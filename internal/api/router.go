@@ -7,10 +7,13 @@ import (
 )
 
 type Dependencies struct {
-	ResourceService *service.ResourceService
-	RelationService *service.RelationService
-	AuditService    *service.AuditService
-	AuthService     *service.AuthService
+	ResourceService    *service.ResourceService
+	RelationService    *service.RelationService
+	AuditService       *service.AuditService
+	AuthService        *service.AuthService
+	EnvironmentService *service.EnvironmentService
+	OwnerService       *service.OwnerService
+	RoleService        *service.RoleService
 }
 
 func NewRouter(deps Dependencies) *chi.Mux {
@@ -22,5 +25,8 @@ func NewRouter(deps Dependencies) *chi.Mux {
 	router.Get("/resources/{id}/audit-events", handleListResourceAuditEvents(deps.AuditService))
 	router.Get("/audit-events", handleListAuditEvents(deps.AuditService))
 	router.Post("/auth/login", handleLogin(deps.AuthService))
+	router.Get("/environments", handleListEnvironments(deps.EnvironmentService))
+	router.Get("/owners", handleListOwners(deps.OwnerService))
+	router.Get("/roles", handleListRoles(deps.RoleService))
 	return router
 }

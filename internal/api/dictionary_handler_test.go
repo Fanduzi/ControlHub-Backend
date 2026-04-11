@@ -1,0 +1,137 @@
+package api
+
+import (
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
+	"testing"
+
+	"github.com/fan/controlhub/internal/model"
+)
+
+func TestListEnvironments(t *testing.T) {
+	server := NewTestServer()
+	req := httptest.NewRequest(http.MethodGet, "/environments", nil)
+	rec := httptest.NewRecorder()
+
+	server.Router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rec.Code)
+	}
+
+	var body struct {
+		Items []model.Environment `json:"items"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&body); err != nil {
+		t.Fatalf("failed to decode response: %v", err)
+	}
+
+	if len(body.Items) != 2 {
+		t.Fatalf("expected 2 environments, got %d", len(body.Items))
+	}
+
+	env := body.Items[0]
+	if env.Name != "Production" {
+		t.Fatalf("expected first environment name 'Production', got %s", env.Name)
+	}
+	if env.Slug != "prod" {
+		t.Fatalf("expected slug 'prod', got %s", env.Slug)
+	}
+	if env.Description != "Production environment" {
+		t.Fatalf("expected description 'Production environment', got %s", env.Description)
+	}
+	if env.CreatedAt.IsZero() {
+		t.Fatal("expected createdAt to be set")
+	}
+}
+
+func TestListOwners(t *testing.T) {
+	server := NewTestServer()
+	req := httptest.NewRequest(http.MethodGet, "/owners", nil)
+	rec := httptest.NewRecorder()
+
+	server.Router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rec.Code)
+	}
+
+	var body struct {
+		Items []model.Owner `json:"items"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&body); err != nil {
+		t.Fatalf("failed to decode response: %v", err)
+	}
+
+	if len(body.Items) != 2 {
+		t.Fatalf("expected 2 owners, got %d", len(body.Items))
+	}
+
+	owner := body.Items[0]
+	if owner.Name != "Platform Team" {
+		t.Fatalf("expected first owner name 'Platform Team', got %s", owner.Name)
+	}
+	if owner.Email != "platform@example.com" {
+		t.Fatalf("expected email 'platform@example.com', got %s", owner.Email)
+	}
+	if owner.CreatedAt.IsZero() {
+		t.Fatal("expected createdAt to be set")
+	}
+}
+
+func TestListRoles(t *testing.T) {
+	server := NewTestServer()
+	req := httptest.NewRequest(http.MethodGet, "/roles", nil)
+	rec := httptest.NewRecorder()
+
+	server.Router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rec.Code)
+	}
+
+	var body struct {
+		Items []model.Role `json:"items"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&body); err != nil {
+		t.Fatalf("failed to decode response: %v", err)
+	}
+
+	if len(body.Items) != 2 {
+		t.Fatalf("expected 2 roles, got %d", len(body.Items))
+	}
+
+	role := body.Items[0]
+	if role.Name != "admin" {
+		t.Fatalf("expected first role name 'admin', got %s", role.Name)
+	}
+	if role.Description != "Full platform access" {
+		t.Fatalf("expected description 'Full platform access', got %s", role.Description)
+	}
+	if role.CreatedAt.IsZero() {
+		t.Fatal("expected createdAt to be set")
+	}
+}
+
+func TestListEnvironmentsResponseShape(t *testing.T) {
+	server := NewTestServer()
+	req := httptest.NewRequest(http.MethodGet, "/environments", nil)
+	rec := httptest.NewRecorder()
+
+	server.Router.ServeHTTP(rec, req)
+
+	contentType := rec.Header().Get("Content-Type")
+	if contentType != "application/json" {
+		t.Fatalf("expected content-type application/json, got %s", contentType)
+	}
+
+	var raw map[string]json.RawMessage
+	if err := json.NewDecoder(rec.Body).Decode(&raw); err != nil {
+		t.Fatalf("failed to decode as envelope: %v", err)
+	}
+
+	if _, ok := raw["items"]; !ok {
+		t.Fatal("expected 'items' key in response")
+	}
+}

@@ -22,11 +22,16 @@ func main() {
 	}
 	defer db.Close()
 
+	dictRepo := postgres.NewDictionaryRepository(db)
+
 	deps := api.Dependencies{
-		ResourceService: service.NewResourceService(postgres.NewResourceRepository(db)),
-		RelationService: service.NewRelationService(postgres.NewRelationRepository(db)),
-		AuditService:    service.NewAuditService(postgres.NewAuditRepository(db)),
-		AuthService:     service.NewAuthService(postgres.NewUserRepository(db), cfg.JWTSecret),
+		ResourceService:    service.NewResourceService(postgres.NewResourceRepository(db)),
+		RelationService:    service.NewRelationService(postgres.NewRelationRepository(db)),
+		AuditService:       service.NewAuditService(postgres.NewAuditRepository(db)),
+		AuthService:        service.NewAuthService(postgres.NewUserRepository(db), cfg.JWTSecret),
+		EnvironmentService: service.NewEnvironmentService(dictRepo),
+		OwnerService:       service.NewOwnerService(dictRepo),
+		RoleService:        service.NewRoleService(dictRepo),
 	}
 
 	if err := http.ListenAndServe(cfg.HTTPAddress(), api.NewRouter(deps)); err != nil {

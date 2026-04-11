@@ -144,6 +144,57 @@ paths:
                     type: array
                     items:
                       $ref: "#/components/schemas/AuditEvent"
+  /environments:
+    get:
+      summary: List environments
+      operationId: listEnvironments
+      responses:
+        "200":
+          description: Environment list
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/Environment"
+  /owners:
+    get:
+      summary: List owners
+      operationId: listOwners
+      responses:
+        "200":
+          description: Owner list
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/Owner"
+  /roles:
+    get:
+      summary: List roles
+      operationId: listRoles
+      responses:
+        "200":
+          description: Role list
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/Role"
 components:
   schemas:
     LoginRequest:
@@ -241,6 +292,48 @@ components:
         eventType:
           type: string
         result:
+          type: string
+        createdAt:
+          type: string
+          format: date-time
+    Environment:
+      type: object
+      required: [id, name, slug, description, createdAt]
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        slug:
+          type: string
+        description:
+          type: string
+        createdAt:
+          type: string
+          format: date-time
+    Owner:
+      type: object
+      required: [id, name, email, createdAt]
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        email:
+          type: string
+          format: email
+        createdAt:
+          type: string
+          format: date-time
+    Role:
+      type: object
+      required: [id, name, description, createdAt]
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        description:
           type: string
         createdAt:
           type: string

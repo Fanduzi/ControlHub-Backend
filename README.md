@@ -31,3 +31,18 @@ Run `go test ./internal/model -v`
 Run `go test ./internal/service -v`
 
 Run `make test`
+
+## API Endpoints
+
+| Method | Path | Description |
+|--------|------|-------------|
+| POST | /auth/login | Login with local credentials |
+| GET | /health | Health check |
+| GET | /resources | List resources |
+| GET | /resources/{id} | Get resource detail |
+| GET | /resources/{id}/relations | List relations for a resource |
+| GET | /resources/{id}/audit-events | List audit events for a resource |
+| GET | /audit-events | List audit events |
+| GET | /environments | List environments |
+| GET | /owners | List owners |
+| GET | /roles | List roles |
