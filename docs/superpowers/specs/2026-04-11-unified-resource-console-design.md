@@ -122,7 +122,7 @@ Prefer clear server/client boundaries, small client islands, readable component 
 
 ## 7. Frontend Structure
 
-The frontend repository lives at `/Users/fan/JsProjects/ConfigHub`.
+The frontend repository lives at `/Users/fan/JsProjects/ControlHub`.
 
 Recommended top-level structure:
 
@@ -148,7 +148,7 @@ Recommended top-level structure:
 
 ## 8. Backend Architecture
 
-The backend repository lives at `/Users/fan/GolangProjects/ConfigHub`.
+The backend repository lives at `/Users/fan/GolangProjects/ControlHub`.
 
 ### Architectural style
 

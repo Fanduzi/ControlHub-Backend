@@ -12,83 +12,83 @@
 
 ## File Structure Map
 
-### Backend repository: `/Users/fan/GolangProjects/ConfigHub`
+### Backend repository: `/Users/fan/GolangProjects/ControlHub`
 
-- Create: `/Users/fan/GolangProjects/ConfigHub/go.mod`
-- Create: `/Users/fan/GolangProjects/ConfigHub/Makefile`
-- Create: `/Users/fan/GolangProjects/ConfigHub/.env.example`
-- Create: `/Users/fan/GolangProjects/ConfigHub/cmd/server/main.go`
-- Create: `/Users/fan/GolangProjects/ConfigHub/internal/config/config.go`
-- Create: `/Users/fan/GolangProjects/ConfigHub/internal/api/router.go`
-- Create: `/Users/fan/GolangProjects/ConfigHub/internal/api/health_handler.go`
-- Create: `/Users/fan/GolangProjects/ConfigHub/internal/api/health_handler_test.go`
-- Create: `/Users/fan/GolangProjects/ConfigHub/internal/api/resource_handler.go`
-- Create: `/Users/fan/GolangProjects/ConfigHub/internal/api/resource_handler_test.go`
-- Create: `/Users/fan/GolangProjects/ConfigHub/internal/api/relation_handler.go`
-- Create: `/Users/fan/GolangProjects/ConfigHub/internal/api/relation_handler_test.go`
-- Create: `/Users/fan/GolangProjects/ConfigHub/internal/api/audit_handler.go`
-- Create: `/Users/fan/GolangProjects/ConfigHub/internal/api/auth_handler.go`
-- Create: `/Users/fan/GolangProjects/ConfigHub/internal/service/resource_service.go`
-- Create: `/Users/fan/GolangProjects/ConfigHub/internal/service/relation_service.go`
-- Create: `/Users/fan/GolangProjects/ConfigHub/internal/service/audit_service.go`
-- Create: `/Users/fan/GolangProjects/ConfigHub/internal/service/auth_service.go`
-- Create: `/Users/fan/GolangProjects/ConfigHub/internal/repository/postgres/resource_repository.go`
-- Create: `/Users/fan/GolangProjects/ConfigHub/internal/repository/postgres/relation_repository.go`
-- Create: `/Users/fan/GolangProjects/ConfigHub/internal/repository/postgres/audit_repository.go`
-- Create: `/Users/fan/GolangProjects/ConfigHub/internal/repository/postgres/user_repository.go`
-- Create: `/Users/fan/GolangProjects/ConfigHub/internal/model/resource.go`
-- Create: `/Users/fan/GolangProjects/ConfigHub/internal/model/relation.go`
-- Create: `/Users/fan/GolangProjects/ConfigHub/internal/model/audit.go`
-- Create: `/Users/fan/GolangProjects/ConfigHub/internal/model/auth.go`
-- Create: `/Users/fan/GolangProjects/ConfigHub/internal/model/settings.go`
-- Create: `/Users/fan/GolangProjects/ConfigHub/internal/openapi/openapi.yaml`
-- Create: `/Users/fan/GolangProjects/ConfigHub/migrations/0001_initial_schema.sql`
-- Create: `/Users/fan/GolangProjects/ConfigHub/migrations/0002_seed_reference_data.sql`
+- Create: `/Users/fan/GolangProjects/ControlHub/go.mod`
+- Create: `/Users/fan/GolangProjects/ControlHub/Makefile`
+- Create: `/Users/fan/GolangProjects/ControlHub/.env.example`
+- Create: `/Users/fan/GolangProjects/ControlHub/cmd/server/main.go`
+- Create: `/Users/fan/GolangProjects/ControlHub/internal/config/config.go`
+- Create: `/Users/fan/GolangProjects/ControlHub/internal/api/router.go`
+- Create: `/Users/fan/GolangProjects/ControlHub/internal/api/health_handler.go`
+- Create: `/Users/fan/GolangProjects/ControlHub/internal/api/health_handler_test.go`
+- Create: `/Users/fan/GolangProjects/ControlHub/internal/api/resource_handler.go`
+- Create: `/Users/fan/GolangProjects/ControlHub/internal/api/resource_handler_test.go`
+- Create: `/Users/fan/GolangProjects/ControlHub/internal/api/relation_handler.go`
+- Create: `/Users/fan/GolangProjects/ControlHub/internal/api/relation_handler_test.go`
+- Create: `/Users/fan/GolangProjects/ControlHub/internal/api/audit_handler.go`
+- Create: `/Users/fan/GolangProjects/ControlHub/internal/api/auth_handler.go`
+- Create: `/Users/fan/GolangProjects/ControlHub/internal/service/resource_service.go`
+- Create: `/Users/fan/GolangProjects/ControlHub/internal/service/relation_service.go`
+- Create: `/Users/fan/GolangProjects/ControlHub/internal/service/audit_service.go`
+- Create: `/Users/fan/GolangProjects/ControlHub/internal/service/auth_service.go`
+- Create: `/Users/fan/GolangProjects/ControlHub/internal/repository/postgres/resource_repository.go`
+- Create: `/Users/fan/GolangProjects/ControlHub/internal/repository/postgres/relation_repository.go`
+- Create: `/Users/fan/GolangProjects/ControlHub/internal/repository/postgres/audit_repository.go`
+- Create: `/Users/fan/GolangProjects/ControlHub/internal/repository/postgres/user_repository.go`
+- Create: `/Users/fan/GolangProjects/ControlHub/internal/model/resource.go`
+- Create: `/Users/fan/GolangProjects/ControlHub/internal/model/relation.go`
+- Create: `/Users/fan/GolangProjects/ControlHub/internal/model/audit.go`
+- Create: `/Users/fan/GolangProjects/ControlHub/internal/model/auth.go`
+- Create: `/Users/fan/GolangProjects/ControlHub/internal/model/settings.go`
+- Create: `/Users/fan/GolangProjects/ControlHub/internal/openapi/openapi.yaml`
+- Create: `/Users/fan/GolangProjects/ControlHub/migrations/0001_initial_schema.sql`
+- Create: `/Users/fan/GolangProjects/ControlHub/migrations/0002_seed_reference_data.sql`
 
-### Frontend repository: `/Users/fan/JsProjects/ConfigHub`
+### Frontend repository: `/Users/fan/JsProjects/ControlHub`
 
-- Create: `/Users/fan/JsProjects/ConfigHub/package.json`
-- Create: `/Users/fan/JsProjects/ConfigHub/next.config.ts`
-- Create: `/Users/fan/JsProjects/ConfigHub/tailwind.config.ts`
-- Create: `/Users/fan/JsProjects/ConfigHub/components.json`
-- Create: `/Users/fan/JsProjects/ConfigHub/app/layout.tsx`
-- Create: `/Users/fan/JsProjects/ConfigHub/app/login/page.tsx`
-- Create: `/Users/fan/JsProjects/ConfigHub/app/globals.css`
-- Create: `/Users/fan/JsProjects/ConfigHub/app/(console)/layout.tsx`
-- Create: `/Users/fan/JsProjects/ConfigHub/app/(console)/overview/page.tsx`
-- Create: `/Users/fan/JsProjects/ConfigHub/app/(console)/resources/page.tsx`
-- Create: `/Users/fan/JsProjects/ConfigHub/app/(console)/resources/[id]/page.tsx`
-- Create: `/Users/fan/JsProjects/ConfigHub/app/(console)/cmdb/page.tsx`
-- Create: `/Users/fan/JsProjects/ConfigHub/app/(console)/databases/page.tsx`
-- Create: `/Users/fan/JsProjects/ConfigHub/app/(console)/audits/page.tsx`
-- Create: `/Users/fan/JsProjects/ConfigHub/app/(console)/settings/page.tsx`
-- Create: `/Users/fan/JsProjects/ConfigHub/components/app-shell/app-shell.tsx`
-- Create: `/Users/fan/JsProjects/ConfigHub/components/app-shell/sidebar.tsx`
-- Create: `/Users/fan/JsProjects/ConfigHub/components/app-shell/topbar.tsx`
-- Create: `/Users/fan/JsProjects/ConfigHub/components/blocks/page-header.tsx`
-- Create: `/Users/fan/JsProjects/ConfigHub/components/blocks/data-table-shell.tsx`
-- Create: `/Users/fan/JsProjects/ConfigHub/components/blocks/detail-panel.tsx`
-- Create: `/Users/fan/JsProjects/ConfigHub/components/blocks/activity-timeline.tsx`
-- Create: `/Users/fan/JsProjects/ConfigHub/components/blocks/resource-relation-panel.tsx`
-- Create: `/Users/fan/JsProjects/ConfigHub/components/blocks/status-badge.tsx`
-- Create: `/Users/fan/JsProjects/ConfigHub/components/blocks/empty-state.tsx`
-- Create: `/Users/fan/JsProjects/ConfigHub/components/resources/resource-table.tsx`
-- Create: `/Users/fan/JsProjects/ConfigHub/components/resources/resource-detail-sheet.tsx`
-- Create: `/Users/fan/JsProjects/ConfigHub/components/databases/database-table.tsx`
-- Create: `/Users/fan/JsProjects/ConfigHub/components/audits/audit-table.tsx`
-- Create: `/Users/fan/JsProjects/ConfigHub/lib/navigation.ts`
-- Create: `/Users/fan/JsProjects/ConfigHub/lib/utils.ts`
-- Create: `/Users/fan/JsProjects/ConfigHub/lib/format.ts`
-- Create: `/Users/fan/JsProjects/ConfigHub/services/api-client.ts`
-- Create: `/Users/fan/JsProjects/ConfigHub/services/resources.ts`
-- Create: `/Users/fan/JsProjects/ConfigHub/services/auth.ts`
-- Create: `/Users/fan/JsProjects/ConfigHub/services/audits.ts`
-- Create: `/Users/fan/JsProjects/ConfigHub/types/resource.ts`
-- Create: `/Users/fan/JsProjects/ConfigHub/types/audit.ts`
-- Create: `/Users/fan/JsProjects/ConfigHub/types/settings.ts`
-- Create: `/Users/fan/JsProjects/ConfigHub/vitest.config.ts`
-- Create: `/Users/fan/JsProjects/ConfigHub/tests/components/sidebar.test.tsx`
-- Create: `/Users/fan/JsProjects/ConfigHub/tests/components/resource-detail-sheet.test.tsx`
+- Create: `/Users/fan/JsProjects/ControlHub/package.json`
+- Create: `/Users/fan/JsProjects/ControlHub/next.config.ts`
+- Create: `/Users/fan/JsProjects/ControlHub/tailwind.config.ts`
+- Create: `/Users/fan/JsProjects/ControlHub/components.json`
+- Create: `/Users/fan/JsProjects/ControlHub/app/layout.tsx`
+- Create: `/Users/fan/JsProjects/ControlHub/app/login/page.tsx`
+- Create: `/Users/fan/JsProjects/ControlHub/app/globals.css`
+- Create: `/Users/fan/JsProjects/ControlHub/app/(console)/layout.tsx`
+- Create: `/Users/fan/JsProjects/ControlHub/app/(console)/overview/page.tsx`
+- Create: `/Users/fan/JsProjects/ControlHub/app/(console)/resources/page.tsx`
+- Create: `/Users/fan/JsProjects/ControlHub/app/(console)/resources/[id]/page.tsx`
+- Create: `/Users/fan/JsProjects/ControlHub/app/(console)/cmdb/page.tsx`
+- Create: `/Users/fan/JsProjects/ControlHub/app/(console)/databases/page.tsx`
+- Create: `/Users/fan/JsProjects/ControlHub/app/(console)/audits/page.tsx`
+- Create: `/Users/fan/JsProjects/ControlHub/app/(console)/settings/page.tsx`
+- Create: `/Users/fan/JsProjects/ControlHub/components/app-shell/app-shell.tsx`
+- Create: `/Users/fan/JsProjects/ControlHub/components/app-shell/sidebar.tsx`
+- Create: `/Users/fan/JsProjects/ControlHub/components/app-shell/topbar.tsx`
+- Create: `/Users/fan/JsProjects/ControlHub/components/blocks/page-header.tsx`
+- Create: `/Users/fan/JsProjects/ControlHub/components/blocks/data-table-shell.tsx`
+- Create: `/Users/fan/JsProjects/ControlHub/components/blocks/detail-panel.tsx`
+- Create: `/Users/fan/JsProjects/ControlHub/components/blocks/activity-timeline.tsx`
+- Create: `/Users/fan/JsProjects/ControlHub/components/blocks/resource-relation-panel.tsx`
+- Create: `/Users/fan/JsProjects/ControlHub/components/blocks/status-badge.tsx`
+- Create: `/Users/fan/JsProjects/ControlHub/components/blocks/empty-state.tsx`
+- Create: `/Users/fan/JsProjects/ControlHub/components/resources/resource-table.tsx`
+- Create: `/Users/fan/JsProjects/ControlHub/components/resources/resource-detail-sheet.tsx`
+- Create: `/Users/fan/JsProjects/ControlHub/components/databases/database-table.tsx`
+- Create: `/Users/fan/JsProjects/ControlHub/components/audits/audit-table.tsx`
+- Create: `/Users/fan/JsProjects/ControlHub/lib/navigation.ts`
+- Create: `/Users/fan/JsProjects/ControlHub/lib/utils.ts`
+- Create: `/Users/fan/JsProjects/ControlHub/lib/format.ts`
+- Create: `/Users/fan/JsProjects/ControlHub/services/api-client.ts`
+- Create: `/Users/fan/JsProjects/ControlHub/services/resources.ts`
+- Create: `/Users/fan/JsProjects/ControlHub/services/auth.ts`
+- Create: `/Users/fan/JsProjects/ControlHub/services/audits.ts`
+- Create: `/Users/fan/JsProjects/ControlHub/types/resource.ts`
+- Create: `/Users/fan/JsProjects/ControlHub/types/audit.ts`
+- Create: `/Users/fan/JsProjects/ControlHub/types/settings.ts`
+- Create: `/Users/fan/JsProjects/ControlHub/vitest.config.ts`
+- Create: `/Users/fan/JsProjects/ControlHub/tests/components/sidebar.test.tsx`
+- Create: `/Users/fan/JsProjects/ControlHub/tests/components/resource-detail-sheet.test.tsx`
 
 ## Assumptions
 
@@ -100,14 +100,14 @@
 ### Task 1: Bootstrap the Go backend shell
 
 **Files:**
-- Create: `/Users/fan/GolangProjects/ConfigHub/go.mod`
-- Create: `/Users/fan/GolangProjects/ConfigHub/Makefile`
-- Create: `/Users/fan/GolangProjects/ConfigHub/.env.example`
-- Create: `/Users/fan/GolangProjects/ConfigHub/cmd/server/main.go`
-- Create: `/Users/fan/GolangProjects/ConfigHub/internal/config/config.go`
-- Create: `/Users/fan/GolangProjects/ConfigHub/internal/api/router.go`
-- Create: `/Users/fan/GolangProjects/ConfigHub/internal/api/health_handler.go`
-- Test: `/Users/fan/GolangProjects/ConfigHub/internal/api/health_handler_test.go`
+- Create: `/Users/fan/GolangProjects/ControlHub/go.mod`
+- Create: `/Users/fan/GolangProjects/ControlHub/Makefile`
+- Create: `/Users/fan/GolangProjects/ControlHub/.env.example`
+- Create: `/Users/fan/GolangProjects/ControlHub/cmd/server/main.go`
+- Create: `/Users/fan/GolangProjects/ControlHub/internal/config/config.go`
+- Create: `/Users/fan/GolangProjects/ControlHub/internal/api/router.go`
+- Create: `/Users/fan/GolangProjects/ControlHub/internal/api/health_handler.go`
+- Test: `/Users/fan/GolangProjects/ControlHub/internal/api/health_handler_test.go`
 
 - [ ] **Step 1: Write the failing backend health-route test**
 
@@ -146,8 +146,8 @@ Expected: FAIL with missing package symbols such as `NewRouter` or missing files
 - [ ] **Step 3: Write the minimal backend shell**
 
 ```go
-// /Users/fan/GolangProjects/ConfigHub/go.mod
-module github.com/fan/confighub
+// /Users/fan/GolangProjects/ControlHub/go.mod
+module github.com/fan/controlhub
 
 go 1.24.0
 
@@ -158,7 +158,7 @@ require (
 ```
 
 ```go
-// /Users/fan/GolangProjects/ConfigHub/internal/api/health_handler.go
+// /Users/fan/GolangProjects/ControlHub/internal/api/health_handler.go
 package api
 
 import (
@@ -177,7 +177,7 @@ func handleHealth(w http.ResponseWriter, _ *http.Request) {
 ```
 
 ```go
-// /Users/fan/GolangProjects/ConfigHub/internal/api/router.go
+// /Users/fan/GolangProjects/ControlHub/internal/api/router.go
 package api
 
 import "github.com/go-chi/chi/v5"
@@ -192,15 +192,15 @@ func NewRouter(_ Dependencies) *chi.Mux {
 ```
 
 ```go
-// /Users/fan/GolangProjects/ConfigHub/cmd/server/main.go
+// /Users/fan/GolangProjects/ControlHub/cmd/server/main.go
 package main
 
 import (
 	"log"
 	"net/http"
 
-	"github.com/fan/confighub/internal/api"
-	"github.com/fan/confighub/internal/config"
+	"github.com/fan/controlhub/internal/api"
+	"github.com/fan/controlhub/internal/config"
 )
 
 func main() {
@@ -211,7 +211,7 @@ func main() {
 ```
 
 ```go
-// /Users/fan/GolangProjects/ConfigHub/internal/config/config.go
+// /Users/fan/GolangProjects/ControlHub/internal/config/config.go
 package config
 
 import "os"
@@ -235,7 +235,7 @@ func (c Config) HTTPAddress() string {
 ```
 
 ```makefile
-# /Users/fan/GolangProjects/ConfigHub/Makefile
+# /Users/fan/GolangProjects/ControlHub/Makefile
 .PHONY: test run
 
 test:
@@ -246,10 +246,10 @@ run:
 ```
 
 ```env
-# /Users/fan/GolangProjects/ConfigHub/.env.example
+# /Users/fan/GolangProjects/ControlHub/.env.example
 APP_ENV=local
 APP_PORT=8080
-DATABASE_URL=postgres://postgres:postgres@localhost:5432/confighub?sslmode=disable
+DATABASE_URL=postgres://postgres:postgres@localhost:5432/controlhub?sslmode=disable
 JWT_SECRET=change-me
 ```
 
@@ -278,10 +278,10 @@ git commit -m "feat: bootstrap backend service shell"
 ### Task 2: Add OpenAPI and the core resource model
 
 **Files:**
-- Create: `/Users/fan/GolangProjects/ConfigHub/internal/model/resource.go`
-- Create: `/Users/fan/GolangProjects/ConfigHub/internal/model/settings.go`
-- Create: `/Users/fan/GolangProjects/ConfigHub/internal/openapi/openapi.yaml`
-- Test: `/Users/fan/GolangProjects/ConfigHub/internal/model/resource_test.go`
+- Create: `/Users/fan/GolangProjects/ControlHub/internal/model/resource.go`
+- Create: `/Users/fan/GolangProjects/ControlHub/internal/model/settings.go`
+- Create: `/Users/fan/GolangProjects/ControlHub/internal/openapi/openapi.yaml`
+- Test: `/Users/fan/GolangProjects/ControlHub/internal/model/resource_test.go`
 
 - [ ] **Step 1: Write the failing resource type validation test**
 
@@ -318,7 +318,7 @@ Expected: FAIL with undefined `ResourceType`.
 - [ ] **Step 3: Write the resource model and OpenAPI baseline**
 
 ```go
-// /Users/fan/GolangProjects/ConfigHub/internal/model/resource.go
+// /Users/fan/GolangProjects/ControlHub/internal/model/resource.go
 package model
 
 import "fmt"
@@ -356,7 +356,7 @@ type Resource struct {
 ```
 
 ```go
-// /Users/fan/GolangProjects/ConfigHub/internal/model/settings.go
+// /Users/fan/GolangProjects/ControlHub/internal/model/settings.go
 package model
 
 type Environment struct {
@@ -374,10 +374,10 @@ type Owner struct {
 ```
 
 ```yaml
-# /Users/fan/GolangProjects/ConfigHub/internal/openapi/openapi.yaml
+# /Users/fan/GolangProjects/ControlHub/internal/openapi/openapi.yaml
 openapi: 3.1.0
 info:
-  title: ConfigHub API
+  title: ControlHub API
   version: 0.1.0
 servers:
   - url: http://localhost:8080
@@ -462,14 +462,14 @@ git commit -m "feat: define resource core model and openapi baseline"
 ### Task 3: Create the PostgreSQL schema and seed data
 
 **Files:**
-- Create: `/Users/fan/GolangProjects/ConfigHub/migrations/0001_initial_schema.sql`
-- Create: `/Users/fan/GolangProjects/ConfigHub/migrations/0002_seed_reference_data.sql`
-- Test: `/Users/fan/GolangProjects/ConfigHub/migrations/verify_initial_schema.sql`
+- Create: `/Users/fan/GolangProjects/ControlHub/migrations/0001_initial_schema.sql`
+- Create: `/Users/fan/GolangProjects/ControlHub/migrations/0002_seed_reference_data.sql`
+- Test: `/Users/fan/GolangProjects/ControlHub/migrations/verify_initial_schema.sql`
 
 - [ ] **Step 1: Write a schema verification SQL script**
 
 ```sql
--- /Users/fan/GolangProjects/ConfigHub/migrations/verify_initial_schema.sql
+-- /Users/fan/GolangProjects/ControlHub/migrations/verify_initial_schema.sql
 select table_name
 from information_schema.tables
 where table_schema = 'public'
@@ -492,7 +492,7 @@ order by table_name;
 - [ ] **Step 2: Write the initial schema migration**
 
 ```sql
--- /Users/fan/GolangProjects/ConfigHub/migrations/0001_initial_schema.sql
+-- /Users/fan/GolangProjects/ControlHub/migrations/0001_initial_schema.sql
 create table roles (
   id uuid primary key,
   name text not null unique,
@@ -605,7 +605,7 @@ create index idx_audit_target on audit_events(target_resource_id);
 - [ ] **Step 3: Write the seed migration**
 
 ```sql
--- /Users/fan/GolangProjects/ConfigHub/migrations/0002_seed_reference_data.sql
+-- /Users/fan/GolangProjects/ControlHub/migrations/0002_seed_reference_data.sql
 insert into roles (id, name, description) values
   ('00000000-0000-0000-0000-000000000001', 'admin', 'Full platform access'),
   ('00000000-0000-0000-0000-000000000002', 'editor', 'Can manage assets and relations');
@@ -641,20 +641,20 @@ git commit -m "feat: add initial postgres schema for resource console"
 ### Task 4: Implement backend resource, relation, and audit APIs
 
 **Files:**
-- Create: `/Users/fan/GolangProjects/ConfigHub/internal/api/resource_handler.go`
-- Create: `/Users/fan/GolangProjects/ConfigHub/internal/api/resource_handler_test.go`
-- Create: `/Users/fan/GolangProjects/ConfigHub/internal/api/relation_handler.go`
-- Create: `/Users/fan/GolangProjects/ConfigHub/internal/api/relation_handler_test.go`
-- Create: `/Users/fan/GolangProjects/ConfigHub/internal/api/audit_handler.go`
-- Create: `/Users/fan/GolangProjects/ConfigHub/internal/api/test_server.go`
-- Create: `/Users/fan/GolangProjects/ConfigHub/internal/service/resource_service.go`
-- Create: `/Users/fan/GolangProjects/ConfigHub/internal/service/relation_service.go`
-- Create: `/Users/fan/GolangProjects/ConfigHub/internal/service/audit_service.go`
-- Create: `/Users/fan/GolangProjects/ConfigHub/internal/repository/postgres/resource_repository.go`
-- Create: `/Users/fan/GolangProjects/ConfigHub/internal/repository/postgres/relation_repository.go`
-- Create: `/Users/fan/GolangProjects/ConfigHub/internal/repository/postgres/audit_repository.go`
-- Create: `/Users/fan/GolangProjects/ConfigHub/internal/model/relation.go`
-- Create: `/Users/fan/GolangProjects/ConfigHub/internal/model/audit.go`
+- Create: `/Users/fan/GolangProjects/ControlHub/internal/api/resource_handler.go`
+- Create: `/Users/fan/GolangProjects/ControlHub/internal/api/resource_handler_test.go`
+- Create: `/Users/fan/GolangProjects/ControlHub/internal/api/relation_handler.go`
+- Create: `/Users/fan/GolangProjects/ControlHub/internal/api/relation_handler_test.go`
+- Create: `/Users/fan/GolangProjects/ControlHub/internal/api/audit_handler.go`
+- Create: `/Users/fan/GolangProjects/ControlHub/internal/api/test_server.go`
+- Create: `/Users/fan/GolangProjects/ControlHub/internal/service/resource_service.go`
+- Create: `/Users/fan/GolangProjects/ControlHub/internal/service/relation_service.go`
+- Create: `/Users/fan/GolangProjects/ControlHub/internal/service/audit_service.go`
+- Create: `/Users/fan/GolangProjects/ControlHub/internal/repository/postgres/resource_repository.go`
+- Create: `/Users/fan/GolangProjects/ControlHub/internal/repository/postgres/relation_repository.go`
+- Create: `/Users/fan/GolangProjects/ControlHub/internal/repository/postgres/audit_repository.go`
+- Create: `/Users/fan/GolangProjects/ControlHub/internal/model/relation.go`
+- Create: `/Users/fan/GolangProjects/ControlHub/internal/model/audit.go`
 
 - [ ] **Step 1: Write a failing resource-list handler test**
 
@@ -692,10 +692,10 @@ Expected: FAIL with missing `NewTestServer` or missing `/resources` route.
 - [ ] **Step 3: Add minimal service and handler contracts for resource list, detail, relations, and audits**
 
 ```go
-// /Users/fan/GolangProjects/ConfigHub/internal/service/resource_service.go
+// /Users/fan/GolangProjects/ControlHub/internal/service/resource_service.go
 package service
 
-import "github.com/fan/confighub/internal/model"
+import "github.com/fan/controlhub/internal/model"
 
 type ResourceRepository interface {
 	ListResources(resourceType string, environmentID string) ([]model.Resource, error)
@@ -720,7 +720,7 @@ func (s *ResourceService) Get(id string) (*model.Resource, error) {
 ```
 
 ```go
-// /Users/fan/GolangProjects/ConfigHub/internal/model/relation.go
+// /Users/fan/GolangProjects/ControlHub/internal/model/relation.go
 package model
 
 type ResourceRelation struct {
@@ -732,7 +732,7 @@ type ResourceRelation struct {
 ```
 
 ```go
-// /Users/fan/GolangProjects/ConfigHub/internal/model/audit.go
+// /Users/fan/GolangProjects/ControlHub/internal/model/audit.go
 package model
 
 type AuditEvent struct {
@@ -746,10 +746,10 @@ type AuditEvent struct {
 ```
 
 ```go
-// /Users/fan/GolangProjects/ConfigHub/internal/service/relation_service.go
+// /Users/fan/GolangProjects/ControlHub/internal/service/relation_service.go
 package service
 
-import "github.com/fan/confighub/internal/model"
+import "github.com/fan/controlhub/internal/model"
 
 type RelationRepository interface {
 	ListByResourceID(resourceID string) ([]model.ResourceRelation, error)
@@ -769,10 +769,10 @@ func (s *RelationService) ListByResourceID(resourceID string) ([]model.ResourceR
 ```
 
 ```go
-// /Users/fan/GolangProjects/ConfigHub/internal/service/audit_service.go
+// /Users/fan/GolangProjects/ControlHub/internal/service/audit_service.go
 package service
 
-import "github.com/fan/confighub/internal/model"
+import "github.com/fan/controlhub/internal/model"
 
 type AuditRepository interface {
 	ListAll() ([]model.AuditEvent, error)
@@ -797,7 +797,7 @@ func (s *AuditService) ListByResourceID(resourceID string) ([]model.AuditEvent, 
 ```
 
 ```go
-// /Users/fan/GolangProjects/ConfigHub/internal/api/resource_handler.go
+// /Users/fan/GolangProjects/ControlHub/internal/api/resource_handler.go
 package api
 
 import (
@@ -806,8 +806,8 @@ import (
  
 	"github.com/go-chi/chi/v5"
 
-	"github.com/fan/confighub/internal/model"
-	"github.com/fan/confighub/internal/service"
+	"github.com/fan/controlhub/internal/model"
+	"github.com/fan/controlhub/internal/service"
 )
 
 func handleListResources(resourceService *service.ResourceService) http.HandlerFunc {
@@ -840,7 +840,7 @@ func handleGetResource(resourceService *service.ResourceService) http.HandlerFun
 ```
 
 ```go
-// /Users/fan/GolangProjects/ConfigHub/internal/api/relation_handler.go
+// /Users/fan/GolangProjects/ControlHub/internal/api/relation_handler.go
 package api
 
 import (
@@ -849,8 +849,8 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
-	"github.com/fan/confighub/internal/model"
-	"github.com/fan/confighub/internal/service"
+	"github.com/fan/controlhub/internal/model"
+	"github.com/fan/controlhub/internal/service"
 )
 
 func handleListResourceRelations(service *service.RelationService) http.HandlerFunc {
@@ -870,7 +870,7 @@ func handleListResourceRelations(service *service.RelationService) http.HandlerF
 ```
 
 ```go
-// /Users/fan/GolangProjects/ConfigHub/internal/api/audit_handler.go
+// /Users/fan/GolangProjects/ControlHub/internal/api/audit_handler.go
 package api
 
 import (
@@ -879,8 +879,8 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
-	"github.com/fan/confighub/internal/model"
-	"github.com/fan/confighub/internal/service"
+	"github.com/fan/controlhub/internal/model"
+	"github.com/fan/controlhub/internal/service"
 )
 
 func handleListAuditEvents(service *service.AuditService) http.HandlerFunc {
@@ -915,14 +915,14 @@ func handleListResourceAuditEvents(service *service.AuditService) http.HandlerFu
 ```
 
 ```go
-// /Users/fan/GolangProjects/ConfigHub/internal/api/test_server.go
+// /Users/fan/GolangProjects/ControlHub/internal/api/test_server.go
 package api
 
 import (
 	"github.com/go-chi/chi/v5"
 
-	"github.com/fan/confighub/internal/model"
-	"github.com/fan/confighub/internal/service"
+	"github.com/fan/controlhub/internal/model"
+	"github.com/fan/controlhub/internal/service"
 )
 
 type TestServer struct {
@@ -992,13 +992,13 @@ func NewTestServer() *TestServer {
 - [ ] **Step 4: Wire the routes to the new handlers**
 
 ```go
-// /Users/fan/GolangProjects/ConfigHub/internal/api/router.go
+// /Users/fan/GolangProjects/ControlHub/internal/api/router.go
 package api
 
 import (
 	"github.com/go-chi/chi/v5"
 
-	"github.com/fan/confighub/internal/service"
+	"github.com/fan/controlhub/internal/service"
 )
 
 type Dependencies struct {
@@ -1023,13 +1023,13 @@ func NewRouter(deps Dependencies) *chi.Mux {
 - [ ] **Step 5: Add repository queries for list/detail/relations/audit**
 
 ```go
-// /Users/fan/GolangProjects/ConfigHub/internal/repository/postgres/resource_repository.go
+// /Users/fan/GolangProjects/ControlHub/internal/repository/postgres/resource_repository.go
 package postgres
 
 import (
 	"context"
 
-	"github.com/fan/confighub/internal/model"
+	"github.com/fan/controlhub/internal/model"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -1081,7 +1081,7 @@ return items, rows.Err()
 ```
 
 ```go
-// /Users/fan/GolangProjects/ConfigHub/cmd/server/main.go
+// /Users/fan/GolangProjects/ControlHub/cmd/server/main.go
 package main
 
 import (
@@ -1091,10 +1091,10 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"github.com/fan/confighub/internal/api"
-	"github.com/fan/confighub/internal/config"
-	"github.com/fan/confighub/internal/repository/postgres"
-	"github.com/fan/confighub/internal/service"
+	"github.com/fan/controlhub/internal/api"
+	"github.com/fan/controlhub/internal/config"
+	"github.com/fan/controlhub/internal/repository/postgres"
+	"github.com/fan/controlhub/internal/service"
 )
 
 func main() {
@@ -1117,7 +1117,7 @@ func main() {
 ```
 
 ```go
-// /Users/fan/GolangProjects/ConfigHub/internal/config/config.go
+// /Users/fan/GolangProjects/ControlHub/internal/config/config.go
 package config
 
 import "os"
@@ -1168,11 +1168,11 @@ git commit -m "feat: implement resource relation and audit apis"
 ### Task 5: Implement backend login and basic role handling
 
 **Files:**
-- Create: `/Users/fan/GolangProjects/ConfigHub/internal/model/auth.go`
-- Create: `/Users/fan/GolangProjects/ConfigHub/internal/service/auth_service.go`
-- Create: `/Users/fan/GolangProjects/ConfigHub/internal/api/auth_handler.go`
-- Create: `/Users/fan/GolangProjects/ConfigHub/internal/api/auth_handler_test.go`
-- Create: `/Users/fan/GolangProjects/ConfigHub/internal/repository/postgres/user_repository.go`
+- Create: `/Users/fan/GolangProjects/ControlHub/internal/model/auth.go`
+- Create: `/Users/fan/GolangProjects/ControlHub/internal/service/auth_service.go`
+- Create: `/Users/fan/GolangProjects/ControlHub/internal/api/auth_handler.go`
+- Create: `/Users/fan/GolangProjects/ControlHub/internal/api/auth_handler_test.go`
+- Create: `/Users/fan/GolangProjects/ControlHub/internal/repository/postgres/user_repository.go`
 
 - [ ] **Step 1: Write the failing login test**
 
@@ -1209,7 +1209,7 @@ Expected: FAIL with missing `/auth/login`.
 - [ ] **Step 3: Add the auth model and handler**
 
 ```go
-// /Users/fan/GolangProjects/ConfigHub/internal/model/auth.go
+// /Users/fan/GolangProjects/ControlHub/internal/model/auth.go
 package model
 
 type UserCredential struct {
@@ -1230,14 +1230,14 @@ type LoginResponse struct {
 ```
 
 ```go
-// /Users/fan/GolangProjects/ConfigHub/internal/api/auth_handler.go
+// /Users/fan/GolangProjects/ControlHub/internal/api/auth_handler.go
 package api
 
 import (
 	"encoding/json"
 	"net/http"
 
-	"github.com/fan/confighub/internal/model"
+	"github.com/fan/controlhub/internal/model"
 )
 
 func handleLogin(w http.ResponseWriter, r *http.Request) {
@@ -1258,20 +1258,20 @@ func handleLogin(w http.ResponseWriter, r *http.Request) {
 ```
 
 ```go
-// /Users/fan/GolangProjects/ConfigHub/internal/api/router.go
+// /Users/fan/GolangProjects/ControlHub/internal/api/router.go
 r.Post("/auth/login", handleLogin)
 ```
 
 - [ ] **Step 4: Replace the dev stub with service-backed credential check**
 
 ```go
-// /Users/fan/GolangProjects/ConfigHub/internal/service/auth_service.go
+// /Users/fan/GolangProjects/ControlHub/internal/service/auth_service.go
 package service
 
 import (
 	"errors"
 
-	"github.com/fan/confighub/internal/model"
+	"github.com/fan/controlhub/internal/model"
 )
 
 var ErrInvalidCredentials = errors.New("invalid credentials")
@@ -1316,19 +1316,19 @@ git commit -m "feat: add login and basic role handling"
 ### Task 6: Scaffold the Next.js frontend and install the UI foundation
 
 **Files:**
-- Create: `/Users/fan/JsProjects/ConfigHub/package.json`
-- Create: `/Users/fan/JsProjects/ConfigHub/app/layout.tsx`
-- Create: `/Users/fan/JsProjects/ConfigHub/app/globals.css`
-- Create: `/Users/fan/JsProjects/ConfigHub/components.json`
-- Create: `/Users/fan/JsProjects/ConfigHub/vitest.config.ts`
-- Test: `/Users/fan/JsProjects/ConfigHub/tests/components/sidebar.test.tsx`
+- Create: `/Users/fan/JsProjects/ControlHub/package.json`
+- Create: `/Users/fan/JsProjects/ControlHub/app/layout.tsx`
+- Create: `/Users/fan/JsProjects/ControlHub/app/globals.css`
+- Create: `/Users/fan/JsProjects/ControlHub/components.json`
+- Create: `/Users/fan/JsProjects/ControlHub/vitest.config.ts`
+- Test: `/Users/fan/JsProjects/ControlHub/tests/components/sidebar.test.tsx`
 
 - [ ] **Step 1: Create the Next.js app and install dependencies**
 
 Run:
 
 ```bash
-cd /Users/fan/JsProjects/ConfigHub
+cd /Users/fan/JsProjects/ControlHub
 npm create next-app@latest . --ts --tailwind --eslint --app --use-npm --src-dir false --import-alias "@/*"
 npm install @tanstack/react-table react-hook-form zod @hookform/resolvers lucide-react class-variance-authority clsx tailwind-merge
 npm install -D vitest @testing-library/react @testing-library/jest-dom jsdom
@@ -1358,13 +1358,13 @@ describe("Sidebar", () => {
 
 - [ ] **Step 3: Run the frontend test to confirm the shell component is missing**
 
-Run: `cd /Users/fan/JsProjects/ConfigHub && npx vitest run tests/components/sidebar.test.tsx`  
+Run: `cd /Users/fan/JsProjects/ControlHub && npx vitest run tests/components/sidebar.test.tsx`  
 Expected: FAIL with missing `Sidebar` module.
 
 - [ ] **Step 4: Add the baseline frontend config and test setup**
 
 ```ts
-// /Users/fan/JsProjects/ConfigHub/vitest.config.ts
+// /Users/fan/JsProjects/ControlHub/vitest.config.ts
 import { defineConfig } from "vitest/config";
 import react from "@vitejs/plugin-react";
 import path from "node:path";
@@ -1384,12 +1384,12 @@ export default defineConfig({
 ```
 
 ```ts
-// /Users/fan/JsProjects/ConfigHub/tests/setup.ts
+// /Users/fan/JsProjects/ControlHub/tests/setup.ts
 import "@testing-library/jest-dom";
 ```
 
 ```tsx
-// /Users/fan/JsProjects/ConfigHub/app/layout.tsx
+// /Users/fan/JsProjects/ControlHub/app/layout.tsx
 import "./globals.css";
 import type { ReactNode } from "react";
 
@@ -1404,13 +1404,13 @@ export default function RootLayout({ children }: { children: ReactNode }) {
 
 - [ ] **Step 5: Run the frontend test suite again**
 
-Run: `cd /Users/fan/JsProjects/ConfigHub && npx vitest run tests/components/sidebar.test.tsx`  
+Run: `cd /Users/fan/JsProjects/ControlHub && npx vitest run tests/components/sidebar.test.tsx`  
 Expected: still FAIL because `Sidebar` is not implemented yet.
 
 - [ ] **Step 6: Commit the frontend scaffold**
 
 ```bash
-cd /Users/fan/JsProjects/ConfigHub
+cd /Users/fan/JsProjects/ControlHub
 git add .
 git commit -m "feat: scaffold nextjs frontend foundation"
 ```
@@ -1418,23 +1418,23 @@ git commit -m "feat: scaffold nextjs frontend foundation"
 ### Task 7: Build the shared app shell and console blocks
 
 **Files:**
-- Create: `/Users/fan/JsProjects/ConfigHub/app/(console)/layout.tsx`
-- Create: `/Users/fan/JsProjects/ConfigHub/components/app-shell/app-shell.tsx`
-- Create: `/Users/fan/JsProjects/ConfigHub/components/app-shell/sidebar.tsx`
-- Create: `/Users/fan/JsProjects/ConfigHub/components/app-shell/topbar.tsx`
-- Create: `/Users/fan/JsProjects/ConfigHub/components/blocks/page-header.tsx`
-- Create: `/Users/fan/JsProjects/ConfigHub/components/blocks/data-table-shell.tsx`
-- Create: `/Users/fan/JsProjects/ConfigHub/components/blocks/detail-panel.tsx`
-- Create: `/Users/fan/JsProjects/ConfigHub/components/blocks/activity-timeline.tsx`
-- Create: `/Users/fan/JsProjects/ConfigHub/components/blocks/resource-relation-panel.tsx`
-- Create: `/Users/fan/JsProjects/ConfigHub/components/blocks/status-badge.tsx`
-- Create: `/Users/fan/JsProjects/ConfigHub/components/blocks/empty-state.tsx`
-- Create: `/Users/fan/JsProjects/ConfigHub/lib/navigation.ts`
+- Create: `/Users/fan/JsProjects/ControlHub/app/(console)/layout.tsx`
+- Create: `/Users/fan/JsProjects/ControlHub/components/app-shell/app-shell.tsx`
+- Create: `/Users/fan/JsProjects/ControlHub/components/app-shell/sidebar.tsx`
+- Create: `/Users/fan/JsProjects/ControlHub/components/app-shell/topbar.tsx`
+- Create: `/Users/fan/JsProjects/ControlHub/components/blocks/page-header.tsx`
+- Create: `/Users/fan/JsProjects/ControlHub/components/blocks/data-table-shell.tsx`
+- Create: `/Users/fan/JsProjects/ControlHub/components/blocks/detail-panel.tsx`
+- Create: `/Users/fan/JsProjects/ControlHub/components/blocks/activity-timeline.tsx`
+- Create: `/Users/fan/JsProjects/ControlHub/components/blocks/resource-relation-panel.tsx`
+- Create: `/Users/fan/JsProjects/ControlHub/components/blocks/status-badge.tsx`
+- Create: `/Users/fan/JsProjects/ControlHub/components/blocks/empty-state.tsx`
+- Create: `/Users/fan/JsProjects/ControlHub/lib/navigation.ts`
 
 - [ ] **Step 1: Write the minimal navigation source**
 
 ```ts
-// /Users/fan/JsProjects/ConfigHub/lib/navigation.ts
+// /Users/fan/JsProjects/ControlHub/lib/navigation.ts
 export const primaryNavigation = [
   { href: "/overview", label: "Overview" },
   { href: "/resources", label: "Resources" },
@@ -1448,7 +1448,7 @@ export const primaryNavigation = [
 - [ ] **Step 2: Implement the sidebar so the existing test passes**
 
 ```tsx
-// /Users/fan/JsProjects/ConfigHub/components/app-shell/sidebar.tsx
+// /Users/fan/JsProjects/ControlHub/components/app-shell/sidebar.tsx
 import Link from "next/link";
 import { primaryNavigation } from "@/lib/navigation";
 
@@ -1456,7 +1456,7 @@ export function Sidebar() {
   return (
     <aside className="flex h-full w-64 flex-col border-r border-slate-200 bg-slate-50">
       <div className="border-b border-slate-200 px-4 py-3 text-sm font-semibold text-slate-900">
-        ConfigHub
+        ControlHub
       </div>
       <nav className="flex flex-1 flex-col gap-1 p-3">
         {primaryNavigation.map((item) => (
@@ -1477,7 +1477,7 @@ export function Sidebar() {
 - [ ] **Step 3: Add the shell frame**
 
 ```tsx
-// /Users/fan/JsProjects/ConfigHub/components/app-shell/app-shell.tsx
+// /Users/fan/JsProjects/ControlHub/components/app-shell/app-shell.tsx
 import type { ReactNode } from "react";
 import { Sidebar } from "@/components/app-shell/sidebar";
 import { Topbar } from "@/components/app-shell/topbar";
@@ -1496,7 +1496,7 @@ export function AppShell({ children }: { children: ReactNode }) {
 ```
 
 ```tsx
-// /Users/fan/JsProjects/ConfigHub/components/blocks/page-header.tsx
+// /Users/fan/JsProjects/ControlHub/components/blocks/page-header.tsx
 interface PageHeaderProps {
   title: string;
   description: string;
@@ -1515,7 +1515,7 @@ export function PageHeader({ title, description }: PageHeaderProps) {
 ```
 
 ```tsx
-// /Users/fan/JsProjects/ConfigHub/components/app-shell/topbar.tsx
+// /Users/fan/JsProjects/ControlHub/components/app-shell/topbar.tsx
 export function Topbar() {
   return (
     <header className="flex h-14 items-center justify-between border-b border-slate-200 bg-white px-6">
@@ -1533,7 +1533,7 @@ export function Topbar() {
 ```
 
 ```tsx
-// /Users/fan/JsProjects/ConfigHub/app/(console)/layout.tsx
+// /Users/fan/JsProjects/ControlHub/app/(console)/layout.tsx
 import type { ReactNode } from "react";
 import { AppShell } from "@/components/app-shell/app-shell";
 
@@ -1545,7 +1545,7 @@ export default function ConsoleLayout({ children }: { children: ReactNode }) {
 - [ ] **Step 4: Add the shared console blocks used by page routes**
 
 ```tsx
-// /Users/fan/JsProjects/ConfigHub/components/blocks/data-table-shell.tsx
+// /Users/fan/JsProjects/ControlHub/components/blocks/data-table-shell.tsx
 import type { ReactNode } from "react";
 
 export function DataTableShell({ children }: { children: ReactNode }) {
@@ -1554,7 +1554,7 @@ export function DataTableShell({ children }: { children: ReactNode }) {
 ```
 
 ```tsx
-// /Users/fan/JsProjects/ConfigHub/components/blocks/detail-panel.tsx
+// /Users/fan/JsProjects/ControlHub/components/blocks/detail-panel.tsx
 import type { ReactNode } from "react";
 
 export function DetailPanel({ title, children }: { title: string; children: ReactNode }) {
@@ -1568,7 +1568,7 @@ export function DetailPanel({ title, children }: { title: string; children: Reac
 ```
 
 ```tsx
-// /Users/fan/JsProjects/ConfigHub/components/blocks/activity-timeline.tsx
+// /Users/fan/JsProjects/ControlHub/components/blocks/activity-timeline.tsx
 export function ActivityTimeline({ items }: { items: Array<{ id: string; text: string; time: string }> }) {
   return (
     <ol className="space-y-3">
@@ -1584,7 +1584,7 @@ export function ActivityTimeline({ items }: { items: Array<{ id: string; text: s
 ```
 
 ```tsx
-// /Users/fan/JsProjects/ConfigHub/components/blocks/resource-relation-panel.tsx
+// /Users/fan/JsProjects/ControlHub/components/blocks/resource-relation-panel.tsx
 export function ResourceRelationPanel({ items }: { items: Array<{ id: string; label: string }> }) {
   return (
     <div className="space-y-2">
@@ -1599,7 +1599,7 @@ export function ResourceRelationPanel({ items }: { items: Array<{ id: string; la
 ```
 
 ```tsx
-// /Users/fan/JsProjects/ConfigHub/components/blocks/status-badge.tsx
+// /Users/fan/JsProjects/ControlHub/components/blocks/status-badge.tsx
 export function StatusBadge({ value }: { value: "default" | "success" | "warning" | "error" | "info" }) {
   const tone =
     value === "success"
@@ -1617,7 +1617,7 @@ export function StatusBadge({ value }: { value: "default" | "success" | "warning
 ```
 
 ```tsx
-// /Users/fan/JsProjects/ConfigHub/components/blocks/empty-state.tsx
+// /Users/fan/JsProjects/ControlHub/components/blocks/empty-state.tsx
 export function EmptyState({ title, description }: { title: string; description: string }) {
   return (
     <div className="rounded-xl border border-dashed border-slate-300 bg-slate-50 p-8 text-center">
@@ -1630,13 +1630,13 @@ export function EmptyState({ title, description }: { title: string; description:
 
 - [ ] **Step 5: Run the sidebar test**
 
-Run: `cd /Users/fan/JsProjects/ConfigHub && npx vitest run tests/components/sidebar.test.tsx`  
+Run: `cd /Users/fan/JsProjects/ControlHub && npx vitest run tests/components/sidebar.test.tsx`  
 Expected: PASS
 
 - [ ] **Step 6: Commit the app shell**
 
 ```bash
-cd /Users/fan/JsProjects/ConfigHub
+cd /Users/fan/JsProjects/ControlHub
 git add app components lib tests
 git commit -m "feat: add shared console app shell"
 ```
@@ -1644,14 +1644,14 @@ git commit -m "feat: add shared console app shell"
 ### Task 8: Build the resource list page and detail panel
 
 **Files:**
-- Create: `/Users/fan/JsProjects/ConfigHub/app/(console)/resources/page.tsx`
-- Create: `/Users/fan/JsProjects/ConfigHub/app/(console)/resources/[id]/page.tsx`
-- Create: `/Users/fan/JsProjects/ConfigHub/components/resources/resource-table.tsx`
-- Create: `/Users/fan/JsProjects/ConfigHub/components/resources/resource-detail-sheet.tsx`
-- Create: `/Users/fan/JsProjects/ConfigHub/services/api-client.ts`
-- Create: `/Users/fan/JsProjects/ConfigHub/services/resources.ts`
-- Create: `/Users/fan/JsProjects/ConfigHub/types/resource.ts`
-- Test: `/Users/fan/JsProjects/ConfigHub/tests/components/resource-detail-sheet.test.tsx`
+- Create: `/Users/fan/JsProjects/ControlHub/app/(console)/resources/page.tsx`
+- Create: `/Users/fan/JsProjects/ControlHub/app/(console)/resources/[id]/page.tsx`
+- Create: `/Users/fan/JsProjects/ControlHub/components/resources/resource-table.tsx`
+- Create: `/Users/fan/JsProjects/ControlHub/components/resources/resource-detail-sheet.tsx`
+- Create: `/Users/fan/JsProjects/ControlHub/services/api-client.ts`
+- Create: `/Users/fan/JsProjects/ControlHub/services/resources.ts`
+- Create: `/Users/fan/JsProjects/ControlHub/types/resource.ts`
+- Test: `/Users/fan/JsProjects/ControlHub/tests/components/resource-detail-sheet.test.tsx`
 
 - [ ] **Step 1: Write the failing detail-sheet test**
 
@@ -1683,13 +1683,13 @@ describe("ResourceDetailSheet", () => {
 
 - [ ] **Step 2: Run the failing detail-sheet test**
 
-Run: `cd /Users/fan/JsProjects/ConfigHub && npx vitest run tests/components/resource-detail-sheet.test.tsx`  
+Run: `cd /Users/fan/JsProjects/ControlHub && npx vitest run tests/components/resource-detail-sheet.test.tsx`  
 Expected: FAIL with missing component.
 
 - [ ] **Step 3: Add the resource types and API client**
 
 ```ts
-// /Users/fan/JsProjects/ConfigHub/types/resource.ts
+// /Users/fan/JsProjects/ControlHub/types/resource.ts
 export type ResourceType =
   | "host"
   | "database_instance"
@@ -1712,7 +1712,7 @@ export interface Resource {
 ```
 
 ```ts
-// /Users/fan/JsProjects/ConfigHub/services/api-client.ts
+// /Users/fan/JsProjects/ControlHub/services/api-client.ts
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8080";
 
 export async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {
@@ -1734,7 +1734,7 @@ export async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> 
 ```
 
 ```ts
-// /Users/fan/JsProjects/ConfigHub/services/resources.ts
+// /Users/fan/JsProjects/ControlHub/services/resources.ts
 import { apiFetch } from "@/services/api-client";
 import type { Resource } from "@/types/resource";
 
@@ -1751,7 +1751,7 @@ export async function getResource(id: string): Promise<Resource> {
 - [ ] **Step 4: Implement the detail sheet and table**
 
 ```tsx
-// /Users/fan/JsProjects/ConfigHub/components/resources/resource-detail-sheet.tsx
+// /Users/fan/JsProjects/ControlHub/components/resources/resource-detail-sheet.tsx
 "use client";
 
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
@@ -1789,7 +1789,7 @@ export function ResourceDetailSheet({
 ```
 
 ```tsx
-// /Users/fan/JsProjects/ConfigHub/components/resources/resource-table.tsx
+// /Users/fan/JsProjects/ControlHub/components/resources/resource-table.tsx
 "use client";
 
 import { useMemo, useState } from "react";
@@ -1858,7 +1858,7 @@ export function ResourceTable({ resources }: { resources: Resource[] }) {
 - [ ] **Step 5: Add the resources pages**
 
 ```tsx
-// /Users/fan/JsProjects/ConfigHub/app/(console)/resources/page.tsx
+// /Users/fan/JsProjects/ControlHub/app/(console)/resources/page.tsx
 import { PageHeader } from "@/components/blocks/page-header";
 import { ResourceTable } from "@/components/resources/resource-table";
 import { listResources } from "@/services/resources";
@@ -1879,7 +1879,7 @@ export default async function ResourcesPage() {
 ```
 
 ```tsx
-// /Users/fan/JsProjects/ConfigHub/app/(console)/resources/[id]/page.tsx
+// /Users/fan/JsProjects/ControlHub/app/(console)/resources/[id]/page.tsx
 import { ActivityTimeline } from "@/components/blocks/activity-timeline";
 import { DetailPanel } from "@/components/blocks/detail-panel";
 import { PageHeader } from "@/components/blocks/page-header";
@@ -1919,7 +1919,7 @@ export default async function ResourceDetailPage({ params }: { params: Promise<{
 Run:
 
 ```bash
-cd /Users/fan/JsProjects/ConfigHub
+cd /Users/fan/JsProjects/ControlHub
 npx vitest run tests/components/resource-detail-sheet.test.tsx
 npm run dev
 ```
@@ -1932,7 +1932,7 @@ Expected:
 - [ ] **Step 7: Commit the resources UI**
 
 ```bash
-cd /Users/fan/JsProjects/ConfigHub
+cd /Users/fan/JsProjects/ControlHub
 git add app components services types tests
 git commit -m "feat: add unified resource list and detail panel"
 ```
@@ -1940,23 +1940,23 @@ git commit -m "feat: add unified resource list and detail panel"
 ### Task 9: Add overview, databases, audits, and settings pages
 
 **Files:**
-- Create: `/Users/fan/JsProjects/ConfigHub/app/(console)/overview/page.tsx`
-- Create: `/Users/fan/JsProjects/ConfigHub/app/login/page.tsx`
-- Create: `/Users/fan/JsProjects/ConfigHub/app/(console)/cmdb/page.tsx`
-- Create: `/Users/fan/JsProjects/ConfigHub/app/(console)/databases/page.tsx`
-- Create: `/Users/fan/JsProjects/ConfigHub/app/(console)/audits/page.tsx`
-- Create: `/Users/fan/JsProjects/ConfigHub/app/(console)/settings/page.tsx`
-- Create: `/Users/fan/JsProjects/ConfigHub/components/databases/database-table.tsx`
-- Create: `/Users/fan/JsProjects/ConfigHub/components/audits/audit-table.tsx`
-- Create: `/Users/fan/JsProjects/ConfigHub/types/audit.ts`
-- Create: `/Users/fan/JsProjects/ConfigHub/types/settings.ts`
-- Create: `/Users/fan/JsProjects/ConfigHub/services/auth.ts`
-- Create: `/Users/fan/JsProjects/ConfigHub/services/audits.ts`
+- Create: `/Users/fan/JsProjects/ControlHub/app/(console)/overview/page.tsx`
+- Create: `/Users/fan/JsProjects/ControlHub/app/login/page.tsx`
+- Create: `/Users/fan/JsProjects/ControlHub/app/(console)/cmdb/page.tsx`
+- Create: `/Users/fan/JsProjects/ControlHub/app/(console)/databases/page.tsx`
+- Create: `/Users/fan/JsProjects/ControlHub/app/(console)/audits/page.tsx`
+- Create: `/Users/fan/JsProjects/ControlHub/app/(console)/settings/page.tsx`
+- Create: `/Users/fan/JsProjects/ControlHub/components/databases/database-table.tsx`
+- Create: `/Users/fan/JsProjects/ControlHub/components/audits/audit-table.tsx`
+- Create: `/Users/fan/JsProjects/ControlHub/types/audit.ts`
+- Create: `/Users/fan/JsProjects/ControlHub/types/settings.ts`
+- Create: `/Users/fan/JsProjects/ControlHub/services/auth.ts`
+- Create: `/Users/fan/JsProjects/ControlHub/services/audits.ts`
 
 - [ ] **Step 1: Add audit types and service calls**
 
 ```ts
-// /Users/fan/JsProjects/ConfigHub/services/auth.ts
+// /Users/fan/JsProjects/ControlHub/services/auth.ts
 import { apiFetch } from "@/services/api-client";
 
 export interface LoginPayload {
@@ -1973,7 +1973,7 @@ export async function login(payload: LoginPayload) {
 ```
 
 ```ts
-// /Users/fan/JsProjects/ConfigHub/types/audit.ts
+// /Users/fan/JsProjects/ControlHub/types/audit.ts
 export interface AuditEvent {
   id: string;
   actorName: string;
@@ -1985,7 +1985,7 @@ export interface AuditEvent {
 ```
 
 ```ts
-// /Users/fan/JsProjects/ConfigHub/services/audits.ts
+// /Users/fan/JsProjects/ControlHub/services/audits.ts
 import { apiFetch } from "@/services/api-client";
 import type { AuditEvent } from "@/types/audit";
 
@@ -1996,7 +1996,7 @@ export async function listAuditEvents(): Promise<AuditEvent[]> {
 ```
 
 ```ts
-// /Users/fan/JsProjects/ConfigHub/types/settings.ts
+// /Users/fan/JsProjects/ControlHub/types/settings.ts
 export interface EnvironmentOption {
   id: string;
   name: string;
@@ -2013,7 +2013,7 @@ export interface OwnerOption {
 - [ ] **Step 2: Implement the overview and audit pages**
 
 ```tsx
-// /Users/fan/JsProjects/ConfigHub/app/(console)/overview/page.tsx
+// /Users/fan/JsProjects/ControlHub/app/(console)/overview/page.tsx
 import { PageHeader } from "@/components/blocks/page-header";
 
 export default function OverviewPage() {
@@ -2035,7 +2035,7 @@ export default function OverviewPage() {
 ```
 
 ```tsx
-// /Users/fan/JsProjects/ConfigHub/app/(console)/audits/page.tsx
+// /Users/fan/JsProjects/ControlHub/app/(console)/audits/page.tsx
 import { PageHeader } from "@/components/blocks/page-header";
 import { AuditTable } from "@/components/audits/audit-table";
 import { listAuditEvents } from "@/services/audits";
@@ -2053,7 +2053,7 @@ export default async function AuditsPage() {
 ```
 
 ```tsx
-// /Users/fan/JsProjects/ConfigHub/components/audits/audit-table.tsx
+// /Users/fan/JsProjects/ControlHub/components/audits/audit-table.tsx
 import type { AuditEvent } from "@/types/audit";
 
 export function AuditTable({ items }: { items: AuditEvent[] }) {
@@ -2089,7 +2089,7 @@ export function AuditTable({ items }: { items: AuditEvent[] }) {
 - [ ] **Step 3: Implement database and settings pages with the same shell language**
 
 ```tsx
-// /Users/fan/JsProjects/ConfigHub/components/databases/database-table.tsx
+// /Users/fan/JsProjects/ControlHub/components/databases/database-table.tsx
 import type { Resource } from "@/types/resource";
 
 export function DatabaseTable({ items }: { items: Resource[] }) {
@@ -2121,7 +2121,7 @@ export function DatabaseTable({ items }: { items: Resource[] }) {
 ```
 
 ```tsx
-// /Users/fan/JsProjects/ConfigHub/app/(console)/databases/page.tsx
+// /Users/fan/JsProjects/ControlHub/app/(console)/databases/page.tsx
 import { PageHeader } from "@/components/blocks/page-header";
 import { DatabaseTable } from "@/components/databases/database-table";
 import { listResources } from "@/services/resources";
@@ -2141,7 +2141,7 @@ export default async function DatabasesPage() {
 ```
 
 ```tsx
-// /Users/fan/JsProjects/ConfigHub/app/(console)/cmdb/page.tsx
+// /Users/fan/JsProjects/ControlHub/app/(console)/cmdb/page.tsx
 import { PageHeader } from "@/components/blocks/page-header";
 import { ResourceTable } from "@/components/resources/resource-table";
 import { listResources } from "@/services/resources";
@@ -2159,7 +2159,7 @@ export default async function CmdbPage() {
 ```
 
 ```tsx
-// /Users/fan/JsProjects/ConfigHub/app/(console)/settings/page.tsx
+// /Users/fan/JsProjects/ControlHub/app/(console)/settings/page.tsx
 import { PageHeader } from "@/components/blocks/page-header";
 
 export default function SettingsPage() {
@@ -2176,7 +2176,7 @@ export default function SettingsPage() {
 ```
 
 ```tsx
-// /Users/fan/JsProjects/ConfigHub/app/login/page.tsx
+// /Users/fan/JsProjects/ControlHub/app/login/page.tsx
 "use client";
 
 import { useState } from "react";
@@ -2226,7 +2226,7 @@ export default function LoginPage() {
 Run:
 
 ```bash
-cd /Users/fan/JsProjects/ConfigHub
+cd /Users/fan/JsProjects/ControlHub
 npm run dev
 ```
 
@@ -2238,7 +2238,7 @@ Expected:
 - [ ] **Step 5: Commit the remaining console pages**
 
 ```bash
-cd /Users/fan/JsProjects/ConfigHub
+cd /Users/fan/JsProjects/ControlHub
 git add app components services types
 git commit -m "feat: add overview audits databases and settings pages"
 ```
@@ -2246,18 +2246,18 @@ git commit -m "feat: add overview audits databases and settings pages"
 ### Task 10: Verify cross-repo integration and update docs
 
 **Files:**
-- Modify: `/Users/fan/GolangProjects/ConfigHub/docs/superpowers/specs/2026-04-11-unified-resource-console-design.md`
-- Create: `/Users/fan/GolangProjects/ConfigHub/README.md`
-- Create: `/Users/fan/JsProjects/ConfigHub/README.md`
+- Modify: `/Users/fan/GolangProjects/ControlHub/docs/superpowers/specs/2026-04-11-unified-resource-console-design.md`
+- Create: `/Users/fan/GolangProjects/ControlHub/README.md`
+- Create: `/Users/fan/JsProjects/ControlHub/README.md`
 
 - [ ] **Step 1: Add backend run instructions**
 
 ```md
-# ConfigHub Backend
+# ControlHub Backend
 
 ## Run
 
-1. Create PostgreSQL database `confighub`
+1. Create PostgreSQL database `controlhub`
 2. Copy `.env.example` to `.env`
 3. Apply SQL files in `migrations/`
 4. Run `make run`
@@ -2270,7 +2270,7 @@ Run `make test`
 - [ ] **Step 2: Add frontend run instructions**
 
 ```md
-# ConfigHub Frontend
+# ControlHub Frontend
 
 ## Run
 
@@ -2288,8 +2288,8 @@ Run `npx vitest run`
 Run:
 
 ```bash
-cd /Users/fan/GolangProjects/ConfigHub && make test
-cd /Users/fan/JsProjects/ConfigHub && npx vitest run
+cd /Users/fan/GolangProjects/ControlHub && make test
+cd /Users/fan/JsProjects/ControlHub && npx vitest run
 ```
 
 Expected:
@@ -2300,11 +2300,11 @@ Expected:
 - [ ] **Step 4: Commit documentation and verification updates**
 
 ```bash
-cd /Users/fan/GolangProjects/ConfigHub
+cd /Users/fan/GolangProjects/ControlHub
 git add README.md docs/superpowers/specs/2026-04-11-unified-resource-console-design.md
 git commit -m "docs: add backend usage guide"
 
-cd /Users/fan/JsProjects/ConfigHub
+cd /Users/fan/JsProjects/ControlHub
 git add README.md
 git commit -m "docs: add frontend usage guide"
 ```
