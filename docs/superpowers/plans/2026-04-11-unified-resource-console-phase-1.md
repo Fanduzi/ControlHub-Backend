@@ -149,7 +149,7 @@ Expected: FAIL with missing package symbols such as `NewRouter` or missing files
 // /Users/fan/GolangProjects/ControlHub/go.mod
 module github.com/fan/controlhub
 
-go 1.24.0
+go 1.26.0
 
 require (
 	github.com/go-chi/chi/v5 v5.2.1
