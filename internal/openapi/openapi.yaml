@@ -1,0 +1,247 @@
+openapi: 3.1.0
+info:
+  title: ControlHub API
+  version: 0.1.0
+servers:
+  - url: http://localhost:8080
+paths:
+  /auth/login:
+    post:
+      summary: Login with local credentials
+      operationId: login
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/LoginRequest"
+      responses:
+        "200":
+          description: Login response
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LoginResponse"
+  /health:
+    get:
+      summary: Health check
+      operationId: getHealth
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [status]
+                properties:
+                  status:
+                    type: string
+                    const: ok
+  /resources:
+    get:
+      summary: List resources
+      operationId: listResources
+      parameters:
+        - in: query
+          name: type
+          schema:
+            $ref: "#/components/schemas/ResourceType"
+        - in: query
+          name: environmentId
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Resource list
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/Resource"
+  /resources/{id}:
+    get:
+      summary: Get resource detail
+      operationId: getResource
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Resource detail
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Resource"
+  /resources/{id}/relations:
+    get:
+      summary: List relations for a resource
+      operationId: listResourceRelations
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Resource relation list
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/ResourceRelation"
+  /resources/{id}/audit-events:
+    get:
+      summary: List audit events for a resource
+      operationId: listResourceAuditEvents
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Resource audit list
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/AuditEvent"
+  /audit-events:
+    get:
+      summary: List audit events
+      operationId: listAuditEvents
+      responses:
+        "200":
+          description: Audit event list
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/AuditEvent"
+components:
+  schemas:
+    LoginRequest:
+      type: object
+      required: [email, password]
+      properties:
+        email:
+          type: string
+          format: email
+        password:
+          type: string
+    LoginResponse:
+      type: object
+      required: [token, role]
+      properties:
+        token:
+          type: string
+        role:
+          type: string
+    ResourceType:
+      type: string
+      enum: [host, database_instance, database_cluster, service]
+    Resource:
+      type: object
+      required:
+        - id
+        - resourceType
+        - resourceSubtype
+        - name
+        - displayName
+        - environmentId
+        - ownerId
+        - lifecycleStatus
+        - healthStatus
+        - source
+        - externalId
+      properties:
+        id:
+          type: string
+        resourceType:
+          $ref: "#/components/schemas/ResourceType"
+        resourceSubtype:
+          type: string
+        name:
+          type: string
+        displayName:
+          type: string
+        environmentId:
+          type: string
+        ownerId:
+          type: string
+        lifecycleStatus:
+          type: string
+        healthStatus:
+          type: string
+        source:
+          type: string
+        externalId:
+          type: string
+        labels:
+          type: object
+          additionalProperties:
+            type: string
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+    ResourceRelation:
+      type: object
+      required: [id, fromResourceId, toResourceId, relationType, createdAt]
+      properties:
+        id:
+          type: string
+        fromResourceId:
+          type: string
+        toResourceId:
+          type: string
+        relationType:
+          type: string
+        createdAt:
+          type: string
+          format: date-time
+    AuditEvent:
+      type: object
+      required: [id, actorUserId, eventType, result, createdAt]
+      properties:
+        id:
+          type: string
+        actorUserId:
+          type: string
+        targetResourceId:
+          type: string
+        eventType:
+          type: string
+        result:
+          type: string
+        createdAt:
+          type: string
+          format: date-time
