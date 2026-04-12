@@ -270,6 +270,55 @@ Examples:
 - service depends on database instance
 - service depends on database cluster
 
+#### Database domain guardrails
+
+For database-centric assets, the data model should preserve a clear separation
+between logical database boundaries, running nodes, infrastructure carriers, and
+supporting middleware/control components.
+
+Rules:
+
+- `database_cluster` is a logical service boundary, not a catch-all container
+  for every related component.
+- `database_instance` is the running database node or instance.
+- `host` is the infrastructure carrier when a database instance actually runs on
+  a VM or physical machine.
+- Future carrier types such as containers, Pods, or cloud compute units should
+  be modeled as independent resources rather than forced into `host`.
+- Proxies such as ProxySQL should be modeled as independent resources, not as
+  database instances.
+- HA/control components such as Orchestrator should be modeled as independent
+  resources, not as fields on `database_cluster`.
+- Resource topology belongs in `resource_relations`, not in typed profile
+  fields.
+- Typed profiles describe intrinsic properties of the resource itself, not the
+  full graph around it.
+
+This separation is required so the model remains valid for:
+
+- one host running multiple database instances
+- container or Pod-backed deployments
+- cloud RDS-style assets with no real host resource
+- role or endpoint changes caused by failover
+
+Practical interpretation for phase 1 and beyond:
+
+- `database_instance -> member_of -> database_cluster`
+- `database_instance -> runs_on -> host` when a real carrier exists
+- `service -> depends_on -> database_instance` or `service -> depends_on -> database_cluster`
+- future resource types may add relations such as:
+  - `database_proxy -> fronts -> database_cluster`
+  - `control_plane_component -> manages -> database_cluster`
+  - `database_instance -> replicates_to -> database_instance`
+
+Current source-of-truth rule:
+
+- The authoritative relationship between a database instance and its carrier is
+  the relation record such as `runs_on`.
+- A typed profile field like `resource_profiles_database_instance.host` is
+  supplemental display or connection metadata only; it must not become the sole
+  topology source.
+
 #### Status layers
 
 Keep separate status concepts:
