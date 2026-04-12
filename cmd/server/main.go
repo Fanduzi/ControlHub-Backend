@@ -34,6 +34,7 @@ func main() {
 		RoleService:        service.NewRoleService(dictRepo),
 	}
 
+	log.Printf("ControlHub starting on %s", cfg.HTTPAddress())
 	if err := http.ListenAndServe(cfg.HTTPAddress(), api.NewRouter(deps)); err != nil {
 		log.Fatal(err)
 	}
