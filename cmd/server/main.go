@@ -1,34 +1,34 @@
 package main
 
 import (
-	"context"
+	"database/sql"
 	"log"
 	"net/http"
 
-	"github.com/jackc/pgx/v5/pgxpool"
+	_ "github.com/go-sql-driver/mysql"
 
 	"github.com/fan/controlhub/internal/api"
 	"github.com/fan/controlhub/internal/config"
-	"github.com/fan/controlhub/internal/repository/postgres"
+	"github.com/fan/controlhub/internal/repository/mysql"
 	"github.com/fan/controlhub/internal/service"
 )
 
 func main() {
 	cfg := config.Load()
 
-	db, err := pgxpool.New(context.Background(), cfg.DatabaseURL)
+	db, err := sql.Open("mysql", cfg.DatabaseDSN)
 	if err != nil {
 		log.Fatal(err)
 	}
 	defer db.Close()
 
-	dictRepo := postgres.NewDictionaryRepository(db)
+	dictRepo := mysql.NewDictionaryRepository(db)
 
 	deps := api.Dependencies{
-		ResourceService:    service.NewResourceService(postgres.NewResourceRepository(db)),
-		RelationService:    service.NewRelationService(postgres.NewRelationRepository(db)),
-		AuditService:       service.NewAuditService(postgres.NewAuditRepository(db)),
-		AuthService:        service.NewAuthService(postgres.NewUserRepository(db), cfg.JWTSecret),
+		ResourceService:    service.NewResourceService(mysql.NewResourceRepository(db)),
+		RelationService:    service.NewRelationService(mysql.NewRelationRepository(db)),
+		AuditService:       service.NewAuditService(mysql.NewAuditRepository(db)),
+		AuthService:        service.NewAuthService(mysql.NewUserRepository(db), cfg.JWTSecret),
 		EnvironmentService: service.NewEnvironmentService(dictRepo),
 		OwnerService:       service.NewOwnerService(dictRepo),
 		RoleService:        service.NewRoleService(dictRepo),

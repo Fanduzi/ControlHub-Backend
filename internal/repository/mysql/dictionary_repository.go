@@ -1,28 +1,27 @@
-package postgres
+package mysql
 
 import (
 	"context"
-
-	"github.com/jackc/pgx/v5/pgxpool"
+	"database/sql"
 
 	"github.com/fan/controlhub/internal/model"
 )
 
 type DictionaryRepository struct {
-	db *pgxpool.Pool
+	db *sql.DB
 }
 
-func NewDictionaryRepository(db *pgxpool.Pool) *DictionaryRepository {
+func NewDictionaryRepository(db *sql.DB) *DictionaryRepository {
 	return &DictionaryRepository{db: db}
 }
 
 func (r *DictionaryRepository) ListEnvironments() ([]model.Environment, error) {
 	query := `
-	select id::text, name, slug, description, created_at
+	select id, name, slug, description, created_at
 	from environments
 	order by name`
 
-	rows, err := r.db.Query(context.Background(), query)
+	rows, err := r.db.QueryContext(context.Background(), query)
 	if err != nil {
 		return nil, err
 	}
@@ -42,11 +41,11 @@ func (r *DictionaryRepository) ListEnvironments() ([]model.Environment, error) {
 
 func (r *DictionaryRepository) ListOwners() ([]model.Owner, error) {
 	query := `
-	select id::text, name, email, created_at
+	select id, name, email, created_at
 	from owners
 	order by name`
 
-	rows, err := r.db.Query(context.Background(), query)
+	rows, err := r.db.QueryContext(context.Background(), query)
 	if err != nil {
 		return nil, err
 	}
@@ -66,11 +65,11 @@ func (r *DictionaryRepository) ListOwners() ([]model.Owner, error) {
 
 func (r *DictionaryRepository) ListRoles() ([]model.Role, error) {
 	query := `
-	select id::text, name, description, created_at
+	select id, name, description, created_at
 	from roles
 	order by name`
 
-	rows, err := r.db.Query(context.Background(), query)
+	rows, err := r.db.QueryContext(context.Background(), query)
 	if err != nil {
 		return nil, err
 	}

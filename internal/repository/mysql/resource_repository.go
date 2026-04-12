@@ -1,36 +1,37 @@
-package postgres
+package mysql
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
-
-	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/fan/controlhub/internal/model"
 	"github.com/fan/controlhub/internal/service"
 )
 
 type ResourceRepository struct {
-	db *pgxpool.Pool
+	db *sql.DB
 }
 
-func NewResourceRepository(db *pgxpool.Pool) *ResourceRepository {
+func NewResourceRepository(db *sql.DB) *ResourceRepository {
 	return &ResourceRepository{db: db}
 }
 
 func (r *ResourceRepository) ListResources(resourceType string, environmentID string) ([]model.Resource, error) {
 	query := `
-select id::text, resource_type, resource_subtype, name, display_name,
-       environment_id::text, owner_id::text, lifecycle_status, health_status,
-       source, external_id, labels, created_at, updated_at
-from resources
-where ($1 = '' or resource_type = $1)
-  and ($2 = '' or environment_id::text = $2)
-order by name`
+	select id, resource_type, resource_subtype, name, display_name,
+	       environment_id, owner_id, lifecycle_status, health_status,
+	       source, external_id, labels, created_at, updated_at
+	from resources
+	where (? = '' or resource_type = ?)
+	  and (? = '' or environment_id = ?)
+	order by name`
 
-	rows, err := r.db.Query(context.Background(), query, resourceType, environmentID)
+	rows, err := r.db.QueryContext(context.Background(), query,
+		resourceType, resourceType,
+		environmentID, environmentID,
+	)
 	if err != nil {
 		return nil, err
 	}
@@ -50,17 +51,17 @@ order by name`
 
 func (r *ResourceRepository) GetResource(id string) (*model.Resource, error) {
 	query := `
-select id::text, resource_type, resource_subtype, name, display_name,
-       environment_id::text, owner_id::text, lifecycle_status, health_status,
-       source, external_id, labels, created_at, updated_at
-from resources
-where id::text = $1`
+	select id, resource_type, resource_subtype, name, display_name,
+	       environment_id, owner_id, lifecycle_status, health_status,
+	       source, external_id, labels, created_at, updated_at
+	from resources
+	where id = ?`
 
-	row := r.db.QueryRow(context.Background(), query, id)
+	row := r.db.QueryRowContext(context.Background(), query, id)
 
 	item, err := scanResource(row)
 	if err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
+		if errors.Is(err, sql.ErrNoRows) {
 			return nil, service.ErrResourceNotFound
 		}
 		return nil, err
@@ -76,7 +77,7 @@ type resourceScanner interface {
 func scanResource(scanner resourceScanner) (model.Resource, error) {
 	var (
 		item      model.Resource
-		rawLabels []byte
+		rawLabels string
 	)
 
 	err := scanner.Scan(
@@ -99,12 +100,12 @@ func scanResource(scanner resourceScanner) (model.Resource, error) {
 		return model.Resource{}, err
 	}
 
-	if len(rawLabels) == 0 {
+	if rawLabels == "" || rawLabels == "null" {
 		item.Labels = map[string]string{}
 		return item, nil
 	}
 
-	if err := json.Unmarshal(rawLabels, &item.Labels); err != nil {
+	if err := json.Unmarshal([]byte(rawLabels), &item.Labels); err != nil {
 		return model.Resource{}, err
 	}
 

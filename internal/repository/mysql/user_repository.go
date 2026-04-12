@@ -1,39 +1,37 @@
-package postgres
+package mysql
 
 import (
 	"context"
+	"database/sql"
 	"errors"
-
-	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/fan/controlhub/internal/model"
 )
 
 type UserRepository struct {
-	db *pgxpool.Pool
+	db *sql.DB
 }
 
-func NewUserRepository(db *pgxpool.Pool) *UserRepository {
+func NewUserRepository(db *sql.DB) *UserRepository {
 	return &UserRepository{db: db}
 }
 
 func (r *UserRepository) FindByEmail(email string) (*model.UserCredential, error) {
 	query := `
-select users.id::text, users.email, roles.name, users.password_hash
-from users
-join roles on roles.id = users.role_id
-where lower(users.email) = lower($1)`
+	select users.id, users.email, roles.name, users.password_hash
+	from users
+	join roles on roles.id = users.role_id
+	where lower(users.email) = lower(?)`
 
 	var item model.UserCredential
-	err := r.db.QueryRow(context.Background(), query, email).Scan(
+	err := r.db.QueryRowContext(context.Background(), query, email).Scan(
 		&item.ID,
 		&item.Email,
 		&item.RoleName,
 		&item.PasswordHash,
 	)
 	if err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
+		if errors.Is(err, sql.ErrNoRows) {
 			return nil, nil
 		}
 		return nil, err

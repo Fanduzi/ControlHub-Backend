@@ -1,28 +1,27 @@
-package postgres
+package mysql
 
 import (
 	"context"
-
-	"github.com/jackc/pgx/v5/pgxpool"
+	"database/sql"
 
 	"github.com/fan/controlhub/internal/model"
 )
 
 type AuditRepository struct {
-	db *pgxpool.Pool
+	db *sql.DB
 }
 
-func NewAuditRepository(db *pgxpool.Pool) *AuditRepository {
+func NewAuditRepository(db *sql.DB) *AuditRepository {
 	return &AuditRepository{db: db}
 }
 
 func (r *AuditRepository) ListAll() ([]model.AuditEvent, error) {
 	query := `
-select id::text, actor_user_id::text, coalesce(target_resource_id::text, ''), event_type, result, created_at
-from audit_events
-order by created_at desc`
+	select id, actor_user_id, coalesce(target_resource_id, ''), event_type, result, created_at
+	from audit_events
+	order by created_at desc`
 
-	rows, err := r.db.Query(context.Background(), query)
+	rows, err := r.db.QueryContext(context.Background(), query)
 	if err != nil {
 		return nil, err
 	}
@@ -33,12 +32,12 @@ order by created_at desc`
 
 func (r *AuditRepository) ListByResourceID(resourceID string) ([]model.AuditEvent, error) {
 	query := `
-select id::text, actor_user_id::text, coalesce(target_resource_id::text, ''), event_type, result, created_at
-from audit_events
-where target_resource_id::text = $1
-order by created_at desc`
+	select id, actor_user_id, coalesce(target_resource_id, ''), event_type, result, created_at
+	from audit_events
+	where target_resource_id = ?
+	order by created_at desc`
 
-	rows, err := r.db.Query(context.Background(), query, resourceID)
+	rows, err := r.db.QueryContext(context.Background(), query, resourceID)
 	if err != nil {
 		return nil, err
 	}
@@ -47,7 +46,7 @@ order by created_at desc`
 	return scanAuditEvents(rows)
 }
 
-func scanAuditEvents(rows pgxRows) ([]model.AuditEvent, error) {
+func scanAuditEvents(rows *sql.Rows) ([]model.AuditEvent, error) {
 	items := make([]model.AuditEvent, 0)
 	for rows.Next() {
 		var item model.AuditEvent
@@ -65,10 +64,4 @@ func scanAuditEvents(rows pgxRows) ([]model.AuditEvent, error) {
 	}
 
 	return items, rows.Err()
-}
-
-type pgxRows interface {
-	Next() bool
-	Scan(dest ...any) error
-	Err() error
 }

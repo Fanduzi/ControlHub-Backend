@@ -1,3 +1,5 @@
+-- ControlHub seed reference data
+
 insert into roles (id, name, description) values
   ('00000000-0000-0000-0000-000000000001', 'admin', 'Full platform access'),
   ('00000000-0000-0000-0000-000000000002', 'editor', 'Can manage assets and relations');
@@ -50,7 +52,7 @@ insert into resources (
     '20000000-0000-0000-0000-000000000002',
     'running',
     'healthy',
-    '{"team":"order","tier":"data"}'::jsonb,
+    '{"team":"order","tier":"data"}',
     'manual',
     ''
   ),
@@ -64,7 +66,7 @@ insert into resources (
     '20000000-0000-0000-0000-000000000002',
     'running',
     'healthy',
-    '{"team":"order","tier":"data"}'::jsonb,
+    '{"team":"order","tier":"data"}',
     'manual',
     ''
   ),
@@ -78,7 +80,7 @@ insert into resources (
     '20000000-0000-0000-0000-000000000001',
     'running',
     'healthy',
-    '{"team":"order","tier":"app"}'::jsonb,
+    '{"team":"order","tier":"app"}',
     'manual',
     ''
   ),
@@ -92,7 +94,7 @@ insert into resources (
     '20000000-0000-0000-0000-000000000001',
     'running',
     'healthy',
-    '{"team":"platform","tier":"infra"}'::jsonb,
+    '{"team":"platform","tier":"infra"}',
     'manual',
     ''
   );
@@ -103,7 +105,7 @@ insert into resource_profiles_database_cluster (resource_id, engine, topology_mo
     'mysql',
     'primary-replica',
     'order-mysql-cluster-prod.internal:3306',
-    '{"replicas":2}'::jsonb
+    '{"replicas":2}'
   );
 
 insert into resource_profiles_database_instance (resource_id, engine, version, host, port, role, spec) values
@@ -114,7 +116,7 @@ insert into resource_profiles_database_instance (resource_id, engine, version, h
     'prod-db-host-01.internal',
     3306,
     'primary',
-    '{"storageClass":"ssd"}'::jsonb
+    '{"storageClass":"ssd"}'
   );
 
 insert into resource_profiles_service (resource_id, system_name, repository_url, runtime_env, spec) values
@@ -123,7 +125,7 @@ insert into resource_profiles_service (resource_id, system_name, repository_url,
     'order-api',
     'https://example.com/repos/order-api',
     'kubernetes',
-    '{"language":"go"}'::jsonb
+    '{"language":"go"}'
   );
 
 insert into resource_profiles_host (resource_id, hostname, ip_address, os_name, spec) values
@@ -132,7 +134,7 @@ insert into resource_profiles_host (resource_id, hostname, ip_address, os_name, 
     'prod-db-host-01.internal',
     '10.0.10.21',
     'Ubuntu 24.04',
-    '{"provider":"vmware"}'::jsonb
+    '{"provider":"vmware"}'
   );
 
 insert into resource_relations (id, from_resource_id, to_resource_id, relation_type) values
@@ -162,7 +164,7 @@ insert into audit_events (id, actor_user_id, target_resource_id, event_type, res
     '40000000-0000-0000-0000-000000000002',
     'resource.created',
     'success',
-    '{"resourceType":"database_instance"}'::jsonb
+    '{"resourceType":"database_instance"}'
   ),
   (
     '60000000-0000-0000-0000-000000000002',
@@ -170,5 +172,5 @@ insert into audit_events (id, actor_user_id, target_resource_id, event_type, res
     '40000000-0000-0000-0000-000000000003',
     'relation.created',
     'success',
-    '{"relationType":"depends_on"}'::jsonb
+    '{"relationType":"depends_on"}'
   );

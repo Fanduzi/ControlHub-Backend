@@ -1,6 +1,6 @@
 select table_name
 from information_schema.tables
-where table_schema = 'public'
+where table_schema = 'controlhub'
   and table_name in (
     'users',
     'roles',

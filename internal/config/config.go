@@ -4,7 +4,7 @@ import "os"
 
 type Config struct {
 	Port        string
-	DatabaseURL string
+	DatabaseDSN string
 	JWTSecret   string
 }
 
@@ -16,7 +16,7 @@ func Load() Config {
 
 	return Config{
 		Port:        port,
-		DatabaseURL: os.Getenv("DATABASE_URL"),
+		DatabaseDSN: os.Getenv("DATABASE_DSN"),
 		JWTSecret:   os.Getenv("JWT_SECRET"),
 	}
 }

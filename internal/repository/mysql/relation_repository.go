@@ -1,29 +1,28 @@
-package postgres
+package mysql
 
 import (
 	"context"
-
-	"github.com/jackc/pgx/v5/pgxpool"
+	"database/sql"
 
 	"github.com/fan/controlhub/internal/model"
 )
 
 type RelationRepository struct {
-	db *pgxpool.Pool
+	db *sql.DB
 }
 
-func NewRelationRepository(db *pgxpool.Pool) *RelationRepository {
+func NewRelationRepository(db *sql.DB) *RelationRepository {
 	return &RelationRepository{db: db}
 }
 
 func (r *RelationRepository) ListByResourceID(resourceID string) ([]model.ResourceRelation, error) {
 	query := `
-select id::text, from_resource_id::text, to_resource_id::text, relation_type, created_at
-from resource_relations
-where from_resource_id::text = $1 or to_resource_id::text = $1
-order by created_at desc`
+	select id, from_resource_id, to_resource_id, relation_type, created_at
+	from resource_relations
+	where from_resource_id = ? or to_resource_id = ?
+	order by created_at desc`
 
-	rows, err := r.db.Query(context.Background(), query, resourceID)
+	rows, err := r.db.QueryContext(context.Background(), query, resourceID, resourceID)
 	if err != nil {
 		return nil, err
 	}
