@@ -44,6 +44,7 @@ The seeded login credentials are:
 ```bash
 curl http://localhost:8080/health
 curl http://localhost:8080/resources
+curl http://localhost:8080/resources/40000000-0000-0000-0000-000000000002/profile
 curl http://localhost:8080/environments
 curl http://localhost:8080/owners
 curl http://localhost:8080/roles
@@ -69,6 +70,7 @@ make test
 | GET | /health | Health check |
 | GET | /resources | List resources |
 | GET | /resources/{id} | Get resource detail |
+| GET | /resources/{id}/profile | Get resource typed profile projection |
 | GET | /resources/{id}/relations | List relations for a resource |
 | GET | /resources/{id}/audit-events | List audit events for a resource |
 | GET | /audit-events | List audit events |

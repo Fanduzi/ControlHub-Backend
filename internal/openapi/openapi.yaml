@@ -81,6 +81,31 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/Resource"
+  /resources/{id}/profile:
+    get:
+      summary: Get resource typed profile projection
+      description: >
+        Read-only projection of the typed profile row for a resource.
+        The `profile` object keys vary by `resourceType` and
+        `resourceSubtype`.  Values may be string, number, boolean, or null.
+        If the resource exists but has no typed profile row, `profile` is
+        returned as an empty object `{}`.
+      operationId: getResourceProfile
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Resource profile projection
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ResourceProfileResponse"
+        "404":
+          description: Resource not found
   /resources/{id}/relations:
     get:
       summary: List relations for a resource
@@ -346,3 +371,22 @@ components:
         createdAt:
           type: string
           format: date-time
+    ResourceProfileResponse:
+      type: object
+      required: [resourceId, resourceType, resourceSubtype, profile]
+      properties:
+        resourceId:
+          type: string
+        resourceType:
+          $ref: "#/components/schemas/ResourceType"
+        resourceSubtype:
+          type: string
+        profile:
+          type: object
+          additionalProperties: true
+          description: >
+            Typed profile fields.  Keys depend on resourceType:
+            - database_instance: engine, version, host, port, role
+            - database_cluster: engine, topologyMode, primaryEndpoint
+            - service: systemName, repositoryUrl, runtimeEnv
+            - host: hostname, ipAddress, osName

@@ -11,6 +11,7 @@ var ErrResourceNotFound = errors.New("resource not found")
 type ResourceRepository interface {
 	ListResources(resourceType string, environmentID string) ([]model.Resource, error)
 	GetResource(id string) (*model.Resource, error)
+	GetResourceProfile(id string) (*model.ResourceProfileResponse, error)
 }
 
 type ResourceService struct {
@@ -34,4 +35,12 @@ func (s *ResourceService) Get(id string) (*model.Resource, error) {
 		return nil, ErrResourceNotFound
 	}
 	return item, nil
+}
+
+func (s *ResourceService) GetProfile(id string) (*model.ResourceProfileResponse, error) {
+	profile, err := s.repo.GetResourceProfile(id)
+	if err != nil {
+		return nil, err
+	}
+	return profile, nil
 }

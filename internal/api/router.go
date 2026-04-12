@@ -39,6 +39,7 @@ func NewRouter(deps Dependencies) *chi.Mux {
 	router.Get("/health", handleHealth)
 	router.Get("/resources", handleListResources(deps.ResourceService))
 	router.Get("/resources/{id}", handleGetResource(deps.ResourceService))
+	router.Get("/resources/{id}/profile", handleGetResourceProfile(deps.ResourceService))
 	router.Get("/resources/{id}/relations", handleListResourceRelations(deps.RelationService))
 	router.Get("/resources/{id}/audit-events", handleListResourceAuditEvents(deps.AuditService))
 	router.Get("/audit-events", handleListAuditEvents(deps.AuditService))

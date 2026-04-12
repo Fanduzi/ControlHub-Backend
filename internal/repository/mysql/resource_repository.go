@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"fmt"
 
 	"github.com/fan/controlhub/internal/model"
 	"github.com/fan/controlhub/internal/service"
@@ -68,6 +69,121 @@ func (r *ResourceRepository) GetResource(id string) (*model.Resource, error) {
 	}
 
 	return &item, nil
+}
+
+func (r *ResourceRepository) GetResourceProfile(id string) (*model.ResourceProfileResponse, error) {
+	res, err := r.GetResource(id)
+	if err != nil {
+		return nil, err
+	}
+
+	profile, err := r.fetchProfile(res.ID, res.ResourceType)
+	if err != nil {
+		return nil, err
+	}
+
+	return &model.ResourceProfileResponse{
+		ResourceID:      res.ID,
+		ResourceType:    res.ResourceType,
+		ResourceSubtype: res.ResourceSubtype,
+		Profile:         profile,
+	}, nil
+}
+
+func (r *ResourceRepository) fetchProfile(resourceID string, resourceType model.ResourceType) (map[string]any, error) {
+	ctx := context.Background()
+
+	switch resourceType {
+	case model.ResourceTypeDatabaseInstance:
+		return r.fetchDatabaseInstanceProfile(ctx, resourceID)
+	case model.ResourceTypeDatabaseCluster:
+		return r.fetchDatabaseClusterProfile(ctx, resourceID)
+	case model.ResourceTypeService:
+		return r.fetchServiceProfile(ctx, resourceID)
+	case model.ResourceTypeHost:
+		return r.fetchHostProfile(ctx, resourceID)
+	default:
+		return map[string]any{}, nil
+	}
+}
+
+func (r *ResourceRepository) fetchDatabaseInstanceProfile(ctx context.Context, id string) (map[string]any, error) {
+	var engine, version, host, role string
+	var port int
+	err := r.db.QueryRowContext(ctx,
+		`select engine, version, host, port, role from resource_profiles_database_instance where resource_id = ?`,
+		id,
+	).Scan(&engine, &version, &host, &port, &role)
+	if errors.Is(err, sql.ErrNoRows) {
+		return map[string]any{}, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("fetch database_instance profile: %w", err)
+	}
+	return map[string]any{
+		"engine": engine,
+		"version": version,
+		"host":   host,
+		"port":   port,
+		"role":   role,
+	}, nil
+}
+
+func (r *ResourceRepository) fetchDatabaseClusterProfile(ctx context.Context, id string) (map[string]any, error) {
+	var engine, topologyMode, primaryEndpoint string
+	err := r.db.QueryRowContext(ctx,
+		`select engine, topology_mode, primary_endpoint from resource_profiles_database_cluster where resource_id = ?`,
+		id,
+	).Scan(&engine, &topologyMode, &primaryEndpoint)
+	if errors.Is(err, sql.ErrNoRows) {
+		return map[string]any{}, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("fetch database_cluster profile: %w", err)
+	}
+	return map[string]any{
+		"engine":           engine,
+		"topologyMode":     topologyMode,
+		"primaryEndpoint":  primaryEndpoint,
+	}, nil
+}
+
+func (r *ResourceRepository) fetchServiceProfile(ctx context.Context, id string) (map[string]any, error) {
+	var systemName, repoURL, runtimeEnv string
+	err := r.db.QueryRowContext(ctx,
+		`select system_name, repository_url, runtime_env from resource_profiles_service where resource_id = ?`,
+		id,
+	).Scan(&systemName, &repoURL, &runtimeEnv)
+	if errors.Is(err, sql.ErrNoRows) {
+		return map[string]any{}, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("fetch service profile: %w", err)
+	}
+	return map[string]any{
+		"systemName":    systemName,
+		"repositoryUrl": repoURL,
+		"runtimeEnv":    runtimeEnv,
+	}, nil
+}
+
+func (r *ResourceRepository) fetchHostProfile(ctx context.Context, id string) (map[string]any, error) {
+	var hostname, ipAddress, osName string
+	err := r.db.QueryRowContext(ctx,
+		`select hostname, ip_address, os_name from resource_profiles_host where resource_id = ?`,
+		id,
+	).Scan(&hostname, &ipAddress, &osName)
+	if errors.Is(err, sql.ErrNoRows) {
+		return map[string]any{}, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("fetch host profile: %w", err)
+	}
+	return map[string]any{
+		"hostname":  hostname,
+		"ipAddress": ipAddress,
+		"osName":    osName,
+	}, nil
 }
 
 type resourceScanner interface {

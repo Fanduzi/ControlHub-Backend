@@ -23,6 +23,15 @@ func (r ResourceType) Validate() error {
 	}
 }
 
+// ResourceProfileResponse is the read-only projection returned by
+// GET /resources/{id}/profile. Profile keys vary by resource type.
+type ResourceProfileResponse struct {
+	ResourceID      string         `json:"resourceId"`
+	ResourceType    ResourceType   `json:"resourceType"`
+	ResourceSubtype string         `json:"resourceSubtype"`
+	Profile         map[string]any `json:"profile"`
+}
+
 type Resource struct {
 	ID              string            `json:"id"`
 	ResourceType    ResourceType      `json:"resourceType"`

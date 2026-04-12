@@ -41,6 +41,22 @@ func handleGetResource(resourceService *service.ResourceService) http.HandlerFun
 	}
 }
 
+func handleGetResourceProfile(resourceService *service.ResourceService) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		profile, err := resourceService.GetProfile(chi.URLParam(r, "id"))
+		if err != nil {
+			status := http.StatusInternalServerError
+			if errors.Is(err, service.ErrResourceNotFound) {
+				status = http.StatusNotFound
+			}
+			http.Error(w, err.Error(), status)
+			return
+		}
+
+		writeJSON(w, http.StatusOK, profile)
+	}
+}
+
 func writeJSON(w http.ResponseWriter, status int, payload any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
