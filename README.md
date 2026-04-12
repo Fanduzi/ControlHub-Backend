@@ -6,15 +6,31 @@
 - This workspace is aligned to local `asdf` default `Go 1.26.1`
 - MySQL 8.0+
 
+## Setup
+
+```bash
+# 1. Create the database
+mysql -u root -e "CREATE DATABASE controlhub CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci;"
+
+# 2. Create a dedicated user (recommended over using root)
+mysql -u root -e "CREATE USER IF NOT EXISTS 'controlhub'@'%' IDENTIFIED BY 'controlhub_dev';"
+mysql -u root -e "GRANT ALL PRIVILEGES ON controlhub.* TO 'controlhub'@'%'; FLUSH PRIVILEGES;"
+
+# 3. Apply migrations
+mysql -u root controlhub < migrations/0001_initial_schema.sql
+mysql -u root controlhub < migrations/0002_seed_reference_data.sql
+
+# 4. Copy .env and adjust DSN if needed
+cp .env.example .env
+```
+
 ## Run
 
-1. Copy `.env.example` to `.env`.
-2. Create a MySQL database named `controlhub`:
-   `mysql -u root -e "CREATE DATABASE controlhub CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci;"`
-3. Apply the SQL files in `migrations/`:
-   `mysql -u root controlhub < migrations/0001_initial_schema.sql`
-   `mysql -u root controlhub < migrations/0002_seed_reference_data.sql`
-4. Start the server with `make run`.
+```bash
+make run
+```
+
+The server starts on `http://localhost:8080` by default.
 
 To confirm the local toolchain before running, use `go version`.
 
@@ -23,15 +39,27 @@ The seeded login credentials are:
 - `admin@example.com` / `secret123`
 - `editor@example.com` / `secret123`
 
+## Smoke Test
+
+```bash
+curl http://localhost:8080/health
+curl http://localhost:8080/resources
+curl http://localhost:8080/environments
+curl http://localhost:8080/owners
+curl http://localhost:8080/roles
+curl -X POST http://localhost:8080/auth/login \
+  -H "Content-Type: application/json" \
+  -d '{"email":"admin@example.com","password":"secret123"}'
+```
+
 ## Test
 
-Run `go test ./internal/api -v`
-
-Run `go test ./internal/model -v`
-
-Run `go test ./internal/service -v`
-
-Run `make test`
+```bash
+go test ./internal/api -v
+go test ./internal/model -v
+go test ./internal/service -v
+make test
+```
 
 ## API Endpoints
 
