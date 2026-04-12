@@ -319,6 +319,36 @@ Current source-of-truth rule:
   supplemental display or connection metadata only; it must not become the sole
   topology source.
 
+Future resource-type direction for the database domain:
+
+- Domain names should eventually be modeled as independent resources.
+- VIPs / virtual IPs should eventually be modeled as independent resources.
+- Database proxies such as ProxySQL should eventually be modeled as independent
+  resources.
+- HA/control-plane components such as Orchestrator should eventually be modeled
+  as independent resources.
+
+These are not phase-1 schema requirements, but they are intentional extension
+points and should not later be forced into `database_cluster` or
+`database_instance` profiles.
+
+#### Topology visualization strategy
+
+Topology visualization is intentionally excluded from phase 1 as a heavy
+feature, but the long-term product direction should follow these rules:
+
+- Do not let the frontend build the final topology graph directly from raw
+  `/resources` and `/relations` responses alone.
+- Introduce a backend topology read model or projection first, for example a
+  future endpoint such as `/resources/{id}/topology` or `/topologies/{id}`.
+- The topology read model should return graph-oriented payloads such as nodes,
+  edges, and optional grouping or layout hints.
+- The first useful topology views should be scoped views around a resource or
+  cluster, not an unbounded global graph.
+- Topology must support more than replication trees; it should be able to
+  express upper-layer middleware, HA/control components, service dependencies,
+  and infrastructure carriers in the same graph.
+
 #### Status layers
 
 Keep separate status concepts:
