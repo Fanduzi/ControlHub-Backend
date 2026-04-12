@@ -26,7 +26,7 @@ Core product context:
 Backend scope you own in this session:
 - Task 1: bootstrap backend shell
 - Task 2: add OpenAPI and core resource model
-- Task 3: create PostgreSQL schema and seed data
+- Task 3: create MySQL 8.0+ schema and seed data
 - Task 4: implement backend resource, relation, and audit APIs
 - Task 5: implement backend login and basic role handling
 - Task 10 backend portions only: backend README and backend verification updates
@@ -53,9 +53,9 @@ Implementation rules:
 
 Technical expectations:
 - Go
-- PostgreSQL
+- MySQL 8.0+
 - chi
-- pgx
+- database/sql + github.com/go-sql-driver/mysql
 - OpenAPI 3.1
 
 Quality bar:

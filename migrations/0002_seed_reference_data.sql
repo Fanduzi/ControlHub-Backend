@@ -157,20 +157,18 @@ insert into resource_relations (id, from_resource_id, to_resource_id, relation_t
     'runs_on'
   );
 
-insert into audit_events (id, actor_user_id, target_resource_id, event_type, result, detail) values
+insert into audit_events (id, actor_user_id, target_resource_id, event_type, result) values
   (
     '60000000-0000-0000-0000-000000000001',
     '30000000-0000-0000-0000-000000000001',
     '40000000-0000-0000-0000-000000000002',
     'resource.created',
-    'success',
-    '{"resourceType":"database_instance"}'
+    'success'
   ),
   (
     '60000000-0000-0000-0000-000000000002',
     '30000000-0000-0000-0000-000000000001',
     '40000000-0000-0000-0000-000000000003',
     'relation.created',
-    'success',
-    '{"relationType":"depends_on"}'
+    'success'
   );

@@ -285,6 +285,14 @@ Phase 1 should support at least:
 - `audit_events`
 - room for future `resource_snapshots`
 
+The `audit_events` table in MySQL is a **phase-1 bootstrap/demo placeholder** only.
+It has no foreign-key constraints on resource or user tables, so resource write
+paths never depend on it transactionally.  The long-term backing store for audit
+events is **ClickHouse**, which is better suited for append-only, high-write,
+time-range queries.  The HTTP contract (`GET /audit-events`,
+`GET /resources/{id}/audit-events`) will remain unchanged when the migration to
+ClickHouse happens — only the repository implementation will be swapped.
+
 ## 11. Initial Persistence Outline
 
 The first version should likely include these core tables:

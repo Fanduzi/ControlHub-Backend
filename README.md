@@ -47,3 +47,17 @@ Run `make test`
 | GET | /environments | List environments |
 | GET | /owners | List owners |
 | GET | /roles | List roles |
+
+## Audit Storage Strategy
+
+Phase-1 keeps a minimal `audit_events` table in MySQL for local
+development and demo purposes only.  The table has no foreign-key
+constraints on the resource or user tables, so resource write paths
+never depend on it transactionally.
+
+The long-term backing store for audit events is **ClickHouse**, which
+is better suited for append-only, high-write, time-range queries.  The
+current HTTP contract (`GET /audit-events`,
+`GET /resources/{id}/audit-events`) will remain unchanged when the
+migration to ClickHouse happens — only the repository implementation
+will be swapped.

@@ -104,16 +104,17 @@ create table resource_profiles_service (
   constraint fk_profile_service foreign key (resource_id) references resources(id) on delete cascade
 ) engine=innodb default charset=utf8mb4 collate=utf8mb4_0900_ai_ci;
 
+-- audit_events: bootstrap/demo placeholder only.
+-- Phase-1 stores events in MySQL for local development; the long-term
+-- backing store will be ClickHouse.  FK constraints are intentionally
+-- omitted so that resource write paths do not depend on this table.
 create table audit_events (
   id char(36) not null primary key,
   actor_user_id char(36) not null,
   target_resource_id char(36) default null,
   event_type varchar(64) not null,
   result varchar(64) not null,
-  detail json not null,
-  created_at datetime not null default current_timestamp,
-  constraint fk_audit_actor foreign key (actor_user_id) references users(id),
-  constraint fk_audit_target foreign key (target_resource_id) references resources(id)
+  created_at datetime not null default current_timestamp
 ) engine=innodb default charset=utf8mb4 collate=utf8mb4_0900_ai_ci;
 
 create index idx_resources_type on resources(resource_type);

@@ -109,7 +109,7 @@ If possible, also run the server and smoke-test:
 - curl http://localhost:8080/owners
 - curl http://localhost:8080/roles
 
-If PostgreSQL or psql is unavailable, say exactly what could not be verified and why.
+If MySQL or the mysql client is unavailable, say exactly what could not be verified and why.
 
 Completion report must include:
 - changed files

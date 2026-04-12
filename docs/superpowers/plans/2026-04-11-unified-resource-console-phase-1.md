@@ -4,9 +4,9 @@
 
 **Goal:** Build the first working phase of the unified resource console across the Go backend and Next.js frontend, centered on manually managed assets, relations, audit events, and a professional control-console shell.
 
-**Architecture:** The backend uses a pragmatic layered structure with REST + OpenAPI, PostgreSQL, and resource-centric modules. The frontend uses Next.js App Router with a custom app shell built from shadcn/ui primitives and business blocks, keeping data flow explicit and React complexity low.
+**Architecture:** The backend uses a pragmatic layered structure with REST + OpenAPI, MySQL 8.0+, and resource-centric modules. The frontend uses Next.js App Router with a custom app shell built from shadcn/ui primitives and business blocks, keeping data flow explicit and React complexity low.
 
-**Tech Stack:** Go, chi, pgx, PostgreSQL, OpenAPI 3.1, Next.js App Router, TypeScript, Tailwind CSS, shadcn/ui, TanStack Table, React Hook Form, Zod, Vitest, Testing Library
+**Tech Stack:** Go, chi, database/sql + github.com/go-sql-driver/mysql, MySQL 8.0+, OpenAPI 3.1, Next.js App Router, TypeScript, Tailwind CSS, shadcn/ui, TanStack Table, React Hook Form, Zod, Vitest, Testing Library
 
 ---
 
@@ -32,10 +32,10 @@
 - Create: `/Users/fan/GolangProjects/ControlHub/internal/service/relation_service.go`
 - Create: `/Users/fan/GolangProjects/ControlHub/internal/service/audit_service.go`
 - Create: `/Users/fan/GolangProjects/ControlHub/internal/service/auth_service.go`
-- Create: `/Users/fan/GolangProjects/ControlHub/internal/repository/postgres/resource_repository.go`
-- Create: `/Users/fan/GolangProjects/ControlHub/internal/repository/postgres/relation_repository.go`
-- Create: `/Users/fan/GolangProjects/ControlHub/internal/repository/postgres/audit_repository.go`
-- Create: `/Users/fan/GolangProjects/ControlHub/internal/repository/postgres/user_repository.go`
+- Create: `/Users/fan/GolangProjects/ControlHub/internal/repository/mysql/resource_repository.go`
+- Create: `/Users/fan/GolangProjects/ControlHub/internal/repository/mysql/relation_repository.go`
+- Create: `/Users/fan/GolangProjects/ControlHub/internal/repository/mysql/audit_repository.go`
+- Create: `/Users/fan/GolangProjects/ControlHub/internal/repository/mysql/user_repository.go`
 - Create: `/Users/fan/GolangProjects/ControlHub/internal/model/resource.go`
 - Create: `/Users/fan/GolangProjects/ControlHub/internal/model/relation.go`
 - Create: `/Users/fan/GolangProjects/ControlHub/internal/model/audit.go`
@@ -92,7 +92,7 @@
 
 ## Assumptions
 
-- Backend database is PostgreSQL.
+- Backend database is MySQL 8.0+.
 - Frontend package manager is `npm`.
 - Backend authentication in phase 1 uses local login with signed session token or JWT and two basic roles: `admin` and `editor`.
 - Reference data for environments and owners can be seeded from SQL in phase 1.
@@ -153,7 +153,7 @@ go 1.26.0
 
 require (
 	github.com/go-chi/chi/v5 v5.2.1
-	github.com/jackc/pgx/v5 v5.7.4
+	github.com/go-sql-driver/mysql v1.9.3
 )
 ```
 
@@ -249,7 +249,7 @@ run:
 # /Users/fan/GolangProjects/ControlHub/.env.example
 APP_ENV=local
 APP_PORT=8080
-DATABASE_URL=postgres://postgres:postgres@localhost:5432/controlhub?sslmode=disable
+DATABASE_DSN=root:password@tcp(127.0.0.1:3306)/controlhub?parseTime=true&charset=utf8mb4
 JWT_SECRET=change-me
 ```
 
@@ -459,7 +459,7 @@ git add internal/model internal/openapi/openapi.yaml
 git commit -m "feat: define resource core model and openapi baseline"
 ```
 
-### Task 3: Create the PostgreSQL schema and seed data
+### Task 3: Create the MySQL 8.0+ schema and seed data
 
 **Files:**
 - Create: `/Users/fan/GolangProjects/ControlHub/migrations/0001_initial_schema.sql`
@@ -472,7 +472,7 @@ git commit -m "feat: define resource core model and openapi baseline"
 -- /Users/fan/GolangProjects/ControlHub/migrations/verify_initial_schema.sql
 select table_name
 from information_schema.tables
-where table_schema = 'public'
+where table_schema = 'controlhub'
   and table_name in (
     'users',
     'roles',
@@ -493,110 +493,127 @@ order by table_name;
 
 ```sql
 -- /Users/fan/GolangProjects/ControlHub/migrations/0001_initial_schema.sql
+-- ControlHub initial schema for MySQL 8.0+
 create table roles (
-  id uuid primary key,
-  name text not null unique,
+  id char(36) not null primary key,
+  name varchar(255) not null unique,
   description text not null,
-  created_at timestamptz not null default now()
-);
+  created_at datetime not null default current_timestamp
+) engine=innodb default charset=utf8mb4 collate=utf8mb4_0900_ai_ci;
 
 create table users (
-  id uuid primary key,
-  email text not null unique,
-  password_hash text not null,
-  display_name text not null,
-  role_id uuid not null references roles(id),
-  created_at timestamptz not null default now()
-);
+  id char(36) not null primary key,
+  email varchar(255) not null unique,
+  password_hash varchar(255) not null,
+  display_name varchar(255) not null,
+  role_id char(36) not null,
+  created_at datetime not null default current_timestamp,
+  constraint fk_users_role foreign key (role_id) references roles(id)
+) engine=innodb default charset=utf8mb4 collate=utf8mb4_0900_ai_ci;
 
 create table environments (
-  id uuid primary key,
-  name text not null unique,
-  slug text not null unique,
+  id char(36) not null primary key,
+  name varchar(255) not null unique,
+  slug varchar(255) not null unique,
   description text not null,
-  created_at timestamptz not null default now()
-);
+  created_at datetime not null default current_timestamp
+) engine=innodb default charset=utf8mb4 collate=utf8mb4_0900_ai_ci;
 
 create table owners (
-  id uuid primary key,
-  name text not null,
-  email text not null unique,
-  created_at timestamptz not null default now()
-);
+  id char(36) not null primary key,
+  name varchar(255) not null,
+  email varchar(255) not null unique,
+  created_at datetime not null default current_timestamp
+) engine=innodb default charset=utf8mb4 collate=utf8mb4_0900_ai_ci;
 
 create table resources (
-  id uuid primary key,
-  resource_type text not null,
-  resource_subtype text not null default '',
-  name text not null unique,
-  display_name text not null,
-  environment_id uuid not null references environments(id),
-  owner_id uuid not null references owners(id),
-  lifecycle_status text not null,
-  health_status text not null,
-  labels jsonb not null default '{}'::jsonb,
-  source text not null default 'manual',
-  external_id text not null default '',
-  created_at timestamptz not null default now(),
-  updated_at timestamptz not null default now()
-);
+  id char(36) not null primary key,
+  resource_type varchar(64) not null,
+  resource_subtype varchar(64) not null default '',
+  name varchar(255) not null unique,
+  display_name varchar(255) not null,
+  environment_id char(36) not null,
+  owner_id char(36) not null,
+  lifecycle_status varchar(64) not null,
+  health_status varchar(64) not null,
+  labels json not null,
+  source varchar(64) not null default 'manual',
+  external_id varchar(255) not null default '',
+  created_at datetime not null default current_timestamp,
+  updated_at datetime not null default current_timestamp on update current_timestamp,
+  constraint fk_resources_environment foreign key (environment_id) references environments(id),
+  constraint fk_resources_owner foreign key (owner_id) references owners(id),
+  constraint chk_resource_type check (
+    resource_type in ('host', 'database_instance', 'database_cluster', 'service')
+  )
+) engine=innodb default charset=utf8mb4 collate=utf8mb4_0900_ai_ci;
 
 create table resource_relations (
-  id uuid primary key,
-  from_resource_id uuid not null references resources(id) on delete cascade,
-  to_resource_id uuid not null references resources(id) on delete cascade,
-  relation_type text not null,
-  created_at timestamptz not null default now()
-);
+  id char(36) not null primary key,
+  from_resource_id char(36) not null,
+  to_resource_id char(36) not null,
+  relation_type varchar(64) not null,
+  created_at datetime not null default current_timestamp,
+  constraint fk_relations_from foreign key (from_resource_id) references resources(id) on delete cascade,
+  constraint fk_relations_to foreign key (to_resource_id) references resources(id) on delete cascade,
+  constraint chk_no_self_link check (from_resource_id <> to_resource_id),
+  unique key uq_relation (from_resource_id, to_resource_id, relation_type)
+) engine=innodb default charset=utf8mb4 collate=utf8mb4_0900_ai_ci;
 
 create table resource_profiles_host (
-  resource_id uuid primary key references resources(id) on delete cascade,
-  hostname text not null,
-  ip_address text not null,
-  os_name text not null,
-  spec jsonb not null default '{}'::jsonb
-);
+  resource_id char(36) not null primary key,
+  hostname varchar(255) not null,
+  ip_address varchar(64) not null,
+  os_name varchar(255) not null,
+  spec json not null,
+  constraint fk_profile_host foreign key (resource_id) references resources(id) on delete cascade
+) engine=innodb default charset=utf8mb4 collate=utf8mb4_0900_ai_ci;
 
 create table resource_profiles_database_instance (
-  resource_id uuid primary key references resources(id) on delete cascade,
-  engine text not null,
-  version text not null,
-  host text not null,
-  port integer not null,
-  role text not null,
-  spec jsonb not null default '{}'::jsonb
-);
+  resource_id char(36) not null primary key,
+  engine varchar(64) not null,
+  version varchar(64) not null,
+  host varchar(255) not null,
+  port int not null,
+  role varchar(64) not null,
+  spec json not null,
+  constraint fk_profile_db_instance foreign key (resource_id) references resources(id) on delete cascade
+) engine=innodb default charset=utf8mb4 collate=utf8mb4_0900_ai_ci;
 
 create table resource_profiles_database_cluster (
-  resource_id uuid primary key references resources(id) on delete cascade,
-  engine text not null,
-  topology_mode text not null,
-  primary_endpoint text not null,
-  spec jsonb not null default '{}'::jsonb
-);
+  resource_id char(36) not null primary key,
+  engine varchar(64) not null,
+  topology_mode varchar(64) not null,
+  primary_endpoint varchar(255) not null,
+  spec json not null,
+  constraint fk_profile_db_cluster foreign key (resource_id) references resources(id) on delete cascade
+) engine=innodb default charset=utf8mb4 collate=utf8mb4_0900_ai_ci;
 
 create table resource_profiles_service (
-  resource_id uuid primary key references resources(id) on delete cascade,
-  system_name text not null,
-  repository_url text not null,
-  runtime_env text not null,
-  spec jsonb not null default '{}'::jsonb
-);
+  resource_id char(36) not null primary key,
+  system_name varchar(255) not null,
+  repository_url varchar(512) not null,
+  runtime_env varchar(64) not null,
+  spec json not null,
+  constraint fk_profile_service foreign key (resource_id) references resources(id) on delete cascade
+) engine=innodb default charset=utf8mb4 collate=utf8mb4_0900_ai_ci;
 
+-- audit_events: bootstrap/demo placeholder only.
+-- Phase-1 stores events in MySQL for local development; the long-term
+-- backing store will be ClickHouse.  FK constraints are intentionally
+-- omitted so that resource write paths do not depend on this table.
 create table audit_events (
-  id uuid primary key,
-  actor_user_id uuid not null references users(id),
-  target_resource_id uuid references resources(id),
-  event_type text not null,
-  result text not null,
-  detail jsonb not null default '{}'::jsonb,
-  created_at timestamptz not null default now()
-);
+  id char(36) not null primary key,
+  actor_user_id char(36) not null,
+  target_resource_id char(36) default null,
+  event_type varchar(64) not null,
+  result varchar(64) not null,
+  created_at datetime not null default current_timestamp
+) engine=innodb default charset=utf8mb4 collate=utf8mb4_0900_ai_ci;
 
 create index idx_resources_type on resources(resource_type);
 create index idx_resources_environment on resources(environment_id);
 create index idx_resources_health on resources(health_status);
-create index idx_resources_labels_gin on resources using gin(labels);
 create index idx_relations_from on resource_relations(from_resource_id);
 create index idx_relations_to on resource_relations(to_resource_id);
 create index idx_audit_target on audit_events(target_resource_id);
@@ -619,14 +636,15 @@ insert into owners (id, name, email) values
   ('20000000-0000-0000-0000-000000000002', 'DBA Team', 'dba@example.com');
 ```
 
-- [ ] **Step 4: Run the schema manually against local PostgreSQL**
+- [ ] **Step 4: Run the schema manually against local MySQL**
 
 Run:
 
 ```bash
-psql "$DATABASE_URL" -f migrations/0001_initial_schema.sql
-psql "$DATABASE_URL" -f migrations/0002_seed_reference_data.sql
-psql "$DATABASE_URL" -f migrations/verify_initial_schema.sql
+mysql -u root -e "CREATE DATABASE controlhub CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci;"
+mysql -u root controlhub < migrations/0001_initial_schema.sql
+mysql -u root controlhub < migrations/0002_seed_reference_data.sql
+mysql -u root controlhub < migrations/verify_initial_schema.sql
 ```
 
 Expected: the verification script prints the 11 expected table names.
@@ -635,7 +653,7 @@ Expected: the verification script prints the 11 expected table names.
 
 ```bash
 git add migrations
-git commit -m "feat: add initial postgres schema for resource console"
+git commit -m "feat: add initial mysql schema for resource console"
 ```
 
 ### Task 4: Implement backend resource, relation, and audit APIs
@@ -650,9 +668,9 @@ git commit -m "feat: add initial postgres schema for resource console"
 - Create: `/Users/fan/GolangProjects/ControlHub/internal/service/resource_service.go`
 - Create: `/Users/fan/GolangProjects/ControlHub/internal/service/relation_service.go`
 - Create: `/Users/fan/GolangProjects/ControlHub/internal/service/audit_service.go`
-- Create: `/Users/fan/GolangProjects/ControlHub/internal/repository/postgres/resource_repository.go`
-- Create: `/Users/fan/GolangProjects/ControlHub/internal/repository/postgres/relation_repository.go`
-- Create: `/Users/fan/GolangProjects/ControlHub/internal/repository/postgres/audit_repository.go`
+- Create: `/Users/fan/GolangProjects/ControlHub/internal/repository/mysql/resource_repository.go`
+- Create: `/Users/fan/GolangProjects/ControlHub/internal/repository/mysql/relation_repository.go`
+- Create: `/Users/fan/GolangProjects/ControlHub/internal/repository/mysql/audit_repository.go`
 - Create: `/Users/fan/GolangProjects/ControlHub/internal/model/relation.go`
 - Create: `/Users/fan/GolangProjects/ControlHub/internal/model/audit.go`
 
@@ -1023,34 +1041,37 @@ func NewRouter(deps Dependencies) *chi.Mux {
 - [ ] **Step 5: Add repository queries for list/detail/relations/audit**
 
 ```go
-// /Users/fan/GolangProjects/ControlHub/internal/repository/postgres/resource_repository.go
-package postgres
+// /Users/fan/GolangProjects/ControlHub/internal/repository/mysql/resource_repository.go
+package mysql
 
 import (
 	"context"
+	"database/sql"
 
 	"github.com/fan/controlhub/internal/model"
-	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 type ResourceRepository struct {
-	db *pgxpool.Pool
+	db *sql.DB
 }
 
-func NewResourceRepository(db *pgxpool.Pool) *ResourceRepository {
+func NewResourceRepository(db *sql.DB) *ResourceRepository {
 	return &ResourceRepository{db: db}
 }
 
 func (r *ResourceRepository) ListResources(resourceType string, environmentID string) ([]model.Resource, error) {
 	query := `
-select id::text, resource_type, resource_subtype, name, display_name,
-       environment_id::text, owner_id::text, lifecycle_status, health_status, labels
+select id, resource_type, resource_subtype, name, display_name,
+       environment_id, owner_id, lifecycle_status, health_status, labels
 from resources
-where ($1 = '' or resource_type = $1)
-  and ($2 = '' or environment_id::text = $2)
+where (? = '' or resource_type = ?)
+  and (? = '' or environment_id = ?)
 order by name`
 
-	rows, err := r.db.Query(context.Background(), query, resourceType, environmentID)
+	rows, err := r.db.QueryContext(context.Background(), query,
+		resourceType, resourceType,
+		environmentID, environmentID,
+	)
 	if err != nil {
 		return nil, err
 	}
@@ -1085,34 +1106,36 @@ return items, rows.Err()
 package main
 
 import (
-	"context"
+	"database/sql"
 	"log"
 	"net/http"
 
-	"github.com/jackc/pgx/v5/pgxpool"
+	_ "github.com/go-sql-driver/mysql"
 
 	"github.com/fan/controlhub/internal/api"
 	"github.com/fan/controlhub/internal/config"
-	"github.com/fan/controlhub/internal/repository/postgres"
+	"github.com/fan/controlhub/internal/repository/mysql"
 	"github.com/fan/controlhub/internal/service"
 )
 
 func main() {
 	cfg := config.Load()
-	db, err := pgxpool.New(context.Background(), cfg.DatabaseURL)
+
+	db, err := sql.Open("mysql", cfg.DatabaseDSN)
 	if err != nil {
 		log.Fatal(err)
 	}
 	defer db.Close()
 
 	deps := api.Dependencies{
-		ResourceService: service.NewResourceService(postgres.NewResourceRepository(db)),
-		RelationService: service.NewRelationService(postgres.NewRelationRepository(db)),
-		AuditService:    service.NewAuditService(postgres.NewAuditRepository(db)),
+		ResourceService: service.NewResourceService(mysql.NewResourceRepository(db)),
+		RelationService: service.NewRelationService(mysql.NewRelationRepository(db)),
+		AuditService:    service.NewAuditService(mysql.NewAuditRepository(db)),
 	}
 
-	router := api.NewRouter(deps)
-	log.Fatal(http.ListenAndServe(cfg.HTTPAddress(), router))
+	if err := http.ListenAndServe(cfg.HTTPAddress(), api.NewRouter(deps)); err != nil {
+		log.Fatal(err)
+	}
 }
 ```
 
@@ -1124,7 +1147,8 @@ import "os"
 
 type Config struct {
 	Port        string
-	DatabaseURL string
+	DatabaseDSN string
+	JWTSecret   string
 }
 
 func Load() Config {
@@ -1135,7 +1159,8 @@ func Load() Config {
 
 	return Config{
 		Port:        port,
-		DatabaseURL: os.Getenv("DATABASE_URL"),
+		DatabaseDSN: os.Getenv("DATABASE_DSN"),
+		JWTSecret:   os.Getenv("JWT_SECRET"),
 	}
 }
 
@@ -1172,9 +1197,7 @@ git commit -m "feat: implement resource relation and audit apis"
 - Create: `/Users/fan/GolangProjects/ControlHub/internal/service/auth_service.go`
 - Create: `/Users/fan/GolangProjects/ControlHub/internal/api/auth_handler.go`
 - Create: `/Users/fan/GolangProjects/ControlHub/internal/api/auth_handler_test.go`
-- Create: `/Users/fan/GolangProjects/ControlHub/internal/repository/postgres/user_repository.go`
-
-- [ ] **Step 1: Write the failing login test**
+- Create: `/Users/fan/GolangProjects/ControlHub/internal/repository/mysql/user_repository.go`
 
 ```go
 package api
@@ -1309,7 +1332,7 @@ Expected: PASS
 - [ ] **Step 6: Commit the auth slice**
 
 ```bash
-git add internal/model/auth.go internal/service/auth_service.go internal/api/auth_handler.go internal/repository/postgres/user_repository.go
+git add internal/model/auth.go internal/service/auth_service.go internal/api/auth_handler.go internal/repository/mysql/user_repository.go
 git commit -m "feat: add login and basic role handling"
 ```
 
@@ -2257,7 +2280,7 @@ git commit -m "feat: add overview audits databases and settings pages"
 
 ## Run
 
-1. Create PostgreSQL database `controlhub`
+1. Create MySQL 8.0+ database `controlhub`
 2. Copy `.env.example` to `.env`
 3. Apply SQL files in `migrations/`
 4. Run `make run`

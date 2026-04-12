@@ -107,6 +107,10 @@ paths:
   /resources/{id}/audit-events:
     get:
       summary: List audit events for a resource
+      description: >
+        Phase-1 bootstrap endpoint. Backed by a minimal MySQL table for
+        local development only; the long-term backing store will be
+        ClickHouse.  The response shape will remain stable after migration.
       operationId: listResourceAuditEvents
       parameters:
         - in: path
@@ -130,6 +134,10 @@ paths:
   /audit-events:
     get:
       summary: List audit events
+      description: >
+        Phase-1 bootstrap endpoint. Backed by a minimal MySQL table for
+        local development only; the long-term backing store will be
+        ClickHouse.  The response shape will remain stable after migration.
       operationId: listAuditEvents
       responses:
         "200":
