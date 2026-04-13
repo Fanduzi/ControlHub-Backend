@@ -44,26 +44,82 @@ paths:
       operationId: listResources
       parameters:
         - in: query
-          name: type
+          name: resourceType
           schema:
             $ref: "#/components/schemas/ResourceType"
+          description: Filter by resource type
         - in: query
           name: environmentId
           schema:
             type: string
+          description: Filter by environment ID
+        - in: query
+          name: lifecycleStatus
+          schema:
+            $ref: "#/components/schemas/LifecycleStatus"
+          description: Filter by lifecycle status
+        - in: query
+          name: healthStatus
+          schema:
+            $ref: "#/components/schemas/HealthStatus"
+          description: Filter by health status
+        - in: query
+          name: q
+          schema:
+            type: string
+          description: Free-text search over name, displayName, externalId
+        - in: query
+          name: page
+          schema:
+            type: integer
+            default: 1
+            minimum: 1
+          description: Page number
+        - in: query
+          name: pageSize
+          schema:
+            type: integer
+            default: 20
+            minimum: 1
+            maximum: 100
+          description: Items per page
       responses:
         "200":
-          description: Resource list
+          description: Resource list with pagination
           content:
             application/json:
               schema:
                 type: object
-                required: [items]
+                required: [items, pageInfo]
                 properties:
                   items:
                     type: array
                     items:
                       $ref: "#/components/schemas/Resource"
+                  pageInfo:
+                    $ref: "#/components/schemas/PageInfo"
+              example:
+                items:
+                  - id: res-1
+                    resourceType: database_instance
+                    resourceSubtype: mysql
+                    name: order-mysql-prod
+                    displayName: Order MySQL Prod
+                    environmentId: env-prod
+                    ownerId: owner-dba
+                    lifecycleStatus: running
+                    healthStatus: healthy
+                    source: manual
+                    externalId: ext-order-mysql
+                    labels:
+                      team: order
+                    createdAt: "2026-04-11T20:00:00Z"
+                    updatedAt: "2026-04-11T20:00:00Z"
+                pageInfo:
+                  page: 1
+                  pageSize: 20
+                  totalItems: 64
+                  totalPages: 4
   /resources/{id}:
     get:
       summary: Get resource detail
@@ -164,19 +220,65 @@ paths:
         local development only; the long-term backing store will be
         ClickHouse.  The response shape will remain stable after migration.
       operationId: listAuditEvents
+      parameters:
+        - in: query
+          name: targetResourceId
+          schema:
+            type: string
+          description: Filter by target resource ID
+        - in: query
+          name: eventType
+          schema:
+            type: string
+          description: Filter by event type (e.g. resource.created, resource.updated)
+        - in: query
+          name: result
+          schema:
+            type: string
+          description: Filter by result (success, failure, partial)
+        - in: query
+          name: page
+          schema:
+            type: integer
+            default: 1
+            minimum: 1
+          description: Page number
+        - in: query
+          name: pageSize
+          schema:
+            type: integer
+            default: 20
+            minimum: 1
+            maximum: 100
+          description: Items per page
       responses:
         "200":
-          description: Audit event list
+          description: Audit event list with pagination
           content:
             application/json:
               schema:
                 type: object
-                required: [items]
+                required: [items, pageInfo]
                 properties:
                   items:
                     type: array
                     items:
                       $ref: "#/components/schemas/AuditEvent"
+                  pageInfo:
+                    $ref: "#/components/schemas/PageInfo"
+              example:
+                items:
+                  - id: audit-1
+                    actorUserId: user-1
+                    targetResourceId: res-1
+                    eventType: resource.updated
+                    result: success
+                    createdAt: "2026-04-11T21:00:00Z"
+                pageInfo:
+                  page: 1
+                  pageSize: 20
+                  totalItems: 25
+                  totalPages: 2
   /environments:
     get:
       summary: List environments
@@ -344,6 +446,22 @@ paths:
   # ──────────────────────────────────────────────────────────────
 components:
   schemas:
+    PageInfo:
+      type: object
+      required: [page, pageSize, totalItems, totalPages]
+      properties:
+        page:
+          type: integer
+          description: Current page number (1-based)
+        pageSize:
+          type: integer
+          description: Number of items per page
+        totalItems:
+          type: integer
+          description: Total number of items matching the query
+        totalPages:
+          type: integer
+          description: Total number of pages
     LoginRequest:
       type: object
       required: [email, password]

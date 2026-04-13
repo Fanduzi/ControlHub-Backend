@@ -1,7 +1,7 @@
 // Package api provides HTTP handlers and routing for the ControlHub REST API.
-// input: net/http, internal/service, internal/model
-// output: handleListResources, handleGetResource, handleGetResourceProfile, writeJSON
-// pos: HTTP handlers for resource read operations and profile projection
+// input: net/http, encoding/json, internal/service, internal/model
+// output: handleListResources, handleGetResource, handleGetResourceProfile, writeJSON, parseResourceListQuery, parseIntDefault
+// pos: HTTP handlers for resource read operations with pagination and filtering
 // note: if this file changes, update header and README.md
 package api
 
@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"strconv"
 
 	"github.com/go-chi/chi/v5"
 
@@ -18,15 +19,17 @@ import (
 
 func handleListResources(resourceService *service.ResourceService) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		items, err := resourceService.List(r.URL.Query().Get("type"), r.URL.Query().Get("environmentId"))
+		query := parseResourceListQuery(r)
+		items, pageInfo, err := resourceService.List(r.Context(), query)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
 
 		writeJSON(w, http.StatusOK, struct {
-			Items []model.Resource `json:"items"`
-		}{Items: items})
+			Items    []model.Resource `json:"items"`
+			PageInfo *model.PageInfo  `json:"pageInfo"`
+		}{Items: items, PageInfo: pageInfo})
 	}
 }
 
@@ -60,6 +63,34 @@ func handleGetResourceProfile(resourceService *service.ResourceService) http.Han
 
 		writeJSON(w, http.StatusOK, profile)
 	}
+}
+
+func parseResourceListQuery(r *http.Request) model.ResourceListQuery {
+	q := r.URL.Query()
+	page, pageSize := model.NormalizePagination(
+		parseIntDefault(q.Get("page"), model.DefaultPage),
+		parseIntDefault(q.Get("pageSize"), model.DefaultPageSize),
+	)
+	return model.ResourceListQuery{
+		ResourceType:    q.Get("resourceType"),
+		EnvironmentID:   q.Get("environmentId"),
+		LifecycleStatus: q.Get("lifecycleStatus"),
+		HealthStatus:    q.Get("healthStatus"),
+		Query:           q.Get("q"),
+		Page:            page,
+		PageSize:        pageSize,
+	}
+}
+
+func parseIntDefault(s string, def int) int {
+	if s == "" {
+		return def
+	}
+	n, err := strconv.Atoi(s)
+	if err != nil {
+		return def
+	}
+	return n
 }
 
 func writeJSON(w http.ResponseWriter, status int, payload any) {

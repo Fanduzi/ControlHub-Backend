@@ -1,7 +1,7 @@
 // Package api provides HTTP handlers and routing for the ControlHub REST API.
 // input: net/http, internal/service, internal/model
 // output: handleListAuditEvents, handleListResourceAuditEvents
-// pos: HTTP handlers for audit event listing
+// pos: HTTP handlers for audit event listing with pagination and filtering
 // note: if this file changes, update header and README.md
 package api
 
@@ -15,16 +15,18 @@ import (
 )
 
 func handleListAuditEvents(auditService *service.AuditService) http.HandlerFunc {
-	return func(w http.ResponseWriter, _ *http.Request) {
-		items, err := auditService.ListAll()
+	return func(w http.ResponseWriter, r *http.Request) {
+		query := parseAuditListQuery(r)
+		items, pageInfo, err := auditService.List(r.Context(), query)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
 
 		writeJSON(w, http.StatusOK, struct {
-			Items []model.AuditEvent `json:"items"`
-		}{Items: items})
+			Items    []model.AuditEvent `json:"items"`
+			PageInfo *model.PageInfo    `json:"pageInfo"`
+		}{Items: items, PageInfo: pageInfo})
 	}
 }
 
@@ -39,5 +41,20 @@ func handleListResourceAuditEvents(auditService *service.AuditService) http.Hand
 		writeJSON(w, http.StatusOK, struct {
 			Items []model.AuditEvent `json:"items"`
 		}{Items: items})
+	}
+}
+
+func parseAuditListQuery(r *http.Request) model.AuditListQuery {
+	q := r.URL.Query()
+	page, pageSize := model.NormalizePagination(
+		parseIntDefault(q.Get("page"), model.DefaultPage),
+		parseIntDefault(q.Get("pageSize"), model.DefaultPageSize),
+	)
+	return model.AuditListQuery{
+		TargetResourceID: q.Get("targetResourceId"),
+		EventType:        q.Get("eventType"),
+		Result:           q.Get("result"),
+		Page:             page,
+		PageSize:         pageSize,
 	}
 }

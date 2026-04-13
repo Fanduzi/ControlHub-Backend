@@ -6,6 +6,8 @@
 package api
 
 import (
+	"context"
+	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -38,8 +40,8 @@ func (f fakeResourceRepo) GetResourceProfile(id string) (*model.ResourceProfileR
 	}, nil
 }
 
-func (fakeResourceRepo) ListResources(resourceType string, _ string) ([]model.Resource, error) {
-	items := []model.Resource{
+func (fakeResourceRepo) ListResources(_ context.Context, q model.ResourceListQuery) ([]model.Resource, int, error) {
+	all := []model.Resource{
 		{
 			ID:              "res-1",
 			ResourceType:    model.ResourceTypeDatabaseInstance,
@@ -51,17 +53,64 @@ func (fakeResourceRepo) ListResources(resourceType string, _ string) ([]model.Re
 			LifecycleStatus: "running",
 			HealthStatus:    "healthy",
 			Source:          "manual",
+			ExternalID:      "ext-order-mysql",
 			Labels:          map[string]string{"team": "order"},
+			CreatedAt:       time.Date(2026, 4, 11, 20, 0, 0, 0, time.UTC),
+			UpdatedAt:       time.Date(2026, 4, 11, 20, 0, 0, 0, time.UTC),
+		},
+		{
+			ID:              "res-2",
+			ResourceType:    model.ResourceTypeHost,
+			ResourceSubtype: "vm",
+			Name:            "prod-host-01",
+			DisplayName:     "Prod Host 01",
+			EnvironmentID:   "env-staging",
+			OwnerID:         "owner-platform",
+			LifecycleStatus: "degraded",
+			HealthStatus:    "warning",
+			Source:          "manual",
+			ExternalID:      "ext-prod-host",
+			Labels:          map[string]string{"team": "platform"},
 			CreatedAt:       time.Date(2026, 4, 11, 20, 0, 0, 0, time.UTC),
 			UpdatedAt:       time.Date(2026, 4, 11, 20, 0, 0, 0, time.UTC),
 		},
 	}
 
-	if resourceType == "" || resourceType == string(model.ResourceTypeDatabaseInstance) {
-		return items, nil
+	filtered := make([]model.Resource, 0)
+	for _, item := range all {
+		if q.ResourceType != "" && string(item.ResourceType) != q.ResourceType {
+			continue
+		}
+		if q.EnvironmentID != "" && item.EnvironmentID != q.EnvironmentID {
+			continue
+		}
+		if q.LifecycleStatus != "" && item.LifecycleStatus != q.LifecycleStatus {
+			continue
+		}
+		if q.HealthStatus != "" && item.HealthStatus != q.HealthStatus {
+			continue
+		}
+		if q.Query != "" {
+			lq := strings.ToLower(q.Query)
+			if !strings.Contains(strings.ToLower(item.Name), lq) &&
+				!strings.Contains(strings.ToLower(item.DisplayName), lq) &&
+				!strings.Contains(strings.ToLower(item.ExternalID), lq) {
+				continue
+			}
+		}
+		filtered = append(filtered, item)
 	}
 
-	return []model.Resource{}, nil
+	total := len(filtered)
+	offset := (q.Page - 1) * q.PageSize
+	if offset >= total {
+		return []model.Resource{}, total, nil
+	}
+	end := offset + q.PageSize
+	if end > total {
+		end = total
+	}
+	return filtered[offset:end], total, nil
 }
 
 func (fakeResourceRepo) GetResource(id string) (*model.Resource, error) {
@@ -165,8 +214,8 @@ func (fakeRelationRepo) ListByResourceID(resourceID string) ([]model.ResourceRel
 
 type fakeAuditRepo struct{}
 
-func (fakeAuditRepo) ListAll() ([]model.AuditEvent, error) {
-	return []model.AuditEvent{
+func (fakeAuditRepo) ListAuditEvents(_ context.Context, q model.AuditListQuery) ([]model.AuditEvent, int, error) {
+	all := []model.AuditEvent{
 		{
 			ID:               "audit-1",
 			ActorUserID:      "user-1",
@@ -175,7 +224,40 @@ func (fakeAuditRepo) ListAll() ([]model.AuditEvent, error) {
 			Result:           "success",
 			CreatedAt:        time.Date(2026, 4, 11, 21, 0, 0, 0, time.UTC),
 		},
-	}, nil
+		{
+			ID:               "audit-2",
+			ActorUserID:      "user-2",
+			TargetResourceID: "res-2",
+			EventType:        "resource.created",
+			Result:           "failure",
+			CreatedAt:        time.Date(2026, 4, 11, 22, 0, 0, 0, time.UTC),
+		},
+	}
+
+	filtered := make([]model.AuditEvent, 0)
+	for _, item := range all {
+		if q.TargetResourceID != "" && item.TargetResourceID != q.TargetResourceID {
+			continue
+		}
+		if q.EventType != "" && item.EventType != q.EventType {
+			continue
+		}
+		if q.Result != "" && item.Result != q.Result {
+			continue
+		}
+		filtered = append(filtered, item)
+	}
+
+	total := len(filtered)
+	offset := (q.Page - 1) * q.PageSize
+	if offset >= total {
+		return []model.AuditEvent{}, total, nil
+	}
+	end := offset + q.PageSize
+	if end > total {
+		end = total
+	}
+	return filtered[offset:end], total, nil
 }
 
 func (fakeAuditRepo) ListByResourceID(resourceID string) ([]model.AuditEvent, error) {

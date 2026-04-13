@@ -1,7 +1,7 @@
 // Package mysql provides MySQL-backed repository implementations.
-// input: database/sql, internal/model
+// input: database/sql, internal/model, internal/service
 // output: NewResourceRepository, ResourceRepository struct (implements service.ResourceRepository)
-// pos: MySQL data access for core resource and profile tables
+// pos: MySQL data access for core resource table with pagination and filtering
 // note: if this file changes, update header and README.md
 package mysql
 
@@ -24,22 +24,40 @@ func NewResourceRepository(db *sql.DB) *ResourceRepository {
 	return &ResourceRepository{db: db}
 }
 
-func (r *ResourceRepository) ListResources(resourceType string, environmentID string) ([]model.Resource, error) {
-	query := `
-	select id, resource_type, resource_subtype, name, display_name,
+func (r *ResourceRepository) ListResources(ctx context.Context, q model.ResourceListQuery) ([]model.Resource, int, error) {
+	where := `where (? = '' or resource_type = ?)
+	  and (? = '' or environment_id = ?)
+	  and (? = '' or lifecycle_status = ?)
+	  and (? = '' or health_status = ?)
+	  and (? = '' or (name like ? or display_name like ? or external_id like ?))`
+
+	searchPattern := "%" + q.Query + "%"
+	filterArgs := []any{
+		q.ResourceType, q.ResourceType,
+		q.EnvironmentID, q.EnvironmentID,
+		q.LifecycleStatus, q.LifecycleStatus,
+		q.HealthStatus, q.HealthStatus,
+		q.Query, searchPattern, searchPattern, searchPattern,
+	}
+
+	// Count query
+	var total int
+	countQuery := "select count(*) from resources " + where
+	if err := r.db.QueryRowContext(ctx, countQuery, filterArgs...).Scan(&total); err != nil {
+		return nil, 0, fmt.Errorf("count resources: %w", err)
+	}
+
+	// Data query
+	offset := (q.Page - 1) * q.PageSize
+	dataQuery := `select id, resource_type, resource_subtype, name, display_name,
 	       environment_id, owner_id, lifecycle_status, health_status,
 	       source, external_id, labels, created_at, updated_at
-	from resources
-	where (? = '' or resource_type = ?)
-	  and (? = '' or environment_id = ?)
-	order by name`
+	from resources ` + where + ` order by name limit ? offset ?`
 
-	rows, err := r.db.QueryContext(context.Background(), query,
-		resourceType, resourceType,
-		environmentID, environmentID,
-	)
+	dataArgs := append(filterArgs, q.PageSize, offset)
+	rows, err := r.db.QueryContext(ctx, dataQuery, dataArgs...)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	defer rows.Close()
 
@@ -47,12 +65,12 @@ func (r *ResourceRepository) ListResources(resourceType string, environmentID st
 	for rows.Next() {
 		item, err := scanResource(rows)
 		if err != nil {
-			return nil, err
+			return nil, 0, err
 		}
 		items = append(items, item)
 	}
 
-	return items, rows.Err()
+	return items, total, rows.Err()
 }
 
 func (r *ResourceRepository) GetResource(id string) (*model.Resource, error) {
