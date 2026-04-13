@@ -14,6 +14,10 @@ import (
 )
 
 func main() {
+	if err := config.LoadDotEnv(); err != nil {
+		log.Fatalf("load .env: %v", err)
+	}
+
 	cfg := config.Load()
 
 	db, err := sql.Open("mysql", cfg.DatabaseDSN)

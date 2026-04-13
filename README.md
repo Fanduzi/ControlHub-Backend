@@ -24,6 +24,8 @@ mysql -u root controlhub < migrations/0002_seed_reference_data.sql
 cp .env.example .env
 ```
 
+`make run` now attempts to load `.env` automatically during startup. If a variable is already exported in your shell, that exported value takes precedence over `.env`.
+
 ## Run
 
 ```bash
@@ -32,25 +34,45 @@ make run
 
 The server starts on `http://localhost:8080` by default.
 
+You can still override local defaults inline for a single run:
+
+```bash
+DATABASE_DSN="controlhub:controlhub_dev@tcp(127.0.0.1:3306)/controlhub?parseTime=true&charset=utf8mb4" \
+JWT_SECRET="override-secret" \
+make run
+```
+
 To confirm the local toolchain before running, use `go version`.
 
-The seeded login credentials are:
+## Local Verification
+
+Health check:
+
+```bash
+curl http://localhost:8080/health
+```
+
+Seeded login credentials:
 
 - `admin@example.com` / `secret123`
 - `editor@example.com` / `secret123`
 
-## Smoke Test
+Login smoke test:
 
 ```bash
-curl http://localhost:8080/health
+curl -X POST http://localhost:8080/auth/login \
+  -H "Content-Type: application/json" \
+  -d '{"email":"admin@example.com","password":"secret123"}'
+```
+
+Additional API smoke test:
+
+```bash
 curl http://localhost:8080/resources
 curl http://localhost:8080/resources/40000000-0000-0000-0000-000000000002/profile
 curl http://localhost:8080/environments
 curl http://localhost:8080/owners
 curl http://localhost:8080/roles
-curl -X POST http://localhost:8080/auth/login \
-  -H "Content-Type: application/json" \
-  -d '{"email":"admin@example.com","password":"secret123"}'
 ```
 
 ## Test
@@ -60,6 +82,8 @@ go test ./internal/api -v
 go test ./internal/model -v
 go test ./internal/service -v
 make test
+go vet ./...
+go build ./...
 ```
 
 ## API Endpoints
