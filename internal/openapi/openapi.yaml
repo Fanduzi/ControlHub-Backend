@@ -228,6 +228,40 @@ paths:
                     type: array
                     items:
                       $ref: "#/components/schemas/Role"
+  /resource-types:
+    get:
+      summary: List resource types
+      operationId: listResourceTypes
+      responses:
+        "200":
+          description: Resource type dictionary
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/DictionaryItem"
+  /relation-types:
+    get:
+      summary: List relation types
+      operationId: listRelationTypes
+      responses:
+        "200":
+          description: Relation type dictionary
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/DictionaryItem"
 components:
   schemas:
     LoginRequest:
@@ -249,7 +283,35 @@ components:
           type: string
     ResourceType:
       type: string
-      enum: [host, database_instance, database_cluster, service]
+      enum:
+        - host
+        - database_instance
+        - database_cluster
+        - service
+        - domain_name
+        - virtual_ip
+        - database_proxy
+        - control_plane_component
+    RelationType:
+      type: string
+      enum:
+        - depends_on
+        - member_of
+        - runs_on
+        - points_to
+        - fronts
+        - manages
+        - replicates_to
+    DictionaryItem:
+      type: object
+      required: [key, label, description]
+      properties:
+        key:
+          type: string
+        label:
+          type: string
+        description:
+          type: string
     Resource:
       type: object
       required:
@@ -308,7 +370,7 @@ components:
         toResourceId:
           type: string
         relationType:
-          type: string
+          $ref: "#/components/schemas/RelationType"
         createdAt:
           type: string
           format: date-time

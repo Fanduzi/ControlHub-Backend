@@ -29,13 +29,15 @@ func main() {
 	dictRepo := mysql.NewDictionaryRepository(db)
 
 	deps := api.Dependencies{
-		ResourceService:    service.NewResourceService(mysql.NewResourceRepository(db)),
-		RelationService:    service.NewRelationService(mysql.NewRelationRepository(db)),
-		AuditService:       service.NewAuditService(mysql.NewAuditRepository(db)),
-		AuthService:        service.NewAuthService(mysql.NewUserRepository(db), cfg.JWTSecret),
-		EnvironmentService: service.NewEnvironmentService(dictRepo),
-		OwnerService:       service.NewOwnerService(dictRepo),
-		RoleService:        service.NewRoleService(dictRepo),
+		ResourceService:     service.NewResourceService(mysql.NewResourceRepository(db)),
+		RelationService:     service.NewRelationService(mysql.NewRelationRepository(db)),
+		AuditService:        service.NewAuditService(mysql.NewAuditRepository(db)),
+		AuthService:         service.NewAuthService(mysql.NewUserRepository(db), cfg.JWTSecret),
+		EnvironmentService:  service.NewEnvironmentService(dictRepo),
+		OwnerService:        service.NewOwnerService(dictRepo),
+		RoleService:         service.NewRoleService(dictRepo),
+		ResourceTypeService: service.NewResourceTypeService(dictRepo),
+		RelationTypeService: service.NewRelationTypeService(dictRepo),
 	}
 
 	log.Printf("ControlHub starting on %s", cfg.HTTPAddress())

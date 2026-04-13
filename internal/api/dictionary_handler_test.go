@@ -135,3 +135,71 @@ func TestListEnvironmentsResponseShape(t *testing.T) {
 		t.Fatal("expected 'items' key in response")
 	}
 }
+
+func TestListResourceTypes(t *testing.T) {
+	server := NewTestServer()
+	req := httptest.NewRequest(http.MethodGet, "/resource-types", nil)
+	rec := httptest.NewRecorder()
+
+	server.Router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rec.Code)
+	}
+
+	var body struct {
+		Items []model.DictionaryItem `json:"items"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&body); err != nil {
+		t.Fatalf("failed to decode response: %v", err)
+	}
+
+	if len(body.Items) != 8 {
+		t.Fatalf("expected 8 resource types, got %d", len(body.Items))
+	}
+
+	item := body.Items[0]
+	if item.Key != string(model.ResourceTypeHost) {
+		t.Fatalf("expected first resource type key host, got %s", item.Key)
+	}
+	if item.Label == "" {
+		t.Fatal("expected label to be set")
+	}
+	if item.Description == "" {
+		t.Fatal("expected description to be set")
+	}
+}
+
+func TestListRelationTypes(t *testing.T) {
+	server := NewTestServer()
+	req := httptest.NewRequest(http.MethodGet, "/relation-types", nil)
+	rec := httptest.NewRecorder()
+
+	server.Router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rec.Code)
+	}
+
+	var body struct {
+		Items []model.DictionaryItem `json:"items"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&body); err != nil {
+		t.Fatalf("failed to decode response: %v", err)
+	}
+
+	if len(body.Items) != 7 {
+		t.Fatalf("expected 7 relation types, got %d", len(body.Items))
+	}
+
+	item := body.Items[0]
+	if item.Key != string(model.RelationTypeDependsOn) {
+		t.Fatalf("expected first relation type key depends_on, got %s", item.Key)
+	}
+	if item.Label == "" {
+		t.Fatal("expected label to be set")
+	}
+	if item.Description == "" {
+		t.Fatal("expected description to be set")
+	}
+}

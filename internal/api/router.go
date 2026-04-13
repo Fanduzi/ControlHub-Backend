@@ -9,13 +9,15 @@ import (
 )
 
 type Dependencies struct {
-	ResourceService    *service.ResourceService
-	RelationService    *service.RelationService
-	AuditService       *service.AuditService
-	AuthService        *service.AuthService
-	EnvironmentService *service.EnvironmentService
-	OwnerService       *service.OwnerService
-	RoleService        *service.RoleService
+	ResourceService     *service.ResourceService
+	RelationService     *service.RelationService
+	AuditService        *service.AuditService
+	AuthService         *service.AuthService
+	EnvironmentService  *service.EnvironmentService
+	OwnerService        *service.OwnerService
+	RoleService         *service.RoleService
+	ResourceTypeService *service.ResourceTypeService
+	RelationTypeService *service.RelationTypeService
 }
 
 func corsLocalDev(next http.Handler) http.Handler {
@@ -47,5 +49,7 @@ func NewRouter(deps Dependencies) *chi.Mux {
 	router.Get("/environments", handleListEnvironments(deps.EnvironmentService))
 	router.Get("/owners", handleListOwners(deps.OwnerService))
 	router.Get("/roles", handleListRoles(deps.RoleService))
+	router.Get("/resource-types", handleListResourceTypes(deps.ResourceTypeService))
+	router.Get("/relation-types", handleListRelationTypes(deps.RelationTypeService))
 	return router
 }

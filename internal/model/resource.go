@@ -1,27 +1,8 @@
 package model
 
-import (
-	"fmt"
-	"time"
-)
+import "time"
 
 type ResourceType string
-
-const (
-	ResourceTypeHost             ResourceType = "host"
-	ResourceTypeDatabaseInstance ResourceType = "database_instance"
-	ResourceTypeDatabaseCluster  ResourceType = "database_cluster"
-	ResourceTypeService          ResourceType = "service"
-)
-
-func (r ResourceType) Validate() error {
-	switch r {
-	case ResourceTypeHost, ResourceTypeDatabaseInstance, ResourceTypeDatabaseCluster, ResourceTypeService:
-		return nil
-	default:
-		return fmt.Errorf("invalid resource type: %s", r)
-	}
-}
 
 // ResourceProfileResponse is the read-only projection returned by
 // GET /resources/{id}/profile. Profile keys vary by resource type.

@@ -86,3 +86,11 @@ func (r *DictionaryRepository) ListRoles() ([]model.Role, error) {
 
 	return items, rows.Err()
 }
+
+func (r *DictionaryRepository) ListResourceTypes() ([]model.DictionaryItem, error) {
+	return model.ResourceTypeDictionary(), nil
+}
+
+func (r *DictionaryRepository) ListRelationTypes() ([]model.DictionaryItem, error) {
+	return model.RelationTypeDictionary(), nil
+}

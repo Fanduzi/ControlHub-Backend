@@ -235,13 +235,15 @@ func NewTestServer() *TestServer {
 	}
 
 	deps := Dependencies{
-		ResourceService:    service.NewResourceService(resourceRepo),
-		RelationService:    service.NewRelationService(fakeRelationRepo{}),
-		AuditService:       service.NewAuditService(fakeAuditRepo{}),
-		AuthService:        service.NewAuthService(fakeUserCredentialRepo{}, "test-secret"),
-		EnvironmentService: service.NewEnvironmentService(fakeEnvironmentRepo{}),
-		OwnerService:       service.NewOwnerService(fakeOwnerRepo{}),
-		RoleService:        service.NewRoleService(fakeRoleRepo{}),
+		ResourceService:     service.NewResourceService(resourceRepo),
+		RelationService:     service.NewRelationService(fakeRelationRepo{}),
+		AuditService:        service.NewAuditService(fakeAuditRepo{}),
+		AuthService:         service.NewAuthService(fakeUserCredentialRepo{}, "test-secret"),
+		EnvironmentService:  service.NewEnvironmentService(fakeEnvironmentRepo{}),
+		OwnerService:        service.NewOwnerService(fakeOwnerRepo{}),
+		RoleService:         service.NewRoleService(fakeRoleRepo{}),
+		ResourceTypeService: service.NewResourceTypeService(fakeResourceTypeRepo{}),
+		RelationTypeService: service.NewRelationTypeService(fakeRelationTypeRepo{}),
 	}
 
 	return &TestServer{Router: NewRouter(deps)}
@@ -319,4 +321,16 @@ func (fakeRoleRepo) ListRoles() ([]model.Role, error) {
 			CreatedAt:   time.Date(2026, 4, 11, 20, 0, 0, 0, time.UTC),
 		},
 	}, nil
+}
+
+type fakeResourceTypeRepo struct{}
+
+func (fakeResourceTypeRepo) ListResourceTypes() ([]model.DictionaryItem, error) {
+	return model.ResourceTypeDictionary(), nil
+}
+
+type fakeRelationTypeRepo struct{}
+
+func (fakeRelationTypeRepo) ListRelationTypes() ([]model.DictionaryItem, error) {
+	return model.RelationTypeDictionary(), nil
 }

@@ -201,6 +201,8 @@ Frontend and backend should collaborate through `REST + OpenAPI`.
 - `/roles`
 - `/environments`
 - `/owners`
+- `/resource-types`
+- `/relation-types`
 - `/resources`
 - `/resources/{id}`
 - `/resources/{id}/relations`
@@ -331,6 +333,10 @@ Future resource-type direction for the database domain:
 These are not phase-1 schema requirements, but they are intentional extension
 points and should not later be forced into `database_cluster` or
 `database_instance` profiles.
+
+Near-term backend taxonomy groundwork should expose these vocabularies through
+read-only dictionary endpoints so frontend and future topology work consume a
+shared source of truth instead of hard-coded enums.
 
 #### Topology visualization strategy
 

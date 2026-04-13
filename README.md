@@ -19,6 +19,7 @@ mysql -u root -e "GRANT ALL PRIVILEGES ON controlhub.* TO 'controlhub'@'%'; FLUS
 # 3. Apply migrations
 mysql -u root controlhub < migrations/0001_initial_schema.sql
 mysql -u root controlhub < migrations/0002_seed_reference_data.sql
+mysql -u root controlhub < migrations/0003_expand_resource_type_constraint.sql
 
 # 4. Copy .env and adjust DSN if needed
 cp .env.example .env
@@ -73,6 +74,8 @@ curl http://localhost:8080/resources/40000000-0000-0000-0000-000000000002/profil
 curl http://localhost:8080/environments
 curl http://localhost:8080/owners
 curl http://localhost:8080/roles
+curl http://localhost:8080/resource-types
+curl http://localhost:8080/relation-types
 ```
 
 ## Test
@@ -101,6 +104,8 @@ go build ./...
 | GET | /environments | List environments |
 | GET | /owners | List owners |
 | GET | /roles | List roles |
+| GET | /resource-types | List resource type dictionary items |
+| GET | /relation-types | List relation type dictionary items |
 
 ## Audit Storage Strategy
 

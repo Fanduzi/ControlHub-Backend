@@ -48,3 +48,31 @@ func handleListRoles(roleService *service.RoleService) http.HandlerFunc {
 		}{Items: items})
 	}
 }
+
+func handleListResourceTypes(resourceTypeService *service.ResourceTypeService) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		items, err := resourceTypeService.List()
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+
+		writeJSON(w, http.StatusOK, struct {
+			Items []model.DictionaryItem `json:"items"`
+		}{Items: items})
+	}
+}
+
+func handleListRelationTypes(relationTypeService *service.RelationTypeService) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		items, err := relationTypeService.List()
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+
+		writeJSON(w, http.StatusOK, struct {
+			Items []model.DictionaryItem `json:"items"`
+		}{Items: items})
+	}
+}
