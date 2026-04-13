@@ -354,6 +354,10 @@ feature, but the long-term product direction should follow these rules:
 - Topology must support more than replication trees; it should be able to
   express upper-layer middleware, HA/control components, service dependencies,
   and infrastructure carriers in the same graph.
+- Contract rule: a proposed topology endpoint only becomes a real backend
+  contract once it exists as a formal OpenAPI path plus response schema.
+  Comments, notes, and example-only drafts inside `openapi.yaml` are design
+  guidance, not shippable contract.
 
 #### Status layers
 

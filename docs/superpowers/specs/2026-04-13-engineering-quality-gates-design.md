@@ -92,6 +92,8 @@ When frontend and backend are changing in parallel:
 - contract changes should be verified against OpenAPI and concrete JSON examples
 - frontend should not silently widen types beyond confirmed backend support
 - taxonomy and dictionaries should move toward backend-owned sources, not duplicated frontend assumptions
+- comments or draft notes inside `openapi.yaml` do not count as contract; only
+  formal OpenAPI paths and schemas count as backend API surface
 
 ## Immediate Application
 
