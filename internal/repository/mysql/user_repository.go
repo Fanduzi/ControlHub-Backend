@@ -1,3 +1,8 @@
+// Package mysql provides MySQL-backed repository implementations.
+// input: database/sql, internal/model
+// output: NewUserRepository, UserRepository struct
+// pos: MySQL data access for users table (credential lookup by email)
+// note: if this file changes, update header and README.md
 package mysql
 
 import (

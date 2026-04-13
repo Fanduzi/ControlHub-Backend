@@ -1,3 +1,8 @@
+// Package service provides static dictionary service for relation type taxonomy.
+// input: internal/model (DictionaryItem)
+// output: NewRelationTypeService, RelationTypeService.List, RelationTypeRepository interface
+// pos: Static dictionary service for relation type taxonomy
+// note: if this file changes, update header and README.md
 package service
 
 import "github.com/fan/controlhub/internal/model"

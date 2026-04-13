@@ -1,3 +1,8 @@
+// Package service provides tests for auth login flow.
+// input: internal/service (AuthService), internal/model, crypto/sha256
+// output: TestAuthServiceLogin, TestAuthServiceLoginInvalidPassword
+// pos: Validates credential check and token generation
+// note: if this file changes, update header and README.md
 package service
 
 import (

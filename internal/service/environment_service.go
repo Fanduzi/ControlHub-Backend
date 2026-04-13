@@ -1,3 +1,8 @@
+// Package service provides thin service for environment dictionary listing.
+// input: internal/model (Environment)
+// output: NewEnvironmentService, EnvironmentService.List, EnvironmentRepository interface
+// pos: Thin service for environment dictionary listing
+// note: if this file changes, update header and README.md
 package service
 
 import "github.com/fan/controlhub/internal/model"

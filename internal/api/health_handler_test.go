@@ -1,3 +1,8 @@
+// Package api provides HTTP handlers and routing for the ControlHub REST API.
+// input: internal/api (test server), net/http, net/http/httptest
+// output: TestHealthRoute
+// pos: Validates health endpoint returns 200
+// note: if this file changes, update header and README.md
 package api
 
 import (

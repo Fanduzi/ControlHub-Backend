@@ -1,3 +1,8 @@
+// Package service provides business logic for audit event queries.
+// input: internal/model (AuditEvent)
+// output: NewAuditService, AuditService.ListAll/ListByResourceID, AuditRepository interface
+// pos: Business logic for audit event queries
+// note: if this file changes, update header and README.md
 package service
 
 import "github.com/fan/controlhub/internal/model"

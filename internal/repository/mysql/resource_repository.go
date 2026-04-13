@@ -1,3 +1,8 @@
+// Package mysql provides MySQL-backed repository implementations.
+// input: database/sql, internal/model
+// output: NewResourceRepository, ResourceRepository struct (implements service.ResourceRepository)
+// pos: MySQL data access for core resource and profile tables
+// note: if this file changes, update header and README.md
 package mysql
 
 import (

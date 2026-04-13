@@ -1,3 +1,8 @@
+// Package api provides HTTP handlers and routing for the ControlHub REST API.
+// input: net/http, internal/service, internal/model
+// output: handleListResources, handleGetResource, handleGetResourceProfile, writeJSON
+// pos: HTTP handlers for resource read operations and profile projection
+// note: if this file changes, update header and README.md
 package api
 
 import (

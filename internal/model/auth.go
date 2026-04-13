@@ -1,3 +1,8 @@
+// Package model provides domain entities for the resource management system.
+// input: none
+// output: UserCredential, LoginRequest, LoginResponse
+// pos: Authentication data structures for local login flow
+// note: if this file changes, update header and README.md
 package model
 
 type UserCredential struct {

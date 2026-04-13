@@ -1,3 +1,8 @@
+// Package main provides the ControlHub application entry point.
+// input: config.LoadDotEnv/Load, mysql repositories, api.NewRouter, service constructors
+// output: main() binary entry point
+// pos: Application bootstrap, manual DI container
+// note: if wiring changes, update this header and cmd/server/README.md
 package main
 
 import (
@@ -36,8 +41,10 @@ func main() {
 		EnvironmentService:  service.NewEnvironmentService(dictRepo),
 		OwnerService:        service.NewOwnerService(dictRepo),
 		RoleService:         service.NewRoleService(dictRepo),
-		ResourceTypeService: service.NewResourceTypeService(dictRepo),
-		RelationTypeService: service.NewRelationTypeService(dictRepo),
+		ResourceTypeService:     service.NewResourceTypeService(dictRepo),
+		RelationTypeService:     service.NewRelationTypeService(dictRepo),
+		LifecycleStatusService:  service.NewLifecycleStatusService(dictRepo),
+		HealthStatusService:     service.NewHealthStatusService(dictRepo),
 	}
 
 	log.Printf("ControlHub starting on %s", cfg.HTTPAddress())

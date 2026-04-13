@@ -1,3 +1,8 @@
+// Package model provides domain entities for the resource management system.
+// input: internal/model (all types and dictionaries), testing
+// output: Test* functions
+// pos: Validates taxonomy constants and dictionary completeness
+// note: if this file changes, update header and README.md
 package model
 
 import "testing"
@@ -95,6 +100,97 @@ func TestRelationTypeDictionaryItems(t *testing.T) {
 		}
 		if item.Description == "" {
 			t.Fatalf("expected description for relation type %s", item.Key)
+		}
+	}
+}
+
+func TestLifecycleStatusValidation(t *testing.T) {
+	valid := []LifecycleStatus{
+		LifecycleStatusProvisioning,
+		LifecycleStatusRunning,
+		LifecycleStatusStopped,
+		LifecycleStatusDegraded,
+		LifecycleStatusDecommissioning,
+	}
+
+	for _, item := range valid {
+		if err := item.Validate(); err != nil {
+			t.Fatalf("expected %s to be valid: %v", item, err)
+		}
+	}
+
+	if err := LifecycleStatus("unknown").Validate(); err == nil {
+		t.Fatal("expected invalid lifecycle status to fail validation")
+	}
+}
+
+func TestHealthStatusValidation(t *testing.T) {
+	valid := []HealthStatus{
+		HealthStatusHealthy,
+		HealthStatusWarning,
+		HealthStatusCritical,
+		HealthStatusUnknown,
+	}
+
+	for _, item := range valid {
+		if err := item.Validate(); err != nil {
+			t.Fatalf("expected %s to be valid: %v", item, err)
+		}
+	}
+
+	if err := HealthStatus("unknown_status").Validate(); err == nil {
+		t.Fatal("expected invalid health status to fail validation")
+	}
+}
+
+func TestLifecycleStatusDictionaryItems(t *testing.T) {
+	items := LifecycleStatusDictionary()
+
+	if len(items) != 5 {
+		t.Fatalf("expected 5 lifecycle status items, got %d", len(items))
+	}
+
+	if items[0].Key != string(LifecycleStatusProvisioning) {
+		t.Fatalf("expected first lifecycle status key provisioning, got %s", items[0].Key)
+	}
+
+	last := items[len(items)-1]
+	if last.Key != string(LifecycleStatusDecommissioning) {
+		t.Fatalf("expected last lifecycle status key decommissioning, got %s", last.Key)
+	}
+
+	for _, item := range items {
+		if item.Label == "" {
+			t.Fatalf("expected label for lifecycle status %s", item.Key)
+		}
+		if item.Description == "" {
+			t.Fatalf("expected description for lifecycle status %s", item.Key)
+		}
+	}
+}
+
+func TestHealthStatusDictionaryItems(t *testing.T) {
+	items := HealthStatusDictionary()
+
+	if len(items) != 4 {
+		t.Fatalf("expected 4 health status items, got %d", len(items))
+	}
+
+	if items[0].Key != string(HealthStatusHealthy) {
+		t.Fatalf("expected first health status key healthy, got %s", items[0].Key)
+	}
+
+	last := items[len(items)-1]
+	if last.Key != string(HealthStatusUnknown) {
+		t.Fatalf("expected last health status key unknown, got %s", last.Key)
+	}
+
+	for _, item := range items {
+		if item.Label == "" {
+			t.Fatalf("expected label for health status %s", item.Key)
+		}
+		if item.Description == "" {
+			t.Fatalf("expected description for health status %s", item.Key)
 		}
 	}
 }

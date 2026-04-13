@@ -1,3 +1,8 @@
+// Package mysql provides MySQL-backed repository implementations.
+// input: database/sql, internal/model
+// output: NewAuditRepository, AuditRepository struct
+// pos: MySQL data access for audit_events table
+// note: if this file changes, update header and README.md
 package mysql
 
 import (

@@ -1,3 +1,6 @@
 /.superpowers/
 .env
 .playwright-mcp/
+.gitnexus
+/.claude/
+/mempalace.yaml

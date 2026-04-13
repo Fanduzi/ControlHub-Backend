@@ -1,3 +1,8 @@
+// Package api provides HTTP handlers and routing for the ControlHub REST API.
+// input: internal/api, internal/model, net/http, net/http/httptest, encoding/json
+// output: TestListEnvironments/Owners/Roles/ResourceTypes/RelationTypes/LifecycleStatuses/HealthStatuses
+// pos: Validates all dictionary endpoints return correct items
+// note: if this file changes, update header and README.md
 package api
 
 import (
@@ -195,6 +200,74 @@ func TestListRelationTypes(t *testing.T) {
 	item := body.Items[0]
 	if item.Key != string(model.RelationTypeDependsOn) {
 		t.Fatalf("expected first relation type key depends_on, got %s", item.Key)
+	}
+	if item.Label == "" {
+		t.Fatal("expected label to be set")
+	}
+	if item.Description == "" {
+		t.Fatal("expected description to be set")
+	}
+}
+
+func TestListLifecycleStatuses(t *testing.T) {
+	server := NewTestServer()
+	req := httptest.NewRequest(http.MethodGet, "/lifecycle-statuses", nil)
+	rec := httptest.NewRecorder()
+
+	server.Router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rec.Code)
+	}
+
+	var body struct {
+		Items []model.DictionaryItem `json:"items"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&body); err != nil {
+		t.Fatalf("failed to decode response: %v", err)
+	}
+
+	if len(body.Items) != 5 {
+		t.Fatalf("expected 5 lifecycle statuses, got %d", len(body.Items))
+	}
+
+	item := body.Items[0]
+	if item.Key != string(model.LifecycleStatusProvisioning) {
+		t.Fatalf("expected first lifecycle status key provisioning, got %s", item.Key)
+	}
+	if item.Label == "" {
+		t.Fatal("expected label to be set")
+	}
+	if item.Description == "" {
+		t.Fatal("expected description to be set")
+	}
+}
+
+func TestListHealthStatuses(t *testing.T) {
+	server := NewTestServer()
+	req := httptest.NewRequest(http.MethodGet, "/health-statuses", nil)
+	rec := httptest.NewRecorder()
+
+	server.Router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rec.Code)
+	}
+
+	var body struct {
+		Items []model.DictionaryItem `json:"items"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&body); err != nil {
+		t.Fatalf("failed to decode response: %v", err)
+	}
+
+	if len(body.Items) != 4 {
+		t.Fatalf("expected 4 health statuses, got %d", len(body.Items))
+	}
+
+	item := body.Items[0]
+	if item.Key != string(model.HealthStatusHealthy) {
+		t.Fatalf("expected first health status key healthy, got %s", item.Key)
 	}
 	if item.Label == "" {
 		t.Fatal("expected label to be set")

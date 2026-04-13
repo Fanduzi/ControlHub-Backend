@@ -1,3 +1,8 @@
+// Package config tests validate configuration loading behavior.
+// input: internal/config (Config, Load, LoadDotEnv)
+// output: TestConfig* test functions
+// pos: Validates config loading behavior
+// note: if config loading changes, update this header
 package config
 
 import (

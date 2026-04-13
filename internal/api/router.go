@@ -1,3 +1,8 @@
+// Package api provides HTTP handlers and routing for the ControlHub REST API.
+// input: chi/v5, internal/service (all services)
+// output: Dependencies struct, NewRouter, corsLocalDev
+// pos: HTTP routing entry point, wires service dependencies to handlers
+// note: if this file changes, update header and README.md
 package api
 
 import (
@@ -16,8 +21,10 @@ type Dependencies struct {
 	EnvironmentService  *service.EnvironmentService
 	OwnerService        *service.OwnerService
 	RoleService         *service.RoleService
-	ResourceTypeService *service.ResourceTypeService
-	RelationTypeService *service.RelationTypeService
+	ResourceTypeService     *service.ResourceTypeService
+	RelationTypeService     *service.RelationTypeService
+	LifecycleStatusService  *service.LifecycleStatusService
+	HealthStatusService     *service.HealthStatusService
 }
 
 func corsLocalDev(next http.Handler) http.Handler {
@@ -51,5 +58,7 @@ func NewRouter(deps Dependencies) *chi.Mux {
 	router.Get("/roles", handleListRoles(deps.RoleService))
 	router.Get("/resource-types", handleListResourceTypes(deps.ResourceTypeService))
 	router.Get("/relation-types", handleListRelationTypes(deps.RelationTypeService))
+	router.Get("/lifecycle-statuses", handleListLifecycleStatuses(deps.LifecycleStatusService))
+	router.Get("/health-statuses", handleListHealthStatuses(deps.HealthStatusService))
 	return router
 }

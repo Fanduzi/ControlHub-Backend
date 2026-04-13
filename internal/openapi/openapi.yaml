@@ -262,6 +262,86 @@ paths:
                     type: array
                     items:
                       $ref: "#/components/schemas/DictionaryItem"
+  /lifecycle-statuses:
+    get:
+      summary: List lifecycle statuses
+      operationId: listLifecycleStatuses
+      responses:
+        "200":
+          description: Lifecycle status dictionary
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/DictionaryItem"
+  /health-statuses:
+    get:
+      summary: List health statuses
+      operationId: listHealthStatuses
+      responses:
+        "200":
+          description: Health status dictionary
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/DictionaryItem"
+  # ──────────────────────────────────────────────────────────────
+  # PROPOSED: Topology endpoint contract (not yet implemented)
+  #
+  # GET /resources/{id}/topology
+  #
+  # Returns a local topology projection around a resource.
+  # Scope: 1-hop or 2-hop neighborhood, built from existing
+  # resources + relations. Not a global graph.
+  #
+  # Proposed response shape:
+  #   {
+  #     "rootResourceId": "string",
+  #     "nodes": [
+  #       {
+  #         "id": "string",
+  #         "resourceType": "string",
+  #         "name": "string",
+  #         "displayName": "string",
+  #         "lifecycleStatus": "string",
+  #         "healthStatus": "string"
+  #       }
+  #     ],
+  #     "edges": [
+  #       {
+  #         "id": "string",
+  #         "fromResourceId": "string",
+  #         "toResourceId": "string",
+  #         "relationType": "string"
+  #       }
+  #     ],
+  #     "groups": [
+  #       {
+  #         "id": "string",
+  #         "label": "string",
+  #         "nodeIds": ["string"]
+  #       }
+  #     ]
+  #   }
+  #
+  # Design notes:
+  # - nodes/edges are required; groups is optional
+  # - groups provide layout hints (e.g., cluster membership)
+  # - no layout engine; positioning is client-side
+  # - no topology persistence; built on-the-fly from resources + relations
+  # - rootResourceId identifies the center of the local graph
+  # ──────────────────────────────────────────────────────────────
 components:
   schemas:
     LoginRequest:
@@ -302,6 +382,21 @@ components:
         - fronts
         - manages
         - replicates_to
+    LifecycleStatus:
+      type: string
+      enum:
+        - provisioning
+        - running
+        - stopped
+        - degraded
+        - decommissioning
+    HealthStatus:
+      type: string
+      enum:
+        - healthy
+        - warning
+        - critical
+        - unknown
     DictionaryItem:
       type: object
       required: [key, label, description]
@@ -342,9 +437,9 @@ components:
         ownerId:
           type: string
         lifecycleStatus:
-          type: string
+          $ref: "#/components/schemas/LifecycleStatus"
         healthStatus:
-          type: string
+          $ref: "#/components/schemas/HealthStatus"
         source:
           type: string
         externalId:

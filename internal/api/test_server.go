@@ -1,3 +1,8 @@
+// Package api provides HTTP handlers and routing for the ControlHub REST API.
+// input: chi/v5, internal/model, internal/service
+// output: TestServer struct, NewTestServer
+// pos: Test infrastructure — fake repos and pre-wired router for handler tests
+// note: if this file changes, update header and README.md
 package api
 
 import (
@@ -242,8 +247,10 @@ func NewTestServer() *TestServer {
 		EnvironmentService:  service.NewEnvironmentService(fakeEnvironmentRepo{}),
 		OwnerService:        service.NewOwnerService(fakeOwnerRepo{}),
 		RoleService:         service.NewRoleService(fakeRoleRepo{}),
-		ResourceTypeService: service.NewResourceTypeService(fakeResourceTypeRepo{}),
-		RelationTypeService: service.NewRelationTypeService(fakeRelationTypeRepo{}),
+		ResourceTypeService:     service.NewResourceTypeService(fakeResourceTypeRepo{}),
+		RelationTypeService:     service.NewRelationTypeService(fakeRelationTypeRepo{}),
+		LifecycleStatusService:  service.NewLifecycleStatusService(fakeLifecycleStatusRepo{}),
+		HealthStatusService:     service.NewHealthStatusService(fakeHealthStatusRepo{}),
 	}
 
 	return &TestServer{Router: NewRouter(deps)}
@@ -333,4 +340,16 @@ type fakeRelationTypeRepo struct{}
 
 func (fakeRelationTypeRepo) ListRelationTypes() ([]model.DictionaryItem, error) {
 	return model.RelationTypeDictionary(), nil
+}
+
+type fakeLifecycleStatusRepo struct{}
+
+func (fakeLifecycleStatusRepo) ListLifecycleStatuses() ([]model.DictionaryItem, error) {
+	return model.LifecycleStatusDictionary(), nil
+}
+
+type fakeHealthStatusRepo struct{}
+
+func (fakeHealthStatusRepo) ListHealthStatuses() ([]model.DictionaryItem, error) {
+	return model.HealthStatusDictionary(), nil
 }

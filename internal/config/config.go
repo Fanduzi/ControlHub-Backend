@@ -1,3 +1,8 @@
+// Package config loads environment variables into a typed Config struct.
+// input: os.Getenv, godotenv
+// output: LoadDotEnv, Load, Config struct, HTTPAddress
+// pos: Configuration loading layer
+// note: if config vars change, update this header and internal/config/README.md
 package config
 
 import (

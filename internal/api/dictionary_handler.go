@@ -1,3 +1,8 @@
+// Package api provides HTTP handlers and routing for the ControlHub REST API.
+// input: net/http, internal/service, internal/model
+// output: handleListEnvironments/Owners/Roles/ResourceTypes/RelationTypes/LifecycleStatuses/HealthStatuses
+// pos: HTTP handlers for all dictionary endpoints
+// note: if this file changes, update header and README.md
 package api
 
 import (
@@ -45,6 +50,34 @@ func handleListRoles(roleService *service.RoleService) http.HandlerFunc {
 
 		writeJSON(w, http.StatusOK, struct {
 			Items []model.Role `json:"items"`
+		}{Items: items})
+	}
+}
+
+func handleListLifecycleStatuses(lifecycleStatusService *service.LifecycleStatusService) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		items, err := lifecycleStatusService.List()
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+
+		writeJSON(w, http.StatusOK, struct {
+			Items []model.DictionaryItem `json:"items"`
+		}{Items: items})
+	}
+}
+
+func handleListHealthStatuses(healthStatusService *service.HealthStatusService) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		items, err := healthStatusService.List()
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+
+		writeJSON(w, http.StatusOK, struct {
+			Items []model.DictionaryItem `json:"items"`
 		}{Items: items})
 	}
 }

@@ -1,3 +1,8 @@
+// Package model provides domain entities for the resource management system.
+// input: time package
+// output: ResourceRelation struct
+// pos: Directed edge between resources in the relation graph
+// note: if this file changes, update header and README.md
 package model
 
 import "time"

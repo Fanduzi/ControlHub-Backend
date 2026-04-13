@@ -20,6 +20,7 @@ mysql -u root -e "GRANT ALL PRIVILEGES ON controlhub.* TO 'controlhub'@'%'; FLUS
 mysql -u root controlhub < migrations/0001_initial_schema.sql
 mysql -u root controlhub < migrations/0002_seed_reference_data.sql
 mysql -u root controlhub < migrations/0003_expand_resource_type_constraint.sql
+mysql -u root controlhub < migrations/0004_seed_demo_data.sql
 
 # 4. Copy .env and adjust DSN if needed
 cp .env.example .env
@@ -89,6 +90,23 @@ go vet ./...
 go build ./...
 ```
 
+## Architecture
+
+ControlHub is a read-heavy resource management backend exposing dictionary-driven APIs for a frontend console. Resources are typed entities (8 types) linked by directed relations (7 types), with per-type profile projections and a taxonomy system of static dictionaries.
+
+### Modules
+
+| Module | Description | Doc |
+|--------|-------------|-----|
+| cmd/server | Application entry point, dependency wiring | [README](cmd/server/README.md) |
+| internal/api | HTTP handlers, routing, CORS, test server | [README](internal/api/README.md) |
+| internal/service | Business logic, repository interfaces | [README](internal/service/README.md) |
+| internal/repository/mysql | MySQL data access, SQL queries | [README](internal/repository/mysql/README.md) |
+| internal/model | Domain structs, taxonomy constants, validation | [README](internal/model/README.md) |
+| internal/config | Environment and .env configuration loading | [README](internal/config/README.md) |
+
+Dependency flow (strict, one-directional): `cmd/server` → `api` → `service` → `repository/mysql` → `model`. The `model` package has no upstream dependencies.
+
 ## API Endpoints
 
 | Method | Path | Description |
@@ -106,6 +124,8 @@ go build ./...
 | GET | /roles | List roles |
 | GET | /resource-types | List resource type dictionary items |
 | GET | /relation-types | List relation type dictionary items |
+| GET | /lifecycle-statuses | List lifecycle status dictionary items |
+| GET | /health-statuses | List health status dictionary items |
 
 ## Audit Storage Strategy
 
@@ -120,3 +140,22 @@ current HTTP contract (`GET /audit-events`,
 `GET /resources/{id}/audit-events`) will remain unchanged when the
 migration to ClickHouse happens — only the repository implementation
 will be swapped.
+
+## Demo Data
+
+Migration `0004_seed_demo_data.sql` provides scenario-based demo data
+for frontend integration testing:
+
+- **~64 resources** across 3 environments (production, staging, development)
+- **8 resource types**: host, database_instance, database_cluster, service,
+  domain_name, virtual_ip, database_proxy, control_plane_component
+- **5 business domains**: Order, Payment, User, Analytics, Config
+- **~60 relations** covering member_of, runs_on, depends_on, fronts,
+  points_to, manages
+- **25 audit events** with varied event types and results
+- **Status variety**: running/healthy (majority), warning, critical,
+  degraded, stopped/unknown, provisioning
+
+The data is structured to exercise frontend edge cases: empty profiles,
+sparse labels, long display names, mixed health/lifecycle states, and
+cross-type relation chains.

@@ -1,3 +1,8 @@
+// Package service provides authentication business logic — credential validation and token generation.
+// input: internal/model (UserCredential, LoginRequest, LoginResponse), crypto/hmac, crypto/sha256, encoding/hex, encoding/json
+// output: NewAuthService, AuthService.Login, ErrInvalidCredentials, UserRepository interface
+// pos: Authentication business logic — credential validation and token generation
+// note: if this file changes, update header and README.md
 package service
 
 import (

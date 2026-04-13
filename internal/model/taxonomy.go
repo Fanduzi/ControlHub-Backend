@@ -1,6 +1,15 @@
+// Package model provides domain entities for the resource management system.
+// input: fmt package
+// output: All type constants, XxxDictionary() functions, Validate() methods
+// pos: Central taxonomy registry — single source of truth for all enum-like types
+// note: if this file changes, update header and README.md
 package model
 
 import "fmt"
+
+type LifecycleStatus string
+
+type HealthStatus string
 
 type RelationType string
 
@@ -16,6 +25,21 @@ const (
 )
 
 const (
+	LifecycleStatusProvisioning    LifecycleStatus = "provisioning"
+	LifecycleStatusRunning         LifecycleStatus = "running"
+	LifecycleStatusStopped         LifecycleStatus = "stopped"
+	LifecycleStatusDegraded        LifecycleStatus = "degraded"
+	LifecycleStatusDecommissioning LifecycleStatus = "decommissioning"
+)
+
+const (
+	HealthStatusHealthy  HealthStatus = "healthy"
+	HealthStatusWarning  HealthStatus = "warning"
+	HealthStatusCritical HealthStatus = "critical"
+	HealthStatusUnknown  HealthStatus = "unknown"
+)
+
+const (
 	RelationTypeDependsOn    RelationType = "depends_on"
 	RelationTypeMemberOf     RelationType = "member_of"
 	RelationTypeRunsOn       RelationType = "runs_on"
@@ -24,6 +48,21 @@ const (
 	RelationTypeManages      RelationType = "manages"
 	RelationTypeReplicatesTo RelationType = "replicates_to"
 )
+
+var lifecycleStatusDictionaryItems = []DictionaryItem{
+	{Key: string(LifecycleStatusProvisioning), Label: "Provisioning", Description: "Resource is being created or configured."},
+	{Key: string(LifecycleStatusRunning), Label: "Running", Description: "Resource is active and serving expected workload."},
+	{Key: string(LifecycleStatusStopped), Label: "Stopped", Description: "Resource is provisioned but currently inactive."},
+	{Key: string(LifecycleStatusDegraded), Label: "Degraded", Description: "Resource is operating below expected capacity."},
+	{Key: string(LifecycleStatusDecommissioning), Label: "Decommissioning", Description: "Resource is being retired or removed."},
+}
+
+var healthStatusDictionaryItems = []DictionaryItem{
+	{Key: string(HealthStatusHealthy), Label: "Healthy", Description: "Resource is functioning normally with no issues."},
+	{Key: string(HealthStatusWarning), Label: "Warning", Description: "Resource has minor issues that may need attention."},
+	{Key: string(HealthStatusCritical), Label: "Critical", Description: "Resource has significant issues requiring immediate action."},
+	{Key: string(HealthStatusUnknown), Label: "Unknown", Description: "Health status cannot be determined."},
+}
 
 var resourceTypeDictionaryItems = []DictionaryItem{
 	{Key: string(ResourceTypeHost), Label: "Host", Description: "Infrastructure carrier resource for workloads or data services."},
@@ -46,12 +85,38 @@ var relationTypeDictionaryItems = []DictionaryItem{
 	{Key: string(RelationTypeReplicatesTo), Label: "Replicates To", Description: "The source resource replicates data or state to the target resource."},
 }
 
+func LifecycleStatusDictionary() []DictionaryItem {
+	return cloneDictionaryItems(lifecycleStatusDictionaryItems)
+}
+
+func HealthStatusDictionary() []DictionaryItem {
+	return cloneDictionaryItems(healthStatusDictionaryItems)
+}
+
 func ResourceTypeDictionary() []DictionaryItem {
 	return cloneDictionaryItems(resourceTypeDictionaryItems)
 }
 
 func RelationTypeDictionary() []DictionaryItem {
 	return cloneDictionaryItems(relationTypeDictionaryItems)
+}
+
+func (l LifecycleStatus) Validate() error {
+	for _, item := range lifecycleStatusDictionaryItems {
+		if item.Key == string(l) {
+			return nil
+		}
+	}
+	return fmt.Errorf("invalid lifecycle status: %s", l)
+}
+
+func (h HealthStatus) Validate() error {
+	for _, item := range healthStatusDictionaryItems {
+		if item.Key == string(h) {
+			return nil
+		}
+	}
+	return fmt.Errorf("invalid health status: %s", h)
 }
 
 func (r ResourceType) Validate() error {

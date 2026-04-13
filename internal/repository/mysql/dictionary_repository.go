@@ -1,3 +1,8 @@
+// Package mysql provides MySQL-backed repository implementations.
+// input: database/sql, internal/model
+// output: NewDictionaryRepository, DictionaryRepository struct
+// pos: Hybrid dictionary data access — DB-backed for reference data, static for taxonomy dictionaries
+// note: if this file changes, update header and README.md
 package mysql
 
 import (
@@ -85,6 +90,14 @@ func (r *DictionaryRepository) ListRoles() ([]model.Role, error) {
 	}
 
 	return items, rows.Err()
+}
+
+func (r *DictionaryRepository) ListLifecycleStatuses() ([]model.DictionaryItem, error) {
+	return model.LifecycleStatusDictionary(), nil
+}
+
+func (r *DictionaryRepository) ListHealthStatuses() ([]model.DictionaryItem, error) {
+	return model.HealthStatusDictionary(), nil
 }
 
 func (r *DictionaryRepository) ListResourceTypes() ([]model.DictionaryItem, error) {

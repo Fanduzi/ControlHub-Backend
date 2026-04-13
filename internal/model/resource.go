@@ -1,3 +1,8 @@
+// Package model provides domain entities for the resource management system.
+// input: time package
+// output: Resource struct, ResourceProfileResponse struct, ResourceType type
+// pos: Core domain entity for the resource management system
+// note: if this file changes, update header and README.md
 package model
 
 import "time"

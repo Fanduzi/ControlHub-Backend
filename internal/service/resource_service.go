@@ -1,3 +1,8 @@
+// Package service provides business logic for resource reads and typed profile assembly.
+// input: internal/model (Resource, ResourceProfileResponse, ResourceType)
+// output: NewResourceService, ResourceService.List/Get/GetProfile, ErrResourceNotFound, ResourceRepository interface
+// pos: Business logic for resource reads and typed profile assembly
+// note: if this file changes, update header and README.md
 package service
 
 import (
