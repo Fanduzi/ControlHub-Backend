@@ -1,4 +1,5 @@
 /.superpowers/
+/.worktrees/
 .env
 .playwright-mcp/
 .gitnexus
