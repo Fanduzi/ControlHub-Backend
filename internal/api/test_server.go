@@ -1,5 +1,5 @@
 // Package api provides HTTP handlers and routing for the ControlHub REST API.
-// input: chi/v5, internal/model, internal/service
+// input: internal/api, internal/model, internal/service, net/http/httptest
 // output: TestServer struct, NewTestServer
 // pos: Test infrastructure — fake repos and pre-wired router for handler tests
 // note: if this file changes, update header and README.md
@@ -7,6 +7,7 @@ package api
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"time"
 
@@ -21,16 +22,20 @@ type TestServer struct {
 }
 
 type fakeResourceRepo struct {
-	profiles map[string]*model.ResourceProfileResponse
+	resources map[string]model.Resource
+	listOrder []string
+	profiles  map[string]*model.ResourceProfileResponse
+	nextID    int
+	now       time.Time
 }
 
-func (f fakeResourceRepo) GetResourceProfile(id string) (*model.ResourceProfileResponse, error) {
+func (f *fakeResourceRepo) GetResourceProfile(id string) (*model.ResourceProfileResponse, error) {
 	res, err := f.GetResource(id)
 	if err != nil {
 		return nil, err
 	}
 	if p, ok := f.profiles[id]; ok {
-		return p, nil
+		return cloneProfileResponse(p), nil
 	}
 	return &model.ResourceProfileResponse{
 		ResourceID:      res.ID,
@@ -40,44 +45,13 @@ func (f fakeResourceRepo) GetResourceProfile(id string) (*model.ResourceProfileR
 	}, nil
 }
 
-func (fakeResourceRepo) ListResources(_ context.Context, q model.ResourceListQuery) ([]model.Resource, int, error) {
-	all := []model.Resource{
-		{
-			ID:              "res-1",
-			ResourceType:    model.ResourceTypeDatabaseInstance,
-			ResourceSubtype: "mysql",
-			Name:            "order-mysql-prod",
-			DisplayName:     "Order MySQL Prod",
-			EnvironmentID:   "env-prod",
-			OwnerID:         "owner-dba",
-			LifecycleStatus: "running",
-			HealthStatus:    "healthy",
-			Source:          "manual",
-			ExternalID:      "ext-order-mysql",
-			Labels:          map[string]string{"team": "order"},
-			CreatedAt:       time.Date(2026, 4, 11, 20, 0, 0, 0, time.UTC),
-			UpdatedAt:       time.Date(2026, 4, 11, 20, 0, 0, 0, time.UTC),
-		},
-		{
-			ID:              "res-2",
-			ResourceType:    model.ResourceTypeHost,
-			ResourceSubtype: "vm",
-			Name:            "prod-host-01",
-			DisplayName:     "Prod Host 01",
-			EnvironmentID:   "env-staging",
-			OwnerID:         "owner-platform",
-			LifecycleStatus: "degraded",
-			HealthStatus:    "warning",
-			Source:          "manual",
-			ExternalID:      "ext-prod-host",
-			Labels:          map[string]string{"team": "platform"},
-			CreatedAt:       time.Date(2026, 4, 11, 20, 0, 0, 0, time.UTC),
-			UpdatedAt:       time.Date(2026, 4, 11, 20, 0, 0, 0, time.UTC),
-		},
-	}
-
-	filtered := make([]model.Resource, 0)
-	for _, item := range all {
+func (f *fakeResourceRepo) ListResources(_ context.Context, q model.ResourceListQuery) ([]model.Resource, int, error) {
+	filtered := make([]model.Resource, 0, len(f.listOrder))
+	for _, id := range f.listOrder {
+		item, ok := f.resources[id]
+		if !ok {
+			continue
+		}
 		if q.ResourceType != "" && string(item.ResourceType) != q.ResourceType {
 			continue
 		}
@@ -98,7 +72,7 @@ func (fakeResourceRepo) ListResources(_ context.Context, q model.ResourceListQue
 				continue
 			}
 		}
-		filtered = append(filtered, item)
+		filtered = append(filtered, cloneResource(item))
 	}
 
 	total := len(filtered)
@@ -113,103 +87,148 @@ func (fakeResourceRepo) ListResources(_ context.Context, q model.ResourceListQue
 	return filtered[offset:end], total, nil
 }
 
-func (fakeResourceRepo) GetResource(id string) (*model.Resource, error) {
-	resources := map[string]model.Resource{
-		"res-db-instance": {
-			ID:              "res-db-instance",
-			ResourceType:    model.ResourceTypeDatabaseInstance,
-			ResourceSubtype: "mysql",
-			Name:            "order-mysql-prod",
-			DisplayName:     "Order MySQL Prod",
-			EnvironmentID:   "env-prod",
-			OwnerID:         "owner-dba",
-			LifecycleStatus: "running",
-			HealthStatus:    "healthy",
-			Source:          "manual",
-			Labels:          map[string]string{"team": "order"},
-			CreatedAt:       time.Date(2026, 4, 11, 20, 0, 0, 0, time.UTC),
-			UpdatedAt:       time.Date(2026, 4, 11, 20, 0, 0, 0, time.UTC),
-		},
-		"res-db-cluster": {
-			ID:              "res-db-cluster",
-			ResourceType:    model.ResourceTypeDatabaseCluster,
-			ResourceSubtype: "mysql",
-			Name:            "order-mysql-cluster-prod",
-			DisplayName:     "Order MySQL Cluster Prod",
-			EnvironmentID:   "env-prod",
-			OwnerID:         "owner-dba",
-			LifecycleStatus: "running",
-			HealthStatus:    "healthy",
-			Source:          "manual",
-			Labels:          map[string]string{"team": "order"},
-			CreatedAt:       time.Date(2026, 4, 11, 20, 0, 0, 0, time.UTC),
-			UpdatedAt:       time.Date(2026, 4, 11, 20, 0, 0, 0, time.UTC),
-		},
-		"res-service": {
-			ID:              "res-service",
-			ResourceType:    model.ResourceTypeService,
-			ResourceSubtype: "api",
-			Name:            "order-api-prod",
-			DisplayName:     "Order API Prod",
-			EnvironmentID:   "env-prod",
-			OwnerID:         "owner-platform",
-			LifecycleStatus: "running",
-			HealthStatus:    "healthy",
-			Source:          "manual",
-			Labels:          map[string]string{"team": "order"},
-			CreatedAt:       time.Date(2026, 4, 11, 20, 0, 0, 0, time.UTC),
-			UpdatedAt:       time.Date(2026, 4, 11, 20, 0, 0, 0, time.UTC),
-		},
-		"res-host": {
-			ID:              "res-host",
-			ResourceType:    model.ResourceTypeHost,
-			ResourceSubtype: "vm",
-			Name:            "prod-db-host-01",
-			DisplayName:     "Prod DB Host 01",
-			EnvironmentID:   "env-prod",
-			OwnerID:         "owner-platform",
-			LifecycleStatus: "running",
-			HealthStatus:    "healthy",
-			Source:          "manual",
-			Labels:          map[string]string{"team": "platform"},
-			CreatedAt:       time.Date(2026, 4, 11, 20, 0, 0, 0, time.UTC),
-			UpdatedAt:       time.Date(2026, 4, 11, 20, 0, 0, 0, time.UTC),
-		},
-		"res-no-profile": {
-			ID:              "res-no-profile",
-			ResourceType:    model.ResourceTypeHost,
-			ResourceSubtype: "vm",
-			Name:            "bare-host",
-			DisplayName:     "Bare Host",
-			EnvironmentID:   "env-prod",
-			OwnerID:         "owner-platform",
-			LifecycleStatus: "running",
-			HealthStatus:    "healthy",
-			Source:          "manual",
-			Labels:          map[string]string{},
-			CreatedAt:       time.Date(2026, 4, 11, 20, 0, 0, 0, time.UTC),
-			UpdatedAt:       time.Date(2026, 4, 11, 20, 0, 0, 0, time.UTC),
-		},
+func (f *fakeResourceRepo) GetResource(id string) (*model.Resource, error) {
+	res, ok := f.resources[id]
+	if !ok {
+		return nil, service.ErrResourceNotFound
 	}
-
-	if res, ok := resources[id]; ok {
-		return &res, nil
-	}
-	return nil, service.ErrResourceNotFound
+	cloned := cloneResource(res)
+	return &cloned, nil
 }
 
-type fakeRelationRepo struct{}
+func (f *fakeResourceRepo) CreateResource(_ context.Context, input model.ResourceCreateInput) (*model.Resource, error) {
+	for _, existing := range f.resources {
+		if existing.EnvironmentID == input.EnvironmentID && existing.Name == input.Name {
+			return nil, service.ErrResourceConflict
+		}
+	}
 
-func (fakeRelationRepo) ListByResourceID(resourceID string) ([]model.ResourceRelation, error) {
-	return []model.ResourceRelation{
-		{
-			ID:             "rel-1",
-			FromResourceID: "svc-1",
-			ToResourceID:   resourceID,
-			RelationType:   "depends_on",
-			CreatedAt:      time.Date(2026, 4, 11, 21, 0, 0, 0, time.UTC),
-		},
-	}, nil
+	f.nextID++
+	createdAt := f.now.Add(time.Duration(f.nextID) * time.Minute)
+	created := model.Resource{
+		ID:              fmt.Sprintf("res-created-%d", f.nextID),
+		ResourceType:    input.ResourceType,
+		ResourceSubtype: input.ResourceSubtype,
+		Name:            input.Name,
+		DisplayName:     input.DisplayName,
+		EnvironmentID:   input.EnvironmentID,
+		OwnerID:         input.OwnerID,
+		LifecycleStatus: string(input.LifecycleStatus),
+		HealthStatus:    string(input.HealthStatus),
+		Source:          input.Source,
+		ExternalID:      input.ExternalID,
+		Labels:          cloneLabels(input.Labels),
+		CreatedAt:       createdAt,
+		UpdatedAt:       createdAt,
+	}
+	f.resources[created.ID] = created
+	f.listOrder = append(f.listOrder, created.ID)
+
+	cloned := cloneResource(created)
+	return &cloned, nil
+}
+
+func (f *fakeResourceRepo) UpdateResource(_ context.Context, id string, input model.ResourceUpdateInput) (*model.Resource, error) {
+	existing, ok := f.resources[id]
+	if !ok {
+		return nil, service.ErrResourceNotFound
+	}
+
+	updated := cloneResource(existing)
+	if input.ResourceSubtype != nil {
+		updated.ResourceSubtype = *input.ResourceSubtype
+	}
+	if input.DisplayName != nil {
+		updated.DisplayName = *input.DisplayName
+	}
+	if input.EnvironmentID != nil {
+		updated.EnvironmentID = *input.EnvironmentID
+	}
+	if input.OwnerID != nil {
+		updated.OwnerID = *input.OwnerID
+	}
+	if input.LifecycleStatus != nil {
+		updated.LifecycleStatus = string(*input.LifecycleStatus)
+	}
+	if input.HealthStatus != nil {
+		updated.HealthStatus = string(*input.HealthStatus)
+	}
+	if input.Source != nil {
+		updated.Source = *input.Source
+	}
+	if input.ExternalID != nil {
+		updated.ExternalID = *input.ExternalID
+	}
+	if input.Labels != nil {
+		updated.Labels = cloneLabels(*input.Labels)
+	}
+	updated.UpdatedAt = existing.UpdatedAt.Add(time.Minute)
+
+	f.resources[id] = updated
+	cloned := cloneResource(updated)
+	return &cloned, nil
+}
+
+type fakeRelationRepo struct {
+	resources *fakeResourceRepo
+	relations map[string]model.ResourceRelation
+	order     []string
+	nextID    int
+	now       time.Time
+}
+
+func (f *fakeRelationRepo) ListByResourceID(resourceID string) ([]model.ResourceRelation, error) {
+	items := make([]model.ResourceRelation, 0)
+	for _, id := range f.order {
+		relation, ok := f.relations[id]
+		if !ok {
+			continue
+		}
+		if relation.FromResourceID == resourceID || relation.ToResourceID == resourceID {
+			items = append(items, relation)
+		}
+	}
+	return items, nil
+}
+
+func (f *fakeRelationRepo) GetResource(id string) (*model.Resource, error) {
+	return f.resources.GetResource(id)
+}
+
+func (f *fakeRelationRepo) CreateRelation(_ context.Context, input model.RelationCreateInput) (*model.ResourceRelation, error) {
+	for _, existing := range f.relations {
+		if existing.FromResourceID == input.FromResourceID && existing.ToResourceID == input.ToResourceID && existing.RelationType == input.RelationType {
+			return nil, service.ErrRelationConflict
+		}
+	}
+
+	f.nextID++
+	relation := model.ResourceRelation{
+		ID:             fmt.Sprintf("rel-created-%d", f.nextID),
+		FromResourceID: input.FromResourceID,
+		ToResourceID:   input.ToResourceID,
+		RelationType:   input.RelationType,
+		CreatedAt:      f.now.Add(time.Duration(f.nextID) * time.Minute),
+	}
+	f.relations[relation.ID] = relation
+	f.order = append(f.order, relation.ID)
+
+	return &relation, nil
+}
+
+func (f *fakeRelationRepo) DeleteRelation(_ context.Context, relationID string) error {
+	if _, ok := f.relations[relationID]; !ok {
+		return service.ErrRelationNotFound
+	}
+	delete(f.relations, relationID)
+	filtered := make([]string, 0, len(f.order))
+	for _, id := range f.order {
+		if id != relationID {
+			filtered = append(filtered, id)
+		}
+	}
+	f.order = filtered
+	return nil
 }
 
 type fakeAuditRepo struct{}
@@ -274,7 +293,117 @@ func (fakeAuditRepo) ListByResourceID(resourceID string) ([]model.AuditEvent, er
 }
 
 func NewTestServer() *TestServer {
-	resourceRepo := fakeResourceRepo{
+	resourceRepo := &fakeResourceRepo{
+		resources: map[string]model.Resource{
+			"res-1": {
+				ID:              "res-1",
+				ResourceType:    model.ResourceTypeDatabaseInstance,
+				ResourceSubtype: "mysql",
+				Name:            "order-mysql-prod",
+				DisplayName:     "Order MySQL Prod",
+				EnvironmentID:   "env-prod",
+				OwnerID:         "owner-dba",
+				LifecycleStatus: "running",
+				HealthStatus:    "healthy",
+				Source:          "manual",
+				ExternalID:      "ext-order-mysql",
+				Labels:          map[string]string{"team": "order"},
+				CreatedAt:       time.Date(2026, 4, 11, 20, 0, 0, 0, time.UTC),
+				UpdatedAt:       time.Date(2026, 4, 11, 20, 0, 0, 0, time.UTC),
+			},
+			"res-2": {
+				ID:              "res-2",
+				ResourceType:    model.ResourceTypeHost,
+				ResourceSubtype: "vm",
+				Name:            "prod-host-01",
+				DisplayName:     "Prod Host 01",
+				EnvironmentID:   "env-staging",
+				OwnerID:         "owner-platform",
+				LifecycleStatus: "degraded",
+				HealthStatus:    "warning",
+				Source:          "manual",
+				ExternalID:      "ext-prod-host",
+				Labels:          map[string]string{"team": "platform"},
+				CreatedAt:       time.Date(2026, 4, 11, 20, 0, 0, 0, time.UTC),
+				UpdatedAt:       time.Date(2026, 4, 11, 20, 0, 0, 0, time.UTC),
+			},
+			"res-db-instance": {
+				ID:              "res-db-instance",
+				ResourceType:    model.ResourceTypeDatabaseInstance,
+				ResourceSubtype: "mysql",
+				Name:            "order-mysql-prod",
+				DisplayName:     "Order MySQL Prod",
+				EnvironmentID:   "env-prod",
+				OwnerID:         "owner-dba",
+				LifecycleStatus: "running",
+				HealthStatus:    "healthy",
+				Source:          "manual",
+				Labels:          map[string]string{"team": "order"},
+				CreatedAt:       time.Date(2026, 4, 11, 20, 0, 0, 0, time.UTC),
+				UpdatedAt:       time.Date(2026, 4, 11, 20, 0, 0, 0, time.UTC),
+			},
+			"res-db-cluster": {
+				ID:              "res-db-cluster",
+				ResourceType:    model.ResourceTypeDatabaseCluster,
+				ResourceSubtype: "mysql",
+				Name:            "order-mysql-cluster-prod",
+				DisplayName:     "Order MySQL Cluster Prod",
+				EnvironmentID:   "env-prod",
+				OwnerID:         "owner-dba",
+				LifecycleStatus: "running",
+				HealthStatus:    "healthy",
+				Source:          "manual",
+				Labels:          map[string]string{"team": "order"},
+				CreatedAt:       time.Date(2026, 4, 11, 20, 0, 0, 0, time.UTC),
+				UpdatedAt:       time.Date(2026, 4, 11, 20, 0, 0, 0, time.UTC),
+			},
+			"res-service": {
+				ID:              "res-service",
+				ResourceType:    model.ResourceTypeService,
+				ResourceSubtype: "api",
+				Name:            "order-api-prod",
+				DisplayName:     "Order API Prod",
+				EnvironmentID:   "env-prod",
+				OwnerID:         "owner-platform",
+				LifecycleStatus: "running",
+				HealthStatus:    "healthy",
+				Source:          "manual",
+				Labels:          map[string]string{"team": "order"},
+				CreatedAt:       time.Date(2026, 4, 11, 20, 0, 0, 0, time.UTC),
+				UpdatedAt:       time.Date(2026, 4, 11, 20, 0, 0, 0, time.UTC),
+			},
+			"res-host": {
+				ID:              "res-host",
+				ResourceType:    model.ResourceTypeHost,
+				ResourceSubtype: "vm",
+				Name:            "prod-db-host-01",
+				DisplayName:     "Prod DB Host 01",
+				EnvironmentID:   "env-prod",
+				OwnerID:         "owner-platform",
+				LifecycleStatus: "running",
+				HealthStatus:    "healthy",
+				Source:          "manual",
+				Labels:          map[string]string{"team": "platform"},
+				CreatedAt:       time.Date(2026, 4, 11, 20, 0, 0, 0, time.UTC),
+				UpdatedAt:       time.Date(2026, 4, 11, 20, 0, 0, 0, time.UTC),
+			},
+			"res-no-profile": {
+				ID:              "res-no-profile",
+				ResourceType:    model.ResourceTypeHost,
+				ResourceSubtype: "vm",
+				Name:            "bare-host",
+				DisplayName:     "Bare Host",
+				EnvironmentID:   "env-prod",
+				OwnerID:         "owner-platform",
+				LifecycleStatus: "running",
+				HealthStatus:    "healthy",
+				Source:          "manual",
+				Labels:          map[string]string{},
+				CreatedAt:       time.Date(2026, 4, 11, 20, 0, 0, 0, time.UTC),
+				UpdatedAt:       time.Date(2026, 4, 11, 20, 0, 0, 0, time.UTC),
+			},
+		},
+		listOrder: []string{"res-1", "res-2"},
 		profiles: map[string]*model.ResourceProfileResponse{
 			"res-db-instance": {
 				ResourceID:      "res-db-instance",
@@ -319,16 +448,32 @@ func NewTestServer() *TestServer {
 				},
 			},
 		},
+		now: time.Date(2026, 4, 11, 20, 0, 0, 0, time.UTC),
+	}
+
+	relationRepo := &fakeRelationRepo{
+		resources: resourceRepo,
+		relations: map[string]model.ResourceRelation{
+			"rel-1": {
+				ID:             "rel-1",
+				FromResourceID: "res-service",
+				ToResourceID:   "res-db-instance",
+				RelationType:   model.RelationTypeDependsOn,
+				CreatedAt:      time.Date(2026, 4, 11, 21, 0, 0, 0, time.UTC),
+			},
+		},
+		order: []string{"rel-1"},
+		now:   time.Date(2026, 4, 11, 21, 0, 0, 0, time.UTC),
 	}
 
 	deps := Dependencies{
-		ResourceService:     service.NewResourceService(resourceRepo),
-		RelationService:     service.NewRelationService(fakeRelationRepo{}),
-		AuditService:        service.NewAuditService(fakeAuditRepo{}),
-		AuthService:         service.NewAuthService(fakeUserCredentialRepo{}, "test-secret"),
-		EnvironmentService:  service.NewEnvironmentService(fakeEnvironmentRepo{}),
-		OwnerService:        service.NewOwnerService(fakeOwnerRepo{}),
-		RoleService:         service.NewRoleService(fakeRoleRepo{}),
+		ResourceService:         service.NewResourceService(resourceRepo),
+		RelationService:         service.NewRelationService(relationRepo),
+		AuditService:            service.NewAuditService(fakeAuditRepo{}),
+		AuthService:             service.NewAuthService(fakeUserCredentialRepo{}, "test-secret"),
+		EnvironmentService:      service.NewEnvironmentService(fakeEnvironmentRepo{}),
+		OwnerService:            service.NewOwnerService(fakeOwnerRepo{}),
+		RoleService:             service.NewRoleService(fakeRoleRepo{}),
 		ResourceTypeService:     service.NewResourceTypeService(fakeResourceTypeRepo{}),
 		RelationTypeService:     service.NewRelationTypeService(fakeRelationTypeRepo{}),
 		LifecycleStatusService:  service.NewLifecycleStatusService(fakeLifecycleStatusRepo{}),
@@ -434,4 +579,36 @@ type fakeHealthStatusRepo struct{}
 
 func (fakeHealthStatusRepo) ListHealthStatuses() ([]model.DictionaryItem, error) {
 	return model.HealthStatusDictionary(), nil
+}
+
+func cloneResource(resource model.Resource) model.Resource {
+	resource.Labels = cloneLabels(resource.Labels)
+	return resource
+}
+
+func cloneLabels(labels map[string]string) map[string]string {
+	if labels == nil {
+		return map[string]string{}
+	}
+	cloned := make(map[string]string, len(labels))
+	for key, value := range labels {
+		cloned[key] = value
+	}
+	return cloned
+}
+
+func cloneProfileResponse(profile *model.ResourceProfileResponse) *model.ResourceProfileResponse {
+	if profile == nil {
+		return nil
+	}
+	cloned := &model.ResourceProfileResponse{
+		ResourceID:      profile.ResourceID,
+		ResourceType:    profile.ResourceType,
+		ResourceSubtype: profile.ResourceSubtype,
+		Profile:         make(map[string]any, len(profile.Profile)),
+	}
+	for key, value := range profile.Profile {
+		cloned.Profile[key] = value
+	}
+	return cloned
 }

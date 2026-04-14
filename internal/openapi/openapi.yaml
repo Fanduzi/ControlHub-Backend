@@ -120,6 +120,40 @@ paths:
                   pageSize: 20
                   totalItems: 64
                   totalPages: 4
+    post:
+      summary: Create a resource
+      operationId: createResource
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ResourceCreateInput"
+      responses:
+        "201":
+          description: Resource created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Resource"
+        "400":
+          description: Validation failed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "404":
+          description: Referenced environment or owner not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "409":
+          description: Resource name already exists in environment
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
   /resources/{id}:
     get:
       summary: Get resource detail
@@ -137,6 +171,40 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/Resource"
+    patch:
+      summary: Update mutable resource fields
+      operationId: patchResource
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ResourcePatchRequest"
+      responses:
+        "200":
+          description: Resource updated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Resource"
+        "400":
+          description: Validation failed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "404":
+          description: Resource not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
   /resources/{id}/profile:
     get:
       summary: Get resource typed profile projection
@@ -185,7 +253,65 @@ paths:
                     type: array
                     items:
                       $ref: "#/components/schemas/ResourceRelation"
-  /resources/{id}/audit-events:
+    post:
+      summary: Create a relation from this resource to another
+      operationId: createResourceRelation
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RelationCreateInput"
+      responses:
+        "201":
+          description: Relation created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ResourceRelation"
+        "400":
+          description: Validation failed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "404":
+          description: Source or target resource not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "409":
+          description: Duplicate relation already exists
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+  /resource-relations/{id}:
+    delete:
+      summary: Delete a relation
+      operationId: deleteResourceRelation
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+      responses:
+        "204":
+          description: Relation deleted
+        "404":
+          description: Relation not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
     get:
       summary: List audit events for a resource
       description: >
@@ -665,3 +791,85 @@ components:
             - database_cluster: engine, topologyMode, primaryEndpoint
             - service: systemName, repositoryUrl, runtimeEnv
             - host: hostname, ipAddress, osName
+    ResourceCreateInput:
+      type: object
+      required:
+        - resourceType
+        - name
+        - displayName
+        - environmentId
+        - ownerId
+        - lifecycleStatus
+        - healthStatus
+        - source
+      properties:
+        resourceType:
+          $ref: "#/components/schemas/ResourceType"
+        resourceSubtype:
+          type: string
+        name:
+          type: string
+          pattern: "^[a-z0-9][a-z0-9._-]*$"
+        displayName:
+          type: string
+        environmentId:
+          type: string
+        ownerId:
+          type: string
+        lifecycleStatus:
+          $ref: "#/components/schemas/LifecycleStatus"
+        healthStatus:
+          $ref: "#/components/schemas/HealthStatus"
+        source:
+          type: string
+          enum: [manual]
+        externalId:
+          type: string
+        labels:
+          type: object
+          additionalProperties:
+            type: string
+    ResourcePatchRequest:
+      type: object
+      properties:
+        resourceSubtype:
+          type: string
+        displayName:
+          type: string
+        environmentId:
+          type: string
+        ownerId:
+          type: string
+        lifecycleStatus:
+          $ref: "#/components/schemas/LifecycleStatus"
+        healthStatus:
+          $ref: "#/components/schemas/HealthStatus"
+        source:
+          type: string
+          enum: [manual]
+        externalId:
+          type: string
+        labels:
+          type: object
+          additionalProperties:
+            type: string
+    RelationCreateInput:
+      type: object
+      required:
+        - toResourceId
+        - relationType
+      properties:
+        toResourceId:
+          type: string
+        relationType:
+          $ref: "#/components/schemas/RelationType"
+    ErrorResponse:
+      type: object
+      required: [error, message]
+      properties:
+        error:
+          type: string
+          description: Machine-readable error code
+        message:
+          type: string
+          description: Human-readable error description
