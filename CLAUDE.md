@@ -17,6 +17,11 @@ go test ./internal/api -v -run TestListResources
 go test ./internal/model -v -run TestLifecycleStatusValidation
 ```
 
+OpenAPI contract validation:
+```bash
+make openapi-validate
+```
+
 Race detection (not in Makefile):
 ```bash
 go test -race ./...
@@ -95,11 +100,11 @@ Resource types (8), relation types (7), lifecycle statuses (5), health statuses 
 
 ## API Design
 
-**16 endpoints** on a chi router with localhost:3000 CORS. All list endpoints return `{ "items": [...] }` envelope. Filtering via query params (`?type=`, `?environmentId=`).
+**18 endpoints** on a chi router with localhost:3000 CORS. All list endpoints return `{ "items": [...] }` envelope. Filtering via query params (`?type=`, `?environmentId=`).
 
 **Auth:** Custom HMAC-SHA256 token (not standard JWT). Passwords hashed with SHA-256. Seed credentials: `admin@example.com` / `secret123`.
 
-**OpenAPI spec** at `internal/openapi/openapi.yaml` (3.1.0). Includes a proposed (not yet implemented) topology endpoint contract as comments.
+**OpenAPI spec** at `internal/openapi/openapi.yaml` (3.1.0) — YAML-first, not annotation-generated. Served at `GET /openapi.yaml`. Interactive docs at `GET /docs` via Scalar API Reference (CDN-loaded). Validate with `make openapi-validate`. Do not use swaggo/swag or Swagger UI.
 
 ## Testing Conventions
 

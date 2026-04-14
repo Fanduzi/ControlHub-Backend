@@ -1,4 +1,4 @@
-.PHONY: test run migrate-up migrate-status migrate-down-one migrate-reset-dev
+.PHONY: test run openapi-validate migrate-up migrate-status migrate-down-one migrate-reset-dev
 
 GOOSE := $(shell go env GOPATH)/bin/goose
 GOOSE_DRIVER := mysql
@@ -15,6 +15,9 @@ GOOSE_DBSTRING := $(shell echo "$(DATABASE_DSN)" | sed 's/?parseTime=true&charse
 
 test:
 	go test ./...
+
+openapi-validate: ## Validate internal/openapi/openapi.yaml
+	go test ./internal/openapi -v -run TestOpenAPIYAMLIsValid
 
 run:
 	go run ./cmd/server

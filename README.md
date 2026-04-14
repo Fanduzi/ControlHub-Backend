@@ -105,6 +105,11 @@ curl http://localhost:8080/resource-types
 curl http://localhost:8080/relation-types
 ```
 
+API documentation:
+
+- **Docs UI**: http://localhost:8080/docs (Scalar API Reference)
+- **Raw spec**: http://localhost:8080/openapi.yaml
+
 ## Test
 
 ```bash
@@ -114,6 +119,12 @@ go test ./internal/service -v
 make test
 go vet ./...
 go build ./...
+```
+
+OpenAPI contract validation:
+
+```bash
+make openapi-validate
 ```
 
 ## Architecture
@@ -152,6 +163,8 @@ Dependency flow (strict, one-directional): `cmd/server` → `api` → `service` 
 | GET | /relation-types | List relation type dictionary items |
 | GET | /lifecycle-statuses | List lifecycle status dictionary items |
 | GET | /health-statuses | List health status dictionary items |
+| GET | /openapi.yaml | Raw OpenAPI 3.1.0 spec |
+| GET | /docs | Scalar API Reference docs UI |
 
 ## Audit Storage Strategy
 

@@ -64,5 +64,7 @@ func NewRouter(deps Dependencies) *chi.Mux {
 	router.Get("/relation-types", handleListRelationTypes(deps.RelationTypeService))
 	router.Get("/lifecycle-statuses", handleListLifecycleStatuses(deps.LifecycleStatusService))
 	router.Get("/health-statuses", handleListHealthStatuses(deps.HealthStatusService))
+	router.Get("/openapi.yaml", handleOpenAPIYAML)
+	router.Get("/docs", handleDocs)
 	return router
 }

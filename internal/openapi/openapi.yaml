@@ -43,7 +43,8 @@ paths:
                 properties:
                   status:
                     type: string
-                    const: ok
+                    enum:
+                      - ok
   /resources:
     get:
       summary: List resources
