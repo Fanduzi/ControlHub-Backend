@@ -13,6 +13,19 @@ Read first:
 - `/Users/fan/GolangProjects/ControlHub/docs/superpowers/prompts/frontend-phase-11-list-scale-and-pagination-worker.md`
 - `/Users/fan/GolangProjects/ControlHub/docs/superpowers/prompts/backend-phase-10-asset-write-and-relation-maintenance-worker.md`
 
+## Fixed Decisions
+
+These decisions are already made. Do not ask the user to choose alternatives before implementation.
+
+- Use shared right-side sheets as the primary editing surface.
+- New resource, edit resource, and relation maintenance should all reuse the existing sheet-oriented console interaction model.
+- Do not build dedicated edit pages.
+- Do not use large inline edit sections on `/resources/[id]`.
+- Use capability-based degradation when backend write capabilities are incomplete.
+- The relation delete endpoint is fixed as `DELETE /resource-relations/{id}`.
+- Do not support or assume `DELETE /resources/{resourceId}/relations/{relationId}`.
+- Do not re-run broad brainstorming or present A/B/C UX options. This prompt is the implementation assignment.
+
 ## Goal
 
 ControlHub can now browse, filter, paginate, inspect, and test asset data. The next product foundation is manual asset maintenance:
@@ -30,13 +43,24 @@ This phase expects backend Phase 10 write APIs:
 - `POST /resources`
 - `PATCH /resources/{id}`
 - `POST /resources/{id}/relations`
-- relation delete endpoint chosen by backend, expected as either:
-  - `DELETE /resource-relations/{id}`
-  - or `DELETE /resources/{resourceId}/relations/{relationId}`
+- `DELETE /resource-relations/{id}`
 
-If backend Phase 10 is not available yet, you may implement UI structure behind service functions, but do not fake a final success path. Stop and report the contract gap before claiming integration is complete.
+If backend Phase 10 is not available yet, use the capability-based degradation rules below. You may implement UI structure behind service functions, but do not fake a final success path.
 
 Do not use frontend-only mutation mocks as final behavior.
+
+## Backend Capability Degradation
+
+Use this exact fallback behavior while frontend and backend run in parallel:
+
+- The "New resource" entry point may remain visible and the create sheet may open.
+- If dictionary endpoints are unavailable, affected selects must show an unavailable/loading-failed state and submit must be disabled with a clear reason.
+- If dictionary endpoints are available but `POST /resources` is unavailable, the form may be filled, but submit must fail visibly with a backend-capability error. Do not pretend success.
+- If `PATCH /resources/{id}` is unavailable, edit submit capability must be disabled or hidden with a clear reason.
+- If `POST /resources/{id}/relations` is unavailable, add-relation capability must be disabled with a clear reason.
+- If `DELETE /resource-relations/{id}` is unavailable, relation delete actions must be disabled with a clear reason.
+- Capabilities degrade independently. Do not collapse the whole asset UI into one generic "not ready" state.
+- Once backend Phase 10 is available, wire to real endpoints. Do not leave frontend-only mutation mocks.
 
 ## Scope
 
@@ -72,10 +96,10 @@ Do not redesign unrelated pages.
 
 Add a compact "New resource" entry point on `/resources`.
 
-Recommended pattern:
+Required pattern:
 
 - button in the list page header or table shell toolbar
-- opens a side sheet or dialog
+- opens a right-side sheet
 - fields are grouped into small sections:
   - identity
   - ownership/environment

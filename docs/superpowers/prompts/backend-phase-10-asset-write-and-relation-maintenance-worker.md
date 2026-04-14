@@ -35,6 +35,20 @@ Do exactly this:
 
 This phase is about manual asset maintenance only.
 
+## Fixed Decisions
+
+These decisions are already made. Do not ask the user to choose alternatives before implementation.
+
+- Extend the existing layered shape: `internal/api` -> `internal/service` -> `internal/repository/mysql` -> `internal/model`.
+- Add write methods to the existing resource/relation service and repository boundaries where practical. Do not introduce a separate write subsystem for this phase.
+- Use `DELETE /resource-relations/{id}` as the only relation delete endpoint.
+- Do not implement `DELETE /resources/{resourceId}/relations/{relationId}`.
+- Use unique `name + environmentId` for resources.
+- Use unique `fromResourceId + toResourceId + relationType` for relations.
+- Use JSON error responses for the new write endpoints.
+- Do not write a new design spec before implementation. This prompt is the implementation assignment.
+- Do not re-run broad brainstorming or present A/B/C implementation options. Make scoped engineering decisions and document them in the final report.
+
 ## Endpoints In Scope
 
 ### 1. `POST /resources`
@@ -132,7 +146,7 @@ Rules:
 - `fromResourceId` is always the path resource id
 - `toResourceId` must exist
 - `relationType` must be one of `GET /relation-types`
-- reject self-relations unless there is a documented reason to allow them
+- reject self-relations
 - prevent exact duplicate relation triples: `fromResourceId + toResourceId + relationType`
 
 ### 4. `DELETE /resource-relations/{id}`
@@ -143,7 +157,9 @@ Response:
 
 - `204 No Content`
 
-If this route is awkward for the current router, `DELETE /resources/{resourceId}/relations/{relationId}` is acceptable. Pick one and document it formally in OpenAPI.
+Missing relation ids return `404`.
+
+Do not implement any nested relation delete route in this phase. OpenAPI must only expose `DELETE /resource-relations/{id}` for relation deletion.
 
 ## Validation Requirements
 
@@ -167,16 +183,16 @@ Validation rules:
 - `healthStatus` must be one of `GET /health-statuses`
 - `environmentId` must exist
 - `ownerId` must exist
-- `source` must be `manual` for this phase unless current model already supports more values
+- `source` must be `manual` for this phase
 - `labels` must be a JSON object, not an array or scalar
 - `name` must be non-empty and URL/identifier friendly enough for operations use
 - `displayName` must be non-empty
 
 Uniqueness:
 
-- Add a pragmatic uniqueness rule for resources.
-- Recommended: unique `name` within `environmentId`.
-- If you choose a different rule, explain it in OpenAPI/README and tests.
+- Resources must be unique by `name + environmentId`.
+- Relations must be unique by `fromResourceId + toResourceId + relationType`.
+- Write both rules into migration, OpenAPI, README, and tests.
 
 Do not implement hard delete for resources in this phase.
 
@@ -191,9 +207,7 @@ Do not implement hard delete for resources in this phase.
 
 ## Error Shape
 
-If the project already has a consistent error response, reuse it.
-
-If not, keep it simple but consistent:
+Use this JSON error shape for the new write endpoints:
 
 ```json
 {
