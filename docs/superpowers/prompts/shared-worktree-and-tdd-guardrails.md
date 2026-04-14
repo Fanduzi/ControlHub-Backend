@@ -114,3 +114,9 @@ For stage-level work, include a short "next phase input" section:
 - model limitations found
 - test or E2E gaps remaining
 - recommended next action
+
+When planning future phases, consult:
+
+- `docs/superpowers/notes/2026-04-14-agent-friendly-integration-testing-roadmap.md`
+
+Use it to decide when to introduce Testcontainers, Schemathesis, and Playwright API/E2E hardening.
