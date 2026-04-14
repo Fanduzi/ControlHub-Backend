@@ -96,10 +96,15 @@ func (r *RelationRepository) GetResource(id string) (*model.Resource, error) {
 }
 
 func (r *RelationRepository) CreateRelation(ctx context.Context, input model.RelationCreateInput) (*model.ResourceRelation, error) {
-	query := `insert into resource_relations (id, from_resource_id, to_resource_id, relation_type, created_at)
-	values (UUID(), ?, ?, ?, NOW())`
+	var id string
+	if err := r.db.QueryRowContext(ctx, "SELECT UUID()").Scan(&id); err != nil {
+		return nil, fmt.Errorf("generate id: %w", err)
+	}
 
-	result, err := r.db.ExecContext(ctx, query, input.FromResourceID, input.ToResourceID, input.RelationType)
+	query := `insert into resource_relations (id, from_resource_id, to_resource_id, relation_type, created_at)
+	values (?, ?, ?, ?, NOW())`
+
+	_, err := r.db.ExecContext(ctx, query, id, input.FromResourceID, input.ToResourceID, input.RelationType)
 	if err != nil {
 		var mysqlErr *mysql.MySQLError
 		if errors.As(err, &mysqlErr) && mysqlErr.Number == 1062 {
@@ -108,9 +113,8 @@ func (r *RelationRepository) CreateRelation(ctx context.Context, input model.Rel
 		return nil, fmt.Errorf("insert relation: %w", err)
 	}
 
-	id, _ := result.LastInsertId()
 	return &model.ResourceRelation{
-		ID:             fmt.Sprintf("%d", id),
+		ID:             id,
 		FromResourceID: input.FromResourceID,
 		ToResourceID:   input.ToResourceID,
 		RelationType:   input.RelationType,

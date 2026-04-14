@@ -218,13 +218,19 @@ func (r *ResourceRepository) CreateResource(ctx context.Context, input model.Res
 		return nil, fmt.Errorf("marshal labels: %w", err)
 	}
 
+	var id string
+	if err := r.db.QueryRowContext(ctx, "SELECT UUID()").Scan(&id); err != nil {
+		return nil, fmt.Errorf("generate id: %w", err)
+	}
+
 	query := `insert into resources
 	(id, resource_type, resource_subtype, name, display_name,
 	 environment_id, owner_id, lifecycle_status, health_status,
 	 source, external_id, labels, created_at, updated_at)
-	values (UUID(), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), NOW())`
+	values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), NOW())`
 
-	result, err := r.db.ExecContext(ctx, query,
+	_, err = r.db.ExecContext(ctx, query,
+		id,
 		input.ResourceType, input.ResourceSubtype,
 		input.Name, input.DisplayName,
 		input.EnvironmentID, input.OwnerID,
@@ -240,8 +246,7 @@ func (r *ResourceRepository) CreateResource(ctx context.Context, input model.Res
 		return nil, fmt.Errorf("insert resource: %w", err)
 	}
 
-	id, _ := result.LastInsertId()
-	return r.GetResource(fmt.Sprintf("%d", id))
+	return r.GetResource(id)
 }
 
 func (r *ResourceRepository) UpdateResource(ctx context.Context, id string, input model.ResourceUpdateInput) (*model.Resource, error) {
