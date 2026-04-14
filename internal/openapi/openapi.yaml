@@ -2,6 +2,12 @@ openapi: 3.1.0
 info:
   title: ControlHub API
   version: 0.1.0
+  description: >
+    **Security note (Phase 1):** Write endpoints (POST, PATCH, DELETE) do not
+    enforce authentication or authorization. Any caller reaching the server can
+    create, modify, or delete resources and relations. This is acceptable for
+    local development only. An auth middleware gate must be added before any
+    network-accessible deployment.
 servers:
   - url: http://localhost:8080
 paths:

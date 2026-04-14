@@ -13,6 +13,8 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/go-sql-driver/mysql"
+
 	"github.com/fan/controlhub/internal/model"
 	"github.com/fan/controlhub/internal/service"
 )
@@ -99,6 +101,10 @@ func (r *RelationRepository) CreateRelation(ctx context.Context, input model.Rel
 
 	result, err := r.db.ExecContext(ctx, query, input.FromResourceID, input.ToResourceID, input.RelationType)
 	if err != nil {
+		var mysqlErr *mysql.MySQLError
+		if errors.As(err, &mysqlErr) && mysqlErr.Number == 1062 {
+			return nil, service.ErrRelationConflict
+		}
 		return nil, fmt.Errorf("insert relation: %w", err)
 	}
 

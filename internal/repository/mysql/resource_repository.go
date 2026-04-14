@@ -13,6 +13,8 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/go-sql-driver/mysql"
+
 	"github.com/fan/controlhub/internal/model"
 	"github.com/fan/controlhub/internal/service"
 )
@@ -231,6 +233,10 @@ func (r *ResourceRepository) CreateResource(ctx context.Context, input model.Res
 		string(labelsJSON),
 	)
 	if err != nil {
+		var mysqlErr *mysql.MySQLError
+		if errors.As(err, &mysqlErr) && mysqlErr.Number == 1062 {
+			return nil, service.ErrResourceConflict
+		}
 		return nil, fmt.Errorf("insert resource: %w", err)
 	}
 
