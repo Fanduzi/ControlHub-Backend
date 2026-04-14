@@ -2,6 +2,17 @@
 
 Use these rules for future stage-level worker sessions unless a prompt explicitly overrides them.
 
+## Execution Bias
+
+Stage-level worker prompts are implementation assignments, not open-ended design workshops.
+
+- Do not re-run broad brainstorming or ask the user to choose between architecture options when the prompt already specifies the contract, scope, and constraints.
+- Make reasonable implementation choices inside the requested scope and document them in the final report.
+- Ask the user only when there is a real blocker that cannot be resolved from the prompt, existing docs, OpenAPI, or codebase.
+- If you must ask, ask one concrete blocking question and include the recommended answer.
+- Do not write a new spec before implementation unless the prompt explicitly asks for one.
+- Do not delay implementation by presenting A/B/C方案 for decisions already made by the phase prompt.
+
 ## Worktree
 
 - Use a dedicated git worktree for stage-level implementation by default.
