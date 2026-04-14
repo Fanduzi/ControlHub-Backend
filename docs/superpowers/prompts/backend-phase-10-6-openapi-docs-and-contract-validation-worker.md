@@ -24,7 +24,7 @@ internal/openapi/openapi.yaml
 This phase makes that contract easier to inspect and harder to break:
 
 - serve the OpenAPI YAML from the backend
-- serve a Swagger UI page for local development
+- serve a modern OpenAPI documentation page for local development
 - add contract validation tooling
 - document the workflow
 
@@ -37,7 +37,8 @@ These decisions are already made. Do not ask the user to choose alternatives bef
 - Keep `internal/openapi/openapi.yaml` as the single source of API contract truth.
 - Do not introduce `swaggo/swag` or handler comment annotations.
 - Do not generate OpenAPI from Go handler comments.
-- Add Swagger UI only as a read/view layer over the existing YAML.
+- Do not use Swagger UI.
+- Use Scalar API Reference as the read/view layer over the existing YAML.
 - Add validation for the YAML contract.
 - Use project-local worktree path under `/Users/fan/GolangProjects/ControlHub/.worktrees`.
 - Do not re-run broad brainstorming or present A/B/C options. This prompt is the implementation assignment.
@@ -47,7 +48,7 @@ These decisions are already made. Do not ask the user to choose alternatives bef
 Do exactly this:
 
 1. expose `GET /openapi.yaml`
-2. expose `GET /docs` with Swagger UI
+2. expose `GET /docs` with Scalar API Reference
 3. add OpenAPI validation command
 4. add tests for docs/spec routes
 5. update README/CLAUDE docs
@@ -69,7 +70,7 @@ Requirements:
 
 ### 2. `GET /docs`
 
-Serve a Swagger UI page that loads `/openapi.yaml`.
+Serve a Scalar API Reference page that loads `/openapi.yaml`.
 
 Requirements:
 
@@ -78,11 +79,12 @@ Requirements:
 - UI must point to `/openapi.yaml`
 - keep it local-dev focused and minimal
 - do not build a custom docs frontend
+- do not use Swagger UI assets
 
 Implementation options are allowed inside this fixed direction:
 
-- use an embedded static HTML page referencing Swagger UI assets from a CDN
-- or vendor a minimal Swagger UI bundle if avoiding CDN is straightforward
+- use an embedded static HTML page referencing Scalar browser assets from a CDN
+- or vendor a minimal Scalar bundle if avoiding CDN is straightforward
 
 Pick the smaller maintainable approach and document the tradeoff in the final report.
 
@@ -144,6 +146,7 @@ Document:
 - validation command: `make openapi-validate`
 - YAML-first policy
 - no handler annotation generation
+- Scalar-based docs viewer, not Swagger UI
 
 ## Verification
 
@@ -169,7 +172,7 @@ curl -i http://localhost:8080/docs
 Your final report must include:
 
 - changed files
-- implementation approach for Swagger UI assets
+- implementation approach for Scalar docs assets
 - docs/spec endpoint status
 - OpenAPI validation approach
 - test/vet/build results
@@ -185,4 +188,5 @@ Your final report must include:
 - do not discard unrelated work
 - do not add business APIs
 - do not add annotation-generated Swagger
+- do not add Swagger UI
 - do not require global Node/npm tools for validation
