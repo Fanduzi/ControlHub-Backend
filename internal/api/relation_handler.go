@@ -1,7 +1,7 @@
 // Package api provides HTTP handlers and routing for the ControlHub REST API.
 // input: net/http, internal/service
-// output: handleListResourceRelations
-// pos: HTTP handler for relation listing per resource
+// output: handleListResourceRelations, handleCreateResourceRelation, handleDeleteResourceRelation
+// pos: HTTP handlers for relation listing and maintenance
 // note: if this file changes, update header and README.md
 package api
 
@@ -18,12 +18,40 @@ func handleListResourceRelations(relationService *service.RelationService) http.
 	return func(w http.ResponseWriter, r *http.Request) {
 		items, err := relationService.ListByResourceID(chi.URLParam(r, "id"))
 		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
+			writeServiceError(w, err)
 			return
 		}
 
 		writeJSON(w, http.StatusOK, struct {
 			Items []model.ResourceRelation `json:"items"`
 		}{Items: items})
+	}
+}
+
+func handleCreateResourceRelation(relationService *service.RelationService) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		var input model.RelationCreateInput
+		if err := decodeJSONBody(r, &input); err != nil {
+			writeJSONError(w, http.StatusBadRequest, "malformed_json", "request body must be valid JSON")
+			return
+		}
+
+		created, err := relationService.Create(r.Context(), chi.URLParam(r, "id"), input)
+		if err != nil {
+			writeServiceError(w, err)
+			return
+		}
+
+		writeJSON(w, http.StatusCreated, created)
+	}
+}
+
+func handleDeleteResourceRelation(relationService *service.RelationService) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if err := relationService.Delete(r.Context(), chi.URLParam(r, "id")); err != nil {
+			writeServiceError(w, err)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
 	}
 }

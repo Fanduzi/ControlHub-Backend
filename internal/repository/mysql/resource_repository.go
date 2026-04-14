@@ -11,6 +11,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
+
+	"github.com/go-sql-driver/mysql"
 
 	"github.com/fan/controlhub/internal/model"
 	"github.com/fan/controlhub/internal/service"
@@ -207,6 +210,106 @@ func (r *ResourceRepository) fetchHostProfile(ctx context.Context, id string) (m
 		"ipAddress": ipAddress,
 		"osName":    osName,
 	}, nil
+}
+
+func (r *ResourceRepository) CreateResource(ctx context.Context, input model.ResourceCreateInput) (*model.Resource, error) {
+	labelsJSON, err := json.Marshal(input.Labels)
+	if err != nil {
+		return nil, fmt.Errorf("marshal labels: %w", err)
+	}
+
+	var id string
+	if err := r.db.QueryRowContext(ctx, "SELECT UUID()").Scan(&id); err != nil {
+		return nil, fmt.Errorf("generate id: %w", err)
+	}
+
+	query := `insert into resources
+	(id, resource_type, resource_subtype, name, display_name,
+	 environment_id, owner_id, lifecycle_status, health_status,
+	 source, external_id, labels, created_at, updated_at)
+	values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), NOW())`
+
+	_, err = r.db.ExecContext(ctx, query,
+		id,
+		input.ResourceType, input.ResourceSubtype,
+		input.Name, input.DisplayName,
+		input.EnvironmentID, input.OwnerID,
+		string(input.LifecycleStatus), string(input.HealthStatus),
+		input.Source, input.ExternalID,
+		string(labelsJSON),
+	)
+	if err != nil {
+		var mysqlErr *mysql.MySQLError
+		if errors.As(err, &mysqlErr) && mysqlErr.Number == 1062 {
+			return nil, service.ErrResourceConflict
+		}
+		return nil, fmt.Errorf("insert resource: %w", err)
+	}
+
+	return r.GetResource(id)
+}
+
+func (r *ResourceRepository) UpdateResource(ctx context.Context, id string, input model.ResourceUpdateInput) (*model.Resource, error) {
+	existing, err := r.GetResource(id)
+	if err != nil {
+		return nil, err
+	}
+
+	setClauses := []string{}
+	args := []any{}
+
+	if input.ResourceSubtype != nil {
+		setClauses = append(setClauses, "resource_subtype = ?")
+		args = append(args, *input.ResourceSubtype)
+	}
+	if input.DisplayName != nil {
+		setClauses = append(setClauses, "display_name = ?")
+		args = append(args, *input.DisplayName)
+	}
+	if input.EnvironmentID != nil {
+		setClauses = append(setClauses, "environment_id = ?")
+		args = append(args, *input.EnvironmentID)
+	}
+	if input.OwnerID != nil {
+		setClauses = append(setClauses, "owner_id = ?")
+		args = append(args, *input.OwnerID)
+	}
+	if input.LifecycleStatus != nil {
+		setClauses = append(setClauses, "lifecycle_status = ?")
+		args = append(args, string(*input.LifecycleStatus))
+	}
+	if input.HealthStatus != nil {
+		setClauses = append(setClauses, "health_status = ?")
+		args = append(args, string(*input.HealthStatus))
+	}
+	if input.Source != nil {
+		setClauses = append(setClauses, "source = ?")
+		args = append(args, *input.Source)
+	}
+	if input.ExternalID != nil {
+		setClauses = append(setClauses, "external_id = ?")
+		args = append(args, *input.ExternalID)
+	}
+	if input.Labels != nil {
+		labelsJSON, _ := json.Marshal(*input.Labels)
+		setClauses = append(setClauses, "labels = ?")
+		args = append(args, string(labelsJSON))
+	}
+
+	if len(setClauses) == 0 {
+		return existing, nil
+	}
+
+	setClauses = append(setClauses, "updated_at = NOW()")
+	args = append(args, id)
+
+	query := "update resources set " + strings.Join(setClauses, ", ") + " where id = ?"
+
+	if _, err := r.db.ExecContext(ctx, query, args...); err != nil {
+		return nil, fmt.Errorf("update resource %s: %w", id, err)
+	}
+
+	return r.GetResource(id)
 }
 
 type resourceScanner interface {
