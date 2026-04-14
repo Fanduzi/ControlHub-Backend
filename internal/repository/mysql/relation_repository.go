@@ -11,6 +11,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/go-sql-driver/mysql"
@@ -132,4 +133,50 @@ func (r *RelationRepository) DeleteRelation(ctx context.Context, relationID stri
 		return service.ErrRelationNotFound
 	}
 	return nil
+}
+
+func (r *RelationRepository) ListRelationsByResourceIDs(ids []string) ([]model.ResourceRelation, error) {
+	if len(ids) == 0 {
+		return []model.ResourceRelation{}, nil
+	}
+
+	placeholders := make([]string, len(ids))
+	args := make([]any, len(ids)*2)
+	for i, id := range ids {
+		placeholders[i] = "?"
+		args[i] = id
+		args[len(ids)+i] = id
+	}
+
+	query := fmt.Sprintf(`
+	select id, from_resource_id, to_resource_id, relation_type, created_at
+	from resource_relations
+	where from_resource_id in (%s) or to_resource_id in (%s)
+	order by created_at desc`,
+		strings.Join(placeholders, ", "),
+		strings.Join(placeholders, ", "),
+	)
+
+	rows, err := r.db.QueryContext(context.Background(), query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	items := make([]model.ResourceRelation, 0)
+	for rows.Next() {
+		var item model.ResourceRelation
+		if err := rows.Scan(
+			&item.ID,
+			&item.FromResourceID,
+			&item.ToResourceID,
+			&item.RelationType,
+			&item.CreatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, item)
+	}
+
+	return items, rows.Err()
 }

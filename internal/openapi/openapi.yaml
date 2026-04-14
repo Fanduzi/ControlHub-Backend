@@ -532,51 +532,109 @@ paths:
                     items:
                       $ref: "#/components/schemas/DictionaryItem"
   # ──────────────────────────────────────────────────────────────
-  # PROPOSED: Topology endpoint contract (not yet implemented)
-  #
-  # GET /resources/{id}/topology
-  #
-  # Returns a local topology projection around a resource.
-  # Scope: 1-hop or 2-hop neighborhood, built from existing
-  # resources + relations. Not a global graph.
-  #
-  # Proposed response shape:
-  #   {
-  #     "rootResourceId": "string",
-  #     "nodes": [
-  #       {
-  #         "id": "string",
-  #         "resourceType": "string",
-  #         "name": "string",
-  #         "displayName": "string",
-  #         "lifecycleStatus": "string",
-  #         "healthStatus": "string"
-  #       }
-  #     ],
-  #     "edges": [
-  #       {
-  #         "id": "string",
-  #         "fromResourceId": "string",
-  #         "toResourceId": "string",
-  #         "relationType": "string"
-  #       }
-  #     ],
-  #     "groups": [
-  #       {
-  #         "id": "string",
-  #         "label": "string",
-  #         "nodeIds": ["string"]
-  #       }
-  #     ]
-  #   }
-  #
-  # Design notes:
-  # - nodes/edges are required; groups is optional
-  # - groups provide layout hints (e.g., cluster membership)
-  # - no layout engine; positioning is client-side
-  # - no topology persistence; built on-the-fly from resources + relations
-  # - rootResourceId identifies the center of the local graph
+  # IMPLEMENTED: Topology read model endpoint
   # ──────────────────────────────────────────────────────────────
+  /resources/{id}/topology:
+    get:
+      summary: Get resource topology
+      description: >
+        Read-only topology projection around a root resource, built from
+        existing resources and relations. Returns nodes, edges, and
+        optional groups for graph visualization. Supports depth (1 or 2)
+        and directional filtering (upstream, downstream, or both).
+      operationId: getResourceTopology
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+          description: Root resource ID
+        - in: query
+          name: depth
+          schema:
+            type: integer
+            enum: [1, 2]
+            default: 1
+          description: Traversal depth (1 = direct neighbors, 2 = two hops)
+        - in: query
+          name: direction
+          schema:
+            type: string
+            enum: [both, upstream, downstream]
+            default: both
+          description: >
+            Expansion direction relative to the root.
+            `downstream`: edges where root is fromResourceId.
+            `upstream`: edges where root is toResourceId.
+            `both`: include both.
+        - in: query
+          name: relationType
+          schema:
+            $ref: "#/components/schemas/RelationType"
+          description: Optional filter to include only edges of this relation type
+      responses:
+        "200":
+          description: Topology projection
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TopologyResponse"
+              example:
+                rootResourceId: "40000000-0000-0000-0000-000000000001"
+                depth: 1
+                direction: both
+                nodes:
+                  - id: "40000000-0000-0000-0000-000000000001"
+                    resourceType: database_cluster
+                    resourceSubtype: mysql
+                    name: order-mysql-cluster-prod
+                    displayName: Order MySQL Cluster Prod
+                    environmentId: "10000000-0000-0000-0000-000000000001"
+                    ownerId: "20000000-0000-0000-0000-000000000002"
+                    lifecycleStatus: running
+                    healthStatus: healthy
+                    isRoot: true
+                    distance: 0
+                  - id: "40000000-0000-0000-0000-000000000002"
+                    resourceType: database_instance
+                    resourceSubtype: mysql
+                    name: order-mysql-1-prod
+                    displayName: Order MySQL 1 Prod
+                    environmentId: "10000000-0000-0000-0000-000000000001"
+                    ownerId: "20000000-0000-0000-0000-000000000002"
+                    lifecycleStatus: running
+                    healthStatus: healthy
+                    isRoot: false
+                    distance: 1
+                edges:
+                  - id: "50000000-0000-0000-0000-000000000001"
+                    fromResourceId: "40000000-0000-0000-0000-000000000002"
+                    toResourceId: "40000000-0000-0000-0000-000000000001"
+                    relationType: member_of
+                groups:
+                  - id: group-database_cluster
+                    label: Database Cluster
+                    resourceType: database_cluster
+                    nodeIds:
+                      - "40000000-0000-0000-0000-000000000001"
+                  - id: group-database_instance
+                    label: Database Instance
+                    resourceType: database_instance
+                    nodeIds:
+                      - "40000000-0000-0000-0000-000000000002"
+        "400":
+          description: Invalid query parameters
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "404":
+          description: Root resource not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
 components:
   schemas:
     PageInfo:
@@ -880,3 +938,104 @@ components:
         message:
           type: string
           description: Human-readable error description
+    TopologyResponse:
+      type: object
+      required: [rootResourceId, depth, direction, nodes, edges, groups]
+      properties:
+        rootResourceId:
+          type: string
+          description: ID of the root resource the topology is centered on
+        depth:
+          type: integer
+          description: Traversal depth used for this response (1 or 2)
+        direction:
+          type: string
+          enum: [both, upstream, downstream]
+          description: Direction filter used for this response
+        nodes:
+          type: array
+          items:
+            $ref: "#/components/schemas/TopologyNode"
+          description: >
+            De-duplicated nodes sorted by distance, then resource type,
+            then name, then id. Root node is always first.
+        edges:
+          type: array
+          items:
+            $ref: "#/components/schemas/TopologyEdge"
+          description: >
+            De-duplicated edges sorted by relation type, fromResourceId,
+            toResourceId, then id.
+        groups:
+          type: array
+          items:
+            $ref: "#/components/schemas/TopologyGroup"
+          description: Optional grouping of nodes by resource type
+    TopologyNode:
+      type: object
+      required:
+        - id
+        - resourceType
+        - resourceSubtype
+        - name
+        - displayName
+        - environmentId
+        - ownerId
+        - lifecycleStatus
+        - healthStatus
+        - isRoot
+        - distance
+      properties:
+        id:
+          type: string
+        resourceType:
+          $ref: "#/components/schemas/ResourceType"
+        resourceSubtype:
+          type: string
+        name:
+          type: string
+        displayName:
+          type: string
+        environmentId:
+          type: string
+        ownerId:
+          type: string
+        lifecycleStatus:
+          $ref: "#/components/schemas/LifecycleStatus"
+        healthStatus:
+          $ref: "#/components/schemas/HealthStatus"
+        isRoot:
+          type: boolean
+          description: True if this node is the root resource
+        distance:
+          type: integer
+          description: Hop distance from root (0 for root itself)
+    TopologyEdge:
+      type: object
+      required: [id, fromResourceId, toResourceId, relationType]
+      properties:
+        id:
+          type: string
+        fromResourceId:
+          type: string
+        toResourceId:
+          type: string
+        relationType:
+          $ref: "#/components/schemas/RelationType"
+    TopologyGroup:
+      type: object
+      required: [id, label, resourceType, nodeIds]
+      properties:
+        id:
+          type: string
+          description: Group identifier (e.g., "group-database_cluster")
+        label:
+          type: string
+          description: Human-readable group label
+        resourceType:
+          $ref: "#/components/schemas/ResourceType"
+        nodeIds:
+          type: array
+          items:
+            type: string
+          description: IDs of nodes belonging to this group
