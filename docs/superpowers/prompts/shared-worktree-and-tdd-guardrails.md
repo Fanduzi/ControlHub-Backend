@@ -28,6 +28,27 @@ Exceptions:
 - doc-only changes
 - tiny one-file hotfixes
 
+## Startup Check
+
+Before changing files, verify and report:
+
+- current working directory
+- git branch
+- recent commits, enough to prove the expected base is present
+- `git status --short`
+- expected worktree path
+
+Stop and ask only if the branch/path/base commit is wrong or the worktree contains unrelated dirty changes.
+
+## Scope Control
+
+For narrow tasks, obey explicit file or directory allowlists in the prompt.
+
+- Do not modify files outside the allowlist.
+- If the task genuinely requires an out-of-scope file, stop and report the reason before editing it.
+- Do not modify generated files, release docs, package metadata, or broad config unless the prompt explicitly allows it.
+- Do not execute later tasks or adjacent phases early.
+
 ## TDD
 
 Use test-first discipline for meaningful behavior changes.
@@ -47,6 +68,27 @@ Expected loop:
 3. rerun the relevant tests
 4. refactor only after passing
 
+Tests should assert specific facts, not just broad behavior.
+
+- API tests should assert status codes, response shapes, and key fields.
+- UI tests should assert visible state, error state, and request payloads where practical.
+- Read-model tests should assert ordering, de-duplication, filters, and edge cases.
+- Bugfix tests should fail for the original bug and pass after the fix.
+
+## Pre-Commit Scope Check
+
+Before committing:
+
+- stage explicit files only
+- run `git diff --cached --stat`
+- run `git diff --check --cached`
+- report the staged file list
+- verify staged files match the requested scope
+
+Do not commit unrelated local files, IDE files, temporary backups, logs, or generated artifacts unless explicitly required.
+
+If GitNexus is available in the repo, also run the configured change-impact check before committing.
+
 ## Completion Standard
 
 Do not report “done” without separating:
@@ -57,3 +99,18 @@ Do not report “done” without separating:
 - E2E verification, if applicable
 
 If any layer was skipped, say so explicitly.
+
+Final reports must include negative scope confirmation for important boundaries, for example:
+
+- did not change production code for characterization-only tasks
+- did not add topology editing when building read-only topology
+- did not add SQL work orders or query execution during CMDB phases
+- did not add frontend-only mocks as final behavior
+- did not tag, push, release, or add AI co-author unless explicitly requested
+
+For stage-level work, include a short "next phase input" section:
+
+- contract gaps found
+- model limitations found
+- test or E2E gaps remaining
+- recommended next action
