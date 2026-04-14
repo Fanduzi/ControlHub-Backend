@@ -16,6 +16,10 @@ Stage-level worker prompts are implementation assignments, not open-ended design
 ## Worktree
 
 - Use a dedicated git worktree for stage-level implementation by default.
+- Starting with the next stage after this rule was added, stage-level worktrees must be created under the project-local `.worktrees` directory.
+- Backend worktrees must live under `/Users/fan/GolangProjects/ControlHub/.worktrees`.
+- Frontend worktrees must live under `/Users/fan/JsProjects/ControlHub/.worktrees`.
+- Do not create new stage-level worktrees under `.claude/worktrees`.
 - Do not implement large phase work directly in a dirty main worktree.
 - Keep frontend and backend work isolated when they can proceed independently.
 
