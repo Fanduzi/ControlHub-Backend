@@ -16,15 +16,41 @@ mysql -u root -e "CREATE DATABASE controlhub CHARACTER SET utf8mb4 COLLATE utf8m
 mysql -u root -e "CREATE USER IF NOT EXISTS 'controlhub'@'%' IDENTIFIED BY 'controlhub_dev';"
 mysql -u root -e "GRANT ALL PRIVILEGES ON controlhub.* TO 'controlhub'@'%'; FLUSH PRIVILEGES;"
 
-# 3. Apply migrations
-mysql -u root controlhub < migrations/0001_initial_schema.sql
-mysql -u root controlhub < migrations/0002_seed_reference_data.sql
-mysql -u root controlhub < migrations/0003_expand_resource_type_constraint.sql
-mysql -u root controlhub < migrations/0004_seed_demo_data.sql
+# 3. Apply migrations via goose
+make migrate-up
 
 # 4. Copy .env and adjust DSN if needed
 cp .env.example .env
 ```
+
+### Existing Local DB
+
+If you already have a `controlhub` database that was migrated manually before goose was introduced, baseline it:
+
+```bash
+mysql -u root controlhub -e "
+CREATE TABLE IF NOT EXISTS goose_db_version (
+    id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+    version_id bigint NOT NULL,
+    is_applied boolean NOT NULL,
+    tstamp timestamp NULL DEFAULT CURRENT_TIMESTAMP
+) ENGINE=InnoDB;
+INSERT INTO goose_db_version (version_id, is_applied) VALUES
+(0,true),(1,true),(2,true),(3,true),(4,true),(5,true),(6,true);
+"
+make migrate-status   # confirm all 6 show as Applied
+```
+
+### Migration Commands
+
+| Command | Description |
+|---------|-------------|
+| `make migrate-up` | Apply all pending migrations |
+| `make migrate-status` | Show current migration state |
+| `make migrate-down-one` | Roll back one migration |
+| `CONFIRM=yes make migrate-reset-dev` | Drop + recreate DB + apply all (destructive) |
+
+Migrations are **not** run automatically on server startup.
 
 `make run` now attempts to load `.env` automatically during startup. If a variable is already exported in your shell, that exported value takes precedence over `.env`.
 

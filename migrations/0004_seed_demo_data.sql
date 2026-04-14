@@ -1,47 +1,29 @@
--- ControlHub comprehensive demo data for frontend integration testing
--- Adds ~60 resources across 3 environments with realistic relationships
---
--- Scenarios:
---   Order MySQL cluster (prod/staging/dev)
---   Payment MySQL cluster (prod/staging)
---   User Redis cluster (prod)
---   Analytics ClickHouse cluster (prod)
---   Config MySQL cluster (prod)
---   Shared infrastructure (hosts, proxies, VIPs, domains, control plane)
---
--- Status variety:
---   running/healthy   — majority of resources
---   running/warning   — payment-mysql-replica-01, config-mysql-replica-01
---   running/critical  — analytics-ch-node-02 (disk pressure)
---   degraded/warning  — config-mysql-cluster, config-proxysql
---   stopped/unknown   — notification-service (intentionally disabled)
---   provisioning/healthy — payment-mysql-primary-staging
+-- ControlHub comprehensive demo data for frontend integration testing.
+-- Down migration deletes by fixed ID patterns. Dev-oriented, NOT a production rollback strategy.
 
+-- +goose Up
 -- ============================================================
 -- Section 1: Reference Data Expansion
 -- ============================================================
 
+-- +goose StatementBegin
 insert ignore into environments (id, name, slug, description) values
   ('10000000-0000-0000-0000-000000000003', 'Development', 'dev', 'Development and testing environment');
+-- +goose StatementEnd
 
+-- +goose StatementBegin
 insert ignore into owners (id, name, email) values
   ('20000000-0000-0000-0000-000000000003', 'Order Team',     'order-team@example.com'),
   ('20000000-0000-0000-0000-000000000004', 'Payment Team',   'payment-team@example.com'),
   ('20000000-0000-0000-0000-000000000005', 'Analytics Team', 'analytics-team@example.com');
+-- +goose StatementEnd
 
 -- ============================================================
 -- Section 2: Production Resources (39 new)
 -- ============================================================
--- Existing prod resources:
---   40000000-...-0001  order-mysql-cluster-prod  (database_cluster)
---   40000000-...-0002  order-mysql-01-prod       (database_instance, primary)
---   40000000-...-0003  order-api-prod             (service)
---   40000000-...-0004  prod-db-host-01           (host)
 
 -- --- Production Hosts (7) ---
--- ID mapping: ...0001=db-host-02, ...0002=db-host-03, ...0003=db-host-04
---             ...0004=app-host-01, ...0005=app-host-02, ...0006=ch-host-01, ...0007=ch-host-02
-
+-- +goose StatementBegin
 insert into resources (
   id, resource_type, resource_subtype, name, display_name,
   environment_id, owner_id, lifecycle_status, health_status,
@@ -88,9 +70,10 @@ insert into resources (
    '10000000-0000-0000-0000-000000000001', '20000000-0000-0000-0000-000000000001',
    'running', 'healthy',
    '{"team":"platform","tier":"infra","purpose":"analytics","disk_type":"nvme"}', 'discovery', 'bare-prod-ch-host-02');
+-- +goose StatementEnd
 
 -- --- Production Database Clusters (4) ---
-
+-- +goose StatementBegin
 insert into resources (
   id, resource_type, resource_subtype, name, display_name,
   environment_id, owner_id, lifecycle_status, health_status,
@@ -122,9 +105,10 @@ insert into resources (
    '10000000-0000-0000-0000-000000000001', '20000000-0000-0000-0000-000000000002',
    'degraded', 'warning',
    '{"team":"platform","tier":"data"}', 'manual', '');
+-- +goose StatementEnd
 
 -- --- Production Database Instances (10) ---
-
+-- +goose StatementBegin
 insert into resources (
   id, resource_type, resource_subtype, name, display_name,
   environment_id, owner_id, lifecycle_status, health_status,
@@ -190,9 +174,10 @@ insert into resources (
    '10000000-0000-0000-0000-000000000001', '20000000-0000-0000-0000-000000000002',
    'running', 'warning',
    '{"team":"platform","tier":"data","replication_lag_seconds":"12"}', 'manual', '');
+-- +goose StatementEnd
 
 -- --- Production Services (5) ---
-
+-- +goose StatementBegin
 insert into resources (
   id, resource_type, resource_subtype, name, display_name,
   environment_id, owner_id, lifecycle_status, health_status,
@@ -227,9 +212,10 @@ insert into resources (
    '10000000-0000-0000-0000-000000000001', '20000000-0000-0000-0000-000000000003',
    'stopped', 'unknown',
    '{"team":"order","tier":"app","runtime":"node","disabled_reason":"kafka-migration"}', 'manual', '');
+-- +goose StatementEnd
 
 -- --- Production Database Proxies (4) ---
-
+-- +goose StatementBegin
 insert into resources (
   id, resource_type, resource_subtype, name, display_name,
   environment_id, owner_id, lifecycle_status, health_status,
@@ -258,9 +244,10 @@ insert into resources (
    '10000000-0000-0000-0000-000000000001', '20000000-0000-0000-0000-000000000001',
    'degraded', 'warning',
    '{"team":"platform","tier":"proxy","backend":"mysql"}', 'manual', '');
+-- +goose StatementEnd
 
 -- --- Production Virtual IPs (3) ---
-
+-- +goose StatementBegin
 insert into resources (
   id, resource_type, resource_subtype, name, display_name,
   environment_id, owner_id, lifecycle_status, health_status,
@@ -283,9 +270,10 @@ insert into resources (
    '10000000-0000-0000-0000-000000000001', '20000000-0000-0000-0000-000000000001',
    'running', 'healthy',
    '{"team":"platform","tier":"network","ip":"10.0.10.102"}', 'manual', '');
+-- +goose StatementEnd
 
 -- --- Production Domain Names (4) ---
-
+-- +goose StatementBegin
 insert into resources (
   id, resource_type, resource_subtype, name, display_name,
   environment_id, owner_id, lifecycle_status, health_status,
@@ -314,9 +302,10 @@ insert into resources (
    '10000000-0000-0000-0000-000000000001', '20000000-0000-0000-0000-000000000005',
    'running', 'healthy',
    '{"team":"analytics","tier":"network"}', 'manual', '');
+-- +goose StatementEnd
 
 -- --- Production Control Plane Components (2) ---
-
+-- +goose StatementBegin
 insert into resources (
   id, resource_type, resource_subtype, name, display_name,
   environment_id, owner_id, lifecycle_status, health_status,
@@ -333,17 +322,18 @@ insert into resources (
    '10000000-0000-0000-0000-000000000001', '20000000-0000-0000-0000-000000000001',
    'running', 'healthy',
    '{"team":"platform","tier":"control-plane"}', 'manual', '');
+-- +goose StatementEnd
 
 -- ============================================================
 -- Section 3: Staging Resources (14)
 -- ============================================================
 
+-- +goose StatementBegin
 insert into resources (
   id, resource_type, resource_subtype, name, display_name,
   environment_id, owner_id, lifecycle_status, health_status,
   labels, source, external_id
 ) values
-  -- Staging hosts (3)
   ('41000000-0000-0000-0000-000000000080', 'host', 'vm',
    'staging-db-host-01', 'Staging DB Host 01',
    '10000000-0000-0000-0000-000000000002', '20000000-0000-0000-0000-000000000001',
@@ -362,7 +352,6 @@ insert into resources (
    'running', 'healthy',
    '{"team":"platform","tier":"compute"}', 'manual', ''),
 
-  -- Staging database clusters (2)
   ('41000000-0000-0000-0000-000000000083', 'database_cluster', 'mysql',
    'order-mysql-cluster-staging', 'Order MySQL Cluster Staging',
    '10000000-0000-0000-0000-000000000002', '20000000-0000-0000-0000-000000000002',
@@ -375,7 +364,6 @@ insert into resources (
    'running', 'healthy',
    '{"team":"payment","tier":"data"}', 'manual', ''),
 
-  -- Staging database instances (3)
   ('41000000-0000-0000-0000-000000000085', 'database_instance', 'mysql',
    'order-mysql-primary-staging', 'Order MySQL Primary Staging',
    '10000000-0000-0000-0000-000000000002', '20000000-0000-0000-0000-000000000002',
@@ -394,7 +382,6 @@ insert into resources (
    'provisioning', 'healthy',
    '{"team":"payment","tier":"data"}', 'manual', ''),
 
-  -- Staging services (2)
   ('41000000-0000-0000-0000-000000000088', 'service', 'api',
    'order-api-staging', 'Order API Staging',
    '10000000-0000-0000-0000-000000000002', '20000000-0000-0000-0000-000000000003',
@@ -407,38 +394,36 @@ insert into resources (
    'running', 'healthy',
    '{"team":"payment","tier":"app"}', 'manual', ''),
 
-  -- Staging proxy (1)
   ('41000000-0000-0000-0000-000000000090', 'database_proxy', 'proxysql',
    'order-proxysql-staging', 'Order ProxySQL Staging',
    '10000000-0000-0000-0000-000000000002', '20000000-0000-0000-0000-000000000001',
    'running', 'healthy',
    '{"team":"platform","tier":"proxy"}', 'manual', ''),
 
-  -- Staging VIP (1)
   ('41000000-0000-0000-0000-000000000091', 'virtual_ip', 'floating',
    'order-vip-staging', 'Order Service Virtual IP Staging',
    '10000000-0000-0000-0000-000000000002', '20000000-0000-0000-0000-000000000001',
    'running', 'healthy',
    '{"team":"platform","tier":"network","ip":"10.1.10.100"}', 'manual', ''),
 
-  -- Staging domain (1)
   ('41000000-0000-0000-0000-000000000092', 'domain_name', 'dns',
    'staging.order.internal', 'Order Service Staging Internal Domain',
    '10000000-0000-0000-0000-000000000002', '20000000-0000-0000-0000-000000000003',
    'running', 'healthy',
    '{"team":"order","tier":"network"}', 'manual', ''),
 
-  -- Staging control plane (1)
   ('41000000-0000-0000-0000-000000000093', 'control_plane_component', 'orchestrator',
    'db-orchestrator-staging', 'Database Orchestrator - Staging Control Plane',
    '10000000-0000-0000-0000-000000000002', '20000000-0000-0000-0000-000000000001',
    'running', 'healthy',
    '{"team":"platform","tier":"control-plane"}', 'manual', '');
+-- +goose StatementEnd
 
 -- ============================================================
 -- Section 4: Development Resources (7)
 -- ============================================================
 
+-- +goose StatementBegin
 insert into resources (
   id, resource_type, resource_subtype, name, display_name,
   environment_id, owner_id, lifecycle_status, health_status,
@@ -485,13 +470,13 @@ insert into resources (
    '10000000-0000-0000-0000-000000000003', '20000000-0000-0000-0000-000000000003',
    'running', 'healthy',
    '{}', 'manual', '');
+-- +goose StatementEnd
 
 -- ============================================================
 -- Section 5: Profiles
 -- ============================================================
 
--- --- Host Profiles (7 prod) ---
-
+-- +goose StatementBegin
 insert into resource_profiles_host (resource_id, hostname, ip_address, os_name, spec) values
   ('41000000-0000-0000-0000-000000000001', 'prod-db-host-02.internal', '10.0.10.22', 'Ubuntu 24.04', '{"provider":"vmware","cpu":16,"memory_gb":128}'),
   ('41000000-0000-0000-0000-000000000002', 'prod-db-host-03.internal', '10.0.10.23', 'Ubuntu 24.04', '{"provider":"vmware","cpu":16,"memory_gb":128}'),
@@ -500,17 +485,17 @@ insert into resource_profiles_host (resource_id, hostname, ip_address, os_name, 
   ('41000000-0000-0000-0000-000000000005', 'prod-app-host-02.internal', '10.0.20.11', 'Ubuntu 22.04', '{"provider":"vmware","cpu":8,"memory_gb":32,"kubernetes_node":"true"}'),
   ('41000000-0000-0000-0000-000000000006', 'prod-ch-host-01.internal', '10.0.30.10', 'Ubuntu 24.04', '{"provider":"bare-metal","cpu":32,"memory_gb":256,"disk_tb":8,"disk_type":"nvme"}'),
   ('41000000-0000-0000-0000-000000000007', 'prod-ch-host-02.internal', '10.0.30.11', 'Ubuntu 24.04', '{"provider":"bare-metal","cpu":32,"memory_gb":256,"disk_tb":8,"disk_type":"nvme"}');
+-- +goose StatementEnd
 
--- --- Host Profiles (3 staging, 1 dev) ---
-
+-- +goose StatementBegin
 insert into resource_profiles_host (resource_id, hostname, ip_address, os_name, spec) values
   ('41000000-0000-0000-0000-000000000080', 'staging-db-host-01.internal', '10.1.10.20', 'Ubuntu 24.04', '{"provider":"vmware","cpu":4,"memory_gb":32}'),
   ('41000000-0000-0000-0000-000000000081', 'staging-db-host-02.internal', '10.1.10.21', 'Ubuntu 24.04', '{"provider":"vmware","cpu":4,"memory_gb":32}'),
   ('41000000-0000-0000-0000-000000000082', 'staging-app-host-01.internal', '10.1.20.10', 'Ubuntu 22.04', '{"cpu":4,"memory_gb":16}'),
   ('41000000-0000-0000-0000-000000000094', 'dev-db-host-01.internal', '10.2.10.20', 'Ubuntu 24.04', '{"cpu":2,"memory_gb":8}');
+-- +goose StatementEnd
 
--- --- Database Cluster Profiles (4 prod, 2 staging, 1 dev) ---
-
+-- +goose StatementBegin
 insert into resource_profiles_database_cluster (resource_id, engine, topology_mode, primary_endpoint, spec) values
   ('41000000-0000-0000-0000-000000000010', 'mysql',        'primary-replica',  'payment-mysql-cluster-prod.internal:3306',  '{"replicas":1,"storage_class":"ssd","backup_enabled":true}'),
   ('41000000-0000-0000-0000-000000000011', 'redis',        'cluster',          'user-redis-cluster-prod.internal:6379',     '{"shards":3,"replicas_per_shard":1,"memory_max_gb":"32"}'),
@@ -519,13 +504,11 @@ insert into resource_profiles_database_cluster (resource_id, engine, topology_mo
   ('41000000-0000-0000-0000-000000000083', 'mysql',        'primary-replica',  'order-mysql-cluster-staging.internal:3306', '{"replicas":1}'),
   ('41000000-0000-0000-0000-000000000084', 'mysql',        'primary-replica',  'payment-mysql-cluster-staging.internal:3306', '{}'),
   ('41000000-0000-0000-0000-000000000095', 'mysql',        'single',           'dev-mysql-cluster.internal:3306',           '{}');
+-- +goose StatementEnd
 
--- --- Database Instance Profiles (10 prod, 2 staging, 1 dev) ---
--- Note: order-mysql-replica-02-prod gets NO profile row (sparse test case)
-
+-- +goose StatementBegin
 insert into resource_profiles_database_instance (resource_id, engine, version, host, port, role, spec) values
   ('41000000-0000-0000-0000-000000000020', 'mysql',      '8.0.36', 'prod-db-host-02.internal',     3306, 'replica', '{"storage_class":"ssd","delayed":false}'),
-  -- 000021 intentionally skipped: order-mysql-replica-02 has no profile
   ('41000000-0000-0000-0000-000000000022', 'mysql',      '8.0.36', 'prod-db-host-02.internal',     3307, 'primary', '{"storage_class":"ssd","innodb_buffer_pool_gb":"64"}'),
   ('41000000-0000-0000-0000-000000000023', 'mysql',      '8.0.36', 'prod-db-host-03.internal',     3306, 'replica', '{"storage_class":"ssd"}'),
   ('41000000-0000-0000-0000-000000000024', 'redis',      '7.2.4',  'prod-db-host-03.internal',     6379, 'primary', '{"maxmemory_policy":"allkeys-lru"}'),
@@ -537,54 +520,43 @@ insert into resource_profiles_database_instance (resource_id, engine, version, h
   ('41000000-0000-0000-0000-000000000085', 'mysql',      '8.0.36', 'staging-db-host-01.internal',  3306, 'primary', '{}'),
   ('41000000-0000-0000-0000-000000000086', 'mysql',      '8.0.36', 'staging-db-host-01.internal',  3307, 'replica', '{}'),
   ('41000000-0000-0000-0000-000000000096', 'mysql',      '8.0.36', 'dev-db-host-01.internal',      3306, 'primary', '{}');
+-- +goose StatementEnd
 
--- Note: payment-mysql-primary-staging (000087) has no profile — still provisioning
-
--- --- Service Profiles (5 prod, 2 staging, 1 dev) ---
--- Note: notification-service-prod gets NO profile row (stopped/disabled)
-
+-- +goose StatementBegin
 insert into resource_profiles_service (resource_id, system_name, repository_url, runtime_env, spec) values
   ('41000000-0000-0000-0000-000000000030', 'payment-api',   'https://git.internal/payment/api',   'kubernetes', '{"language":"go","framework":"gin","replicas":3}'),
   ('41000000-0000-0000-0000-000000000031', 'user-api',      'https://git.internal/user/api',      'kubernetes', '{"language":"java","framework":"spring-boot","replicas":2}'),
   ('41000000-0000-0000-0000-000000000032', 'analytics-pipeline', 'https://git.internal/analytics/pipeline', 'kubernetes', '{"language":"python","framework":"celery"}'),
   ('41000000-0000-0000-0000-000000000033', 'config-service', 'https://git.internal/platform/config', 'vm', '{}'),
-  -- 000034 notification-service skipped: no profile (disabled service)
   ('41000000-0000-0000-0000-000000000088', 'order-api',     'https://git.internal/order/api',     'kubernetes', '{"language":"go"}'),
   ('41000000-0000-0000-0000-000000000089', 'payment-api',   'https://git.internal/payment/api',   'kubernetes', '{"language":"go"}'),
   ('41000000-0000-0000-0000-000000000097', 'order-api',     'https://git.internal/order/api',     'docker-compose', '{}');
+-- +goose StatementEnd
 
 -- ============================================================
 -- Section 6: Relations (~57 new)
 -- ============================================================
 
--- --- member_of: instance -> cluster (14) ---
+-- +goose StatementBegin
 insert into resource_relations (id, from_resource_id, to_resource_id, relation_type) values
-  -- Production Order replicas -> Order cluster (existing 40000000...0001)
   ('51000000-0000-0000-0000-000000000001', '41000000-0000-0000-0000-000000000020', '40000000-0000-0000-0000-000000000001', 'member_of'),
   ('51000000-0000-0000-0000-000000000002', '41000000-0000-0000-0000-000000000021', '40000000-0000-0000-0000-000000000001', 'member_of'),
-  -- Production Payment
   ('51000000-0000-0000-0000-000000000003', '41000000-0000-0000-0000-000000000022', '41000000-0000-0000-0000-000000000010', 'member_of'),
   ('51000000-0000-0000-0000-000000000004', '41000000-0000-0000-0000-000000000023', '41000000-0000-0000-0000-000000000010', 'member_of'),
-  -- Production User Redis
   ('51000000-0000-0000-0000-000000000005', '41000000-0000-0000-0000-000000000024', '41000000-0000-0000-0000-000000000011', 'member_of'),
   ('51000000-0000-0000-0000-000000000006', '41000000-0000-0000-0000-000000000025', '41000000-0000-0000-0000-000000000011', 'member_of'),
-  -- Production Analytics CH
   ('51000000-0000-0000-0000-000000000007', '41000000-0000-0000-0000-000000000026', '41000000-0000-0000-0000-000000000012', 'member_of'),
   ('51000000-0000-0000-0000-000000000008', '41000000-0000-0000-0000-000000000027', '41000000-0000-0000-0000-000000000012', 'member_of'),
-  -- Production Config
   ('51000000-0000-0000-0000-000000000009', '41000000-0000-0000-0000-000000000028', '41000000-0000-0000-0000-000000000013', 'member_of'),
   ('51000000-0000-0000-0000-000000000010', '41000000-0000-0000-0000-000000000029', '41000000-0000-0000-0000-000000000013', 'member_of'),
-  -- Staging Order
   ('51000000-0000-0000-0000-000000000011', '41000000-0000-0000-0000-000000000085', '41000000-0000-0000-0000-000000000083', 'member_of'),
   ('51000000-0000-0000-0000-000000000012', '41000000-0000-0000-0000-000000000086', '41000000-0000-0000-0000-000000000083', 'member_of'),
-  -- Staging Payment
   ('51000000-0000-0000-0000-000000000013', '41000000-0000-0000-0000-000000000087', '41000000-0000-0000-0000-000000000084', 'member_of'),
-  -- Development
   ('51000000-0000-0000-0000-000000000014', '41000000-0000-0000-0000-000000000096', '41000000-0000-0000-0000-000000000095', 'member_of');
+-- +goose StatementEnd
 
--- --- runs_on: instance -> host (13) ---
+-- +goose StatementBegin
 insert into resource_relations (id, from_resource_id, to_resource_id, relation_type) values
-  -- Production
   ('51000000-0000-0000-0000-000000000020', '41000000-0000-0000-0000-000000000020', '41000000-0000-0000-0000-000000000001', 'runs_on'),
   ('51000000-0000-0000-0000-000000000021', '41000000-0000-0000-0000-000000000021', '41000000-0000-0000-0000-000000000002', 'runs_on'),
   ('51000000-0000-0000-0000-000000000022', '41000000-0000-0000-0000-000000000022', '41000000-0000-0000-0000-000000000002', 'runs_on'),
@@ -595,110 +567,121 @@ insert into resource_relations (id, from_resource_id, to_resource_id, relation_t
   ('51000000-0000-0000-0000-000000000027', '41000000-0000-0000-0000-000000000027', '41000000-0000-0000-0000-000000000007', 'runs_on'),
   ('51000000-0000-0000-0000-000000000028', '41000000-0000-0000-0000-000000000028', '41000000-0000-0000-0000-000000000003', 'runs_on'),
   ('51000000-0000-0000-0000-000000000029', '41000000-0000-0000-0000-000000000029', '41000000-0000-0000-0000-000000000003', 'runs_on'),
-  -- Staging
   ('51000000-0000-0000-0000-000000000030', '41000000-0000-0000-0000-000000000085', '41000000-0000-0000-0000-000000000080', 'runs_on'),
   ('51000000-0000-0000-0000-000000000031', '41000000-0000-0000-0000-000000000086', '41000000-0000-0000-0000-000000000080', 'runs_on'),
-  -- Development
   ('51000000-0000-0000-0000-000000000032', '41000000-0000-0000-0000-000000000096', '41000000-0000-0000-0000-000000000094', 'runs_on');
+-- +goose StatementEnd
 
--- --- depends_on: service -> cluster/proxy/instance (9) ---
+-- +goose StatementBegin
 insert into resource_relations (id, from_resource_id, to_resource_id, relation_type) values
-  -- Production
   ('51000000-0000-0000-0000-000000000040', '41000000-0000-0000-0000-000000000030', '41000000-0000-0000-0000-000000000010', 'depends_on'),
   ('51000000-0000-0000-0000-000000000041', '41000000-0000-0000-0000-000000000030', '41000000-0000-0000-0000-000000000041', 'depends_on'),
   ('51000000-0000-0000-0000-000000000042', '41000000-0000-0000-0000-000000000031', '41000000-0000-0000-0000-000000000011', 'depends_on'),
   ('51000000-0000-0000-0000-000000000043', '41000000-0000-0000-0000-000000000032', '41000000-0000-0000-0000-000000000042', 'depends_on'),
   ('51000000-0000-0000-0000-000000000044', '41000000-0000-0000-0000-000000000033', '41000000-0000-0000-0000-000000000013', 'depends_on'),
   ('51000000-0000-0000-0000-000000000045', '41000000-0000-0000-0000-000000000034', '41000000-0000-0000-0000-000000000013', 'depends_on'),
-  -- Also link existing order-api to proxy
   ('51000000-0000-0000-0000-000000000046', '40000000-0000-0000-0000-000000000003', '41000000-0000-0000-0000-000000000040', 'depends_on'),
-  -- Staging
   ('51000000-0000-0000-0000-000000000047', '41000000-0000-0000-0000-000000000088', '41000000-0000-0000-0000-000000000083', 'depends_on'),
   ('51000000-0000-0000-0000-000000000048', '41000000-0000-0000-0000-000000000089', '41000000-0000-0000-0000-000000000084', 'depends_on');
+-- +goose StatementEnd
 
--- --- fronts: proxy -> cluster (6) ---
+-- +goose StatementBegin
 insert into resource_relations (id, from_resource_id, to_resource_id, relation_type) values
-  -- Production
   ('51000000-0000-0000-0000-000000000050', '41000000-0000-0000-0000-000000000040', '40000000-0000-0000-0000-000000000001', 'fronts'),
   ('51000000-0000-0000-0000-000000000051', '41000000-0000-0000-0000-000000000041', '41000000-0000-0000-0000-000000000010', 'fronts'),
   ('51000000-0000-0000-0000-000000000052', '41000000-0000-0000-0000-000000000042', '41000000-0000-0000-0000-000000000012', 'fronts'),
   ('51000000-0000-0000-0000-000000000053', '41000000-0000-0000-0000-000000000043', '41000000-0000-0000-0000-000000000013', 'fronts'),
-  -- Staging
   ('51000000-0000-0000-0000-000000000054', '41000000-0000-0000-0000-000000000090', '41000000-0000-0000-0000-000000000083', 'fronts'),
-  -- Development
   ('51000000-0000-0000-0000-000000000055', '41000000-0000-0000-0000-000000000098', '41000000-0000-0000-0000-000000000095', 'fronts');
+-- +goose StatementEnd
 
--- --- fronts: VIP -> proxy (5) ---
+-- +goose StatementBegin
 insert into resource_relations (id, from_resource_id, to_resource_id, relation_type) values
-  -- Production
   ('51000000-0000-0000-0000-000000000060', '41000000-0000-0000-0000-000000000050', '41000000-0000-0000-0000-000000000040', 'fronts'),
   ('51000000-0000-0000-0000-000000000061', '41000000-0000-0000-0000-000000000051', '41000000-0000-0000-0000-000000000041', 'fronts'),
   ('51000000-0000-0000-0000-000000000062', '41000000-0000-0000-0000-000000000052', '41000000-0000-0000-0000-000000000042', 'fronts'),
-  -- Staging
   ('51000000-0000-0000-0000-000000000063', '41000000-0000-0000-0000-000000000091', '41000000-0000-0000-0000-000000000090', 'fronts'),
-  -- Development
   ('51000000-0000-0000-0000-000000000064', '41000000-0000-0000-0000-000000000099', '41000000-0000-0000-0000-000000000098', 'fronts');
+-- +goose StatementEnd
 
--- --- points_to: domain -> VIP/service/proxy (6) ---
+-- +goose StatementBegin
 insert into resource_relations (id, from_resource_id, to_resource_id, relation_type) values
-  -- Production
   ('51000000-0000-0000-0000-000000000070', '41000000-0000-0000-0000-000000000060', '41000000-0000-0000-0000-000000000050', 'points_to'),
   ('51000000-0000-0000-0000-000000000071', '41000000-0000-0000-0000-000000000061', '41000000-0000-0000-0000-000000000051', 'points_to'),
   ('51000000-0000-0000-0000-000000000072', '41000000-0000-0000-0000-000000000062', '41000000-0000-0000-0000-000000000031', 'points_to'),
   ('51000000-0000-0000-0000-000000000073', '41000000-0000-0000-0000-000000000063', '41000000-0000-0000-0000-000000000052', 'points_to'),
-  -- Staging
   ('51000000-0000-0000-0000-000000000074', '41000000-0000-0000-0000-000000000092', '41000000-0000-0000-0000-000000000091', 'points_to'),
-  -- Development
   ('51000000-0000-0000-0000-000000000075', '41000000-0000-0000-0000-000000000100', '41000000-0000-0000-0000-000000000099', 'points_to');
+-- +goose StatementEnd
 
--- --- manages: control_plane -> cluster (4) ---
+-- +goose StatementBegin
 insert into resource_relations (id, from_resource_id, to_resource_id, relation_type) values
-  -- Production
   ('51000000-0000-0000-0000-000000000080', '41000000-0000-0000-0000-000000000070', '40000000-0000-0000-0000-000000000001', 'manages'),
   ('51000000-0000-0000-0000-000000000081', '41000000-0000-0000-0000-000000000070', '41000000-0000-0000-0000-000000000010', 'manages'),
   ('51000000-0000-0000-0000-000000000082', '41000000-0000-0000-0000-000000000071', '41000000-0000-0000-0000-000000000013', 'manages'),
   ('51000000-0000-0000-0000-000000000083', '41000000-0000-0000-0000-000000000071', '41000000-0000-0000-0000-000000000011', 'manages'),
-  -- Staging
   ('51000000-0000-0000-0000-000000000084', '41000000-0000-0000-0000-000000000093', '41000000-0000-0000-0000-000000000083', 'manages');
+-- +goose StatementEnd
 
 -- ============================================================
 -- Section 7: Audit Events (25)
 -- ============================================================
 
+-- +goose StatementBegin
 insert into audit_events (id, actor_user_id, target_resource_id, event_type, result, created_at) values
-  -- Day 1: Initial setup
   ('61000000-0000-0000-0000-000000000001', '30000000-0000-0000-0000-000000000001', '41000000-0000-0000-0000-000000000001', 'resource.created',       'success', '2026-04-10 09:00:00'),
   ('61000000-0000-0000-0000-000000000002', '30000000-0000-0000-0000-000000000001', '41000000-0000-0000-0000-000000000002', 'resource.created',       'success', '2026-04-10 09:02:00'),
   ('61000000-0000-0000-0000-000000000003', '30000000-0000-0000-0000-000000000001', '41000000-0000-0000-0000-000000000003', 'resource.created',       'success', '2026-04-10 09:05:00'),
   ('61000000-0000-0000-0000-000000000004', '30000000-0000-0000-0000-000000000001', '41000000-0000-0000-0000-000000000010', 'resource.created',       'success', '2026-04-10 09:30:00'),
   ('61000000-0000-0000-0000-000000000005', '30000000-0000-0000-0000-000000000002', '41000000-0000-0000-0000-000000000020', 'resource.created',       'success', '2026-04-10 10:00:00'),
-
-  -- Day 2: Cluster wiring
   ('61000000-0000-0000-0000-000000000006', '30000000-0000-0000-0000-000000000001', '41000000-0000-0000-0000-000000000020', 'relation.created',       'success', '2026-04-10 10:15:00'),
   ('61000000-0000-0000-0000-000000000007', '30000000-0000-0000-0000-000000000001', '41000000-0000-0000-0000-000000000022', 'resource.created',       'success', '2026-04-10 10:30:00'),
   ('61000000-0000-0000-0000-000000000008', '30000000-0000-0000-0000-000000000001', '41000000-0000-0000-0000-000000000023', 'resource.created',       'success', '2026-04-10 10:45:00'),
   ('61000000-0000-0000-0000-000000000009', '30000000-0000-0000-0000-000000000001', '41000000-0000-0000-0000-000000000011', 'resource.created',       'success', '2026-04-10 11:00:00'),
-
-  -- Day 3: Services and proxies
   ('61000000-0000-0000-0000-000000000010', '30000000-0000-0000-0000-000000000002', '41000000-0000-0000-0000-000000000030', 'resource.created',       'success', '2026-04-10 14:00:00'),
   ('61000000-0000-0000-0000-000000000011', '30000000-0000-0000-0000-000000000002', '41000000-0000-0000-0000-000000000031', 'resource.created',       'success', '2026-04-10 14:10:00'),
   ('61000000-0000-0000-0000-000000000012', '30000000-0000-0000-0000-000000000002', '41000000-0000-0000-0000-000000000040', 'resource.created',       'success', '2026-04-10 14:30:00'),
   ('61000000-0000-0000-0000-000000000013', '30000000-0000-0000-0000-000000000002', '41000000-0000-0000-0000-000000000041', 'resource.created',       'success', '2026-04-10 14:35:00'),
-
-  -- Day 4: Configuration work + a failure
   ('61000000-0000-0000-0000-000000000014', '30000000-0000-0000-0000-000000000001', '41000000-0000-0000-0000-000000000033', 'resource.created',       'success', '2026-04-11 08:00:00'),
   ('61000000-0000-0000-0000-000000000015', '30000000-0000-0000-0000-000000000001', '41000000-0000-0000-0000-000000000033', 'resource.updated',       'success', '2026-04-11 08:30:00'),
   ('61000000-0000-0000-0000-000000000016', '30000000-0000-0000-0000-000000000001', '41000000-0000-0000-0000-000000000034', 'resource.created',       'success', '2026-04-11 09:00:00'),
   ('61000000-0000-0000-0000-000000000017', '30000000-0000-0000-0000-000000000002', '41000000-0000-0000-0000-000000000034', 'resource.lifecycle_changed', 'success', '2026-04-11 10:00:00'),
-
-  -- Day 5: Health incidents
   ('61000000-0000-0000-0000-000000000018', '30000000-0000-0000-0000-000000000001', '41000000-0000-0000-0000-000000000023', 'resource.health_changed', 'success', '2026-04-11 15:00:00'),
   ('61000000-0000-0000-0000-000000000019', '30000000-0000-0000-0000-000000000001', '41000000-0000-0000-0000-000000000027', 'resource.health_changed', 'success', '2026-04-11 16:00:00'),
   ('61000000-0000-0000-0000-000000000020', '30000000-0000-0000-0000-000000000002', '41000000-0000-0000-0000-000000000013', 'resource.health_changed', 'partial', '2026-04-11 16:30:00'),
-
-  -- Day 6: Infrastructure changes with failures
   ('61000000-0000-0000-0000-000000000021', '30000000-0000-0000-0000-000000000002', '41000000-0000-0000-0000-000000000043', 'resource.updated',       'failure', '2026-04-12 09:00:00'),
   ('61000000-0000-0000-0000-000000000022', '30000000-0000-0000-0000-000000000002', '41000000-0000-0000-0000-000000000043', 'resource.updated',       'success', '2026-04-12 09:15:00'),
   ('61000000-0000-0000-0000-000000000023', '30000000-0000-0000-0000-000000000001', '41000000-0000-0000-0000-000000000050', 'relation.created',       'success', '2026-04-12 10:00:00'),
   ('61000000-0000-0000-0000-000000000024', '30000000-0000-0000-0000-000000000001', '41000000-0000-0000-0000-000000000060', 'relation.created',       'failure', '2026-04-12 10:05:00'),
   ('61000000-0000-0000-0000-000000000025', '30000000-0000-0000-0000-000000000001', '41000000-0000-0000-0000-000000000060', 'relation.created',       'success', '2026-04-12 10:10:00');
+-- +goose StatementEnd
+
+-- +goose Down
+-- WARNING: Deletes demo data by fixed ID patterns. Dev-oriented, NOT a production rollback strategy.
+-- +goose StatementBegin
+delete from audit_events where id like '61000000-%';
+-- +goose StatementEnd
+-- +goose StatementBegin
+delete from resource_relations where id like '51000000-%';
+-- +goose StatementEnd
+-- +goose StatementBegin
+delete from resource_profiles_service where resource_id like '41000000-%';
+-- +goose StatementEnd
+-- +goose StatementBegin
+delete from resource_profiles_database_instance where resource_id like '41000000-%';
+-- +goose StatementEnd
+-- +goose StatementBegin
+delete from resource_profiles_database_cluster where resource_id like '41000000-%';
+-- +goose StatementEnd
+-- +goose StatementBegin
+delete from resource_profiles_host where resource_id like '41000000-%';
+-- +goose StatementEnd
+-- +goose StatementBegin
+delete from resources where id like '41000000-%';
+-- +goose StatementEnd
+-- +goose StatementBegin
+delete from owners where id in ('20000000-0000-0000-0000-000000000003', '20000000-0000-0000-0000-000000000004', '20000000-0000-0000-0000-000000000005');
+-- +goose StatementEnd
+-- +goose StatementBegin
+delete from environments where id = '10000000-0000-0000-0000-000000000003';
+-- +goose StatementEnd

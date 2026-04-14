@@ -42,19 +42,47 @@ internal/model/          — domain structs, taxonomy constants, validation (no 
 
 ## Database
 
-Migrations are plain SQL files applied manually:
+Migrations are managed by **goose** (`github.com/pressly/goose/v3`). Migration files live in `migrations/` in goose SQL format (`-- +goose Up` / `-- +goose Down`).
+
 ```bash
-mysql -u root controlhub < migrations/0001_initial_schema.sql
-mysql -u root controlhub < migrations/0002_seed_reference_data.sql
-mysql -u root controlhub < migrations/0003_expand_resource_type_constraint.sql
-mysql -u root controlhub < migrations/0004_seed_demo_data.sql
+make migrate-up       # apply all pending migrations
+make migrate-status   # show current migration state
+make migrate-down-one # roll back one migration
 ```
+
+**No auto-migration on server startup.** Migrations must be run explicitly via Makefile targets or the `goose` CLI.
 
 **No ORM** — raw `database/sql` with manual `rows.Scan()`. JSON columns (`labels`, `spec`) use `json.Unmarshal`.
 
 **Profile tables** are per-resource-type: `resource_profiles_host`, `resource_profiles_database_instance`, `resource_profiles_database_cluster`, `resource_profiles_service`. Newer resource types (`domain_name`, `virtual_ip`, `database_proxy`, `control_plane_component`) have no profile table yet.
 
 **Audit events** are MySQL-backed for dev; ClickHouse migration planned. No FK constraints on `audit_events` table.
+
+### Adopting an Existing Manually-Migrated DB
+
+If your local `controlhub` DB was created before goose was introduced, you need to baseline goose tracking:
+
+```bash
+mysql -u root controlhub -e "
+CREATE TABLE IF NOT EXISTS goose_db_version (
+    id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+    version_id bigint NOT NULL,
+    is_applied boolean NOT NULL,
+    tstamp timestamp NULL DEFAULT CURRENT_TIMESTAMP
+) ENGINE=InnoDB;
+
+INSERT INTO goose_db_version (version_id, is_applied) VALUES
+(0,true),(1,true),(2,true),(3,true),(4,true),(5,true),(6,true);
+"
+```
+
+Then run `make migrate-status` to confirm goose sees all 6 migrations as applied.
+
+### Dev Reset (Destructive)
+
+```bash
+CONFIRM=yes make migrate-reset-dev   # drops and recreates DB, then applies all migrations
+```
 
 ## Taxonomy System
 
