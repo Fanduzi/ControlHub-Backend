@@ -206,3 +206,45 @@ func TestGetTopology_GroupsPresent(t *testing.T) {
 		t.Error("expected groups in response")
 	}
 }
+
+func TestGetTopology_InvalidRelationType(t *testing.T) {
+	server := NewTestServer()
+
+	req := httptest.NewRequest(http.MethodGet, "/resources/res-db-cluster/topology?relationType=invalid_type", nil)
+	w := httptest.NewRecorder()
+	server.Router.ServeHTTP(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400; body: %s", w.Code, w.Body.String())
+	}
+
+	var errResp errorResponse
+	if err := json.NewDecoder(w.Body).Decode(&errResp); err != nil {
+		t.Fatalf("decode error: %v", err)
+	}
+	if errResp.Error != "validation_failed" {
+		t.Errorf("error code = %q, want validation_failed", errResp.Error)
+	}
+}
+
+func TestGetTopology_ValidRelationTypeStillWorks(t *testing.T) {
+	server := NewTestServer()
+
+	req := httptest.NewRequest(http.MethodGet, "/resources/res-db-cluster/topology?relationType=member_of", nil)
+	w := httptest.NewRecorder()
+	server.Router.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body: %s", w.Code, w.Body.String())
+	}
+
+	var resp model.TopologyResponse
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	for _, e := range resp.Edges {
+		if e.RelationType != model.RelationTypeMemberOf {
+			t.Errorf("edge relation type = %q, want member_of", e.RelationType)
+		}
+	}
+}

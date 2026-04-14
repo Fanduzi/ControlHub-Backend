@@ -36,7 +36,14 @@ func handleGetTopology(topologyService *service.TopologyService) http.HandlerFun
 			return
 		}
 
-		relationType := model.RelationType(q.Get("relationType"))
+		var relationType model.RelationType
+		if rt := q.Get("relationType"); rt != "" {
+			relationType = model.RelationType(rt)
+			if err := relationType.Validate(); err != nil {
+				writeJSONError(w, http.StatusBadRequest, "validation_failed", "relationType is not supported")
+				return
+			}
+		}
 
 		resp, err := topologyService.BuildTopology(model.TopologyQuery{
 			RootID:       rootID,
