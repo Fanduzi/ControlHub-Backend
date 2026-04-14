@@ -16,6 +16,7 @@ import (
 type Dependencies struct {
 	ResourceService        *service.ResourceService
 	RelationService        *service.RelationService
+	TopologyService        *service.TopologyService
 	AuditService           *service.AuditService
 	AuthService            *service.AuthService
 	EnvironmentService     *service.EnvironmentService
@@ -52,6 +53,7 @@ func NewRouter(deps Dependencies) *chi.Mux {
 	router.Patch("/resources/{id}", handlePatchResource(deps.ResourceService))
 	router.Get("/resources/{id}/profile", handleGetResourceProfile(deps.ResourceService))
 	router.Get("/resources/{id}/relations", handleListResourceRelations(deps.RelationService))
+	router.Get("/resources/{id}/topology", handleGetTopology(deps.TopologyService))
 	router.Post("/resources/{id}/relations", handleCreateResourceRelation(deps.RelationService))
 	router.Delete("/resource-relations/{id}", handleDeleteResourceRelation(deps.RelationService))
 	router.Get("/resources/{id}/audit-events", handleListResourceAuditEvents(deps.AuditService))

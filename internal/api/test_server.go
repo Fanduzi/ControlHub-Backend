@@ -231,6 +231,33 @@ func (f *fakeRelationRepo) DeleteRelation(_ context.Context, relationID string) 
 	return nil
 }
 
+type fakeTopologyRepo struct {
+	resources *fakeResourceRepo
+	relations *fakeRelationRepo
+}
+
+func (f *fakeTopologyRepo) GetResource(id string) (*model.Resource, error) {
+	return f.resources.GetResource(id)
+}
+
+func (f *fakeTopologyRepo) ListRelationsByResourceIDs(ids []string) ([]model.ResourceRelation, error) {
+	idSet := make(map[string]bool, len(ids))
+	for _, id := range ids {
+		idSet[id] = true
+	}
+	var result []model.ResourceRelation
+	for _, id := range f.relations.order {
+		rel, ok := f.relations.relations[id]
+		if !ok {
+			continue
+		}
+		if idSet[rel.FromResourceID] || idSet[rel.ToResourceID] {
+			result = append(result, rel)
+		}
+	}
+	return result, nil
+}
+
 type fakeAuditRepo struct{}
 
 func (fakeAuditRepo) ListAuditEvents(_ context.Context, q model.AuditListQuery) ([]model.AuditEvent, int, error) {
@@ -461,14 +488,34 @@ func NewTestServer() *TestServer {
 				RelationType:   model.RelationTypeDependsOn,
 				CreatedAt:      time.Date(2026, 4, 11, 21, 0, 0, 0, time.UTC),
 			},
+			"rel-2": {
+				ID:             "rel-2",
+				FromResourceID: "res-db-instance",
+				ToResourceID:   "res-db-cluster",
+				RelationType:   model.RelationTypeMemberOf,
+				CreatedAt:      time.Date(2026, 4, 11, 21, 1, 0, 0, time.UTC),
+			},
+			"rel-3": {
+				ID:             "rel-3",
+				FromResourceID: "res-db-instance",
+				ToResourceID:   "res-host",
+				RelationType:   model.RelationTypeRunsOn,
+				CreatedAt:      time.Date(2026, 4, 11, 21, 2, 0, 0, time.UTC),
+			},
 		},
-		order: []string{"rel-1"},
+		order: []string{"rel-1", "rel-2", "rel-3"},
 		now:   time.Date(2026, 4, 11, 21, 0, 0, 0, time.UTC),
+	}
+
+	topologyRepo := &fakeTopologyRepo{
+		resources: resourceRepo,
+		relations: relationRepo,
 	}
 
 	deps := Dependencies{
 		ResourceService:         service.NewResourceService(resourceRepo),
 		RelationService:         service.NewRelationService(relationRepo),
+		TopologyService:         service.NewTopologyService(topologyRepo),
 		AuditService:            service.NewAuditService(fakeAuditRepo{}),
 		AuthService:             service.NewAuthService(fakeUserCredentialRepo{}, "test-secret"),
 		EnvironmentService:      service.NewEnvironmentService(fakeEnvironmentRepo{}),

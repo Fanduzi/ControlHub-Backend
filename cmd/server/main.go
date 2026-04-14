@@ -32,10 +32,12 @@ func main() {
 	defer db.Close()
 
 	dictRepo := mysql.NewDictionaryRepository(db)
+	relationRepo := mysql.NewRelationRepository(db)
 
 	deps := api.Dependencies{
 		ResourceService:     service.NewResourceService(mysql.NewResourceRepository(db)),
-		RelationService:     service.NewRelationService(mysql.NewRelationRepository(db)),
+		RelationService:     service.NewRelationService(relationRepo),
+		TopologyService:     service.NewTopologyService(relationRepo),
 		AuditService:        service.NewAuditService(mysql.NewAuditRepository(db)),
 		AuthService:         service.NewAuthService(mysql.NewUserRepository(db), cfg.JWTSecret),
 		EnvironmentService:  service.NewEnvironmentService(dictRepo),
