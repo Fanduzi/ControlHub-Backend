@@ -84,11 +84,11 @@ CREATE TABLE IF NOT EXISTS goose_db_version (
 ) ENGINE=InnoDB;
 
 INSERT INTO goose_db_version (version_id, is_applied) VALUES
-(0,true),(1,true),(2,true),(3,true),(4,true),(5,true),(6,true);
+(0,true),(1,true),(2,true),(3,true),(4,true),(5,true),(6,true),(7,true);
 "
 ```
 
-Then run `make migrate-status` to confirm goose sees all 6 migrations as applied.
+Then run `make migrate-status` to confirm goose sees all 8 migrations as applied.
 
 ### Dev Reset (Destructive)
 

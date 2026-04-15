@@ -20,14 +20,14 @@ func TestGooseCleanMigration(t *testing.T) {
 		t.Fatal("goose_db_version has no rows — migrations not recorded")
 	}
 
-	// Latest version should be current (6 migrations).
+	// Latest version should be current.
 	var maxVersion int64
 	err = db.QueryRow("SELECT max(version_id) FROM goose_db_version WHERE is_applied = true").Scan(&maxVersion)
 	if err != nil {
 		t.Fatalf("query max version: %v", err)
 	}
-	if maxVersion < 7 {
-		t.Fatalf("expected at least 7 migrations applied, got version %d", maxVersion)
+	if maxVersion < 8 {
+		t.Fatalf("expected at least 8 migrations applied, got version %d", maxVersion)
 	}
 
 	// Verify expected tables exist.
@@ -77,6 +77,19 @@ func TestGooseCleanMigration(t *testing.T) {
 	if !indexExists(t, db, "resource_relations", "uq_relation") {
 		t.Error("expected unique index uq_relation on resource_relations")
 	}
+
+	// Verify seed patch truth remains visible after all migrations.
+	assertResourceDisplayName(t, db,
+		"41000000-0000-0000-0000-000000000023",
+		"Payment MySQL Replica 01",
+	)
+	assertResourceDisplayName(t, db,
+		"41000000-0000-0000-0000-000000000034",
+		"Notification Delivery Service",
+	)
+	assertResourceExists(t, db, "41000000-0000-0000-0000-000000000044")
+	assertRelationExists(t, db, "51000000-0000-0000-0000-000000000090")
+	assertRelationExists(t, db, "51000000-0000-0000-0000-000000000091")
 }
 
 func tableExists(t *testing.T, db *sql.DB, tableName string) bool {
@@ -143,4 +156,40 @@ func uniqueIndexOnColumnOnly(t *testing.T, db *sql.DB, tableName, columnName str
 		t.Fatalf("check unique index on column: %v", err)
 	}
 	return count > 0
+}
+
+func assertResourceDisplayName(t *testing.T, db *sql.DB, resourceID, want string) {
+	t.Helper()
+	var got string
+	err := db.QueryRow("SELECT display_name FROM resources WHERE id = ?", resourceID).Scan(&got)
+	if err != nil {
+		t.Fatalf("query display_name for %s: %v", resourceID, err)
+	}
+	if got != want {
+		t.Fatalf("display_name for %s = %q, want %q", resourceID, got, want)
+	}
+}
+
+func assertResourceExists(t *testing.T, db *sql.DB, resourceID string) {
+	t.Helper()
+	var count int
+	err := db.QueryRow("SELECT count(*) FROM resources WHERE id = ?", resourceID).Scan(&count)
+	if err != nil {
+		t.Fatalf("query resource %s: %v", resourceID, err)
+	}
+	if count != 1 {
+		t.Fatalf("expected resource %s to exist exactly once, got %d", resourceID, count)
+	}
+}
+
+func assertRelationExists(t *testing.T, db *sql.DB, relationID string) {
+	t.Helper()
+	var count int
+	err := db.QueryRow("SELECT count(*) FROM resource_relations WHERE id = ?", relationID).Scan(&count)
+	if err != nil {
+		t.Fatalf("query relation %s: %v", relationID, err)
+	}
+	if count != 1 {
+		t.Fatalf("expected relation %s to exist exactly once, got %d", relationID, count)
+	}
 }
