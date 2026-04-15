@@ -22,6 +22,9 @@ Stage-level worker prompts are implementation assignments, not open-ended design
 - Do not create new stage-level worktrees under `.claude/worktrees`.
 - Do not implement large phase work directly in a dirty main worktree.
 - Keep frontend and backend work isolated when they can proceed independently.
+- Treat project-local `.worktrees/` as an isolation directory, not source input.
+- Tooling must not scan `.worktrees/**` from the main checkout. This includes TypeScript, Vitest, ESLint, Playwright, Next.js, and any build/test glob.
+- If adding or changing frontend/backend tooling, explicitly preserve `.worktrees/**` excludes so the main checkout cannot pick up worktree source files, tests, or nested `node_modules`.
 
 Exceptions:
 
