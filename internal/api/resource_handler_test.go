@@ -222,6 +222,90 @@ func TestCreateResourceRejectsMalformedJSON(t *testing.T) {
 	assertAPIError(t, rec, http.StatusBadRequest, "malformed_json")
 }
 
+func TestCreateResourceRejectsEmptyName(t *testing.T) {
+	server := NewTestServer()
+	body := `{
+		"resourceType":"database_instance",
+		"name":"",
+		"displayName":"Empty Name",
+		"environmentId":"10000000-0000-0000-0000-000000000001",
+		"ownerId":"20000000-0000-0000-0000-000000000002",
+		"lifecycleStatus":"running",
+		"healthStatus":"healthy",
+		"source":"manual",
+		"labels":{}
+	}`
+	req := httptest.NewRequest(http.MethodPost, "/resources", strings.NewReader(body))
+	rec := httptest.NewRecorder()
+
+	server.Router.ServeHTTP(rec, req)
+
+	assertAPIError(t, rec, http.StatusBadRequest, "validation_failed")
+}
+
+func TestCreateResourceRejectsEmptyDisplayName(t *testing.T) {
+	server := NewTestServer()
+	body := `{
+		"resourceType":"database_instance",
+		"name":"valid-name",
+		"displayName":"",
+		"environmentId":"10000000-0000-0000-0000-000000000001",
+		"ownerId":"20000000-0000-0000-0000-000000000002",
+		"lifecycleStatus":"running",
+		"healthStatus":"healthy",
+		"source":"manual",
+		"labels":{}
+	}`
+	req := httptest.NewRequest(http.MethodPost, "/resources", strings.NewReader(body))
+	rec := httptest.NewRecorder()
+
+	server.Router.ServeHTTP(rec, req)
+
+	assertAPIError(t, rec, http.StatusBadRequest, "validation_failed")
+}
+
+func TestCreateResourceRejectsInvalidSource(t *testing.T) {
+	server := NewTestServer()
+	body := `{
+		"resourceType":"database_instance",
+		"name":"valid-name",
+		"displayName":"Valid Name",
+		"environmentId":"10000000-0000-0000-0000-000000000001",
+		"ownerId":"20000000-0000-0000-0000-000000000002",
+		"lifecycleStatus":"running",
+		"healthStatus":"healthy",
+		"source":"auto",
+		"labels":{}
+	}`
+	req := httptest.NewRequest(http.MethodPost, "/resources", strings.NewReader(body))
+	rec := httptest.NewRecorder()
+
+	server.Router.ServeHTTP(rec, req)
+
+	assertAPIError(t, rec, http.StatusBadRequest, "validation_failed")
+}
+
+func TestCreateResourceRejectsInvalidName(t *testing.T) {
+	server := NewTestServer()
+	body := `{
+		"resourceType":"database_instance",
+		"name":"INVALID",
+		"displayName":"Invalid Name",
+		"environmentId":"10000000-0000-0000-0000-000000000001",
+		"ownerId":"20000000-0000-0000-0000-000000000002",
+		"lifecycleStatus":"running",
+		"healthStatus":"healthy",
+		"source":"manual",
+		"labels":{}
+	}`
+	req := httptest.NewRequest(http.MethodPost, "/resources", strings.NewReader(body))
+	rec := httptest.NewRecorder()
+
+	server.Router.ServeHTTP(rec, req)
+
+	assertAPIError(t, rec, http.StatusBadRequest, "validation_failed")
+}
+
 func TestPatchResource(t *testing.T) {
 	server := NewTestServer()
 	body := `{
@@ -257,6 +341,36 @@ func TestPatchResourceRejectsImmutableFields(t *testing.T) {
 	server := NewTestServer()
 	body := `{"name":"new-name"}`
 	req := httptest.NewRequest(http.MethodPatch, "/resources/res-1", strings.NewReader(body))
+	rec := httptest.NewRecorder()
+
+	server.Router.ServeHTTP(rec, req)
+
+	assertAPIError(t, rec, http.StatusBadRequest, "validation_failed")
+}
+
+func TestPatchResourceRejectsEmptyDisplayName(t *testing.T) {
+	server := NewTestServer()
+	req := httptest.NewRequest(http.MethodPatch, "/resources/res-1", strings.NewReader(`{"displayName":""}`))
+	rec := httptest.NewRecorder()
+
+	server.Router.ServeHTTP(rec, req)
+
+	assertAPIError(t, rec, http.StatusBadRequest, "validation_failed")
+}
+
+func TestPatchResourceRejectsInvalidSource(t *testing.T) {
+	server := NewTestServer()
+	req := httptest.NewRequest(http.MethodPatch, "/resources/res-1", strings.NewReader(`{"source":"auto"}`))
+	rec := httptest.NewRecorder()
+
+	server.Router.ServeHTTP(rec, req)
+
+	assertAPIError(t, rec, http.StatusBadRequest, "validation_failed")
+}
+
+func TestPatchResourceRejectsNoMutableFields(t *testing.T) {
+	server := NewTestServer()
+	req := httptest.NewRequest(http.MethodPatch, "/resources/res-1", strings.NewReader(`{}`))
 	rec := httptest.NewRecorder()
 
 	server.Router.ServeHTTP(rec, req)

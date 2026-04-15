@@ -679,8 +679,10 @@ components:
         email:
           type: string
           format: email
+          minLength: 1
         password:
           type: string
+          minLength: 1
     LoginResponse:
       type: object
       required: [token, role]
@@ -893,13 +895,17 @@ components:
           type: string
         name:
           type: string
+          minLength: 1
           pattern: "^[a-z0-9][a-z0-9._-]*$"
         displayName:
           type: string
+          minLength: 1
         environmentId:
           type: string
+          minLength: 1
         ownerId:
           type: string
+          minLength: 1
         lifecycleStatus:
           $ref: "#/components/schemas/LifecycleStatus"
         healthStatus:
@@ -920,10 +926,13 @@ components:
           type: string
         displayName:
           type: string
+          minLength: 1
         environmentId:
           type: string
+          minLength: 1
         ownerId:
           type: string
+          minLength: 1
         lifecycleStatus:
           $ref: "#/components/schemas/LifecycleStatus"
         healthStatus:
@@ -945,6 +954,7 @@ components:
       properties:
         toResourceId:
           type: string
+          minLength: 1
         relationType:
           $ref: "#/components/schemas/RelationType"
     ErrorResponse:

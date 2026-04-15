@@ -1,6 +1,6 @@
 // Package api provides HTTP handlers and routing for the ControlHub REST API.
 // input: internal/api, internal/model, net/http, net/http/httptest, encoding/json
-// output: TestListResourceRelations
+// output: TestListResourceRelations, TestCreateResourceRelation*, TestDeleteResourceRelation*, TestCreateResourceRelationRejects*
 // pos: Validates relation listing per resource
 // note: if this file changes, update header and README.md
 package api
@@ -101,6 +101,39 @@ func TestCreateResourceRelationRejectsMalformedJSON(t *testing.T) {
 	server.Router.ServeHTTP(rec, req)
 
 	assertAPIError(t, rec, http.StatusBadRequest, "malformed_json")
+}
+
+func TestCreateResourceRelationRejectsEmptyToResourceId(t *testing.T) {
+	server := NewTestServer()
+	body := `{"toResourceId":"","relationType":"depends_on"}`
+	req := httptest.NewRequest(http.MethodPost, "/resources/res-1/relations", strings.NewReader(body))
+	rec := httptest.NewRecorder()
+
+	server.Router.ServeHTTP(rec, req)
+
+	assertAPIError(t, rec, http.StatusBadRequest, "validation_failed")
+}
+
+func TestCreateResourceRelationRejectsMissingToResourceId(t *testing.T) {
+	server := NewTestServer()
+	body := `{"relationType":"depends_on"}`
+	req := httptest.NewRequest(http.MethodPost, "/resources/res-1/relations", strings.NewReader(body))
+	rec := httptest.NewRecorder()
+
+	server.Router.ServeHTTP(rec, req)
+
+	assertAPIError(t, rec, http.StatusBadRequest, "validation_failed")
+}
+
+func TestCreateResourceRelationRejectsMissingRelationType(t *testing.T) {
+	server := NewTestServer()
+	body := `{"toResourceId":"res-2"}`
+	req := httptest.NewRequest(http.MethodPost, "/resources/res-1/relations", strings.NewReader(body))
+	rec := httptest.NewRecorder()
+
+	server.Router.ServeHTTP(rec, req)
+
+	assertAPIError(t, rec, http.StatusBadRequest, "validation_failed")
 }
 
 func TestDeleteResourceRelation(t *testing.T) {
