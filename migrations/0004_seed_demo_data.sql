@@ -60,13 +60,13 @@ insert into resources (
    '{"team":"platform","tier":"compute"}', 'terraform', ''),
 
   ('41000000-0000-0000-0000-000000000006', 'host', 'physical',
-   'prod-ch-host-01', 'Production ClickHouse Host 01 - High Storage Density Node',
+   'prod-ch-host-01', 'ClickHouse Host 01 (Production)',
    '10000000-0000-0000-0000-000000000001', '20000000-0000-0000-0000-000000000001',
    'running', 'healthy',
    '{"team":"platform","tier":"infra","purpose":"analytics","disk_type":"nvme"}', 'discovery', 'bare-prod-ch-host-01'),
 
   ('41000000-0000-0000-0000-000000000007', 'host', 'physical',
-   'prod-ch-host-02', 'Production ClickHouse Host 02 - High Storage Density Node',
+   'prod-ch-host-02', 'ClickHouse Host 02 (Production)',
    '10000000-0000-0000-0000-000000000001', '20000000-0000-0000-0000-000000000001',
    'running', 'healthy',
    '{"team":"platform","tier":"infra","purpose":"analytics","disk_type":"nvme"}', 'discovery', 'bare-prod-ch-host-02');
@@ -134,7 +134,7 @@ insert into resources (
    'dbaas-payment-mysql-primary-prod-inst'),
 
   ('41000000-0000-0000-0000-000000000023', 'database_instance', 'mysql',
-   'payment-mysql-replica-01-prod', 'Payment MySQL Replica 01 Production - Replication Lag Warning',
+   'payment-mysql-replica-01-prod', 'Payment MySQL Replica 01',
    '10000000-0000-0000-0000-000000000001', '20000000-0000-0000-0000-000000000002',
    'running', 'warning',
    '{"team":"payment","tier":"data","replication_lag_seconds":"45","alert":"replication-lag"}', 'manual', ''),
@@ -158,7 +158,7 @@ insert into resources (
    '{"team":"analytics","tier":"data","clickhouse_role":"replica"}', 'manual', ''),
 
   ('41000000-0000-0000-0000-000000000027', 'database_instance', 'clickhouse',
-   'analytics-ch-node-02-prod', 'Analytics ClickHouse Node 02 Production - Critical Disk Pressure',
+   'analytics-ch-node-02-prod', 'Analytics ClickHouse Node 02',
    '10000000-0000-0000-0000-000000000001', '20000000-0000-0000-0000-000000000002',
    'running', 'critical',
    '{"team":"analytics","tier":"data","clickhouse_role":"replica","disk_usage_pct":"94","alert":"disk-pressure"}', 'manual', ''),
@@ -208,7 +208,7 @@ insert into resources (
    '{"team":"platform","tier":"app"}', 'manual', ''),
 
   ('41000000-0000-0000-0000-000000000034', 'service', 'worker',
-   'notification-service-prod', 'Notification Delivery Service Production - Currently Disabled for Migration',
+   'notification-service-prod', 'Notification Delivery Service',
    '10000000-0000-0000-0000-000000000001', '20000000-0000-0000-0000-000000000003',
    'stopped', 'unknown',
    '{"team":"order","tier":"app","runtime":"node","disabled_reason":"kafka-migration"}', 'manual', '');
@@ -243,7 +243,13 @@ insert into resources (
    'config-proxysql-prod', 'Config Service ProxySQL Production',
    '10000000-0000-0000-0000-000000000001', '20000000-0000-0000-0000-000000000001',
    'degraded', 'warning',
-   '{"team":"platform","tier":"proxy","backend":"mysql"}', 'manual', '');
+   '{"team":"platform","tier":"proxy","backend":"mysql"}', 'manual', ''),
+
+  ('41000000-0000-0000-0000-000000000044', 'database_proxy', 'proxysql',
+   'payment-proxysql-02-prod', 'Payment ProxySQL Standby',
+   '10000000-0000-0000-0000-000000000001', '20000000-0000-0000-0000-000000000001',
+   'stopped', 'unknown',
+   '{"team":"platform","tier":"proxy","backend":"mysql","pci_scope":"yes","role":"standby"}', 'manual', '');
 -- +goose StatementEnd
 
 -- --- Production Virtual IPs (3) ---
@@ -280,13 +286,13 @@ insert into resources (
   labels, source, external_id
 ) values
   ('41000000-0000-0000-0000-000000000060', 'domain_name', 'dns',
-   'api.order.internal', 'Order Service Internal API Domain - Production Primary Endpoint',
+   'api.order.internal', 'Order Service API Endpoint',
    '10000000-0000-0000-0000-000000000001', '20000000-0000-0000-0000-000000000003',
    'running', 'healthy',
    '{"team":"order","tier":"network","zone":"internal"}', 'manual', ''),
 
   ('41000000-0000-0000-0000-000000000061', 'domain_name', 'dns',
-   'api.payment.internal', 'Payment Service Internal API Domain - Production Primary Endpoint',
+   'api.payment.internal', 'Payment Service API Endpoint',
    '10000000-0000-0000-0000-000000000001', '20000000-0000-0000-0000-000000000004',
    'running', 'healthy',
    '{"team":"payment","tier":"network","zone":"internal"}', 'manual', ''),
@@ -592,7 +598,8 @@ insert into resource_relations (id, from_resource_id, to_resource_id, relation_t
   ('51000000-0000-0000-0000-000000000052', '41000000-0000-0000-0000-000000000042', '41000000-0000-0000-0000-000000000012', 'fronts'),
   ('51000000-0000-0000-0000-000000000053', '41000000-0000-0000-0000-000000000043', '41000000-0000-0000-0000-000000000013', 'fronts'),
   ('51000000-0000-0000-0000-000000000054', '41000000-0000-0000-0000-000000000090', '41000000-0000-0000-0000-000000000083', 'fronts'),
-  ('51000000-0000-0000-0000-000000000055', '41000000-0000-0000-0000-000000000098', '41000000-0000-0000-0000-000000000095', 'fronts');
+  ('51000000-0000-0000-0000-000000000055', '41000000-0000-0000-0000-000000000098', '41000000-0000-0000-0000-000000000095', 'fronts'),
+  ('51000000-0000-0000-0000-000000000090', '41000000-0000-0000-0000-000000000044', '41000000-0000-0000-0000-000000000010', 'fronts');
 -- +goose StatementEnd
 
 -- +goose StatementBegin
@@ -621,6 +628,11 @@ insert into resource_relations (id, from_resource_id, to_resource_id, relation_t
   ('51000000-0000-0000-0000-000000000082', '41000000-0000-0000-0000-000000000071', '41000000-0000-0000-0000-000000000013', 'manages'),
   ('51000000-0000-0000-0000-000000000083', '41000000-0000-0000-0000-000000000071', '41000000-0000-0000-0000-000000000011', 'manages'),
   ('51000000-0000-0000-0000-000000000084', '41000000-0000-0000-0000-000000000093', '41000000-0000-0000-0000-000000000083', 'manages');
+-- +goose StatementEnd
+
+-- +goose StatementBegin
+insert into resource_relations (id, from_resource_id, to_resource_id, relation_type) values
+  ('51000000-0000-0000-0000-000000000091', '41000000-0000-0000-0000-000000000022', '41000000-0000-0000-0000-000000000023', 'replicates_to');
 -- +goose StatementEnd
 
 -- ============================================================
