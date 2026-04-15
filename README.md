@@ -38,9 +38,9 @@ CREATE TABLE IF NOT EXISTS goose_db_version (
     tstamp timestamp NULL DEFAULT CURRENT_TIMESTAMP
 ) ENGINE=InnoDB;
 INSERT INTO goose_db_version (version_id, is_applied) VALUES
-(0,true),(1,true),(2,true),(3,true),(4,true),(5,true),(6,true);
+(0,true),(1,true),(2,true),(3,true),(4,true),(5,true),(6,true),(7,true);
 "
-make migrate-status   # confirm all 6 show as Applied
+make migrate-status   # confirm all 7 show as Applied
 ```
 
 ### Migration Commands
