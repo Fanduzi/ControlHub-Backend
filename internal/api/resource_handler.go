@@ -116,6 +116,18 @@ func handleArchiveResource(resourceService *service.ResourceService) http.Handle
 	}
 }
 
+func handleUnarchiveResource(resourceService *service.ResourceService) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		unarchived, err := resourceService.Unarchive(r.Context(), chi.URLParam(r, "id"))
+		if err != nil {
+			writeServiceError(w, err)
+			return
+		}
+
+		writeJSON(w, http.StatusOK, unarchived)
+	}
+}
+
 func parseResourceListQuery(r *http.Request) model.ResourceListQuery {
 	q := r.URL.Query()
 	page, pageSize := model.NormalizePagination(
@@ -129,6 +141,7 @@ func parseResourceListQuery(r *http.Request) model.ResourceListQuery {
 		HealthStatus:    q.Get("healthStatus"),
 		Query:           q.Get("q"),
 		IncludeArchived: q.Get("includeArchived") == "true",
+		ArchivedOnly:    q.Get("archivedOnly") == "true",
 		Page:            page,
 		PageSize:        pageSize,
 	}

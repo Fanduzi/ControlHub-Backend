@@ -39,7 +39,10 @@ func (r *ResourceRepository) ListResources(ctx context.Context, q model.Resource
 	  and (? = '' or health_status = ?)
 	  and (? = '' or (name like ? or display_name like ? or external_id like ?))`
 
-	if !q.IncludeArchived {
+	if q.ArchivedOnly {
+		// ArchivedOnly takes precedence: only archived resources.
+		where += " and archived_at is not null"
+	} else if !q.IncludeArchived {
 		where += " and archived_at is null"
 	}
 
@@ -316,6 +319,16 @@ func (r *ResourceRepository) ArchiveResource(ctx context.Context, id string, rea
 	_, err := r.db.ExecContext(ctx, query, reason, id)
 	if err != nil {
 		return nil, fmt.Errorf("archive resource %s: %w", id, err)
+	}
+
+	return r.GetResource(id)
+}
+
+func (r *ResourceRepository) UnarchiveResource(ctx context.Context, id string) (*model.Resource, error) {
+	query := `update resources set archived_at = NULL, archived_by = NULL, archive_reason = NULL where id = ? and archived_at is not null`
+	_, err := r.db.ExecContext(ctx, query, id)
+	if err != nil {
+		return nil, fmt.Errorf("unarchive resource %s: %w", id, err)
 	}
 
 	return r.GetResource(id)

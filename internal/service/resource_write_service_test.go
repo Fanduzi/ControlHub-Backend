@@ -126,6 +126,19 @@ func (f *fakeResourceWriteRepo) ArchiveResource(_ context.Context, id string, re
 	return &copy, nil
 }
 
+func (f *fakeResourceWriteRepo) UnarchiveResource(_ context.Context, id string) (*model.Resource, error) {
+	item, ok := f.resources[id]
+	if !ok {
+		return nil, ErrResourceNotFound
+	}
+	item.ArchivedAt = nil
+	item.ArchivedBy = nil
+	item.ArchiveReason = nil
+	f.resources[id] = item
+	copy := item
+	return &copy, nil
+}
+
 type fakeRelationWriteRepo struct {
 	resources map[string]model.Resource
 	relations map[string]model.ResourceRelation
@@ -505,6 +518,73 @@ func TestResourceServiceUpdateRejectsArchived(t *testing.T) {
 	_, err := svc.Update(context.Background(), "res-1", model.ResourcePatchRequest{DisplayName: &displayName})
 	if !errors.Is(err, ErrResourceArchived) {
 		t.Fatalf("expected ErrResourceArchived, got %v", err)
+	}
+}
+
+func TestResourceServiceUnarchive(t *testing.T) {
+	now := time.Now().UTC()
+	archivedAt := now.Add(-1 * time.Hour)
+	reason := "decommissioned"
+	repo := &fakeResourceWriteRepo{resources: map[string]model.Resource{"res-1": {
+		ID:             "res-1",
+		ResourceType:   model.ResourceTypeDatabaseInstance,
+		Name:           "order-mysql-prod",
+		DisplayName:    "Order MySQL Prod",
+		EnvironmentID:  "10000000-0000-0000-0000-000000000001",
+		OwnerID:        "20000000-0000-0000-0000-000000000002",
+		Source:         "manual",
+		Labels:         map[string]string{},
+		ArchivedAt:     &archivedAt,
+		ArchiveReason:  &reason,
+		CreatedAt:      now,
+		UpdatedAt:      now,
+	}}}
+	svc := NewResourceService(repo)
+
+	unarchived, err := svc.Unarchive(context.Background(), "res-1")
+	if err != nil {
+		t.Fatalf("expected no error, got %v", err)
+	}
+	if unarchived.ArchivedAt != nil {
+		t.Fatal("expected archivedAt to be nil after unarchive")
+	}
+	if unarchived.ArchiveReason != nil {
+		t.Fatal("expected archiveReason to be nil after unarchive")
+	}
+}
+
+func TestResourceServiceUnarchiveNotFound(t *testing.T) {
+	repo := &fakeResourceWriteRepo{resources: map[string]model.Resource{}}
+	svc := NewResourceService(repo)
+
+	_, err := svc.Unarchive(context.Background(), "missing")
+	if !errors.Is(err, ErrResourceNotFound) {
+		t.Fatalf("expected ErrResourceNotFound, got %v", err)
+	}
+}
+
+func TestResourceServiceUnarchiveIdempotentForActive(t *testing.T) {
+	now := time.Now().UTC()
+	repo := &fakeResourceWriteRepo{resources: map[string]model.Resource{"res-1": {
+		ID:            "res-1",
+		ResourceType:  model.ResourceTypeDatabaseInstance,
+		Name:          "order-mysql-prod",
+		DisplayName:   "Order MySQL Prod",
+		EnvironmentID: "10000000-0000-0000-0000-000000000001",
+		OwnerID:       "20000000-0000-0000-0000-000000000002",
+		Source:        "manual",
+		Labels:        map[string]string{},
+		CreatedAt:     now,
+		UpdatedAt:     now,
+	}}}
+	svc := NewResourceService(repo)
+
+	result, err := svc.Unarchive(context.Background(), "res-1")
+	if err != nil {
+		t.Fatalf("expected no error, got %v", err)
+	}
+	if result.ArchivedAt != nil {
+		t.Fatal("expected archivedAt to remain nil for active resource")
 	}
 }
 

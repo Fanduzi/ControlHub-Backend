@@ -108,6 +108,14 @@ paths:
             type: boolean
             default: false
           description: Include archived resources in results (default excludes them)
+        - in: query
+          name: archivedOnly
+          schema:
+            type: boolean
+            default: false
+          description: >-
+            Return only archived resources. Takes precedence over includeArchived
+            when both are true.
       responses:
         "200":
           description: Resource list with pagination
@@ -277,6 +285,34 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/ErrorResponse"
+        "404":
+          description: Resource not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+  /resources/{id}/unarchive:
+    post:
+      summary: Restore an archived resource to active visibility
+      description: >
+        Clears archivedAt, archivedBy, and archiveReason on a resource.
+        Idempotent — unarchiving an already-active resource returns it
+        unchanged. After unarchiving, the resource reappears in default
+        list queries and can be modified via PATCH again.
+      operationId: unarchiveResource
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Resource unarchived (or already active)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Resource"
         "404":
           description: Resource not found
           content:

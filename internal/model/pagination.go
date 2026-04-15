@@ -27,6 +27,7 @@ type ResourceListQuery struct {
 	HealthStatus    string
 	Query           string // free-text search over name, display_name, external_id
 	IncludeArchived bool
+	ArchivedOnly    bool // when true, return only archived resources (takes precedence over IncludeArchived)
 	Page            int
 	PageSize        int
 }

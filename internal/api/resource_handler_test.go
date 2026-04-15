@@ -1103,3 +1103,246 @@ func TestTopology_ArchivedResourceReadable(t *testing.T) {
 		t.Fatalf("expected 200, got %d", rec.Code)
 	}
 }
+
+// --- Phase 12.2: archivedOnly filter ---
+
+func TestListResources_ArchivedOnly(t *testing.T) {
+	server := NewTestServer()
+	req := httptest.NewRequest(http.MethodGet, "/resources?archivedOnly=true", nil)
+	rec := httptest.NewRecorder()
+
+	server.Router.ServeHTTP(rec, req)
+
+	var resp paginatedResourceResponse
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+
+	if len(resp.Items) != 1 {
+		t.Fatalf("expected 1 archived item, got %d", len(resp.Items))
+	}
+	if resp.Items[0].ID != "res-archived" {
+		t.Fatalf("expected res-archived, got %s", resp.Items[0].ID)
+	}
+	if resp.Items[0].ArchivedAt == nil {
+		t.Fatal("expected archivedAt to be set")
+	}
+	if resp.PageInfo.TotalItems != 1 {
+		t.Fatalf("expected totalItems 1, got %d", resp.PageInfo.TotalItems)
+	}
+}
+
+func TestListResources_ArchivedOnlyPagination(t *testing.T) {
+	server := NewTestServer()
+
+	// archivedOnly=true should have total 1
+	req := httptest.NewRequest(http.MethodGet, "/resources?archivedOnly=true", nil)
+	rec := httptest.NewRecorder()
+	server.Router.ServeHTTP(rec, req)
+
+	var resp paginatedResourceResponse
+	json.NewDecoder(rec.Body).Decode(&resp)
+
+	if resp.PageInfo.TotalItems != 1 {
+		t.Fatalf("archivedOnly: expected totalItems 1, got %d", resp.PageInfo.TotalItems)
+	}
+	if resp.PageInfo.TotalPages != 1 {
+		t.Fatalf("archivedOnly: expected totalPages 1, got %d", resp.PageInfo.TotalPages)
+	}
+}
+
+func TestListResources_ArchivedOnlyTakesPrecedenceOverIncludeArchived(t *testing.T) {
+	server := NewTestServer()
+
+	// archivedOnly=true + includeArchived=true should still return only archived
+	req := httptest.NewRequest(http.MethodGet, "/resources?archivedOnly=true&includeArchived=true", nil)
+	rec := httptest.NewRecorder()
+	server.Router.ServeHTTP(rec, req)
+
+	var resp paginatedResourceResponse
+	json.NewDecoder(rec.Body).Decode(&resp)
+
+	if len(resp.Items) != 1 {
+		t.Fatalf("archivedOnly should take precedence: expected 1 item, got %d", len(resp.Items))
+	}
+	if resp.Items[0].ID != "res-archived" {
+		t.Fatalf("expected res-archived, got %s", resp.Items[0].ID)
+	}
+}
+
+func TestListResources_ArchivedOnlyWithOtherFilters(t *testing.T) {
+	server := NewTestServer()
+
+	// archivedOnly + resourceType filter
+	req := httptest.NewRequest(http.MethodGet, "/resources?archivedOnly=true&resourceType=host", nil)
+	rec := httptest.NewRecorder()
+	server.Router.ServeHTTP(rec, req)
+
+	var resp paginatedResourceResponse
+	json.NewDecoder(rec.Body).Decode(&resp)
+
+	if len(resp.Items) != 1 {
+		t.Fatalf("expected 1 archived host, got %d", len(resp.Items))
+	}
+}
+
+// --- Phase 12.2: Unarchive endpoint ---
+
+func TestUnarchiveResource_ArchivedResource(t *testing.T) {
+	server := NewTestServer()
+
+	// First archive res-1
+	archiveBody := `{"reason":"temp"}`
+	archiveReq := httptest.NewRequest(http.MethodPost, "/resources/res-1/archive", strings.NewReader(archiveBody))
+	archiveRec := httptest.NewRecorder()
+	server.Router.ServeHTTP(archiveRec, archiveReq)
+	if archiveRec.Code != http.StatusOK {
+		t.Fatalf("archive: expected 200, got %d", archiveRec.Code)
+	}
+
+	// Now unarchive it
+	unarchiveReq := httptest.NewRequest(http.MethodPost, "/resources/res-1/unarchive", nil)
+	unarchiveRec := httptest.NewRecorder()
+	server.Router.ServeHTTP(unarchiveRec, unarchiveReq)
+
+	if unarchiveRec.Code != http.StatusOK {
+		t.Fatalf("unarchive: expected 200, got %d; body: %s", unarchiveRec.Code, unarchiveRec.Body.String())
+	}
+
+	var resp model.Resource
+	if err := json.NewDecoder(unarchiveRec.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if resp.ArchivedAt != nil {
+		t.Fatal("expected archivedAt to be nil after unarchive")
+	}
+	if resp.ArchiveReason != nil {
+		t.Fatal("expected archiveReason to be nil after unarchive")
+	}
+	if resp.ArchivedBy != nil {
+		t.Fatal("expected archivedBy to be nil after unarchive")
+	}
+}
+
+func TestUnarchiveResource_NotFound(t *testing.T) {
+	server := NewTestServer()
+	req := httptest.NewRequest(http.MethodPost, "/resources/nonexistent/unarchive", nil)
+	rec := httptest.NewRecorder()
+
+	server.Router.ServeHTTP(rec, req)
+
+	assertAPIError(t, rec, http.StatusNotFound, "resource_not_found")
+}
+
+func TestUnarchiveResource_IdempotentForActive(t *testing.T) {
+	server := NewTestServer()
+
+	// res-1 is active — unarchive should be idempotent
+	req := httptest.NewRequest(http.MethodPost, "/resources/res-1/unarchive", nil)
+	rec := httptest.NewRecorder()
+	server.Router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+
+	var resp model.Resource
+	json.NewDecoder(rec.Body).Decode(&resp)
+	if resp.ArchivedAt != nil {
+		t.Fatal("expected archivedAt to remain nil for active resource")
+	}
+}
+
+func TestUnarchivedResource_ReappearsInDefaultList(t *testing.T) {
+	server := NewTestServer()
+
+	// Archive res-1
+	archiveReq := httptest.NewRequest(http.MethodPost, "/resources/res-1/archive", strings.NewReader(`{}`))
+	archiveRec := httptest.NewRecorder()
+	server.Router.ServeHTTP(archiveRec, archiveReq)
+
+	// Confirm hidden from default list
+	listRec1 := httptest.NewRecorder()
+	server.Router.ServeHTTP(listRec1, httptest.NewRequest(http.MethodGet, "/resources", nil))
+	var list1 paginatedResourceResponse
+	json.NewDecoder(listRec1.Body).Decode(&list1)
+	if list1.PageInfo.TotalItems != 1 {
+		t.Fatalf("after archive: expected 1 item, got %d", list1.PageInfo.TotalItems)
+	}
+
+	// Unarchive
+	unarchiveReq := httptest.NewRequest(http.MethodPost, "/resources/res-1/unarchive", nil)
+	unarchiveRec := httptest.NewRecorder()
+	server.Router.ServeHTTP(unarchiveRec, unarchiveReq)
+	if unarchiveRec.Code != http.StatusOK {
+		t.Fatalf("unarchive: expected 200, got %d", unarchiveRec.Code)
+	}
+
+	// Confirm back in default list
+	listReq2 := httptest.NewRequest(http.MethodGet, "/resources", nil)
+	listRec2 := httptest.NewRecorder()
+	server.Router.ServeHTTP(listRec2, listReq2)
+	var list2 paginatedResourceResponse
+	json.NewDecoder(listRec2.Body).Decode(&list2)
+	if list2.PageInfo.TotalItems != 2 {
+		t.Fatalf("after unarchive: expected 2 items, got %d", list2.PageInfo.TotalItems)
+	}
+}
+
+func TestPatchOnArchived_ThenSucceedsAfterUnarchive(t *testing.T) {
+	server := NewTestServer()
+
+	// Archive res-1
+	archiveReq := httptest.NewRequest(http.MethodPost, "/resources/res-1/archive", strings.NewReader(`{}`))
+	archiveRec := httptest.NewRecorder()
+	server.Router.ServeHTTP(archiveRec, archiveReq)
+
+	// Patch should fail
+	patchBody := `{"displayName":"Should Fail"}`
+	patchReq1 := httptest.NewRequest(http.MethodPatch, "/resources/res-1", strings.NewReader(patchBody))
+	patchRec1 := httptest.NewRecorder()
+	server.Router.ServeHTTP(patchRec1, patchReq1)
+	assertAPIError(t, patchRec1, http.StatusConflict, "resource_archived")
+
+	// Unarchive
+	unarchiveReq := httptest.NewRequest(http.MethodPost, "/resources/res-1/unarchive", nil)
+	unarchiveRec := httptest.NewRecorder()
+	server.Router.ServeHTTP(unarchiveRec, unarchiveReq)
+
+	// Patch should now succeed
+	patchReq2 := httptest.NewRequest(http.MethodPatch, "/resources/res-1", strings.NewReader(patchBody))
+	patchRec2 := httptest.NewRecorder()
+	server.Router.ServeHTTP(patchRec2, patchReq2)
+	if patchRec2.Code != http.StatusOK {
+		t.Fatalf("expected patch to succeed after unarchive, got %d; body: %s", patchRec2.Code, patchRec2.Body.String())
+	}
+}
+
+func TestRelationCreateOnArchived_ThenSucceedsAfterUnarchive(t *testing.T) {
+	server := NewTestServer()
+
+	// Archive res-2
+	archiveReq := httptest.NewRequest(http.MethodPost, "/resources/res-2/archive", strings.NewReader(`{}`))
+	archiveRec := httptest.NewRecorder()
+	server.Router.ServeHTTP(archiveRec, archiveReq)
+
+	// Relation creation should fail
+	relBody := `{"toResourceId":"res-1","relationType":"depends_on"}`
+	relReq1 := httptest.NewRequest(http.MethodPost, "/resources/res-2/relations", strings.NewReader(relBody))
+	relRec1 := httptest.NewRecorder()
+	server.Router.ServeHTTP(relRec1, relReq1)
+	assertAPIError(t, relRec1, http.StatusConflict, "resource_archived")
+
+	// Unarchive
+	unarchiveReq := httptest.NewRequest(http.MethodPost, "/resources/res-2/unarchive", nil)
+	unarchiveRec := httptest.NewRecorder()
+	server.Router.ServeHTTP(unarchiveRec, unarchiveReq)
+
+	// Relation creation should now succeed
+	relReq2 := httptest.NewRequest(http.MethodPost, "/resources/res-2/relations", strings.NewReader(relBody))
+	relRec2 := httptest.NewRecorder()
+	server.Router.ServeHTTP(relRec2, relReq2)
+	if relRec2.Code != http.StatusCreated {
+		t.Fatalf("expected relation create to succeed after unarchive, got %d; body: %s", relRec2.Code, relRec2.Body.String())
+	}
+}

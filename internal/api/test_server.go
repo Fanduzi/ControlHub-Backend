@@ -72,7 +72,10 @@ func (f *fakeResourceRepo) ListResources(_ context.Context, q model.ResourceList
 				continue
 			}
 		}
-			if !q.IncludeArchived && item.IsArchived() {
+			if q.ArchivedOnly && !item.IsArchived() {
+					continue
+				}
+				if !q.ArchivedOnly && !q.IncludeArchived && item.IsArchived() {
 				continue
 			}
 		filtered = append(filtered, cloneResource(item))
@@ -180,6 +183,19 @@ func (f *fakeResourceRepo) ArchiveResource(_ context.Context, id string, reason 
 	now := f.now.Add(time.Duration(f.nextID+100) * time.Minute)
 	res.ArchivedAt = &now
 	res.ArchiveReason = &reason
+	f.resources[id] = res
+	cloned := cloneResource(res)
+	return &cloned, nil
+}
+
+func (f *fakeResourceRepo) UnarchiveResource(_ context.Context, id string) (*model.Resource, error) {
+	res, ok := f.resources[id]
+	if !ok {
+		return nil, service.ErrResourceNotFound
+	}
+	res.ArchivedAt = nil
+	res.ArchivedBy = nil
+	res.ArchiveReason = nil
 	f.resources[id] = res
 	cloned := cloneResource(res)
 	return &cloned, nil

@@ -34,6 +34,7 @@ type ResourceRepository interface {
 	CreateResource(ctx context.Context, input model.ResourceCreateInput) (*model.Resource, error)
 	UpdateResource(ctx context.Context, id string, input model.ResourceUpdateInput) (*model.Resource, error)
 	ArchiveResource(ctx context.Context, id string, reason string) (*model.Resource, error)
+	UnarchiveResource(ctx context.Context, id string) (*model.Resource, error)
 }
 
 type ResourceService struct {
@@ -176,6 +177,20 @@ func (s *ResourceService) Archive(ctx context.Context, id string, req model.Arch
 		reason = *req.Reason
 	}
 	return s.repo.ArchiveResource(ctx, id, reason)
+}
+
+func (s *ResourceService) Unarchive(ctx context.Context, id string) (*model.Resource, error) {
+	if id == "" {
+		return nil, wrapValidation("resource id is required")
+	}
+	existing, err := s.Get(id)
+	if err != nil {
+		return nil, err
+	}
+	if !existing.IsArchived() {
+		return existing, nil
+	}
+	return s.repo.UnarchiveResource(ctx, id)
 }
 
 func validateResourceCreateInput(input model.ResourceCreateInput) error {
