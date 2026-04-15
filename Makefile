@@ -1,4 +1,4 @@
-.PHONY: test run openapi-validate migrate-up migrate-status migrate-down-one migrate-reset-dev
+.PHONY: test test-integration run openapi-validate migrate-up migrate-status migrate-down-one migrate-reset-dev
 
 GOOSE := $(shell go env GOPATH)/bin/goose
 GOOSE_DRIVER := mysql
@@ -15,6 +15,9 @@ GOOSE_DBSTRING := $(shell echo "$(DATABASE_DSN)" | sed 's/?parseTime=true&charse
 
 test:
 	go test ./...
+
+test-integration: ## Run integration tests against disposable MySQL via Testcontainers (requires Docker)
+	go test -tags=integration -count=1 -v ./internal/integration
 
 openapi-validate: ## Validate internal/openapi/openapi.yaml
 	go test ./internal/openapi -v -run TestOpenAPIYAMLIsValid

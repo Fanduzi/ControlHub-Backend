@@ -5,6 +5,7 @@
 - Go `1.26.x`
 - This workspace is aligned to local `asdf` default `Go 1.26.1`
 - MySQL 8.0+
+- **Docker** (required for integration tests only)
 
 ## Setup
 
@@ -112,6 +113,8 @@ API documentation:
 
 ## Test
 
+Unit tests (no Docker required):
+
 ```bash
 go test ./internal/api -v
 go test ./internal/model -v
@@ -126,6 +129,31 @@ OpenAPI contract validation:
 ```bash
 make openapi-validate
 ```
+
+### Integration Tests
+
+Integration tests exercise real MySQL behavior using disposable Testcontainers containers.
+
+- **Requires Docker** running locally.
+- Tests start a fresh MySQL 8.0 container, run all goose migrations, and terminate it after.
+- Does **not** touch your daily `controlhub` database.
+
+```bash
+make test-integration
+```
+
+Run a specific integration test:
+
+```bash
+go test -tags=integration -count=1 -v -run TestResourceRepository ./internal/integration
+```
+
+When to run which:
+
+| Command | When | Docker? |
+|---------|------|---------|
+| `make test` | Every commit — fast unit tests | No |
+| `make test-integration` | Before merge — real MySQL validation | Yes |
 
 ## Architecture
 

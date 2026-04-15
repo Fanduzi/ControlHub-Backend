@@ -5,7 +5,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## Build & Run Commands
 
 ```bash
-make test          # go test ./...
+make test          # go test ./... (unit tests only, no Docker)
+make test-integration  # Testcontainers MySQL integration tests (requires Docker)
 make run           # go run ./cmd/server (auto-loads .env)
 go vet ./...       # static analysis
 go build ./...     # compile check
@@ -15,6 +16,11 @@ Run a single test:
 ```bash
 go test ./internal/api -v -run TestListResources
 go test ./internal/model -v -run TestLifecycleStatusValidation
+```
+
+Run a single integration test:
+```bash
+go test -tags=integration -count=1 -v -run TestResourceRepository ./internal/integration
 ```
 
 OpenAPI contract validation:
@@ -112,7 +118,22 @@ Tests use **fake repositories** (not mocks) defined in `internal/api/test_server
 
 Service tests use anonymous structs implementing the repository interface with hardcoded data.
 
-**No integration tests against MySQL** — all tests run without a database connection.
+### Integration Tests
+
+Integration tests live in `internal/integration/` behind a `//go:build integration` build tag. They use **Testcontainers** to start a disposable MySQL 8.0 container, run goose migrations, and exercise real repository code.
+
+```bash
+make test-integration   # runs go test -tags=integration -count=1 -v ./internal/integration
+```
+
+Integration tests cover behavior that fake repositories cannot catch:
+- Goose clean migration (all migrations apply from zero, expected tables/indexes exist)
+- Resource write conflicts (MySQL 1062 duplicate key mapping to service errors)
+- Relation unique constraint enforcement
+- Topology SQL neighborhood queries against real data
+- Name-per-environment unique index behavior
+
+Integration tests **do not** touch the daily local `controlhub` database.
 
 ## Configuration
 
