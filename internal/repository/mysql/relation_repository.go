@@ -8,7 +8,6 @@ package mysql
 import (
 	"context"
 	"database/sql"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -60,38 +59,16 @@ func (r *RelationRepository) ListByResourceID(resourceID string) ([]model.Resour
 }
 
 func (r *RelationRepository) GetResource(id string) (*model.Resource, error) {
-	query := `
-	select id, resource_type, resource_subtype, name, display_name,
-	       environment_id, owner_id, lifecycle_status, health_status,
-	       source, external_id, labels, created_at, updated_at
-	from resources
-	where id = ?`
+	query := "select " + resourceColumns + " from resources where id = ?"
 
 	row := r.db.QueryRowContext(context.Background(), query, id)
 
-	var (
-		item      model.Resource
-		rawLabels string
-	)
-	err := row.Scan(
-		&item.ID, &item.ResourceType, &item.ResourceSubtype,
-		&item.Name, &item.DisplayName,
-		&item.EnvironmentID, &item.OwnerID,
-		&item.LifecycleStatus, &item.HealthStatus,
-		&item.Source, &item.ExternalID,
-		&rawLabels, &item.CreatedAt, &item.UpdatedAt,
-	)
-	if errors.Is(err, sql.ErrNoRows) {
-		return nil, service.ErrResourceNotFound
-	}
+	item, err := scanResource(row)
 	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, service.ErrResourceNotFound
+		}
 		return nil, err
-	}
-	if rawLabels != "" && rawLabels != "null" {
-		_ = json.Unmarshal([]byte(rawLabels), &item.Labels)
-	}
-	if item.Labels == nil {
-		item.Labels = map[string]string{}
 	}
 	return &item, nil
 }

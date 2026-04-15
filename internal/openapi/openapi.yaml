@@ -102,6 +102,12 @@ paths:
             minimum: 1
             maximum: 100
           description: Items per page
+        - in: query
+          name: includeArchived
+          schema:
+            type: boolean
+            default: false
+          description: Include archived resources in results (default excludes them)
       responses:
         "200":
           description: Resource list with pagination
@@ -230,6 +236,53 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/ErrorResponse"
+        "409":
+          description: Resource is archived and cannot be modified
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+  /resources/{id}/archive:
+    post:
+      summary: Archive (soft-delete) a resource
+      description: >
+        Marks a resource as archived by setting archivedAt. Idempotent —
+        archiving an already-archived resource returns it unchanged.
+        Archived resources are excluded from default list queries but remain
+        readable via GET detail. Archived resources reject PATCH and relation
+        creation with 409.
+      operationId: archiveResource
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ArchiveRequest"
+      responses:
+        "200":
+          description: Resource archived (or already archived)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Resource"
+        "400":
+          description: Validation failed (e.g. blank reason)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "404":
+          description: Resource not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
   /resources/{id}/profile:
     get:
       summary: Get resource typed profile projection
@@ -313,7 +366,7 @@ paths:
               schema:
                 $ref: "#/components/schemas/ErrorResponse"
         "409":
-          description: Duplicate relation already exists
+          description: Duplicate relation already exists, or source/target resource is archived
           content:
             application/json:
               schema:
@@ -784,6 +837,19 @@ components:
         updatedAt:
           type: string
           format: date-time
+        archivedAt:
+          type: string
+          format: date-time
+          nullable: true
+          description: Timestamp when the resource was archived (null if active)
+        archivedBy:
+          type: string
+          nullable: true
+          description: User or system that archived the resource
+        archiveReason:
+          type: string
+          nullable: true
+          description: Human-readable reason for archiving
     ResourceRelation:
       type: object
       required: [id, fromResourceId, toResourceId, relationType, createdAt]
@@ -957,6 +1023,13 @@ components:
           minLength: 1
         relationType:
           $ref: "#/components/schemas/RelationType"
+    ArchiveRequest:
+      type: object
+      properties:
+        reason:
+          type: string
+          maxLength: 512
+          description: Optional human-readable reason for archiving. If provided, must be non-blank.
     ErrorResponse:
       type: object
       required: [error, message]

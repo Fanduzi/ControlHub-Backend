@@ -50,11 +50,19 @@ func (s *RelationService) Create(ctx context.Context, fromResourceID string, inp
 	if err := input.RelationType.Validate(); err != nil {
 		return nil, fmt.Errorf("%w: relationType is not supported", ErrValidationFailed)
 	}
-	if _, err := s.repo.GetResource(fromResourceID); err != nil {
+	fromResource, err := s.repo.GetResource(fromResourceID)
+	if err != nil {
 		return nil, err
 	}
-	if _, err := s.repo.GetResource(input.ToResourceID); err != nil {
+	if fromResource.IsArchived() {
+		return nil, ErrResourceArchived
+	}
+	toResource, err := s.repo.GetResource(input.ToResourceID)
+	if err != nil {
 		return nil, err
+	}
+	if toResource.IsArchived() {
+		return nil, ErrResourceArchived
 	}
 	input.FromResourceID = fromResourceID
 	return s.repo.CreateRelation(ctx, input)

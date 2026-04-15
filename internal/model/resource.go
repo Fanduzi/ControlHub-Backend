@@ -33,4 +33,12 @@ type Resource struct {
 	Labels          map[string]string `json:"labels"`
 	CreatedAt       time.Time         `json:"createdAt"`
 	UpdatedAt       time.Time         `json:"updatedAt"`
+	ArchivedAt      *time.Time        `json:"archivedAt,omitempty"`
+	ArchivedBy      *string           `json:"archivedBy,omitempty"`
+	ArchiveReason   *string           `json:"archiveReason,omitempty"`
+}
+
+// IsArchived returns true if the resource has been archived.
+func (r *Resource) IsArchived() bool {
+	return r.ArchivedAt != nil
 }

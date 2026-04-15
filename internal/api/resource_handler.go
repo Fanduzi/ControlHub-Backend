@@ -98,6 +98,24 @@ func handleGetResourceProfile(resourceService *service.ResourceService) http.Han
 	}
 }
 
+func handleArchiveResource(resourceService *service.ResourceService) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		var req model.ArchiveRequest
+		if err := decodeJSONBody(r, &req); err != nil {
+			writeJSONError(w, http.StatusBadRequest, "malformed_json", "request body must be valid JSON")
+			return
+		}
+
+		archived, err := resourceService.Archive(r.Context(), chi.URLParam(r, "id"), req)
+		if err != nil {
+			writeServiceError(w, err)
+			return
+		}
+
+		writeJSON(w, http.StatusOK, archived)
+	}
+}
+
 func parseResourceListQuery(r *http.Request) model.ResourceListQuery {
 	q := r.URL.Query()
 	page, pageSize := model.NormalizePagination(
@@ -110,6 +128,7 @@ func parseResourceListQuery(r *http.Request) model.ResourceListQuery {
 		LifecycleStatus: q.Get("lifecycleStatus"),
 		HealthStatus:    q.Get("healthStatus"),
 		Query:           q.Get("q"),
+		IncludeArchived: q.Get("includeArchived") == "true",
 		Page:            page,
 		PageSize:        pageSize,
 	}
@@ -164,6 +183,8 @@ func writeServiceError(w http.ResponseWriter, err error) {
 		writeJSONError(w, http.StatusConflict, "resource_conflict", err.Error())
 	case errors.Is(err, service.ErrRelationConflict):
 		writeJSONError(w, http.StatusConflict, "relation_conflict", err.Error())
+	case errors.Is(err, service.ErrResourceArchived):
+		writeJSONError(w, http.StatusConflict, "resource_archived", "resource is archived")
 	default:
 		writeJSONError(w, http.StatusInternalServerError, "internal_error", "unexpected server failure")
 	}

@@ -72,6 +72,9 @@ func (f *fakeResourceRepo) ListResources(_ context.Context, q model.ResourceList
 				continue
 			}
 		}
+			if !q.IncludeArchived && item.IsArchived() {
+				continue
+			}
 		filtered = append(filtered, cloneResource(item))
 	}
 
@@ -166,6 +169,19 @@ func (f *fakeResourceRepo) UpdateResource(_ context.Context, id string, input mo
 
 	f.resources[id] = updated
 	cloned := cloneResource(updated)
+	return &cloned, nil
+}
+
+func (f *fakeResourceRepo) ArchiveResource(_ context.Context, id string, reason string) (*model.Resource, error) {
+	res, ok := f.resources[id]
+	if !ok {
+		return nil, service.ErrResourceNotFound
+	}
+	now := f.now.Add(time.Duration(f.nextID+100) * time.Minute)
+	res.ArchivedAt = &now
+	res.ArchiveReason = &reason
+	f.resources[id] = res
+	cloned := cloneResource(res)
 	return &cloned, nil
 }
 
@@ -320,6 +336,8 @@ func (fakeAuditRepo) ListByResourceID(resourceID string) ([]model.AuditEvent, er
 }
 
 func NewTestServer() *TestServer {
+	archivedAt := time.Date(2026, 4, 11, 22, 0, 0, 0, time.UTC)
+	archiveReason := "retired"
 	resourceRepo := &fakeResourceRepo{
 		resources: map[string]model.Resource{
 			"res-1": {
@@ -429,8 +447,25 @@ func NewTestServer() *TestServer {
 				CreatedAt:       time.Date(2026, 4, 11, 20, 0, 0, 0, time.UTC),
 				UpdatedAt:       time.Date(2026, 4, 11, 20, 0, 0, 0, time.UTC),
 			},
-		},
-		listOrder: []string{"res-1", "res-2"},
+				"res-archived": {
+					ID:              "res-archived",
+					ResourceType:    model.ResourceTypeHost,
+					ResourceSubtype: "vm",
+					Name:            "archived-host",
+					DisplayName:     "Archived Host",
+					EnvironmentID:   "env-prod",
+					OwnerID:         "owner-platform",
+					LifecycleStatus: "decommissioned",
+					HealthStatus:    "unknown",
+					Source:          "manual",
+					Labels:          map[string]string{},
+					CreatedAt:       time.Date(2026, 4, 11, 19, 0, 0, 0, time.UTC),
+					UpdatedAt:       time.Date(2026, 4, 11, 19, 0, 0, 0, time.UTC),
+					ArchivedAt:      &archivedAt,
+					ArchiveReason:   &archiveReason,
+				},
+			},
+			listOrder: []string{"res-1", "res-2", "res-archived"},
 		profiles: map[string]*model.ResourceProfileResponse{
 			"res-db-instance": {
 				ResourceID:      "res-db-instance",

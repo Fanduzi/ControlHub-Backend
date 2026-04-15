@@ -26,8 +26,8 @@ func TestGooseCleanMigration(t *testing.T) {
 	if err != nil {
 		t.Fatalf("query max version: %v", err)
 	}
-	if maxVersion < 6 {
-		t.Fatalf("expected at least 6 migrations applied, got version %d", maxVersion)
+	if maxVersion < 7 {
+		t.Fatalf("expected at least 7 migrations applied, got version %d", maxVersion)
 	}
 
 	// Verify expected tables exist.
@@ -54,6 +54,18 @@ func TestGooseCleanMigration(t *testing.T) {
 	// Verify resources has uq_resource_name_env (name, environment_id).
 	if !indexExists(t, db, "resources", "uq_resource_name_env") {
 		t.Error("expected unique index uq_resource_name_env on resources")
+	}
+
+	// Verify archive columns exist on resources.
+	for _, col := range []string{"archived_at", "archived_by", "archive_reason"} {
+		if !columnExists(t, db, "resources", col) {
+			t.Errorf("expected column %q on resources", col)
+		}
+	}
+
+	// Verify archive index exists.
+	if !indexExists(t, db, "resources", "idx_resources_archived_at") {
+		t.Error("expected index idx_resources_archived_at on resources")
 	}
 
 	// Verify resources does NOT have a global unique index only on name.
@@ -89,6 +101,19 @@ func indexExists(t *testing.T, db *sql.DB, tableName, indexName string) bool {
 	).Scan(&count)
 	if err != nil {
 		t.Fatalf("check index existence: %v", err)
+	}
+	return count > 0
+}
+
+func columnExists(t *testing.T, db *sql.DB, tableName, columnName string) bool {
+	t.Helper()
+	var count int
+	err := db.QueryRow(
+		"SELECT count(*) FROM information_schema.columns WHERE table_schema = DATABASE() AND table_name = ? AND column_name = ?",
+		tableName, columnName,
+	).Scan(&count)
+	if err != nil {
+		t.Fatalf("check column existence: %v", err)
 	}
 	return count > 0
 }

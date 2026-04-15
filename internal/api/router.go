@@ -51,6 +51,7 @@ func NewRouter(deps Dependencies) *chi.Mux {
 	router.Post("/resources", handleCreateResource(deps.ResourceService))
 	router.Get("/resources/{id}", handleGetResource(deps.ResourceService))
 	router.Patch("/resources/{id}", handlePatchResource(deps.ResourceService))
+	router.Post("/resources/{id}/archive", handleArchiveResource(deps.ResourceService))
 	router.Get("/resources/{id}/profile", handleGetResourceProfile(deps.ResourceService))
 	router.Get("/resources/{id}/relations", handleListResourceRelations(deps.RelationService))
 	router.Get("/resources/{id}/topology", handleGetTopology(deps.TopologyService))

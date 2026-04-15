@@ -27,12 +27,21 @@ func NewResourceRepository(db *sql.DB) *ResourceRepository {
 	return &ResourceRepository{db: db}
 }
 
+const resourceColumns = `id, resource_type, resource_subtype, name, display_name,
+       environment_id, owner_id, lifecycle_status, health_status,
+       source, external_id, labels, created_at, updated_at,
+       archived_at, archived_by, archive_reason`
+
 func (r *ResourceRepository) ListResources(ctx context.Context, q model.ResourceListQuery) ([]model.Resource, int, error) {
 	where := `where (? = '' or resource_type = ?)
 	  and (? = '' or environment_id = ?)
 	  and (? = '' or lifecycle_status = ?)
 	  and (? = '' or health_status = ?)
 	  and (? = '' or (name like ? or display_name like ? or external_id like ?))`
+
+	if !q.IncludeArchived {
+		where += " and archived_at is null"
+	}
 
 	searchPattern := "%" + q.Query + "%"
 	filterArgs := []any{
@@ -43,19 +52,14 @@ func (r *ResourceRepository) ListResources(ctx context.Context, q model.Resource
 		q.Query, searchPattern, searchPattern, searchPattern,
 	}
 
-	// Count query
 	var total int
 	countQuery := "select count(*) from resources " + where
 	if err := r.db.QueryRowContext(ctx, countQuery, filterArgs...).Scan(&total); err != nil {
 		return nil, 0, fmt.Errorf("count resources: %w", err)
 	}
 
-	// Data query
 	offset := (q.Page - 1) * q.PageSize
-	dataQuery := `select id, resource_type, resource_subtype, name, display_name,
-	       environment_id, owner_id, lifecycle_status, health_status,
-	       source, external_id, labels, created_at, updated_at
-	from resources ` + where + ` order by name limit ? offset ?`
+	dataQuery := "select " + resourceColumns + " from resources " + where + " order by name limit ? offset ?"
 
 	dataArgs := append(filterArgs, q.PageSize, offset)
 	rows, err := r.db.QueryContext(ctx, dataQuery, dataArgs...)
@@ -77,12 +81,7 @@ func (r *ResourceRepository) ListResources(ctx context.Context, q model.Resource
 }
 
 func (r *ResourceRepository) GetResource(id string) (*model.Resource, error) {
-	query := `
-	select id, resource_type, resource_subtype, name, display_name,
-	       environment_id, owner_id, lifecycle_status, health_status,
-	       source, external_id, labels, created_at, updated_at
-	from resources
-	where id = ?`
+	query := "select " + resourceColumns + " from resources where id = ?"
 
 	row := r.db.QueryRowContext(context.Background(), query, id)
 
@@ -147,11 +146,11 @@ func (r *ResourceRepository) fetchDatabaseInstanceProfile(ctx context.Context, i
 		return nil, fmt.Errorf("fetch database_instance profile: %w", err)
 	}
 	return map[string]any{
-		"engine": engine,
+		"engine":  engine,
 		"version": version,
-		"host":   host,
-		"port":   port,
-		"role":   role,
+		"host":    host,
+		"port":    port,
+		"role":    role,
 	}, nil
 }
 
@@ -168,9 +167,9 @@ func (r *ResourceRepository) fetchDatabaseClusterProfile(ctx context.Context, id
 		return nil, fmt.Errorf("fetch database_cluster profile: %w", err)
 	}
 	return map[string]any{
-		"engine":           engine,
-		"topologyMode":     topologyMode,
-		"primaryEndpoint":  primaryEndpoint,
+		"engine":          engine,
+		"topologyMode":    topologyMode,
+		"primaryEndpoint": primaryEndpoint,
 	}, nil
 }
 
@@ -312,14 +311,27 @@ func (r *ResourceRepository) UpdateResource(ctx context.Context, id string, inpu
 	return r.GetResource(id)
 }
 
+func (r *ResourceRepository) ArchiveResource(ctx context.Context, id string, reason string) (*model.Resource, error) {
+	query := `update resources set archived_at = NOW(6), archived_by = NULL, archive_reason = ? where id = ? and archived_at is null`
+	_, err := r.db.ExecContext(ctx, query, reason, id)
+	if err != nil {
+		return nil, fmt.Errorf("archive resource %s: %w", id, err)
+	}
+
+	return r.GetResource(id)
+}
+
 type resourceScanner interface {
 	Scan(dest ...any) error
 }
 
 func scanResource(scanner resourceScanner) (model.Resource, error) {
 	var (
-		item      model.Resource
-		rawLabels string
+		item         model.Resource
+		rawLabels    string
+		archivedAt   sql.NullTime
+		archivedBy   sql.NullString
+		archiveReason sql.NullString
 	)
 
 	err := scanner.Scan(
@@ -337,9 +349,22 @@ func scanResource(scanner resourceScanner) (model.Resource, error) {
 		&rawLabels,
 		&item.CreatedAt,
 		&item.UpdatedAt,
+		&archivedAt,
+		&archivedBy,
+		&archiveReason,
 	)
 	if err != nil {
 		return model.Resource{}, err
+	}
+
+	if archivedAt.Valid {
+		item.ArchivedAt = &archivedAt.Time
+	}
+	if archivedBy.Valid {
+		item.ArchivedBy = &archivedBy.String
+	}
+	if archiveReason.Valid {
+		item.ArchiveReason = &archiveReason.String
 	}
 
 	if rawLabels == "" || rawLabels == "null" {

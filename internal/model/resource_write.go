@@ -1,6 +1,6 @@
 // Package model provides write-side request and repository input types for resources.
 // input: time package
-// output: ResourceCreateInput, ResourcePatchRequest, ResourceUpdateInput
+// output: ResourceCreateInput, ResourcePatchRequest, ResourceUpdateInput, ArchiveRequest
 // pos: Shared request contracts for resource write APIs
 // note: if this file changes, update header and README.md
 package model
@@ -71,4 +71,9 @@ func (r ResourcePatchRequest) ToUpdateInput() ResourceUpdateInput {
 		ExternalID:      r.ExternalID,
 		Labels:          r.Labels,
 	}
+}
+
+// ArchiveRequest is the request body for POST /resources/{id}/archive.
+type ArchiveRequest struct {
+	Reason *string `json:"reason,omitempty"`
 }

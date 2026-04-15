@@ -11,16 +11,18 @@ import (
 	"fmt"
 	"regexp"
 	"slices"
+	"strings"
 
 	"github.com/fan/controlhub/internal/model"
 )
 
 var (
-	ErrResourceNotFound   = errors.New("resource not found")
-	ErrResourceConflict   = errors.New("resource conflict")
+	ErrResourceNotFound    = errors.New("resource not found")
+	ErrResourceConflict    = errors.New("resource conflict")
+	ErrResourceArchived    = errors.New("resource archived")
 	ErrEnvironmentNotFound = errors.New("environment not found")
-	ErrOwnerNotFound      = errors.New("owner not found")
-	ErrValidationFailed   = errors.New("validation failed")
+	ErrOwnerNotFound       = errors.New("owner not found")
+	ErrValidationFailed    = errors.New("validation failed")
 )
 
 var resourceNamePattern = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]*$`)
@@ -31,6 +33,7 @@ type ResourceRepository interface {
 	GetResourceProfile(id string) (*model.ResourceProfileResponse, error)
 	CreateResource(ctx context.Context, input model.ResourceCreateInput) (*model.Resource, error)
 	UpdateResource(ctx context.Context, id string, input model.ResourceUpdateInput) (*model.Resource, error)
+	ArchiveResource(ctx context.Context, id string, reason string) (*model.Resource, error)
 }
 
 type ResourceService struct {
@@ -92,6 +95,13 @@ func (s *ResourceService) Update(ctx context.Context, id string, patch model.Res
 	if id == "" {
 		return nil, wrapValidation("resource id is required")
 	}
+	existing, err := s.Get(id)
+	if err != nil {
+		return nil, err
+	}
+	if existing.IsArchived() {
+		return nil, ErrResourceArchived
+	}
 	if patch.HasImmutableFields() {
 		return nil, wrapValidation("immutable resource fields cannot be updated")
 	}
@@ -142,6 +152,30 @@ func (s *ResourceService) Update(ctx context.Context, id string, patch model.Res
 		return nil, err
 	}
 	return updated, nil
+}
+
+func (s *ResourceService) Archive(ctx context.Context, id string, req model.ArchiveRequest) (*model.Resource, error) {
+	if id == "" {
+		return nil, wrapValidation("resource id is required")
+	}
+	if req.Reason != nil {
+		trimmed := strings.TrimSpace(*req.Reason)
+		if trimmed == "" {
+			return nil, wrapValidation("reason must be non-empty")
+		}
+	}
+	existing, err := s.Get(id)
+	if err != nil {
+		return nil, err
+	}
+	if existing.IsArchived() {
+		return existing, nil
+	}
+	reason := ""
+	if req.Reason != nil {
+		reason = *req.Reason
+	}
+	return s.repo.ArchiveResource(ctx, id, reason)
 }
 
 func validateResourceCreateInput(input model.ResourceCreateInput) error {

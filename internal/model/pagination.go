@@ -26,6 +26,7 @@ type ResourceListQuery struct {
 	LifecycleStatus string
 	HealthStatus    string
 	Query           string // free-text search over name, display_name, external_id
+	IncludeArchived bool
 	Page            int
 	PageSize        int
 }

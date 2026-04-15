@@ -107,7 +107,7 @@ Resource types (8), relation types (7), lifecycle statuses (5), health statuses 
 
 ## API Design
 
-**18 endpoints** on a chi router with localhost:3000 CORS. All list endpoints return `{ "items": [...] }` envelope. Filtering via query params (`?type=`, `?environmentId=`).
+**19 endpoints** on a chi router with localhost:3000 CORS. All list endpoints return `{ "items": [...] }` envelope. Filtering via query params (`?type=`, `?environmentId=`).
 
 **Auth:** Custom HMAC-SHA256 token (not standard JWT). Passwords hashed with SHA-256. Seed credentials: `admin@example.com` / `secret123`.
 

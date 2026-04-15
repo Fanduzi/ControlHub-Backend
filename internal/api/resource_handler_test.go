@@ -830,3 +830,276 @@ func assertAPIError(t *testing.T, rec *httptest.ResponseRecorder, expectedStatus
 		t.Fatal("expected non-empty error message")
 	}
 }
+
+// --- Archive handler tests ---
+
+func TestArchiveResource_ValidResource(t *testing.T) {
+	server := NewTestServer()
+	body := `{"reason":"e2e cleanup"}`
+	req := httptest.NewRequest(http.MethodPost, "/resources/res-1/archive", strings.NewReader(body))
+	rec := httptest.NewRecorder()
+
+	server.Router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+
+	var resp model.Resource
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if resp.ArchivedAt == nil {
+		t.Fatal("expected archivedAt to be set")
+	}
+	if resp.ArchiveReason == nil || *resp.ArchiveReason != "e2e cleanup" {
+		t.Fatalf("expected archiveReason 'e2e cleanup', got %v", resp.ArchiveReason)
+	}
+}
+
+func TestArchiveResource_NotFound(t *testing.T) {
+	server := NewTestServer()
+	body := `{}`
+	req := httptest.NewRequest(http.MethodPost, "/resources/nonexistent/archive", strings.NewReader(body))
+	rec := httptest.NewRecorder()
+
+	server.Router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("expected 404, got %d", rec.Code)
+	}
+}
+
+func TestArchiveResource_Idempotent(t *testing.T) {
+	server := NewTestServer()
+	body := `{"reason":"retired"}`
+
+	// First archive
+	req1 := httptest.NewRequest(http.MethodPost, "/resources/res-1/archive", strings.NewReader(body))
+	rec1 := httptest.NewRecorder()
+	server.Router.ServeHTTP(rec1, req1)
+	if rec1.Code != http.StatusOK {
+		t.Fatalf("first archive: expected 200, got %d", rec1.Code)
+	}
+
+	var first model.Resource
+	json.NewDecoder(rec1.Body).Decode(&first)
+
+	// Second archive — should be idempotent
+	req2 := httptest.NewRequest(http.MethodPost, "/resources/res-1/archive", strings.NewReader(body))
+	rec2 := httptest.NewRecorder()
+	server.Router.ServeHTTP(rec2, req2)
+	if rec2.Code != http.StatusOK {
+		t.Fatalf("second archive: expected 200, got %d", rec2.Code)
+	}
+
+	var second model.Resource
+	json.NewDecoder(rec2.Body).Decode(&second)
+	if !first.ArchivedAt.Equal(*second.ArchivedAt) {
+		t.Fatal("expected idempotent archive to return original archivedAt")
+	}
+}
+
+func TestArchiveResource_BlankReason(t *testing.T) {
+	server := NewTestServer()
+	body := `{"reason":"   "}`
+	req := httptest.NewRequest(http.MethodPost, "/resources/res-1/archive", strings.NewReader(body))
+	rec := httptest.NewRecorder()
+
+	server.Router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+	var resp apiErrorResponse
+	json.NewDecoder(rec.Body).Decode(&resp)
+	if resp.Error != "validation_failed" {
+		t.Fatalf("expected validation_failed, got %s", resp.Error)
+	}
+}
+
+func TestArchiveResource_NoReason(t *testing.T) {
+	server := NewTestServer()
+	body := `{}`
+	req := httptest.NewRequest(http.MethodPost, "/resources/res-1/archive", strings.NewReader(body))
+	rec := httptest.NewRecorder()
+
+	server.Router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+}
+
+// --- Archive + list behavior ---
+
+func TestListResources_ExcludesArchived(t *testing.T) {
+	server := NewTestServer()
+	req := httptest.NewRequest(http.MethodGet, "/resources", nil)
+	rec := httptest.NewRecorder()
+
+	server.Router.ServeHTTP(rec, req)
+
+	var resp paginatedResourceResponse
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+
+	for _, item := range resp.Items {
+		if item.ArchivedAt != nil {
+			t.Fatalf("default list should not include archived resources, got %s", item.ID)
+		}
+	}
+}
+
+func TestListResources_IncludeArchived(t *testing.T) {
+	server := NewTestServer()
+	req := httptest.NewRequest(http.MethodGet, "/resources?includeArchived=true", nil)
+	rec := httptest.NewRecorder()
+
+	server.Router.ServeHTTP(rec, req)
+
+	var resp paginatedResourceResponse
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+
+	hasArchived := false
+	for _, item := range resp.Items {
+		if item.ID == "res-archived" {
+			hasArchived = true
+			if item.ArchivedAt == nil {
+				t.Fatal("expected archivedAt on res-archived")
+			}
+		}
+	}
+	if !hasArchived {
+		t.Fatal("expected res-archived in results when includeArchived=true")
+	}
+}
+
+func TestListResources_IncludeArchivedPagination(t *testing.T) {
+	server := NewTestServer()
+
+	// Without includeArchived — total 2
+	req1 := httptest.NewRequest(http.MethodGet, "/resources", nil)
+	rec1 := httptest.NewRecorder()
+	server.Router.ServeHTTP(rec1, req1)
+	var resp1 paginatedResourceResponse
+	json.NewDecoder(rec1.Body).Decode(&resp1)
+
+	// With includeArchived — total 3
+	req2 := httptest.NewRequest(http.MethodGet, "/resources?includeArchived=true", nil)
+	rec2 := httptest.NewRecorder()
+	server.Router.ServeHTTP(rec2, req2)
+	var resp2 paginatedResourceResponse
+	json.NewDecoder(rec2.Body).Decode(&resp2)
+
+	if resp1.PageInfo.TotalItems >= resp2.PageInfo.TotalItems {
+		t.Fatalf("includeArchived should have more items: %d vs %d", resp1.PageInfo.TotalItems, resp2.PageInfo.TotalItems)
+	}
+}
+
+// --- Archive + detail ---
+
+func TestGetResource_ReturnsArchivedResource(t *testing.T) {
+	server := NewTestServer()
+	req := httptest.NewRequest(http.MethodGet, "/resources/res-archived", nil)
+	rec := httptest.NewRecorder()
+
+	server.Router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rec.Code)
+	}
+	var resp model.Resource
+	json.NewDecoder(rec.Body).Decode(&resp)
+	if resp.ID != "res-archived" {
+		t.Fatalf("expected res-archived, got %s", resp.ID)
+	}
+	if resp.ArchivedAt == nil {
+		t.Fatal("expected archivedAt to be set")
+	}
+}
+
+// --- Archive + mutation rejection ---
+
+func TestPatchResource_RejectsArchived(t *testing.T) {
+	server := NewTestServer()
+	body := `{"displayName":"New Name"}`
+	req := httptest.NewRequest(http.MethodPatch, "/resources/res-archived", strings.NewReader(body))
+	rec := httptest.NewRecorder()
+
+	server.Router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("expected 409, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+	var resp apiErrorResponse
+	json.NewDecoder(rec.Body).Decode(&resp)
+	if resp.Error != "resource_archived" {
+		t.Fatalf("expected resource_archived, got %s", resp.Error)
+	}
+}
+
+func TestCreateRelation_RejectsArchivedSource(t *testing.T) {
+	server := NewTestServer()
+	body := `{"toResourceId":"res-2","relationType":"depends_on"}`
+	req := httptest.NewRequest(http.MethodPost, "/resources/res-archived/relations", strings.NewReader(body))
+	rec := httptest.NewRecorder()
+
+	server.Router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("expected 409, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+	var resp apiErrorResponse
+	json.NewDecoder(rec.Body).Decode(&resp)
+	if resp.Error != "resource_archived" {
+		t.Fatalf("expected resource_archived, got %s", resp.Error)
+	}
+}
+
+func TestCreateRelation_RejectsArchivedTarget(t *testing.T) {
+	server := NewTestServer()
+	body := `{"toResourceId":"res-archived","relationType":"depends_on"}`
+	req := httptest.NewRequest(http.MethodPost, "/resources/res-1/relations", strings.NewReader(body))
+	rec := httptest.NewRecorder()
+
+	server.Router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("expected 409, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+	var resp apiErrorResponse
+	json.NewDecoder(rec.Body).Decode(&resp)
+	if resp.Error != "resource_archived" {
+		t.Fatalf("expected resource_archived, got %s", resp.Error)
+	}
+}
+
+// --- Archive + reads remain available ---
+
+func TestListRelations_ArchivedResourceReadable(t *testing.T) {
+	server := NewTestServer()
+	req := httptest.NewRequest(http.MethodGet, "/resources/res-archived/relations", nil)
+	rec := httptest.NewRecorder()
+
+	server.Router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rec.Code)
+	}
+}
+
+func TestTopology_ArchivedResourceReadable(t *testing.T) {
+	server := NewTestServer()
+	req := httptest.NewRequest(http.MethodGet, "/resources/res-archived/topology", nil)
+	rec := httptest.NewRecorder()
+
+	server.Router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rec.Code)
+	}
+}
