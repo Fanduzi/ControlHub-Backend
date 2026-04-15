@@ -7,6 +7,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ```bash
 make test          # go test ./... (unit tests only, no Docker)
 make test-integration  # Testcontainers MySQL integration tests (requires Docker)
+make test-openapi-fuzz # Schemathesis OpenAPI fuzzing against disposable MySQL (requires Docker + schemathesis)
 make run           # go run ./cmd/server (auto-loads .env)
 go vet ./...       # static analysis
 go build ./...     # compile check
@@ -134,6 +135,28 @@ Integration tests cover behavior that fake repositories cannot catch:
 - Name-per-environment unique index behavior
 
 Integration tests **do not** touch the daily local `controlhub` database.
+
+### OpenAPI Fuzz Testing
+
+Schemathesis-based fuzz testing lives in `internal/integration/openapi_fuzz_test.go` behind the `//go:build integration` tag. It starts a real HTTP server on a random port backed by disposable Testcontainers MySQL, then runs Schemathesis against `/openapi.yaml`.
+
+```bash
+make test-openapi-fuzz
+```
+
+- Requires **Docker** and **Schemathesis CLI** (`pip install schemathesis`).
+- Uses disposable MySQL — does **not** touch the daily `controlhub` database.
+- Bounded run: 50 examples per operation, seed 42, checks: no 5xx, status code conformance, content type conformance, response schema conformance.
+- Write endpoints are exercised freely (the database is disposable).
+- Reports saved to `.schemathesis-reports/`.
+
+When to run:
+
+| Command | When | Docker? | Extra deps |
+|---------|------|---------|------------|
+| `make test` | Every commit | No | — |
+| `make test-integration` | Before merge | Yes | — |
+| `make test-openapi-fuzz` | Before merge, after API changes | Yes | schemathesis |
 
 ## Configuration
 

@@ -5,7 +5,8 @@
 - Go `1.26.x`
 - This workspace is aligned to local `asdf` default `Go 1.26.1`
 - MySQL 8.0+
-- **Docker** (required for integration tests only)
+- **Docker** (required for integration tests and OpenAPI fuzz tests only)
+- **Schemathesis** (required for OpenAPI fuzz tests only: `pip install schemathesis`)
 
 ## Setup
 
@@ -150,10 +151,33 @@ go test -tags=integration -count=1 -v -run TestResourceRepository ./internal/int
 
 When to run which:
 
-| Command | When | Docker? |
-|---------|------|---------|
-| `make test` | Every commit — fast unit tests | No |
-| `make test-integration` | Before merge — real MySQL validation | Yes |
+| Command | When | Docker? | Extra deps |
+|---------|------|---------|------------|
+| `make test` | Every commit — fast unit tests | No | — |
+| `make test-integration` | Before merge — real MySQL validation | Yes | — |
+| `make test-openapi-fuzz` | Before merge — contract fuzzing | Yes | schemathesis |
+
+### OpenAPI Fuzz Testing
+
+Schemathesis-based fuzz testing exercises all API endpoints against a real server backed by disposable Testcontainers MySQL.
+
+- **Requires Docker** and the **Schemathesis CLI** (`pip install schemathesis` or `pipx install schemathesis`).
+- Starts a disposable MySQL 8.0 container, runs goose migrations, starts the ControlHub HTTP server on a random port, and runs Schemathesis against `/openapi.yaml`.
+- Does **not** touch your daily `controlhub` database.
+- Writes are exercised freely (the database is disposable).
+
+```bash
+make test-openapi-fuzz
+```
+
+The run uses bounded settings suitable for AI agents and local development:
+- `--max-examples 50` — 50 generated test cases per operation
+- `--seed 42` — reproducible runs
+- `--checks not_a_server_error,status_code_conformance,content_type_conformance,response_schema_conformance`
+- `--mode all` — both positive and negative data generation
+- `--phases examples,fuzzing`
+
+If Schemathesis finds contract violations, the test fails with a summary. Reports are saved to `.schemathesis-reports/`.
 
 ## Architecture
 

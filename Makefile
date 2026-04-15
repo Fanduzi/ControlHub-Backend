@@ -1,4 +1,4 @@
-.PHONY: test test-integration run openapi-validate migrate-up migrate-status migrate-down-one migrate-reset-dev
+.PHONY: test test-integration test-openapi-fuzz run openapi-validate migrate-up migrate-status migrate-down-one migrate-reset-dev
 
 GOOSE := $(shell go env GOPATH)/bin/goose
 GOOSE_DRIVER := mysql
@@ -17,7 +17,10 @@ test:
 	go test ./...
 
 test-integration: ## Run integration tests against disposable MySQL via Testcontainers (requires Docker)
-	go test -tags=integration -count=1 -v ./internal/integration
+	go test -tags=integration -count=1 -v -run '^Test[^O]' ./internal/integration
+
+test-openapi-fuzz: ## Run Schemathesis OpenAPI fuzzing against disposable MySQL server (requires Docker + schemathesis)
+	go test -tags=integration -count=1 -v -run TestOpenAPIFuzz ./internal/integration
 
 openapi-validate: ## Validate internal/openapi/openapi.yaml
 	go test ./internal/openapi -v -run TestOpenAPIYAMLIsValid

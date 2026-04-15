@@ -18,17 +18,17 @@ func handleLogin(authService *service.AuthService) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var req model.LoginRequest
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			http.Error(w, "invalid payload", http.StatusBadRequest)
+			writeJSONError(w, http.StatusBadRequest, "invalid_payload", "invalid payload")
 			return
 		}
 
 		resp, err := authService.Login(req.Email, req.Password)
 		if err != nil {
-			status := http.StatusInternalServerError
 			if errors.Is(err, service.ErrInvalidCredentials) {
-				status = http.StatusUnauthorized
+				writeJSONError(w, http.StatusUnauthorized, "invalid_credentials", err.Error())
+				return
 			}
-			http.Error(w, err.Error(), status)
+			writeJSONError(w, http.StatusInternalServerError, "internal_error", err.Error())
 			return
 		}
 
