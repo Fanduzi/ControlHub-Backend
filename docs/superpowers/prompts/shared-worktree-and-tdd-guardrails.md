@@ -52,6 +52,29 @@ For narrow tasks, obey explicit file or directory allowlists in the prompt.
 - Do not modify generated files, release docs, package metadata, or broad config unless the prompt explicitly allows it.
 - Do not execute later tasks or adjacent phases early.
 
+## Parallel Phase Coordination
+
+Do not assume frontend and backend workers can communicate with each other during execution.
+
+- Treat every worker prompt as self-sufficient.
+- If a frontend phase depends on backend truth, the frontend prompt must say exactly which parts may proceed in parallel and which parts must wait for backend completion.
+- If a backend phase is expected to unblock frontend work, the backend prompt must describe the contract that will be considered frozen for downstream work.
+- Do not rely on "coordinate with the other worker", "sync with backend", "ask frontend", or similar instructions as the primary control mechanism.
+- Put dependency and merge-order rules directly into each prompt.
+- If parallel development is allowed, the prompt must explicitly say:
+  - what can be implemented independently
+  - what cannot be considered final until the other side lands
+  - what must be revalidated after rebasing or merging the updated `main`
+- If the final behavior depends on another repo's latest truth, the prompt must require a final live verification pass against that updated truth before claiming completion.
+
+Recommended pattern for parallel phases:
+
+1. allow each side to implement the independent subset
+2. freeze the source-of-truth side first
+3. require the dependent side to sync latest `main`
+4. rerun full verification and live checks
+5. only then allow completion claims
+
 ## TDD
 
 Use test-first discipline for meaningful behavior changes.
