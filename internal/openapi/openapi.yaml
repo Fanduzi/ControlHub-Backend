@@ -724,6 +724,7 @@ paths:
                 rootResourceId: "40000000-0000-0000-0000-000000000001"
                 depth: 1
                 direction: both
+                isDatabaseTopology: true
                 nodes:
                   - id: "40000000-0000-0000-0000-000000000001"
                     resourceType: database_cluster
@@ -736,6 +737,10 @@ paths:
                     healthStatus: healthy
                     isRoot: true
                     distance: 0
+                    topologyRole: cluster
+                    topologyLayer: cluster
+                    visualImportance: 10
+                    isDatabaseTopology: true
                   - id: "40000000-0000-0000-0000-000000000002"
                     resourceType: database_instance
                     resourceSubtype: mysql
@@ -747,11 +752,19 @@ paths:
                     healthStatus: healthy
                     isRoot: false
                     distance: 1
+                    topologyRole: primary
+                    topologyLayer: replication
+                    groupKey: "cluster:40000000-0000-0000-0000-000000000001"
+                    visualImportance: 9
+                    isDatabaseTopology: true
+                    replicationDepth: 0
+                    replicationParentId: ""
                 edges:
                   - id: "50000000-0000-0000-0000-000000000001"
                     fromResourceId: "40000000-0000-0000-0000-000000000002"
                     toResourceId: "40000000-0000-0000-0000-000000000001"
                     relationType: member_of
+                    semanticType: membership
                 groups:
                   - id: group-database_cluster
                     label: Database Cluster
@@ -1110,7 +1123,7 @@ components:
           description: Human-readable error description
     TopologyResponse:
       type: object
-      required: [rootResourceId, depth, direction, nodes, edges, groups]
+      required: [rootResourceId, depth, direction, nodes, edges, groups, isDatabaseTopology]
       properties:
         rootResourceId:
           type: string
@@ -1141,6 +1154,12 @@ components:
           items:
             $ref: "#/components/schemas/TopologyGroup"
           description: Optional grouping of nodes by resource type
+        isDatabaseTopology:
+          type: boolean
+          description: >
+            True if any node is a database_cluster or database_instance.
+            Frontend uses this flag to switch to the layered database
+            graph renderer.
     TopologyNode:
       type: object
       required:
@@ -1155,6 +1174,10 @@ components:
         - healthStatus
         - isRoot
         - distance
+        - topologyRole
+        - topologyLayer
+        - visualImportance
+        - isDatabaseTopology
       properties:
         id:
           type: string
@@ -1180,9 +1203,45 @@ components:
         distance:
           type: integer
           description: Hop distance from root (0 for root itself)
+        topologyRole:
+          $ref: "#/components/schemas/TopologyRole"
+        topologyLayer:
+          $ref: "#/components/schemas/TopologyLayer"
+        groupKey:
+          type: string
+          description: >
+            Grouping key for database instances. Format "cluster:{clusterId}".
+            Set when the instance has a member_of relation to a database_cluster.
+            Absent for non-instance nodes and instances without cluster membership.
+        visualImportance:
+          type: integer
+          minimum: 1
+          maximum: 10
+          description: >
+            Relative visual prominence (1-10). Root=10, primary=9, cluster=8,
+            proxy_active=7, entry/service=6, replica_intermediate=5,
+            replica/proxy_standby=4, control_plane=3, host=2, generic=1.
+        isDatabaseTopology:
+          type: boolean
+          description: >
+            True when any node in the topology is a database_cluster or
+            database_instance. Mirrors the response-level flag for per-node
+            convenience.
+        replicationDepth:
+          type: integer
+          description: >
+            Hop count from the replication primary (depth 0) along
+            replicates_to edges. Only set for database_instance nodes
+            that participate in a replication chain.
+        replicationParentId:
+          type: string
+          description: >
+            ID of the upstream replication source. Only set for
+            database_instance nodes that participate in a replication chain.
+            Empty string for the primary (root of the chain).
     TopologyEdge:
       type: object
-      required: [id, fromResourceId, toResourceId, relationType]
+      required: [id, fromResourceId, toResourceId, relationType, semanticType]
       properties:
         id:
           type: string
@@ -1192,6 +1251,8 @@ components:
           type: string
         relationType:
           $ref: "#/components/schemas/RelationType"
+        semanticType:
+          $ref: "#/components/schemas/EdgeSemanticType"
     TopologyGroup:
       type: object
       required: [id, label, resourceType, nodeIds]
@@ -1209,3 +1270,53 @@ components:
           items:
             type: string
           description: IDs of nodes belonging to this group
+    TopologyRole:
+      type: string
+      enum:
+        - application
+        - entry
+        - proxy_active
+        - proxy_standby
+        - cluster
+        - primary
+        - replica
+        - replica_intermediate
+        - host
+        - control_plane
+        - service
+        - generic
+      description: >
+        Semantic role a node plays in the topology graph. Determined by
+        resourceType, labels, and relation edges. Frontend uses this to
+        pick icons, colors, and layout position.
+    TopologyLayer:
+      type: string
+      enum:
+        - application
+        - entry
+        - cluster
+        - replication
+        - control_plane
+        - host
+        - generic
+      description: >
+        Semantic band/layer for top-to-bottom layered graph layout.
+        Mapped 1:1 from TopologyRole (service→application, entry/proxy→entry,
+        cluster→cluster, primary/replica→replication, control_plane→control_plane,
+        host→host).
+    EdgeSemanticType:
+      type: string
+      enum:
+        - traffic
+        - failover
+        - replication
+        - membership
+        - placement
+        - management
+        - dependency
+        - monitoring
+      description: >
+        Semantic meaning of a topology edge. Used by frontend to choose
+        line style, color, and arrow rendering. Determined by relation type
+        and node properties (e.g., fronts from standby proxy → failover,
+        manages from HA subtype → monitoring).

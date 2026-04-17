@@ -396,6 +396,151 @@ func TestSeedData_NoMigrationArtifactsInDisplayNames(t *testing.T) {
 	}
 }
 
+func TestTopology_SeedData_SemanticMetadata(t *testing.T) {
+	db := setupTestDB(t)
+	relRepo := mysql.NewRelationRepository(db)
+
+	// Payment MySQL production resource IDs from seed data.
+	const (
+		clusterID      = "41000000-0000-0000-0000-000000000010"
+		primaryID      = "41000000-0000-0000-0000-000000000022"
+		replicaID      = "41000000-0000-0000-0000-000000000023"
+		activeProxyID  = "41000000-0000-0000-0000-000000000041"
+		standbyProxyID = "41000000-0000-0000-0000-000000000044"
+	)
+
+	topoSvc := service.NewTopologyService(relRepo)
+	resp, err := topoSvc.BuildTopology(model.TopologyQuery{
+		RootID:    clusterID,
+		Depth:     2,
+		Direction: model.TopologyDirectionBoth,
+	})
+	if err != nil {
+		t.Fatalf("build topology for payment cluster: %v", err)
+	}
+
+	// Response must have isDatabaseTopology=true.
+	if !resp.IsDatabaseTopology {
+		t.Error("expected isDatabaseTopology=true for payment cluster topology")
+	}
+
+	nodeMap := map[string]model.TopologyNode{}
+	for _, n := range resp.Nodes {
+		nodeMap[n.ID] = n
+	}
+
+	// Cluster node: role=cluster, layer=cluster
+	if n, ok := nodeMap[clusterID]; !ok {
+		t.Fatal("missing cluster node")
+	} else {
+		if n.TopologyRole != model.TopologyRoleCluster {
+			t.Errorf("cluster role = %q, want cluster", n.TopologyRole)
+		}
+		if n.TopologyLayer != model.TopologyLayerCluster {
+			t.Errorf("cluster layer = %q, want cluster", n.TopologyLayer)
+		}
+		if n.VisualImportance != 10 {
+			t.Errorf("cluster (root) visual importance = %d, want 10", n.VisualImportance)
+		}
+	}
+
+	// Primary instance: role=primary, layer=replication, groupKey set, replicationDepth=0
+	if n, ok := nodeMap[primaryID]; !ok {
+		t.Fatal("missing primary instance node")
+	} else {
+		if n.TopologyRole != model.TopologyRolePrimary {
+			t.Errorf("primary role = %q, want primary", n.TopologyRole)
+		}
+		if n.TopologyLayer != model.TopologyLayerReplication {
+			t.Errorf("primary layer = %q, want replication", n.TopologyLayer)
+		}
+		if n.GroupKey == "" {
+			t.Error("primary should have groupKey via member_of to cluster")
+		}
+		if n.ReplicationDepth != 0 {
+			t.Errorf("primary replicationDepth = %d, want 0", n.ReplicationDepth)
+		}
+	}
+
+	// Replica instance: role=replica, replicationDepth=1
+	if n, ok := nodeMap[replicaID]; !ok {
+		t.Fatal("missing replica instance node")
+	} else {
+		if n.TopologyRole != model.TopologyRoleReplica {
+			t.Errorf("replica role = %q, want replica", n.TopologyRole)
+		}
+		if n.ReplicationDepth != 1 {
+			t.Errorf("replica replicationDepth = %d, want 1", n.ReplicationDepth)
+		}
+		if n.ReplicationParentID != primaryID {
+			t.Errorf("replica replicationParentId = %q, want %q", n.ReplicationParentID, primaryID)
+		}
+	}
+
+	// Active proxy: role=proxy_active, layer=entry
+	if n, ok := nodeMap[activeProxyID]; !ok {
+		t.Fatal("missing active proxy node")
+	} else {
+		if n.TopologyRole != model.TopologyRoleProxyActive {
+			t.Errorf("active proxy role = %q, want proxy_active", n.TopologyRole)
+		}
+		if n.TopologyLayer != model.TopologyLayerEntry {
+			t.Errorf("active proxy layer = %q, want entry", n.TopologyLayer)
+		}
+	}
+
+	// Standby proxy: role=proxy_standby, layer=entry
+	if n, ok := nodeMap[standbyProxyID]; !ok {
+		t.Fatal("missing standby proxy node")
+	} else {
+		if n.TopologyRole != model.TopologyRoleProxyStandby {
+			t.Errorf("standby proxy role = %q, want proxy_standby", n.TopologyRole)
+		}
+	}
+
+	// Edge semantic types
+	edgeMap := map[string]model.TopologyEdge{}
+	for _, e := range resp.Edges {
+		edgeMap[e.ID] = e
+	}
+
+	// replicates_to edge → semantic=replication
+	for _, e := range resp.Edges {
+		if e.RelationType == model.RelationTypeReplicatesTo {
+			if e.SemanticType != model.EdgeSemanticReplication {
+				t.Errorf("replicates_to edge semantic = %q, want replication", e.SemanticType)
+			}
+		}
+	}
+
+	// member_of edge → semantic=membership
+	for _, e := range resp.Edges {
+		if e.RelationType == model.RelationTypeMemberOf {
+			if e.SemanticType != model.EdgeSemanticMembership {
+				t.Errorf("member_of edge semantic = %q, want membership", e.SemanticType)
+			}
+		}
+	}
+
+	// Standby proxy fronts edge → semantic=failover
+	for _, e := range resp.Edges {
+		if e.RelationType == model.RelationTypeFronts && e.FromResourceID == standbyProxyID {
+			if e.SemanticType != model.EdgeSemanticFailover {
+				t.Errorf("standby proxy fronts edge semantic = %q, want failover", e.SemanticType)
+			}
+		}
+	}
+
+	// Active proxy fronts edge → semantic=traffic
+	for _, e := range resp.Edges {
+		if e.RelationType == model.RelationTypeFronts && e.FromResourceID == activeProxyID {
+			if e.SemanticType != model.EdgeSemanticTraffic {
+				t.Errorf("active proxy fronts edge semantic = %q, want traffic", e.SemanticType)
+			}
+		}
+	}
+}
+
 func TestTopology_SeedData_NeighborhoodQuery(t *testing.T) {
 	db := setupTestDB(t)
 	relRepo := mysql.NewRelationRepository(db)

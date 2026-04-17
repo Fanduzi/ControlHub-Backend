@@ -110,17 +110,22 @@ func (s *TopologyService) BuildTopology(query model.TopologyQuery) (*model.Topol
 		frontier = nextFrontier
 	}
 
-	nodes := buildTopologyNodes(nodeSet, distance, root.ID)
-	edges := buildTopologyEdges(edgeSet)
+	isDB := detectDatabaseTopology(nodeSet)
+	replicationInfo := computeReplicationChain(edgeSet)
+	clusterGroupKeys := computeClusterGroupKeys(nodeSet, edgeSet)
+
+	nodes := buildTopologyNodes(nodeSet, distance, edgeSet, root.ID, isDB, replicationInfo, clusterGroupKeys)
+	edges := buildTopologyEdges(edgeSet, nodeSet)
 	groups := buildTopologyGroups(nodeSet)
 
 	return &model.TopologyResponse{
-		RootResourceID: root.ID,
-		Depth:          query.Depth,
-		Direction:      query.Direction,
-		Nodes:          nodes,
-		Edges:         edges,
-		Groups:        groups,
+		RootResourceID:     root.ID,
+		Depth:              query.Depth,
+		Direction:          query.Direction,
+		Nodes:              nodes,
+		Edges:              edges,
+		Groups:             groups,
+		IsDatabaseTopology: isDB,
 	}, nil
 }
 
@@ -146,22 +151,269 @@ func contains(slice []string, s string) bool {
 	return false
 }
 
-func buildTopologyNodes(nodeSet map[string]*model.Resource, distance map[string]int, rootID string) []model.TopologyNode {
+// detectDatabaseTopology returns true if any node is a database_cluster or database_instance.
+func detectDatabaseTopology(nodeSet map[string]*model.Resource) bool {
+	for _, res := range nodeSet {
+		if res.ResourceType == model.ResourceTypeDatabaseCluster ||
+			res.ResourceType == model.ResourceTypeDatabaseInstance {
+			return true
+		}
+	}
+	return false
+}
+
+// replicationEntry holds computed replication chain info for a database instance.
+type replicationEntry struct {
+	depth    int
+	parentID string
+}
+
+// computeReplicationChain traces replicates_to edges and returns depth/parent for each instance.
+// Primary (source of replicates_to with no incoming replicates_to) has depth 0.
+// Each hop adds 1 to depth.
+func computeReplicationChain(edgeSet map[string]model.ResourceRelation) map[string]replicationEntry {
+	// Build forward map: source -> targets (replicates_to)
+	forward := map[string][]string{}
+	// Track who replicates TO each node
+	incoming := map[string]bool{}
+	for _, rel := range edgeSet {
+		if rel.RelationType == model.RelationTypeReplicatesTo {
+			forward[rel.FromResourceID] = append(forward[rel.FromResourceID], rel.ToResourceID)
+			incoming[rel.ToResourceID] = true
+		}
+	}
+
+	result := map[string]replicationEntry{}
+
+	// Find roots: nodes with outgoing replicates_to but no incoming
+	for source := range forward {
+		if !incoming[source] {
+			// BFS from this root
+			type queueItem struct {
+				id     string
+				depth  int
+				parent string
+			}
+			queue := []queueItem{{id: source, depth: 0, parent: ""}}
+			for len(queue) > 0 {
+				item := queue[0]
+				queue = queue[1:]
+				if _, exists := result[item.id]; exists {
+					continue
+				}
+				result[item.id] = replicationEntry{depth: item.depth, parentID: item.parent}
+				for _, target := range forward[item.id] {
+					queue = append(queue, queueItem{id: target, depth: item.depth + 1, parent: item.id})
+				}
+			}
+		}
+	}
+
+	return result
+}
+
+// computeClusterGroupKeys assigns a groupKey to each database instance based on which
+// cluster it is a member_of. Returns map[instanceID] -> groupKey.
+func computeClusterGroupKeys(nodeSet map[string]*model.Resource, edgeSet map[string]model.ResourceRelation) map[string]string {
+	clusterKeys := map[string]string{}
+	instanceGroups := map[string]string{}
+
+	// Assign stable keys to clusters
+	for id, res := range nodeSet {
+		if res.ResourceType == model.ResourceTypeDatabaseCluster {
+			clusterKeys[id] = fmt.Sprintf("cluster:%s", id)
+		}
+	}
+
+	// Map instances to their cluster group key via member_of edges
+	for _, rel := range edgeSet {
+		if rel.RelationType == model.RelationTypeMemberOf {
+			if clusterKey, ok := clusterKeys[rel.ToResourceID]; ok {
+				instanceGroups[rel.FromResourceID] = clusterKey
+			}
+		}
+	}
+
+	return instanceGroups
+}
+
+// classifyNodeRole determines the semantic role of a node based on its type, labels, and edges.
+func classifyNodeRole(res *model.Resource, edgeSet map[string]model.ResourceRelation) model.TopologyRole {
+	switch res.ResourceType {
+	case model.ResourceTypeService:
+		return model.TopologyRoleService
+	case model.ResourceTypeDomainName, model.ResourceTypeVirtualIP:
+		return model.TopologyRoleEntry
+	case model.ResourceTypeDatabaseProxy:
+		if res.Labels != nil && res.Labels["role"] == "standby" {
+			return model.TopologyRoleProxyStandby
+		}
+		return model.TopologyRoleProxyActive
+	case model.ResourceTypeDatabaseCluster:
+		return model.TopologyRoleCluster
+	case model.ResourceTypeDatabaseInstance:
+		// Check replication chain: if this instance has outgoing replicates_to, it's a primary
+		// If it only receives replicates_to, it's a replica (or intermediate)
+		hasOutgoing := false
+		hasIncoming := false
+		for _, rel := range edgeSet {
+			if rel.RelationType == model.RelationTypeReplicatesTo {
+				if rel.FromResourceID == res.ID {
+					hasOutgoing = true
+				}
+				if rel.ToResourceID == res.ID {
+					hasIncoming = true
+				}
+			}
+		}
+		if hasOutgoing && !hasIncoming {
+			return model.TopologyRolePrimary
+		}
+		if hasOutgoing && hasIncoming {
+			return model.TopologyRoleReplicaIntermediate
+		}
+		return model.TopologyRoleReplica
+	case model.ResourceTypeHost:
+		return model.TopologyRoleHost
+	case model.ResourceTypeControlPlaneComponent:
+		return model.TopologyRoleControlPlane
+	default:
+		return model.TopologyRoleGeneric
+	}
+}
+
+// classifyTopologyLayer determines the semantic layer for a node.
+func classifyTopologyLayer(role model.TopologyRole) model.TopologyLayer {
+	switch role {
+	case model.TopologyRoleService:
+		return model.TopologyLayerApplication
+	case model.TopologyRoleEntry, model.TopologyRoleProxyActive, model.TopologyRoleProxyStandby:
+		return model.TopologyLayerEntry
+	case model.TopologyRoleCluster:
+		return model.TopologyLayerCluster
+	case model.TopologyRolePrimary, model.TopologyRoleReplica, model.TopologyRoleReplicaIntermediate:
+		return model.TopologyLayerReplication
+	case model.TopologyRoleControlPlane:
+		return model.TopologyLayerControlPlane
+	case model.TopologyRoleHost:
+		return model.TopologyLayerHost
+	default:
+		return model.TopologyLayerGeneric
+	}
+}
+
+// classifyVisualImportance assigns a relative importance score (1-10).
+// Higher values mean the node should be visually more prominent.
+func classifyVisualImportance(res *model.Resource, role model.TopologyRole, isRoot bool) int {
+	if isRoot {
+		return 10
+	}
+	switch role {
+	case model.TopologyRolePrimary:
+		return 9
+	case model.TopologyRoleCluster:
+		return 8
+	case model.TopologyRoleProxyActive:
+		return 7
+	case model.TopologyRoleEntry:
+		return 6
+	case model.TopologyRoleService:
+		return 6
+	case model.TopologyRoleReplicaIntermediate:
+		return 5
+	case model.TopologyRoleReplica:
+		return 4
+	case model.TopologyRoleProxyStandby:
+		return 4
+	case model.TopologyRoleControlPlane:
+		return 3
+	case model.TopologyRoleHost:
+		return 2
+	default:
+		return 1
+	}
+}
+
+// classifyEdgeSemanticType determines the semantic meaning of an edge.
+func classifyEdgeSemanticType(rel model.ResourceRelation, nodeSet map[string]*model.Resource) model.EdgeSemanticType {
+	switch rel.RelationType {
+	case model.RelationTypeReplicatesTo:
+		return model.EdgeSemanticReplication
+	case model.RelationTypeMemberOf:
+		return model.EdgeSemanticMembership
+	case model.RelationTypeRunsOn:
+		return model.EdgeSemanticPlacement
+	case model.RelationTypePointsTo:
+		return model.EdgeSemanticTraffic
+	case model.RelationTypeDependsOn:
+		return model.EdgeSemanticDependency
+	case model.RelationTypeFronts:
+		// Distinguish active proxy (traffic) from standby proxy (failover)
+		if from, ok := nodeSet[rel.FromResourceID]; ok {
+			if from.ResourceType == model.ResourceTypeDatabaseProxy &&
+				from.Labels != nil && from.Labels["role"] == "standby" {
+				return model.EdgeSemanticFailover
+			}
+		}
+		return model.EdgeSemanticTraffic
+	case model.RelationTypeManages:
+		// HA manager (subtype=ha) → monitoring; orchestrator → management
+		if from, ok := nodeSet[rel.FromResourceID]; ok {
+			if from.ResourceSubtype == "ha" {
+				return model.EdgeSemanticMonitoring
+			}
+		}
+		return model.EdgeSemanticManagement
+	default:
+		return model.EdgeSemanticDependency
+	}
+}
+
+func buildTopologyNodes(
+	nodeSet map[string]*model.Resource,
+	distance map[string]int,
+	edgeSet map[string]model.ResourceRelation,
+	rootID string,
+	isDatabaseTopology bool,
+	replicationInfo map[string]replicationEntry,
+	clusterGroupKeys map[string]string,
+) []model.TopologyNode {
 	nodes := make([]model.TopologyNode, 0, len(nodeSet))
 	for id, res := range nodeSet {
-		nodes = append(nodes, model.TopologyNode{
-			ID:              id,
-			ResourceType:    res.ResourceType,
-			ResourceSubtype: res.ResourceSubtype,
-			Name:            res.Name,
-			DisplayName:     res.DisplayName,
-			EnvironmentID:   res.EnvironmentID,
-			OwnerID:         res.OwnerID,
-			LifecycleStatus: res.LifecycleStatus,
-			HealthStatus:    res.HealthStatus,
-			IsRoot:          id == rootID,
-			Distance:        distance[id],
-		})
+		role := classifyNodeRole(res, edgeSet)
+		layer := classifyTopologyLayer(role)
+		importance := classifyVisualImportance(res, role, id == rootID)
+
+		node := model.TopologyNode{
+			ID:                 id,
+			ResourceType:       res.ResourceType,
+			ResourceSubtype:    res.ResourceSubtype,
+			Name:               res.Name,
+			DisplayName:        res.DisplayName,
+			EnvironmentID:      res.EnvironmentID,
+			OwnerID:            res.OwnerID,
+			LifecycleStatus:    res.LifecycleStatus,
+			HealthStatus:       res.HealthStatus,
+			IsRoot:             id == rootID,
+			Distance:           distance[id],
+			TopologyRole:       role,
+			TopologyLayer:      layer,
+			VisualImportance:   importance,
+			IsDatabaseTopology: isDatabaseTopology,
+		}
+
+		// Attach group key for database instances
+		if gk, ok := clusterGroupKeys[id]; ok {
+			node.GroupKey = gk
+		}
+
+		// Attach replication metadata for database instances
+		if ri, ok := replicationInfo[id]; ok {
+			node.ReplicationDepth = ri.depth
+			node.ReplicationParentID = ri.parentID
+		}
+
+		nodes = append(nodes, node)
 	}
 	sort.Slice(nodes, func(i, j int) bool {
 		if nodes[i].Distance != nodes[j].Distance {
@@ -178,7 +430,7 @@ func buildTopologyNodes(nodeSet map[string]*model.Resource, distance map[string]
 	return nodes
 }
 
-func buildTopologyEdges(edgeSet map[string]model.ResourceRelation) []model.TopologyEdge {
+func buildTopologyEdges(edgeSet map[string]model.ResourceRelation, nodeSet map[string]*model.Resource) []model.TopologyEdge {
 	edges := make([]model.TopologyEdge, 0, len(edgeSet))
 	for _, rel := range edgeSet {
 		edges = append(edges, model.TopologyEdge{
@@ -186,6 +438,7 @@ func buildTopologyEdges(edgeSet map[string]model.ResourceRelation) []model.Topol
 			FromResourceID: rel.FromResourceID,
 			ToResourceID:   rel.ToResourceID,
 			RelationType:   rel.RelationType,
+			SemanticType:   classifyEdgeSemanticType(rel, nodeSet),
 		})
 	}
 	sort.Slice(edges, func(i, j int) bool {
