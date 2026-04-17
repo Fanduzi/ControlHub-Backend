@@ -126,6 +126,42 @@ Do not report “done” without separating:
 
 If any layer was skipped, say so explicitly.
 
+## Closeout Gate
+
+Do not call stage-level work:
+
+- complete
+- done
+- final
+- ready to merge
+- closeout complete
+
+unless all of the following are true:
+
+1. the implementation has been committed
+2. `git status --short --branch` is clean
+3. all required verification commands named in the prompt have been run
+4. any required live/manual verification named in the prompt has been completed
+5. the final report includes the exact commit hash
+
+If any of the above is missing:
+
+- do not write `Final Report`
+- do not write `complete`
+- do not write `done`
+- do not write `ready to merge`
+- instead write `Implementation Progress Report` and explicitly list what is still missing
+
+Before writing a final report for a stage-level task, the worker must:
+
+1. stage the intended files
+2. commit them
+3. run `git status --short --branch`
+4. confirm the tree is clean
+5. only then write the final report
+
+A report without commit hash, clean tree, and required verification is not a closeout report. It is only a progress update.
+
 Final reports must include negative scope confirmation for important boundaries, for example:
 
 - did not change production code for characterization-only tasks
