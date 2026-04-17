@@ -55,6 +55,9 @@ func ComputeTotalPages(totalItems, pageSize int) int {
 	return (totalItems + pageSize - 1) / pageSize
 }
 
+// MaxPage prevents integer overflow in offset calculation: (page-1)*pageSize must not overflow int.
+const MaxPage = 1_000_000_000
+
 // NormalizePagination applies defaults and caps to raw page/pageSize values.
 func NormalizePagination(page, pageSize int) (int, int) {
 	if page < 1 {
@@ -65,6 +68,9 @@ func NormalizePagination(page, pageSize int) (int, int) {
 	}
 	if pageSize > MaxPageSize {
 		pageSize = MaxPageSize
+	}
+	if page > MaxPage {
+		page = MaxPage
 	}
 	return page, pageSize
 }

@@ -80,6 +80,9 @@ tests := []struct {
 	{"pageSize capped at max", 1, 500, 1, MaxPageSize},
 	{"pageSize exactly at max", 1, MaxPageSize, 1, MaxPageSize},
 	{"page 1 with default pageSize", 1, DefaultPageSize, 1, DefaultPageSize},
+	{"page_capped_at_max", MaxPage + 1, 20, MaxPage, 20},
+	{"page_exactly_at_max", MaxPage, 20, MaxPage, 20},
+	{"huge_page_capped", 3945752125071476982, 64, MaxPage, 64},
 }
 
 for _, tt := range tests {
