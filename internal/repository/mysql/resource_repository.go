@@ -33,38 +33,64 @@ const resourceColumns = `id, resource_type, resource_subtype, name, display_name
        archived_at, archived_by, archive_reason`
 
 func (r *ResourceRepository) ListResources(ctx context.Context, q model.ResourceListQuery) ([]model.Resource, int, error) {
-	where := `where (? = '' or resource_type = ?)
-	  and (? = '' or environment_id = ?)
-	  and (? = '' or lifecycle_status = ?)
-	  and (? = '' or health_status = ?)
-	  and (? = '' or (name like ? or display_name like ? or external_id like ?))`
+	var conds []string
+	var args []any
 
-	if q.ArchivedOnly {
-		// ArchivedOnly takes precedence: only archived resources.
-		where += " and archived_at is not null"
-	} else if !q.IncludeArchived {
-		where += " and archived_at is null"
+	if len(q.ResourceTypes) > 0 {
+		ph := buildInClause(len(q.ResourceTypes))
+		conds = append(conds, "resource_type in ("+ph+")")
+		for _, v := range q.ResourceTypes {
+			args = append(args, v)
+		}
+	}
+	if len(q.EnvironmentIDs) > 0 {
+		ph := buildInClause(len(q.EnvironmentIDs))
+		conds = append(conds, "environment_id in ("+ph+")")
+		for _, v := range q.EnvironmentIDs {
+			args = append(args, v)
+		}
+	}
+	if len(q.LifecycleStatus) > 0 {
+		ph := buildInClause(len(q.LifecycleStatus))
+		conds = append(conds, "lifecycle_status in ("+ph+")")
+		for _, v := range q.LifecycleStatus {
+			args = append(args, v)
+		}
+	}
+	if len(q.HealthStatuses) > 0 {
+		ph := buildInClause(len(q.HealthStatuses))
+		conds = append(conds, "health_status in ("+ph+")")
+		for _, v := range q.HealthStatuses {
+			args = append(args, v)
+		}
+	}
+	if q.Query != "" {
+		pattern := "%" + q.Query + "%"
+		conds = append(conds, "(name like ? or display_name like ? or external_id like ?)")
+		args = append(args, pattern, pattern, pattern)
 	}
 
-	searchPattern := "%" + q.Query + "%"
-	filterArgs := []any{
-		q.ResourceType, q.ResourceType,
-		q.EnvironmentID, q.EnvironmentID,
-		q.LifecycleStatus, q.LifecycleStatus,
-		q.HealthStatus, q.HealthStatus,
-		q.Query, searchPattern, searchPattern, searchPattern,
+	if q.ArchivedOnly {
+		conds = append(conds, "archived_at is not null")
+	} else if !q.IncludeArchived {
+		conds = append(conds, "archived_at is null")
+	}
+
+	where := ""
+	if len(conds) > 0 {
+		where = "where " + strings.Join(conds, " and ")
 	}
 
 	var total int
 	countQuery := "select count(*) from resources " + where
-	if err := r.db.QueryRowContext(ctx, countQuery, filterArgs...).Scan(&total); err != nil {
+	if err := r.db.QueryRowContext(ctx, countQuery, args...).Scan(&total); err != nil {
 		return nil, 0, fmt.Errorf("count resources: %w", err)
 	}
 
 	offset := (q.Page - 1) * q.PageSize
 	dataQuery := "select " + resourceColumns + " from resources " + where + " order by name limit ? offset ?"
 
-	dataArgs := append(filterArgs, q.PageSize, offset)
+	dataArgs := append(args, q.PageSize, offset)
 	rows, err := r.db.QueryContext(ctx, dataQuery, dataArgs...)
 	if err != nil {
 		return nil, 0, err
@@ -81,6 +107,18 @@ func (r *ResourceRepository) ListResources(ctx context.Context, q model.Resource
 	}
 
 	return items, total, rows.Err()
+}
+
+// buildInClause returns a parameterized placeholder string like "?, ?, ?" for n values.
+func buildInClause(n int) string {
+	if n <= 0 {
+		return ""
+	}
+	placeholders := make([]string, n)
+	for i := range n {
+		placeholders[i] = "?"
+	}
+	return strings.Join(placeholders, ", ")
 }
 
 func (r *ResourceRepository) GetResource(id string) (*model.Resource, error) {

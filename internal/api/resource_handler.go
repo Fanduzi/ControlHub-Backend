@@ -135,10 +135,10 @@ func parseResourceListQuery(r *http.Request) model.ResourceListQuery {
 		parseIntDefault(q.Get("pageSize"), model.DefaultPageSize),
 	)
 	return model.ResourceListQuery{
-		ResourceType:    q.Get("resourceType"),
-		EnvironmentID:   q.Get("environmentId"),
-		LifecycleStatus: q.Get("lifecycleStatus"),
-		HealthStatus:    q.Get("healthStatus"),
+		ResourceTypes:   model.DedupStrings(q["resourceType"]),
+		EnvironmentIDs:  model.DedupStrings(q["environmentId"]),
+		LifecycleStatus: model.DedupStrings(q["lifecycleStatus"]),
+		HealthStatuses:  model.DedupStrings(q["healthStatus"]),
 		Query:           q.Get("q"),
 		IncludeArchived: q.Get("includeArchived") == "true",
 		ArchivedOnly:    q.Get("archivedOnly") == "true",

@@ -20,12 +20,14 @@ type PageInfo struct {
 }
 
 // ResourceListQuery holds all query parameters for GET /resources.
+// Repeated query parameters are collected into slices for multi-select filtering.
+// Within a filter family, values combine with logical OR. Across families, filters combine with AND.
 type ResourceListQuery struct {
-	ResourceType    string
-	EnvironmentID   string
-	LifecycleStatus string
-	HealthStatus    string
-	Query           string // free-text search over name, display_name, external_id
+	ResourceTypes   []string // repeated ?resourceType= values
+	EnvironmentIDs  []string // repeated ?environmentId= values
+	LifecycleStatus []string // repeated ?lifecycleStatus= values
+	HealthStatuses  []string // repeated ?healthStatus= values
+	Query           string   // free-text search over name, display_name, external_id
 	IncludeArchived bool
 	ArchivedOnly    bool // when true, return only archived resources (takes precedence over IncludeArchived)
 	Page            int
@@ -33,10 +35,11 @@ type ResourceListQuery struct {
 }
 
 // AuditListQuery holds all query parameters for GET /audit-events.
+// Repeated query parameters are collected into slices for multi-select filtering.
 type AuditListQuery struct {
-	TargetResourceID string
-	EventType        string
-	Result           string
+	TargetResourceID string   // kept single-value — naturally unique filter
+	EventTypes       []string // repeated ?eventType= values
+	Results          []string // repeated ?result= values
 	Page             int
 	PageSize         int
 }
@@ -64,4 +67,25 @@ func NormalizePagination(page, pageSize int) (int, int) {
 		pageSize = MaxPageSize
 	}
 	return page, pageSize
+}
+
+// DedupStrings returns a deduplicated copy of s, preserving first-occurrence order.
+// Empty strings are removed.
+func DedupStrings(s []string) []string {
+	if len(s) == 0 {
+		return nil
+	}
+	seen := make(map[string]bool, len(s))
+	result := make([]string, 0, len(s))
+	for _, v := range s {
+		if v == "" || seen[v] {
+			continue
+		}
+		seen[v] = true
+		result = append(result, v)
+	}
+	if len(result) == 0 {
+		return nil
+	}
+	return result
 }

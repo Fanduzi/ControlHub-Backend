@@ -52,16 +52,16 @@ func (f *fakeResourceRepo) ListResources(_ context.Context, q model.ResourceList
 		if !ok {
 			continue
 		}
-		if q.ResourceType != "" && string(item.ResourceType) != q.ResourceType {
+		if len(q.ResourceTypes) > 0 && !containsString(q.ResourceTypes, string(item.ResourceType)) {
 			continue
 		}
-		if q.EnvironmentID != "" && item.EnvironmentID != q.EnvironmentID {
+		if len(q.EnvironmentIDs) > 0 && !containsString(q.EnvironmentIDs, item.EnvironmentID) {
 			continue
 		}
-		if q.LifecycleStatus != "" && item.LifecycleStatus != q.LifecycleStatus {
+		if len(q.LifecycleStatus) > 0 && !containsString(q.LifecycleStatus, item.LifecycleStatus) {
 			continue
 		}
-		if q.HealthStatus != "" && item.HealthStatus != q.HealthStatus {
+		if len(q.HealthStatuses) > 0 && !containsString(q.HealthStatuses, item.HealthStatus) {
 			continue
 		}
 		if q.Query != "" {
@@ -317,10 +317,10 @@ func (fakeAuditRepo) ListAuditEvents(_ context.Context, q model.AuditListQuery) 
 		if q.TargetResourceID != "" && item.TargetResourceID != q.TargetResourceID {
 			continue
 		}
-		if q.EventType != "" && item.EventType != q.EventType {
+		if len(q.EventTypes) > 0 && !containsString(q.EventTypes, item.EventType) {
 			continue
 		}
-		if q.Result != "" && item.Result != q.Result {
+		if len(q.Results) > 0 && !containsString(q.Results, item.Result) {
 			continue
 		}
 		filtered = append(filtered, item)
@@ -682,6 +682,15 @@ func (fakeHealthStatusRepo) ListHealthStatuses() ([]model.DictionaryItem, error)
 func cloneResource(resource model.Resource) model.Resource {
 	resource.Labels = cloneLabels(resource.Labels)
 	return resource
+}
+
+func containsString(slice []string, val string) bool {
+	for _, s := range slice {
+		if s == val {
+			return true
+		}
+	}
+	return false
 }
 
 func cloneLabels(labels map[string]string) map[string]string {

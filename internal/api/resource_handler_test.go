@@ -1346,3 +1346,155 @@ func TestRelationCreateOnArchived_ThenSucceedsAfterUnarchive(t *testing.T) {
 		t.Fatalf("expected relation create to succeed after unarchive, got %d; body: %s", relRec2.Code, relRec2.Body.String())
 	}
 }
+
+// --- Phase 12.5: Multi-select filter tests ---
+
+func TestListResources_MultiSelectResourceType(t *testing.T) {
+	server := NewTestServer()
+
+	// res-1 = database_instance, res-2 = host
+	req := httptest.NewRequest(http.MethodGet, "/resources?resourceType=database_instance&resourceType=host", nil)
+	rec := httptest.NewRecorder()
+	server.Router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+
+	var resp paginatedResourceResponse
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(resp.Items) != 2 {
+		t.Errorf("expected 2 items (both types), got %d", len(resp.Items))
+	}
+}
+
+func TestListResources_MultiSelectEnvironmentID(t *testing.T) {
+	server := NewTestServer()
+
+	req := httptest.NewRequest(http.MethodGet, "/resources?environmentId=env-prod&environmentId=env-staging", nil)
+	rec := httptest.NewRecorder()
+	server.Router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+
+	var resp paginatedResourceResponse
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(resp.Items) != 2 {
+		t.Errorf("expected 2 items (both envs), got %d", len(resp.Items))
+	}
+}
+
+func TestListResources_MultiSelectLifecycleStatus(t *testing.T) {
+	server := NewTestServer()
+
+	// res-1 = running, res-2 = degraded
+	req := httptest.NewRequest(http.MethodGet, "/resources?lifecycleStatus=running&lifecycleStatus=degraded", nil)
+	rec := httptest.NewRecorder()
+	server.Router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+
+	var resp paginatedResourceResponse
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(resp.Items) != 2 {
+		t.Errorf("expected 2 items (running + degraded), got %d", len(resp.Items))
+	}
+}
+
+func TestListResources_MultiSelectHealthStatus(t *testing.T) {
+	server := NewTestServer()
+
+	// res-1 = healthy, res-2 = warning
+	req := httptest.NewRequest(http.MethodGet, "/resources?healthStatus=healthy&healthStatus=warning", nil)
+	rec := httptest.NewRecorder()
+	server.Router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+
+	var resp paginatedResourceResponse
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(resp.Items) != 2 {
+		t.Errorf("expected 2 items (healthy + warning), got %d", len(resp.Items))
+	}
+}
+
+func TestListResources_MultiSelectANDCombination(t *testing.T) {
+	server := NewTestServer()
+
+	// type=database_instance AND env=env-prod => only res-1
+	req := httptest.NewRequest(http.MethodGet, "/resources?resourceType=database_instance&resourceType=host&environmentId=env-prod", nil)
+	rec := httptest.NewRecorder()
+	server.Router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+
+	var resp paginatedResourceResponse
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(resp.Items) != 1 {
+		t.Errorf("expected 1 item (database_instance in env-prod), got %d", len(resp.Items))
+	}
+	if len(resp.Items) > 0 && resp.Items[0].ResourceType != "database_instance" {
+		t.Errorf("expected database_instance, got %s", resp.Items[0].ResourceType)
+	}
+}
+
+func TestListResources_MultiSelectWithSearch(t *testing.T) {
+	server := NewTestServer()
+
+	// search + type filter combined
+	req := httptest.NewRequest(http.MethodGet, "/resources?q=mysql&resourceType=database_instance&resourceType=host", nil)
+	rec := httptest.NewRecorder()
+	server.Router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+
+	var resp paginatedResourceResponse
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	// Only res-1 (mysql-primary-01) matches 'mysql' and is database_instance
+	if len(resp.Items) != 1 {
+		t.Errorf("expected 1 item (mysql + database_instance), got %d", len(resp.Items))
+	}
+}
+
+func TestListResources_MultiSelectDeduplicates(t *testing.T) {
+	server := NewTestServer()
+
+	// Same type repeated — should still return only matching resources without duplicates
+	req := httptest.NewRequest(http.MethodGet, "/resources?resourceType=database_instance&resourceType=database_instance&resourceType=database_instance", nil)
+	rec := httptest.NewRecorder()
+	server.Router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+
+	var resp paginatedResourceResponse
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(resp.Items) != 1 {
+		t.Errorf("expected 1 item (deduped database_instance), got %d", len(resp.Items))
+	}
+}

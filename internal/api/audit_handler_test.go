@@ -178,3 +178,93 @@ func TestListResourceAuditEvents_Unchanged(t *testing.T) {
 		t.Fatal("nested audit route should not have pageInfo")
 	}
 }
+
+
+// --- Phase 12.5: Multi-select audit filter tests ---
+
+func TestListAuditEvents_MultiSelectEventType(t *testing.T) {
+	server := NewTestServer()
+
+	// Both audit events: one resource.created, one resource.updated
+	req := httptest.NewRequest(http.MethodGet, "/audit-events?eventType=resource.created&eventType=resource.updated", nil)
+	rec := httptest.NewRecorder()
+	server.Router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+
+	var resp paginatedAuditResponse
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(resp.Items) != 2 {
+		t.Errorf("expected 2 items (both event types), got %d", len(resp.Items))
+	}
+}
+
+func TestListAuditEvents_MultiSelectResult(t *testing.T) {
+	server := NewTestServer()
+
+	// One success, one failure
+	req := httptest.NewRequest(http.MethodGet, "/audit-events?result=success&result=failure", nil)
+	rec := httptest.NewRecorder()
+	server.Router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+
+	var resp paginatedAuditResponse
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(resp.Items) != 2 {
+		t.Errorf("expected 2 items (success + failure), got %d", len(resp.Items))
+	}
+}
+
+func TestListAuditEvents_MultiSelectANDCombination(t *testing.T) {
+	server := NewTestServer()
+
+	// eventType=resource.created AND result=success => only the first audit event
+	req := httptest.NewRequest(http.MethodGet, "/audit-events?eventType=resource.created&eventType=resource.updated&result=success", nil)
+	rec := httptest.NewRecorder()
+	server.Router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+
+	var resp paginatedAuditResponse
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(resp.Items) != 1 {
+		t.Errorf("expected 1 item (resource.updated + success), got %d", len(resp.Items))
+	}
+	if len(resp.Items) > 0 && resp.Items[0].EventType != "resource.updated" {
+		t.Errorf("expected resource.updated, got %s", resp.Items[0].EventType)
+	}
+}
+
+func TestListAuditEvents_MultiSelectDeduplicates(t *testing.T) {
+	server := NewTestServer()
+
+	// Same eventType repeated should not produce duplicates
+	req := httptest.NewRequest(http.MethodGet, "/audit-events?eventType=resource.created&eventType=resource.created", nil)
+	rec := httptest.NewRecorder()
+	server.Router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+
+	var resp paginatedAuditResponse
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(resp.Items) != 1 {
+		t.Errorf("expected 1 item (deduped), got %d", len(resp.Items))
+	}
+}
