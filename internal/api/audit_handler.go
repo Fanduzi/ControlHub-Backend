@@ -52,8 +52,8 @@ func parseAuditListQuery(r *http.Request) model.AuditListQuery {
 	)
 	return model.AuditListQuery{
 		TargetResourceID: q.Get("targetResourceId"),
-		EventType:        q.Get("eventType"),
-		Result:           q.Get("result"),
+		EventTypes:       model.DedupStrings(q["eventType"]),
+		Results:          model.DedupStrings(q["result"]),
 		Page:             page,
 		PageSize:         pageSize,
 	}

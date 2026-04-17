@@ -9,6 +9,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"strings"
 
 	"github.com/fan/controlhub/internal/model"
 )
@@ -22,29 +23,44 @@ func NewAuditRepository(db *sql.DB) *AuditRepository {
 }
 
 func (r *AuditRepository) ListAuditEvents(ctx context.Context, q model.AuditListQuery) ([]model.AuditEvent, int, error) {
-	where := `where (? = '' or target_resource_id = ?)
-	  and (? = '' or event_type = ?)
-	  and (? = '' or result = ?)`
+	var conds []string
+	var args []any
 
-	filterArgs := []any{
-		q.TargetResourceID, q.TargetResourceID,
-		q.EventType, q.EventType,
-		q.Result, q.Result,
+	if q.TargetResourceID != "" {
+		conds = append(conds, "target_resource_id = ?")
+		args = append(args, q.TargetResourceID)
+	}
+	if len(q.EventTypes) > 0 {
+		ph := buildInClause(len(q.EventTypes))
+		conds = append(conds, "event_type in ("+ph+")")
+		for _, v := range q.EventTypes {
+			args = append(args, v)
+		}
+	}
+	if len(q.Results) > 0 {
+		ph := buildInClause(len(q.Results))
+		conds = append(conds, "result in ("+ph+")")
+		for _, v := range q.Results {
+			args = append(args, v)
+		}
 	}
 
-	// Count query
+	where := ""
+	if len(conds) > 0 {
+		where = "where " + strings.Join(conds, " and ")
+	}
+
 	var total int
 	countQuery := "select count(*) from audit_events " + where
-	if err := r.db.QueryRowContext(ctx, countQuery, filterArgs...).Scan(&total); err != nil {
+	if err := r.db.QueryRowContext(ctx, countQuery, args...).Scan(&total); err != nil {
 		return nil, 0, fmt.Errorf("count audit events: %w", err)
 	}
 
-	// Data query
 	offset := (q.Page - 1) * q.PageSize
 	dataQuery := `select id, actor_user_id, coalesce(target_resource_id, ''), event_type, result, created_at
 	from audit_events ` + where + ` order by created_at desc limit ? offset ?`
 
-	dataArgs := append(filterArgs, q.PageSize, offset)
+	dataArgs := append(args, q.PageSize, offset)
 	rows, err := r.db.QueryContext(ctx, dataQuery, dataArgs...)
 	if err != nil {
 		return nil, 0, err

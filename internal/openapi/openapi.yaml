@@ -65,23 +65,44 @@ paths:
         - in: query
           name: resourceType
           schema:
-            $ref: "#/components/schemas/ResourceType"
-          description: Filter by resource type
+            type: array
+            items:
+              $ref: "#/components/schemas/ResourceType"
+          style: form
+          explode: true
+          description: >-
+            Filter by resource type (repeated for OR: ?resourceType=host&resourceType=database_instance).
+            Across filter families = AND.
         - in: query
           name: environmentId
           schema:
-            type: string
-          description: Filter by environment ID
+            type: array
+            items:
+              type: string
+          style: form
+          explode: true
+          description: >-
+            Filter by environment ID (repeated for OR). Across filter families = AND.
         - in: query
           name: lifecycleStatus
           schema:
-            $ref: "#/components/schemas/LifecycleStatus"
-          description: Filter by lifecycle status
+            type: array
+            items:
+              $ref: "#/components/schemas/LifecycleStatus"
+          style: form
+          explode: true
+          description: >-
+            Filter by lifecycle status (repeated for OR). Across filter families = AND.
         - in: query
           name: healthStatus
           schema:
-            $ref: "#/components/schemas/HealthStatus"
-          description: Filter by health status
+            type: array
+            items:
+              $ref: "#/components/schemas/HealthStatus"
+          style: form
+          explode: true
+          description: >-
+            Filter by health status (repeated for OR). Across filter families = AND.
         - in: query
           name: q
           schema:
@@ -470,13 +491,24 @@ paths:
         - in: query
           name: eventType
           schema:
-            type: string
-          description: Filter by event type (e.g. resource.created, resource.updated)
+            type: array
+            items:
+              type: string
+          style: form
+          explode: true
+          description: >-
+            Filter by event type (repeated for OR: ?eventType=resource.created&eventType=resource.updated).
+            Across filter families = AND.
         - in: query
           name: result
           schema:
-            type: string
-          description: Filter by result (success, failure, partial)
+            type: array
+            items:
+              type: string
+          style: form
+          explode: true
+          description: >-
+            Filter by result (repeated for OR). Across filter families = AND.
         - in: query
           name: page
           schema:

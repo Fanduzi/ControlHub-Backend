@@ -151,7 +151,7 @@ func TestListResources_ExcludesArchived(t *testing.T) {
 
 	// Default list should not include r1.
 	items, _, err := repo.ListResources(ctx, model.ResourceListQuery{
-		ResourceType: string(model.ResourceTypeHost),
+		ResourceTypes: []string{string(model.ResourceTypeHost)},
 		Page:         1,
 		PageSize:     100,
 	})
@@ -189,7 +189,7 @@ func TestListResources_IncludeArchived(t *testing.T) {
 	_, _ = repo.ArchiveResource(ctx, r1.ID, "retired")
 
 	items, total, err := repo.ListResources(ctx, model.ResourceListQuery{
-		ResourceType:    string(model.ResourceTypeHost),
+		ResourceTypes:   []string{string(model.ResourceTypeHost)},
 		IncludeArchived: true,
 		Page:            1,
 		PageSize:        100,
@@ -373,7 +373,7 @@ func TestUnarchivedResource_ReappearsInDefaultList(t *testing.T) {
 
 	// Should NOT appear in default list.
 	items, _, _ := repo.ListResources(ctx, model.ResourceListQuery{
-		ResourceType: string(model.ResourceTypeHost),
+		ResourceTypes: []string{string(model.ResourceTypeHost)},
 		Page:         1,
 		PageSize:     100,
 	})
@@ -387,7 +387,7 @@ func TestUnarchivedResource_ReappearsInDefaultList(t *testing.T) {
 
 	// Should reappear after unarchive.
 	items2, _, err := repo.ListResources(ctx, model.ResourceListQuery{
-		ResourceType: string(model.ResourceTypeHost),
+		ResourceTypes: []string{string(model.ResourceTypeHost)},
 		Page:         1,
 		PageSize:     100,
 	})
@@ -445,7 +445,7 @@ func TestListResources_ArchivedOnly(t *testing.T) {
 	_, _ = repo.ArchiveResource(ctx, r1.ID, "cleanup")
 
 	items, _, err := repo.ListResources(ctx, model.ResourceListQuery{
-		ResourceType: string(model.ResourceTypeHost),
+		ResourceTypes: []string{string(model.ResourceTypeHost)},
 		ArchivedOnly: true,
 		Page:         1,
 		PageSize:     100,
@@ -509,7 +509,7 @@ func TestListResources_ArchivedOnlyTakesPrecedenceOverIncludeArchived(t *testing
 
 	// Both ArchivedOnly=true and IncludeArchived=true set — ArchivedOnly wins.
 	items, _, err := repo.ListResources(ctx, model.ResourceListQuery{
-		ResourceType:    string(model.ResourceTypeHost),
+		ResourceTypes:   []string{string(model.ResourceTypeHost)},
 		ArchivedOnly:    true,
 		IncludeArchived: true,
 		Page:            1,
