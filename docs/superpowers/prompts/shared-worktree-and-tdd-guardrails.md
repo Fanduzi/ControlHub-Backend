@@ -126,6 +126,28 @@ Do not report “done” without separating:
 
 If any layer was skipped, say so explicitly.
 
+## API Path Verification
+
+Do not state or assume API paths from memory, framework habit, or patterns from other projects.
+
+When a worker report mentions an endpoint path, base URL, proxy path, or live API verification target, the worker must first verify the current codebase truth from all relevant layers:
+
+- backend router path
+- OpenAPI path
+- frontend service or client call path
+- E2E proxy path, if one exists
+
+Use repository evidence such as `rg`, router files, service files, and OpenAPI files before writing claims like:
+
+- `/auth/login`
+- `/api/v1/auth/login`
+- `/api/...`
+- proxy-prefixed URLs
+
+Do not infer a versioned prefix such as `/api/v1` unless it is present in the current codebase.
+
+If the report includes an API path claim without code evidence, it does not meet the closeout standard.
+
 ## Closeout Gate
 
 Do not call stage-level work:
