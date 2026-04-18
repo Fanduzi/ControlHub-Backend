@@ -23,15 +23,16 @@ type PageInfo struct {
 // Repeated query parameters are collected into slices for multi-select filtering.
 // Within a filter family, values combine with logical OR. Across families, filters combine with AND.
 type ResourceListQuery struct {
-	ResourceTypes   []string // repeated ?resourceType= values
-	EnvironmentIDs  []string // repeated ?environmentId= values
-	LifecycleStatus []string // repeated ?lifecycleStatus= values
-	HealthStatuses  []string // repeated ?healthStatus= values
-	Query           string   // free-text search over name, display_name, external_id
-	IncludeArchived bool
-	ArchivedOnly    bool // when true, return only archived resources (takes precedence over IncludeArchived)
-	Page            int
-	PageSize        int
+	ResourceTypes    []string // repeated ?resourceType= values
+	ResourceSubtypes []string // repeated ?resourceSubtype= values
+	EnvironmentIDs   []string // repeated ?environmentId= values
+	LifecycleStatus  []string // repeated ?lifecycleStatus= values
+	HealthStatuses   []string // repeated ?healthStatus= values
+	Query            string   // free-text search over name, display_name, external_id
+	IncludeArchived  bool
+	ArchivedOnly     bool // when true, return only archived resources (takes precedence over IncludeArchived)
+	Page             int
+	PageSize         int
 }
 
 // AuditListQuery holds all query parameters for GET /audit-events.

@@ -12,6 +12,9 @@ import (
 	"github.com/fan/controlhub/internal/service"
 )
 
+// Subtypes present in seed data (migration 0004):
+//   mysql, clickhouse, postgresql, redis, vm, physical, api, nginx, haproxy, envoy
+
 // Seed reference IDs from migration 0002.
 const (
 	envProd    = "10000000-0000-0000-0000-000000000001"
@@ -200,5 +203,79 @@ func TestResourceRepository_MySQL1062MapsToConflict(t *testing.T) {
 	_, err = repo.CreateResource(ctx, input)
 	if !errors.Is(err, service.ErrResourceConflict) {
 		t.Fatalf("duplicate create err = %v (%T), want ErrResourceConflict", err, err)
+	}
+}
+
+func TestResourceRepository_FilterByResourceSubtype(t *testing.T) {
+	db := setupTestDB(t)
+	repo := mysql.NewResourceRepository(db)
+	ctx := context.Background()
+
+	items, total, err := repo.ListResources(ctx, model.ResourceListQuery{
+		ResourceSubtypes: []string{"mysql"},
+		EnvironmentIDs:  []string{envProd},
+		Page:            1,
+		PageSize:        100,
+	})
+	if err != nil {
+		t.Fatalf("list resources: %v", err)
+	}
+	if total == 0 {
+		t.Fatal("expected at least one mysql resource in prod seed data")
+	}
+	for _, item := range items {
+		if item.ResourceSubtype != "mysql" {
+			t.Errorf("got subtype %q, want mysql", item.ResourceSubtype)
+		}
+		if item.EnvironmentID != envProd {
+			t.Errorf("got env %q, want %s", item.EnvironmentID, envProd)
+		}
+	}
+}
+
+func TestResourceRepository_FilterByMultiResourceSubtype(t *testing.T) {
+	db := setupTestDB(t)
+	repo := mysql.NewResourceRepository(db)
+	ctx := context.Background()
+
+	items, total, err := repo.ListResources(ctx, model.ResourceListQuery{
+		ResourceSubtypes: []string{"mysql", "clickhouse"},
+		Page:             1,
+		PageSize:         100,
+	})
+	if err != nil {
+		t.Fatalf("list resources: %v", err)
+	}
+	if total == 0 {
+		t.Fatal("expected at least one mysql or clickhouse resource in seed data")
+	}
+	for _, item := range items {
+		if item.ResourceSubtype != "mysql" && item.ResourceSubtype != "clickhouse" {
+			t.Errorf("got subtype %q, want mysql or clickhouse", item.ResourceSubtype)
+		}
+	}
+}
+
+func TestResourceRepository_ResourceSubtypeWithResourceType(t *testing.T) {
+	db := setupTestDB(t)
+	repo := mysql.NewResourceRepository(db)
+	ctx := context.Background()
+
+	items, _, err := repo.ListResources(ctx, model.ResourceListQuery{
+		ResourceTypes:    []string{string(model.ResourceTypeDatabaseInstance)},
+		ResourceSubtypes: []string{"mysql"},
+		Page:             1,
+		PageSize:         100,
+	})
+	if err != nil {
+		t.Fatalf("list resources: %v", err)
+	}
+	for _, item := range items {
+		if item.ResourceType != model.ResourceTypeDatabaseInstance {
+			t.Errorf("got type %q, want database_instance", item.ResourceType)
+		}
+		if item.ResourceSubtype != "mysql" {
+			t.Errorf("got subtype %q, want mysql", item.ResourceSubtype)
+		}
 	}
 }

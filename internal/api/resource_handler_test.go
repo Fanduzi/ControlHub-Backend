@@ -1498,3 +1498,168 @@ func TestListResources_MultiSelectDeduplicates(t *testing.T) {
 		t.Errorf("expected 1 item (deduped database_instance), got %d", len(resp.Items))
 	}
 }
+
+// --- Phase 12.7: resourceSubtype filter tests ---
+
+func TestListResources_FilterByResourceSubtype(t *testing.T) {
+	server := NewTestServer()
+
+	// res-1 = mysql, res-2 = vm
+	req := httptest.NewRequest(http.MethodGet, "/resources?resourceSubtype=mysql", nil)
+	rec := httptest.NewRecorder()
+
+	server.Router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+
+	var resp paginatedResourceResponse
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(resp.Items) != 1 {
+		t.Fatalf("expected 1 mysql resource, got %d", len(resp.Items))
+	}
+	if resp.Items[0].ResourceSubtype != "mysql" {
+		t.Fatalf("expected resourceSubtype mysql, got %s", resp.Items[0].ResourceSubtype)
+	}
+}
+
+func TestListResources_MultiSelectResourceSubtype(t *testing.T) {
+	server := NewTestServer()
+
+	// res-1 = mysql, res-2 = vm — OR combination
+	req := httptest.NewRequest(http.MethodGet, "/resources?resourceSubtype=mysql&resourceSubtype=vm", nil)
+	rec := httptest.NewRecorder()
+
+	server.Router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+
+	var resp paginatedResourceResponse
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(resp.Items) != 2 {
+		t.Errorf("expected 2 items (mysql + vm), got %d", len(resp.Items))
+	}
+}
+
+func TestListResources_ResourceSubtypeDeduplicates(t *testing.T) {
+	server := NewTestServer()
+
+	req := httptest.NewRequest(http.MethodGet, "/resources?resourceSubtype=mysql&resourceSubtype=mysql&resourceSubtype=mysql", nil)
+	rec := httptest.NewRecorder()
+
+	server.Router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+
+	var resp paginatedResourceResponse
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(resp.Items) != 1 {
+		t.Errorf("expected 1 item (deduped mysql), got %d", len(resp.Items))
+	}
+}
+
+func TestListResources_ResourceSubtypeWithEnvironmentID(t *testing.T) {
+	server := NewTestServer()
+
+	// mysql + env-prod — AND combination
+	req := httptest.NewRequest(http.MethodGet, "/resources?resourceSubtype=mysql&environmentId=env-prod", nil)
+	rec := httptest.NewRecorder()
+
+	server.Router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+
+	var resp paginatedResourceResponse
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(resp.Items) != 1 {
+		t.Errorf("expected 1 item (mysql in env-prod), got %d", len(resp.Items))
+	}
+	if len(resp.Items) > 0 {
+		if resp.Items[0].ResourceSubtype != "mysql" {
+			t.Errorf("expected mysql, got %s", resp.Items[0].ResourceSubtype)
+		}
+		if resp.Items[0].EnvironmentID != "env-prod" {
+			t.Errorf("expected env-prod, got %s", resp.Items[0].EnvironmentID)
+		}
+	}
+}
+
+func TestListResources_ResourceSubtypeWithResourceType(t *testing.T) {
+	server := NewTestServer()
+
+	// subtype=mysql AND type=database_instance
+	req := httptest.NewRequest(http.MethodGet, "/resources?resourceSubtype=mysql&resourceType=database_instance", nil)
+	rec := httptest.NewRecorder()
+
+	server.Router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+
+	var resp paginatedResourceResponse
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(resp.Items) != 1 {
+		t.Errorf("expected 1 item (mysql database_instance), got %d", len(resp.Items))
+	}
+}
+
+func TestListResources_ResourceSubtypeWithSearch(t *testing.T) {
+	server := NewTestServer()
+
+	// q=mysql AND subtype=mysql
+	req := httptest.NewRequest(http.MethodGet, "/resources?q=mysql&resourceSubtype=mysql", nil)
+	rec := httptest.NewRecorder()
+
+	server.Router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+
+	var resp paginatedResourceResponse
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(resp.Items) != 1 {
+		t.Errorf("expected 1 item (name matches mysql AND subtype=mysql), got %d", len(resp.Items))
+	}
+}
+
+func TestListResources_ResourceSubtypeNoMatch(t *testing.T) {
+	server := NewTestServer()
+
+	req := httptest.NewRequest(http.MethodGet, "/resources?resourceSubtype=postgres", nil)
+	rec := httptest.NewRecorder()
+
+	server.Router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+
+	var resp paginatedResourceResponse
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(resp.Items) != 0 {
+		t.Errorf("expected 0 items for non-existent subtype, got %d", len(resp.Items))
+	}
+}

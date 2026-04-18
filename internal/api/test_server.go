@@ -64,6 +64,9 @@ func (f *fakeResourceRepo) ListResources(_ context.Context, q model.ResourceList
 		if len(q.HealthStatuses) > 0 && !containsString(q.HealthStatuses, item.HealthStatus) {
 			continue
 		}
+			if len(q.ResourceSubtypes) > 0 && !containsString(q.ResourceSubtypes, item.ResourceSubtype) {
+				continue
+			}
 		if q.Query != "" {
 			lq := strings.ToLower(q.Query)
 			if !strings.Contains(strings.ToLower(item.Name), lq) &&

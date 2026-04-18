@@ -104,6 +104,17 @@ paths:
           description: >-
             Filter by health status (repeated for OR). Across filter families = AND.
         - in: query
+          name: resourceSubtype
+          schema:
+            type: array
+            items:
+              type: string
+          style: form
+          explode: true
+          description: >-
+            Filter by resource subtype (repeated for OR: ?resourceSubtype=mysql&resourceSubtype=clickhouse).
+            Across filter families = AND.
+        - in: query
           name: q
           schema:
             type: string

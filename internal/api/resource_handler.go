@@ -136,6 +136,7 @@ func parseResourceListQuery(r *http.Request) model.ResourceListQuery {
 	)
 	return model.ResourceListQuery{
 		ResourceTypes:   model.DedupStrings(q["resourceType"]),
+		ResourceSubtypes: model.DedupStrings(q["resourceSubtype"]),
 		EnvironmentIDs:  model.DedupStrings(q["environmentId"]),
 		LifecycleStatus: model.DedupStrings(q["lifecycleStatus"]),
 		HealthStatuses:  model.DedupStrings(q["healthStatus"]),

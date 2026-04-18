@@ -64,6 +64,13 @@ func (r *ResourceRepository) ListResources(ctx context.Context, q model.Resource
 			args = append(args, v)
 		}
 	}
+	if len(q.ResourceSubtypes) > 0 {
+		ph := buildInClause(len(q.ResourceSubtypes))
+		conds = append(conds, "resource_subtype in ("+ph+")")
+		for _, v := range q.ResourceSubtypes {
+			args = append(args, v)
+		}
+	}
 	if q.Query != "" {
 		pattern := "%" + q.Query + "%"
 		conds = append(conds, "(name like ? or display_name like ? or external_id like ?)")
