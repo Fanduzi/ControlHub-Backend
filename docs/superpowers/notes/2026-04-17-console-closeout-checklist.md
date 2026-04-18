@@ -4,8 +4,8 @@ This checklist records the 11 console issues raised during live review and class
 
 Scope used for this checklist:
 
-- frontend main: `/Users/fan/JsProjects/ControlHub` at `74d24bf`
-- backend main: `/Users/fan/GolangProjects/ControlHub` at `f9c5bfe`
+- frontend main: `/Users/fan/JsProjects/ControlHub` at `18a9906`
+- backend main: `/Users/fan/GolangProjects/ControlHub` at `0d793bb`
 - included: already merged code on `main`
 - excluded: unmerged worktrees, prompt intent, worker claims without merged code evidence
 
@@ -57,11 +57,13 @@ Status meanings:
 
 ### 5. Database replication topology still has poor layout and edge-through-node problems
 
-- Status: `Partially resolved`
+- Status: `Resolved`
 - Current fact:
   - frontend main now consumes backend semantic topology fields and uses a semantic banded layout plus replication-depth columns
   - expanded topology inspection exists
-  - however, live Playwright verification still emits React Flow edge / handle warnings and NaN warnings on some topology pages, so the “no broken routing artifacts” goal is not fully closed
+  - React Flow handle warnings were fixed by removing mismatched explicit handle IDs from generated edges
+  - NaN geometry warnings were fixed with defensive topology position guards
+  - edge clearance was improved with wider spacing and differentiated backbone / non-backbone routing
 - Evidence:
   - semantic layer ordering + replication-depth columns: [topology-mapper.ts](/Users/fan/JsProjects/ControlHub/lib/topology-mapper.ts:11)
   - semantic node rendering + URL-synced expanded mode: [topology-panel.tsx](/Users/fan/JsProjects/ControlHub/components/blocks/topology-panel.tsx:62)
@@ -117,18 +119,20 @@ Status meanings:
 
 ### 10. Resources page still has filter and action problems
 
-- Status: `Partially resolved`
+- Status: `Resolved`
 - Current fact:
   - default page size is reduced to `15`
   - subtype filtering exists
   - lifecycle and health are now multi-select
+  - resource type and resource subtype are now multi-select
+  - multi-value filters use repeated URL params, for example `?resourceType=database_instance&resourceType=host`
   - create action duplication is gone; page header button was removed and table toolbar keeps the single create entry
-  - resource type, subtype, and archive filters are still single-select
+  - archive filter intentionally remains single-select because it is a mutually exclusive view-mode toggle, not an OR filter family
 - Evidence:
   - page header no longer renders create action: [resources/page.tsx](/Users/fan/JsProjects/ControlHub/app/(console)/resources/page.tsx:67)
   - table-local single create action: [resource-table.tsx](/Users/fan/JsProjects/ControlHub/components/resources/resource-table.tsx:261)
-  - lifecycle/health multi-select: [resource-table.tsx](/Users/fan/JsProjects/ControlHub/components/resources/resource-table.tsx:336)
-  - remaining single-select filters: [resource-table.tsx](/Users/fan/JsProjects/ControlHub/components/resources/resource-table.tsx:284)
+  - resource type / subtype / lifecycle / health multi-select filters: [resource-table.tsx](/Users/fan/JsProjects/ControlHub/components/resources/resource-table.tsx:284)
+  - repeated resource query params: [services/resources.ts](/Users/fan/JsProjects/ControlHub/services/resources.ts:39)
   - default page size: [list-page-search-params.ts](/Users/fan/JsProjects/ControlHub/lib/list-page-search-params.ts:7)
 
 ### 11. Audits page “recent changes” should not be a cramped side rail
@@ -148,25 +152,23 @@ Status meanings:
 - 2. Sidebar collapse
 - 3. Open full detail placement
 - 4. Chinese status localization in topology/status badges
+- 5. Replication topology layout and edge routing
 - 6. Semantic banded operator view for database topology
 - 7. Expanded/fullscreen topology analysis mode
 - 8. Databases page cleanup
 - 9. Environment URL readability
+- 10. Resources page filters and action cleanup
 - 11. Audits stacked layout
 
 ### Partially Resolved
 
-- 5. Replication topology layout and edge routing
-- 10. Resources page filters and action cleanup
+- none
 
 ### Unresolved
 - none from the original 11 remain fully unresolved on merged main
 
 ## What This Means For The Next Phase
 
-The remaining heavy work is concentrated in two areas:
-
-1. topology still needs a technical cleanup pass for React Flow warnings / residual routing artifacts on some live pages
-2. resources-page filtering still needs full multi-select parity across all remaining single-select families if product still wants that
+All 11 originally tracked console-review issues are now closed on merged main. Future work should be planned as new product phases rather than as leftovers from this checklist.
 
 This checklist should be used during future frontend closeout review instead of relying on memory or prompt prose.
