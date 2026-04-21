@@ -439,3 +439,167 @@ func nodeIDs(resp *model.TopologyResponse) map[string]bool {
 	}
 	return m
 }
+
+func TestDetectNodeProblems_HealthyRunning(t *testing.T) {
+	res := &model.Resource{HealthStatus: "healthy", LifecycleStatus: "running"}
+	problems := detectNodeProblems(res)
+	if len(problems) != 0 {
+		t.Fatalf("expected 0 problems for healthy/running, got %d", len(problems))
+	}
+}
+
+func TestDetectNodeProblems_CriticalHealth(t *testing.T) {
+	res := &model.Resource{HealthStatus: "critical", LifecycleStatus: "running"}
+	problems := detectNodeProblems(res)
+	if len(problems) != 1 {
+		t.Fatalf("expected 1 problem, got %d", len(problems))
+	}
+	if problems[0].Severity != "critical" || problems[0].Code != "health_critical" {
+		t.Errorf("problem = %+v, want critical/health_critical", problems[0])
+	}
+}
+
+func TestDetectNodeProblems_WarningHealth(t *testing.T) {
+	res := &model.Resource{HealthStatus: "warning", LifecycleStatus: "running"}
+	problems := detectNodeProblems(res)
+	if len(problems) != 1 {
+		t.Fatalf("expected 1 problem, got %d", len(problems))
+	}
+	if problems[0].Severity != "warning" || problems[0].Code != "health_warning" {
+		t.Errorf("problem = %+v, want warning/health_warning", problems[0])
+	}
+}
+
+func TestDetectNodeProblems_StoppedLifecycle(t *testing.T) {
+	res := &model.Resource{HealthStatus: "healthy", LifecycleStatus: "stopped"}
+	problems := detectNodeProblems(res)
+	if len(problems) != 1 {
+		t.Fatalf("expected 1 problem, got %d", len(problems))
+	}
+	if problems[0].Severity != "critical" || problems[0].Code != "lifecycle_stopped" {
+		t.Errorf("problem = %+v, want critical/lifecycle_stopped", problems[0])
+	}
+}
+
+func TestDetectNodeProblems_MultipleProblems(t *testing.T) {
+	res := &model.Resource{HealthStatus: "critical", LifecycleStatus: "stopped"}
+	problems := detectNodeProblems(res)
+	if len(problems) != 2 {
+		t.Fatalf("expected 2 problems, got %d", len(problems))
+	}
+	codes := map[string]bool{}
+	for _, p := range problems {
+		codes[p.Code] = true
+	}
+	if !codes["health_critical"] || !codes["lifecycle_stopped"] {
+		t.Errorf("expected health_critical + lifecycle_stopped, got %+v", problems)
+	}
+}
+
+func TestBuildProblemSummaries_FilterHealthy(t *testing.T) {
+	nodes := []model.TopologyNode{
+		{ID: "a", DisplayName: "A", HealthStatus: "healthy", LifecycleStatus: "running"},
+	}
+	summaries := buildProblemSummaries(nodes)
+	if len(summaries) != 0 {
+		t.Fatalf("expected 0 summaries for healthy node, got %d", len(summaries))
+	}
+}
+
+func TestBuildProblemSummaries_WorstSeverity(t *testing.T) {
+	nodes := []model.TopologyNode{
+		{
+			ID: "a", DisplayName: "A", ResourceType: model.ResourceTypeDatabaseInstance,
+			HealthStatus: "healthy", LifecycleStatus: "running",
+			Problems: []model.TopologyProblem{
+				{Severity: "warning", Code: "health_warning"},
+				{Severity: "critical", Code: "lifecycle_stopped"},
+			},
+		},
+	}
+	summaries := buildProblemSummaries(nodes)
+	if len(summaries) != 1 {
+		t.Fatalf("expected 1 summary, got %d", len(summaries))
+	}
+	if summaries[0].Severity != "critical" {
+		t.Errorf("severity = %q, want critical", summaries[0].Severity)
+	}
+}
+
+func TestBuildTopology_ProfileEnrichment(t *testing.T) {
+	repo := &fakeTopologyRepo{
+		resources: map[string]model.Resource{
+			"inst-1": {
+				ID: "inst-1", ResourceType: model.ResourceTypeDatabaseInstance,
+				ResourceSubtype: "mysql", Name: "mysql-1", DisplayName: "MySQL 1",
+				HealthStatus: "healthy", LifecycleStatus: "running",
+				ProfileSummary: &model.ProfileSummary{
+					Hostname: "db-host-01.internal",
+					IP:       "10.0.10.20",
+					Port:     3306,
+				},
+			},
+		},
+		relations: []model.ResourceRelation{},
+	}
+	svc := NewTopologyService(repo)
+
+	resp, err := svc.BuildTopology(model.TopologyQuery{
+		RootID: "inst-1", Depth: 1, Direction: model.TopologyDirectionBoth,
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(resp.Nodes) != 1 {
+		t.Fatalf("nodes = %d, want 1", len(resp.Nodes))
+	}
+	n := resp.Nodes[0]
+	if n.Hostname != "db-host-01.internal" {
+		t.Errorf("hostname = %q, want db-host-01.internal", n.Hostname)
+	}
+	if n.IP != "10.0.10.20" {
+		t.Errorf("ip = %q, want 10.0.10.20", n.IP)
+	}
+	if n.Port != 3306 {
+		t.Errorf("port = %d, want 3306", n.Port)
+	}
+}
+
+func TestBuildTopology_ProblemSummary(t *testing.T) {
+	repo := &fakeTopologyRepo{
+		resources: map[string]model.Resource{
+			"inst-ok": {
+				ID: "inst-ok", ResourceType: model.ResourceTypeDatabaseInstance,
+				ResourceSubtype: "mysql", Name: "ok", DisplayName: "OK Instance",
+				HealthStatus: "healthy", LifecycleStatus: "running",
+			},
+			"inst-bad": {
+				ID: "inst-bad", ResourceType: model.ResourceTypeDatabaseInstance,
+				ResourceSubtype: "mysql", Name: "bad", DisplayName: "Bad Instance",
+				HealthStatus: "critical", LifecycleStatus: "stopped",
+			},
+		},
+		relations: []model.ResourceRelation{},
+	}
+	svc := NewTopologyService(repo)
+
+	resp, err := svc.BuildTopology(model.TopologyQuery{
+		RootID: "inst-bad", Depth: 1, Direction: model.TopologyDirectionBoth,
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(resp.Problems) != 1 {
+		t.Fatalf("problems = %d, want 1", len(resp.Problems))
+	}
+	p := resp.Problems[0]
+	if p.ResourceID != "inst-bad" {
+		t.Errorf("resourceId = %q, want inst-bad", p.ResourceID)
+	}
+	if p.Severity != "critical" {
+		t.Errorf("severity = %q, want critical", p.Severity)
+	}
+	if len(p.Problems) != 2 {
+		t.Errorf("problem count = %d, want 2", len(p.Problems))
+	}
+}
