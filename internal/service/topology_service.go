@@ -411,6 +411,7 @@ func buildTopologyNodes(
 			}
 
 			node.Problems = detectNodeProblems(res)
+			node.Labels = res.Labels
 
 		// Attach group key for database instances
 		if gk, ok := clusterGroupKeys[id]; ok {

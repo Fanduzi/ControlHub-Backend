@@ -91,6 +91,7 @@ type TopologyNode struct {
 	IP                  string           `json:"ip,omitempty"`
 	Port                int              `json:"port,omitempty"`
 	Problems            []TopologyProblem `json:"problems,omitempty"`
+	Labels              map[string]string `json:"labels,omitempty"`
 }
 
 type TopologyEdge struct {
