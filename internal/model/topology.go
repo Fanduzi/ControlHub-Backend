@@ -85,8 +85,12 @@ type TopologyNode struct {
 	GroupKey            string        `json:"groupKey,omitempty"`
 	VisualImportance    int           `json:"visualImportance"`
 	IsDatabaseTopology  bool          `json:"isDatabaseTopology"`
-	ReplicationDepth    int           `json:"replicationDepth,omitempty"`
-	ReplicationParentID string        `json:"replicationParentId,omitempty"`
+	ReplicationDepth    int              `json:"replicationDepth,omitempty"`
+	ReplicationParentID string           `json:"replicationParentId,omitempty"`
+	Hostname            string           `json:"hostname,omitempty"`
+	IP                  string           `json:"ip,omitempty"`
+	Port                int              `json:"port,omitempty"`
+	Problems            []TopologyProblem `json:"problems,omitempty"`
 }
 
 type TopologyEdge struct {
@@ -112,4 +116,19 @@ type TopologyResponse struct {
 	Edges              []TopologyEdge    `json:"edges"`
 	Groups             []TopologyGroup   `json:"groups"`
 	IsDatabaseTopology bool              `json:"isDatabaseTopology"`
+	Problems           []TopologyProblemSummary `json:"problems,omitempty"`
+}
+
+type TopologyProblem struct {
+	Severity string `json:"severity"`
+	Message  string `json:"message"`
+	Code     string `json:"code"`
+}
+
+type TopologyProblemSummary struct {
+	ResourceID   string            `json:"resourceId"`
+	ResourceName string            `json:"resourceName"`
+	ResourceType string            `json:"resourceType"`
+	Severity     string            `json:"severity"`
+	Problems     []TopologyProblem `json:"problems"`
 }
