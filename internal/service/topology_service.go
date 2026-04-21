@@ -117,6 +117,7 @@ func (s *TopologyService) BuildTopology(query model.TopologyQuery) (*model.Topol
 	nodes := buildTopologyNodes(nodeSet, distance, edgeSet, root.ID, isDB, replicationInfo, clusterGroupKeys)
 	edges := buildTopologyEdges(edgeSet, nodeSet)
 	groups := buildTopologyGroups(nodeSet)
+	problems := buildProblemSummaries(nodes)
 
 	return &model.TopologyResponse{
 		RootResourceID:     root.ID,
@@ -126,6 +127,7 @@ func (s *TopologyService) BuildTopology(query model.TopologyQuery) (*model.Topol
 		Edges:              edges,
 		Groups:             groups,
 		IsDatabaseTopology: isDB,
+		Problems:           problems,
 	}, nil
 }
 
@@ -402,6 +404,14 @@ func buildTopologyNodes(
 			IsDatabaseTopology: isDatabaseTopology,
 		}
 
+			if res.ProfileSummary != nil {
+				node.Hostname = res.ProfileSummary.Hostname
+				node.IP = res.ProfileSummary.IP
+				node.Port = res.ProfileSummary.Port
+			}
+
+			node.Problems = detectNodeProblems(res)
+
 		// Attach group key for database instances
 		if gk, ok := clusterGroupKeys[id]; ok {
 			node.GroupKey = gk
@@ -496,4 +506,65 @@ func resourceTypeLabel(rt model.ResourceType) string {
 		}
 	}
 	return string(rt)
+}
+
+func detectNodeProblems(res *model.Resource) []model.TopologyProblem {
+	var problems []model.TopologyProblem
+
+	switch model.HealthStatus(res.HealthStatus) {
+	case model.HealthStatusCritical:
+		problems = append(problems, model.TopologyProblem{
+			Severity: "critical", Code: "health_critical",
+			Message: "Resource health is critical",
+		})
+	case model.HealthStatusWarning:
+		problems = append(problems, model.TopologyProblem{
+			Severity: "warning", Code: "health_warning",
+			Message: "Resource health is degraded",
+		})
+	}
+
+	switch model.LifecycleStatus(res.LifecycleStatus) {
+	case model.LifecycleStatusStopped:
+		problems = append(problems, model.TopologyProblem{
+			Severity: "critical", Code: "lifecycle_stopped",
+			Message: "Resource is stopped",
+		})
+	case model.LifecycleStatusProvisioning:
+		problems = append(problems, model.TopologyProblem{
+			Severity: "warning", Code: "lifecycle_provisioning",
+			Message: "Resource is provisioning",
+		})
+	case model.LifecycleStatusDecommissioning:
+		problems = append(problems, model.TopologyProblem{
+			Severity: "warning", Code: "lifecycle_decommissioning",
+			Message: "Resource is being decommissioned",
+		})
+	}
+
+	return problems
+}
+
+func buildProblemSummaries(nodes []model.TopologyNode) []model.TopologyProblemSummary {
+	var summaries []model.TopologyProblemSummary
+	for _, n := range nodes {
+		if len(n.Problems) == 0 {
+			continue
+		}
+		worstSeverity := "warning"
+		for _, p := range n.Problems {
+			if p.Severity == "critical" {
+				worstSeverity = "critical"
+				break
+			}
+		}
+		summaries = append(summaries, model.TopologyProblemSummary{
+			ResourceID:   n.ID,
+			ResourceName: n.DisplayName,
+			ResourceType: string(n.ResourceType),
+			Severity:     worstSeverity,
+			Problems:     n.Problems,
+		})
+	}
+	return summaries
 }
