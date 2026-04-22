@@ -259,6 +259,61 @@ func (r *ResourceRepository) fetchHostProfile(ctx context.Context, id string) (m
 	}, nil
 }
 
+func (r *ResourceRepository) UpsertHostProfile(ctx context.Context, resourceID string, hostname, ipAddress, osName string) error {
+	_, err := r.db.ExecContext(ctx,
+		`INSERT INTO resource_profiles_host (resource_id, hostname, ip_address, os_name)
+		 VALUES (?, ?, ?, ?)
+		 ON DUPLICATE KEY UPDATE hostname = VALUES(hostname), ip_address = VALUES(ip_address), os_name = VALUES(os_name)`,
+		resourceID, hostname, ipAddress, osName,
+	)
+	return err
+}
+
+func (r *ResourceRepository) UpsertDatabaseInstanceProfile(ctx context.Context, resourceID string, engine, version, host string, port int, role string) error {
+	_, err := r.db.ExecContext(ctx,
+		`INSERT INTO resource_profiles_database_instance (resource_id, engine, version, host, port, role)
+		 VALUES (?, ?, ?, ?, ?, ?)
+		 ON DUPLICATE KEY UPDATE engine = VALUES(engine), version = VALUES(version), host = VALUES(host), port = VALUES(port), role = VALUES(role)`,
+		resourceID, engine, version, host, port, role,
+	)
+	return err
+}
+
+func (r *ResourceRepository) UpsertDatabaseClusterProfile(ctx context.Context, resourceID string, engine, topologyMode, primaryEndpoint string) error {
+	_, err := r.db.ExecContext(ctx,
+		`INSERT INTO resource_profiles_database_cluster (resource_id, engine, topology_mode, primary_endpoint)
+		 VALUES (?, ?, ?, ?)
+		 ON DUPLICATE KEY UPDATE engine = VALUES(engine), topology_mode = VALUES(topology_mode), primary_endpoint = VALUES(primary_endpoint)`,
+		resourceID, engine, topologyMode, primaryEndpoint,
+	)
+	return err
+}
+
+func (r *ResourceRepository) UpsertServiceProfile(ctx context.Context, resourceID string, systemName, repositoryUrl, runtimeEnv string) error {
+	_, err := r.db.ExecContext(ctx,
+		`INSERT INTO resource_profiles_service (resource_id, system_name, repository_url, runtime_env)
+		 VALUES (?, ?, ?, ?)
+		 ON DUPLICATE KEY UPDATE system_name = VALUES(system_name), repository_url = VALUES(repository_url), runtime_env = VALUES(runtime_env)`,
+		resourceID, systemName, repositoryUrl, runtimeEnv,
+	)
+	return err
+}
+
+func (r *ResourceRepository) DeleteProfile(ctx context.Context, resourceID, resourceType string) error {
+	tableMap := map[string]string{
+		"host":              "resource_profiles_host",
+		"database_instance": "resource_profiles_database_instance",
+		"database_cluster":  "resource_profiles_database_cluster",
+		"service":           "resource_profiles_service",
+	}
+	table, ok := tableMap[resourceType]
+	if !ok {
+		return nil
+	}
+	_, err := r.db.ExecContext(ctx, "DELETE FROM "+table+" WHERE resource_id = ?", resourceID)
+	return err
+}
+
 func (r *ResourceRepository) CreateResource(ctx context.Context, input model.ResourceCreateInput) (*model.Resource, error) {
 	labelsJSON, err := json.Marshal(input.Labels)
 	if err != nil {

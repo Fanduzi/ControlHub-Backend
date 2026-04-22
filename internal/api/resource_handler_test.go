@@ -643,6 +643,28 @@ func TestListResources_SearchQueryNoMatch(t *testing.T) {
 	}
 }
 
+func TestListResources_SearchQueryMatchesLabels(t *testing.T) {
+	server := NewTestServer()
+	req := httptest.NewRequest(http.MethodGet, "/resources?q=platform", nil)
+	rec := httptest.NewRecorder()
+
+	server.Router.ServeHTTP(rec, req)
+
+	var resp paginatedResourceResponse
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+
+	if len(resp.Items) == 0 {
+		t.Fatal("expected at least 1 result matching label value 'platform'")
+	}
+	for _, item := range resp.Items {
+		if item.Labels["team"] != "platform" && !strings.Contains(item.Name, "platform") && !strings.Contains(item.DisplayName, "platform") && !strings.Contains(item.ExternalID, "platform") {
+			t.Fatalf("result %s does not match 'platform' in name, display_name, external_id, or labels", item.Name)
+		}
+	}
+}
+
 func TestListResources_ResponseBackwardCompat(t *testing.T) {
 	server := NewTestServer()
 	req := httptest.NewRequest(http.MethodGet, "/resources", nil)

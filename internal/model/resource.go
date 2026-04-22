@@ -31,11 +31,20 @@ type Resource struct {
 	Source          string            `json:"source"`
 	ExternalID      string            `json:"externalId"`
 	Labels          map[string]string `json:"labels"`
+	ProfileSummary  *ProfileSummary   `json:"profileSummary,omitempty"`
 	CreatedAt       time.Time         `json:"createdAt"`
 	UpdatedAt       time.Time         `json:"updatedAt"`
 	ArchivedAt      *time.Time        `json:"archivedAt,omitempty"`
 	ArchivedBy      *string           `json:"archivedBy,omitempty"`
 	ArchiveReason   *string           `json:"archiveReason,omitempty"`
+}
+
+type ProfileSummary struct {
+	Hostname  string `json:"hostname,omitempty"`
+	IP        string `json:"ip,omitempty"`
+	Port      int    `json:"port,omitempty"`
+	NodeCount int    `json:"nodeCount,omitempty"`
+	Engine    string `json:"engine,omitempty"`
 }
 
 // IsArchived returns true if the resource has been archived.
