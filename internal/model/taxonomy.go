@@ -75,6 +75,49 @@ var resourceTypeDictionaryItems = []DictionaryItem{
 	{Key: string(ResourceTypeControlPlaneComponent), Label: "Control Plane Component", Description: "Control or HA management component such as orchestrators or schedulers."},
 }
 
+// resourceSubtypeMap defines valid subtypes per resource type.
+// Types not present have no subtypes (subtype field is ignored).
+var resourceSubtypeMap = map[string][]DictionaryItem{
+	string(ResourceTypeDatabaseInstance): {
+		{Key: "mysql", Label: "MySQL"},
+		{Key: "postgresql", Label: "PostgreSQL"},
+		{Key: "redis", Label: "Redis"},
+		{Key: "clickhouse", Label: "ClickHouse"},
+		{Key: "mongodb", Label: "MongoDB"},
+		{Key: "tidb", Label: "TiDB"},
+	},
+	string(ResourceTypeDatabaseCluster): {
+		{Key: "mysql", Label: "MySQL"},
+		{Key: "postgresql", Label: "PostgreSQL"},
+		{Key: "redis", Label: "Redis"},
+		{Key: "clickhouse", Label: "ClickHouse"},
+		{Key: "mongodb", Label: "MongoDB"},
+		{Key: "tidb", Label: "TiDB"},
+	},
+	string(ResourceTypeDatabaseProxy): {
+		{Key: "proxysql", Label: "ProxySQL"},
+		{Key: "chproxy", Label: "CHProxy"},
+		{Key: "haproxy", Label: "HAProxy"},
+		{Key: "maxscale", Label: "MaxScale"},
+	},
+	string(ResourceTypeHost): {
+		{Key: "vm", Label: "Virtual Machine"},
+		{Key: "physical", Label: "Physical Server"},
+		{Key: "container", Label: "Container"},
+	},
+	string(ResourceTypeService): {
+		{Key: "api", Label: "API Service"},
+		{Key: "web", Label: "Web Application"},
+		{Key: "job", Label: "Batch Job"},
+		{Key: "cron", Label: "Cron Job"},
+	},
+	string(ResourceTypeControlPlaneComponent): {
+		{Key: "orchestrator", Label: "Orchestrator"},
+		{Key: "ha_monitor", Label: "HA Monitor"},
+		{Key: "backup_manager", Label: "Backup Manager"},
+	},
+}
+
 var relationTypeDictionaryItems = []DictionaryItem{
 	{Key: string(RelationTypeDependsOn), Label: "Depends On", Description: "The source resource functionally depends on the target resource."},
 	{Key: string(RelationTypeMemberOf), Label: "Member Of", Description: "The source resource belongs to the target logical grouping."},
@@ -95,6 +138,33 @@ func HealthStatusDictionary() []DictionaryItem {
 
 func ResourceTypeDictionary() []DictionaryItem {
 	return cloneDictionaryItems(resourceTypeDictionaryItems)
+}
+
+// ResourceSubtypeDictionary returns the valid subtypes for a given resource type.
+func ResourceSubtypeDictionary(resourceType string) []DictionaryItem {
+	items, ok := resourceSubtypeMap[resourceType]
+	if !ok {
+		return nil
+	}
+	return cloneDictionaryItems(items)
+}
+
+// ValidateResourceSubtype validates that subtype is valid for the given resource type.
+// If the resource type has no subtypes defined, any subtype is silently accepted (ignored).
+func ValidateResourceSubtype(resourceType, subtype string) error {
+	items, ok := resourceSubtypeMap[resourceType]
+	if !ok {
+		return nil // no subtypes defined for this type — ignore
+	}
+	if subtype == "" {
+		return fmt.Errorf("resourceSubtype is required for %s", resourceType)
+	}
+	for _, item := range items {
+		if item.Key == subtype {
+			return nil
+		}
+	}
+	return fmt.Errorf("invalid resourceSubtype %q for type %s", subtype, resourceType)
 }
 
 func RelationTypeDictionary() []DictionaryItem {
