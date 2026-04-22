@@ -27,13 +27,14 @@ type Dependencies struct {
 	LifecycleStatusService *service.LifecycleStatusService
 	HealthStatusService    *service.HealthStatusService
 	ResourceSubtypeService *service.ResourceSubtypeService
+	ProfileService         *service.ProfileService
 }
 
 func corsLocalDev(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Header.Get("Origin") == "http://localhost:3000" {
 			w.Header().Set("Access-Control-Allow-Origin", "http://localhost:3000")
-			w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PATCH, DELETE, OPTIONS")
+			w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS")
 			w.Header().Set("Access-Control-Allow-Headers", "Authorization, Content-Type")
 		}
 		if r.Method == http.MethodOptions {
@@ -55,6 +56,9 @@ func NewRouter(deps Dependencies) *chi.Mux {
 	router.Post("/resources/{id}/archive", handleArchiveResource(deps.ResourceService))
 	router.Post("/resources/{id}/unarchive", handleUnarchiveResource(deps.ResourceService))
 	router.Get("/resources/{id}/profile", handleGetResourceProfile(deps.ResourceService))
+	router.Put("/resources/{id}/profile", handlePutResourceProfile(deps.ProfileService))
+	router.Patch("/resources/{id}/profile", handlePatchResourceProfile(deps.ProfileService))
+	router.Delete("/resources/{id}/profile", handleDeleteResourceProfile(deps.ProfileService))
 	router.Get("/resources/{id}/relations", handleListResourceRelations(deps.RelationService))
 	router.Get("/resources/{id}/topology", handleGetTopology(deps.TopologyService))
 	router.Post("/resources/{id}/relations", handleCreateResourceRelation(deps.RelationService))

@@ -34,20 +34,23 @@ func main() {
 	dictRepo := mysql.NewDictionaryRepository(db)
 	relationRepo := mysql.NewRelationRepository(db)
 
+	resourceRepo := mysql.NewResourceRepository(db)
+
 	deps := api.Dependencies{
-		ResourceService:     service.NewResourceService(mysql.NewResourceRepository(db)),
-		RelationService:     service.NewRelationService(relationRepo),
-		TopologyService:     service.NewTopologyService(relationRepo),
-		AuditService:        service.NewAuditService(mysql.NewAuditRepository(db)),
-		AuthService:         service.NewAuthService(mysql.NewUserRepository(db), cfg.JWTSecret),
-		EnvironmentService:  service.NewEnvironmentService(dictRepo),
-		OwnerService:        service.NewOwnerService(dictRepo),
-		RoleService:         service.NewRoleService(dictRepo),
+		ResourceService:         service.NewResourceService(resourceRepo),
+		RelationService:         service.NewRelationService(relationRepo),
+		TopologyService:         service.NewTopologyService(relationRepo),
+		AuditService:            service.NewAuditService(mysql.NewAuditRepository(db)),
+		AuthService:             service.NewAuthService(mysql.NewUserRepository(db), cfg.JWTSecret),
+		EnvironmentService:      service.NewEnvironmentService(dictRepo),
+		OwnerService:            service.NewOwnerService(dictRepo),
+		RoleService:             service.NewRoleService(dictRepo),
 		ResourceTypeService:     service.NewResourceTypeService(dictRepo),
 		RelationTypeService:     service.NewRelationTypeService(dictRepo),
 		LifecycleStatusService:  service.NewLifecycleStatusService(dictRepo),
 		HealthStatusService:     service.NewHealthStatusService(dictRepo),
 		ResourceSubtypeService:  service.NewResourceSubtypeService(),
+		ProfileService:          service.NewProfileService(resourceRepo, resourceRepo),
 	}
 
 	log.Printf("ControlHub starting on %s", cfg.HTTPAddress())

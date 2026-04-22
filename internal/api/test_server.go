@@ -691,6 +691,24 @@ func (fakeHealthStatusRepo) ListHealthStatuses() ([]model.DictionaryItem, error)
 	return model.HealthStatusDictionary(), nil
 }
 
+type fakeProfileRepo struct{}
+
+func (fakeProfileRepo) UpsertHostProfile(_ context.Context, _ string, _, _, _ string) error {
+	return nil
+}
+func (fakeProfileRepo) UpsertDatabaseInstanceProfile(_ context.Context, _ string, _, _, _ string, _ int, _ string) error {
+	return nil
+}
+func (fakeProfileRepo) UpsertDatabaseClusterProfile(_ context.Context, _ string, _, _, _ string) error {
+	return nil
+}
+func (fakeProfileRepo) UpsertServiceProfile(_ context.Context, _ string, _, _, _ string) error {
+	return nil
+}
+func (fakeProfileRepo) DeleteProfile(_ context.Context, _, _ string) error {
+	return nil
+}
+
 func cloneResource(resource model.Resource) model.Resource {
 	resource.Labels = cloneLabels(resource.Labels)
 	return resource
