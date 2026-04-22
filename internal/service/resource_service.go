@@ -215,35 +215,50 @@ func (s *ResourceService) Unarchive(ctx context.Context, id string) (*model.Reso
 }
 
 func validateResourceCreateInput(input model.ResourceCreateInput) error {
+	var ve *ValidationError
+
 	if err := input.ResourceType.Validate(); err != nil {
-		return wrapValidation("resourceType is not supported")
+		if ve == nil { ve = newValidationError("validation failed") }
+		ve.WithField("resourceType", "Resource type is not supported")
 	}
 	if input.Name == "" {
-		return wrapValidation("name is required")
-	}
-	if !resourceNamePattern.MatchString(input.Name) {
-		return wrapValidation("name must be operations-friendly")
+		if ve == nil { ve = newValidationError("validation failed") }
+		ve.WithField("name", "Name is required")
+	} else if !resourceNamePattern.MatchString(input.Name) {
+		if ve == nil { ve = newValidationError("validation failed") }
+		ve.WithField("name", "Must match pattern: lowercase letters, numbers, dots, hyphens, underscores")
 	}
 	if input.DisplayName == "" {
-		return wrapValidation("displayName is required")
+		if ve == nil { ve = newValidationError("validation failed") }
+		ve.WithField("displayName", "Display name is required")
 	}
 	if input.EnvironmentID == "" {
-		return wrapValidation("environmentId is required")
+		if ve == nil { ve = newValidationError("validation failed") }
+		ve.WithField("environmentId", "Environment is required")
 	}
 	if input.OwnerID == "" {
-		return wrapValidation("ownerId is required")
+		if ve == nil { ve = newValidationError("validation failed") }
+		ve.WithField("ownerId", "Owner is required")
 	}
 	if err := input.LifecycleStatus.Validate(); err != nil {
-		return wrapValidation("lifecycleStatus is not supported")
+		if ve == nil { ve = newValidationError("validation failed") }
+		ve.WithField("lifecycleStatus", "Lifecycle status is not supported")
 	}
 	if err := input.HealthStatus.Validate(); err != nil {
-		return wrapValidation("healthStatus is not supported")
+		if ve == nil { ve = newValidationError("validation failed") }
+		ve.WithField("healthStatus", "Health status is not supported")
 	}
 	if input.Source != "manual" {
-		return wrapValidation("source must be manual")
+		if ve == nil { ve = newValidationError("validation failed") }
+		ve.WithField("source", "Source must be manual")
 	}
 	if err := model.ValidateResourceSubtype(string(input.ResourceType), input.ResourceSubtype); err != nil {
-		return wrapValidation(err.Error())
+		if ve == nil { ve = newValidationError("validation failed") }
+		ve.WithField("resourceSubtype", err.Error())
+	}
+
+	if ve != nil {
+		return ve
 	}
 	return nil
 }
@@ -279,6 +294,29 @@ func normalizeResourceCreateInput(input model.ResourceCreateInput) model.Resourc
 		input.Labels = map[string]string{}
 	}
 	return input
+}
+
+// ValidationError carries field-level validation details.
+type ValidationError struct {
+	Message string
+	Fields  map[string]string
+}
+
+func (e *ValidationError) Error() string {
+	return fmt.Sprintf("%s: %s", ErrValidationFailed, e.Message)
+}
+
+func (e *ValidationError) Unwrap() error {
+	return ErrValidationFailed
+}
+
+func newValidationError(msg string) *ValidationError {
+	return &ValidationError{Message: msg, Fields: map[string]string{}}
+}
+
+func (e *ValidationError) WithField(field, msg string) *ValidationError {
+	e.Fields[field] = msg
+	return e
 }
 
 func wrapValidation(message string) error {

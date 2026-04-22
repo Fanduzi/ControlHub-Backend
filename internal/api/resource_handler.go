@@ -183,6 +183,14 @@ func writeJSONError(w http.ResponseWriter, status int, code, message string) {
 
 func writeServiceError(w http.ResponseWriter, err error) {
 	switch {
+	case errors.As(err, new(*service.ValidationError)):
+		var ve *service.ValidationError
+		errors.As(err, &ve)
+		writeJSON(w, http.StatusBadRequest, map[string]any{
+			"error":   "validation_failed",
+			"message": ve.Message,
+			"details": ve.Fields,
+		})
 	case errors.Is(err, service.ErrValidationFailed):
 		writeJSONError(w, http.StatusBadRequest, "validation_failed", err.Error())
 	case errors.Is(err, service.ErrEnvironmentNotFound):
