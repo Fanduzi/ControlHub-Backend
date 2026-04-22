@@ -38,11 +38,16 @@ type ResourceRepository interface {
 }
 
 type ResourceService struct {
-	repo ResourceRepository
+	repo       ResourceRepository
+	profileSvc *ProfileService
 }
 
-func NewResourceService(repo ResourceRepository) *ResourceService {
-	return &ResourceService{repo: repo}
+func NewResourceService(repo ResourceRepository, profileSvc ...*ProfileService) *ResourceService {
+	var ps *ProfileService
+	if len(profileSvc) > 0 {
+		ps = profileSvc[0]
+	}
+	return &ResourceService{repo: repo, profileSvc: ps}
 }
 
 func (s *ResourceService) List(ctx context.Context, q model.ResourceListQuery) ([]model.Resource, *model.PageInfo, error) {
@@ -89,6 +94,9 @@ func (s *ResourceService) Create(ctx context.Context, input model.ResourceCreate
 	if err != nil {
 		return nil, err
 	}
+	if len(input.Profile) > 0 && s.profileSvc != nil {
+		_ = s.profileSvc.PutProfile(ctx, created.ID, input.Profile)
+	}
 	return created, nil
 }
 
@@ -108,6 +116,19 @@ func (s *ResourceService) Update(ctx context.Context, id string, patch model.Res
 	}
 	if !patch.HasMutableFields() {
 		return nil, wrapValidation("at least one mutable field is required")
+	}
+	if patch.Name != nil {
+		if *patch.Name == "" {
+			return nil, wrapValidation("name is required")
+		}
+		if !resourceNamePattern.MatchString(*patch.Name) {
+			return nil, wrapValidation("name must be operations-friendly")
+		}
+	}
+	if patch.ResourceSubtype != nil {
+		if err := model.ValidateResourceSubtype(string(existing.ResourceType), *patch.ResourceSubtype); err != nil {
+			return nil, wrapValidation(err.Error())
+		}
 	}
 	if patch.DisplayName != nil && *patch.DisplayName == "" {
 		return nil, wrapValidation("displayName is required")
@@ -220,6 +241,9 @@ func validateResourceCreateInput(input model.ResourceCreateInput) error {
 	}
 	if input.Source != "manual" {
 		return wrapValidation("source must be manual")
+	}
+	if err := model.ValidateResourceSubtype(string(input.ResourceType), input.ResourceSubtype); err != nil {
+		return wrapValidation(err.Error())
 	}
 	return nil
 }

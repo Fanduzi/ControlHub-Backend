@@ -243,6 +243,7 @@ func TestResourceServiceCreateRejectsMissingEnvironment(t *testing.T) {
 
 	_, err := svc.Create(context.Background(), model.ResourceCreateInput{
 		ResourceType:    model.ResourceTypeDatabaseInstance,
+		ResourceSubtype: "mysql",
 		Name:            "missing-env",
 		DisplayName:     "Missing Env",
 		EnvironmentID:   "missing-env",
@@ -262,6 +263,7 @@ func TestResourceServiceCreateRejectsMissingOwner(t *testing.T) {
 
 	_, err := svc.Create(context.Background(), model.ResourceCreateInput{
 		ResourceType:    model.ResourceTypeDatabaseInstance,
+		ResourceSubtype: "mysql",
 		Name:            "missing-owner",
 		DisplayName:     "Missing Owner",
 		EnvironmentID:   "10000000-0000-0000-0000-000000000001",
@@ -282,6 +284,7 @@ func TestResourceServiceCreateRejectsDuplicateNameWithinEnvironment(t *testing.T
 
 	_, err := svc.Create(context.Background(), model.ResourceCreateInput{
 		ResourceType:    model.ResourceTypeDatabaseInstance,
+		ResourceSubtype: "mysql",
 		Name:            "order-mysql-prod",
 		DisplayName:     "Duplicate",
 		EnvironmentID:   "10000000-0000-0000-0000-000000000001",
@@ -308,9 +311,9 @@ func TestResourceServiceUpdateRejectsImmutableFields(t *testing.T) {
 		Labels:        map[string]string{},
 	}}}
 	svc := NewResourceService(repo)
-	name := "new-name"
+	rt := model.ResourceTypeHost
 
-	_, err := svc.Update(context.Background(), "res-1", model.ResourcePatchRequest{Name: &name})
+	_, err := svc.Update(context.Background(), "res-1", model.ResourcePatchRequest{ResourceType: &rt})
 	if !errors.Is(err, ErrValidationFailed) {
 		t.Fatalf("expected ErrValidationFailed, got %v", err)
 	}

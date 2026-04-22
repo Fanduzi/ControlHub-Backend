@@ -132,6 +132,7 @@ func TestCreateResourceRejectsMissingEnvironment(t *testing.T) {
 	server := NewTestServer()
 	body := `{
 		"resourceType":"database_instance",
+		"resourceSubtype":"mysql",
 		"name":"missing-env",
 		"displayName":"Missing Env",
 		"environmentId":"missing-env",
@@ -153,6 +154,7 @@ func TestCreateResourceRejectsMissingOwner(t *testing.T) {
 	server := NewTestServer()
 	body := `{
 		"resourceType":"database_instance",
+		"resourceSubtype":"mysql",
 		"name":"missing-owner",
 		"displayName":"Missing Owner",
 		"environmentId":"10000000-0000-0000-0000-000000000001",
@@ -174,6 +176,7 @@ func TestCreateResourceRejectsDuplicateNameWithinEnvironment(t *testing.T) {
 	server := NewTestServer()
 	body := `{
 		"resourceType":"database_instance",
+		"resourceSubtype":"mysql",
 		"name":"order-mysql-prod",
 		"displayName":"Order MySQL Duplicate",
 		"environmentId":"env-prod",
@@ -339,7 +342,7 @@ func TestPatchResource(t *testing.T) {
 
 func TestPatchResourceRejectsImmutableFields(t *testing.T) {
 	server := NewTestServer()
-	body := `{"name":"new-name"}`
+	body := `{"resourceType":"host"}`
 	req := httptest.NewRequest(http.MethodPatch, "/resources/res-1", strings.NewReader(body))
 	rec := httptest.NewRecorder()
 

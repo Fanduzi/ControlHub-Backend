@@ -360,6 +360,10 @@ func (r *ResourceRepository) UpdateResource(ctx context.Context, id string, inpu
 	setClauses := []string{}
 	args := []any{}
 
+	if input.Name != nil {
+		setClauses = append(setClauses, "name = ?")
+		args = append(args, *input.Name)
+	}
 	if input.ResourceSubtype != nil {
 		setClauses = append(setClauses, "resource_subtype = ?")
 		args = append(args, *input.ResourceSubtype)

@@ -8,17 +8,18 @@ package model
 import "time"
 
 type ResourceCreateInput struct {
-	ResourceType    ResourceType      `json:"resourceType"`
-	ResourceSubtype string            `json:"resourceSubtype"`
-	Name            string            `json:"name"`
-	DisplayName     string            `json:"displayName"`
-	EnvironmentID   string            `json:"environmentId"`
-	OwnerID         string            `json:"ownerId"`
-	LifecycleStatus LifecycleStatus   `json:"lifecycleStatus"`
-	HealthStatus    HealthStatus      `json:"healthStatus"`
-	Source          string            `json:"source"`
-	ExternalID      string            `json:"externalId"`
-	Labels          map[string]string `json:"labels"`
+	ResourceType    ResourceType            `json:"resourceType"`
+	ResourceSubtype string                  `json:"resourceSubtype"`
+	Name            string                  `json:"name"`
+	DisplayName     string                  `json:"displayName"`
+	EnvironmentID   string                  `json:"environmentId"`
+	OwnerID         string                  `json:"ownerId"`
+	LifecycleStatus LifecycleStatus         `json:"lifecycleStatus"`
+	HealthStatus    HealthStatus            `json:"healthStatus"`
+	Source          string                  `json:"source"`
+	ExternalID      string                  `json:"externalId"`
+	Labels          map[string]string       `json:"labels"`
+	Profile         map[string]interface{}  `json:"profile,omitempty"`
 }
 
 type ResourcePatchRequest struct {
@@ -38,6 +39,7 @@ type ResourcePatchRequest struct {
 }
 
 type ResourceUpdateInput struct {
+	Name            *string
 	ResourceSubtype *string
 	DisplayName     *string
 	EnvironmentID   *string
@@ -50,17 +52,18 @@ type ResourceUpdateInput struct {
 }
 
 func (r ResourcePatchRequest) HasImmutableFields() bool {
-	return r.ID != nil || r.ResourceType != nil || r.Name != nil || r.CreatedAt != nil
+	return r.ID != nil || r.ResourceType != nil || r.CreatedAt != nil
 }
 
 func (r ResourcePatchRequest) HasMutableFields() bool {
-	return r.ResourceSubtype != nil || r.DisplayName != nil || r.EnvironmentID != nil ||
+	return r.Name != nil || r.ResourceSubtype != nil || r.DisplayName != nil || r.EnvironmentID != nil ||
 		r.OwnerID != nil || r.LifecycleStatus != nil || r.HealthStatus != nil ||
 		r.Source != nil || r.ExternalID != nil || r.Labels != nil
 }
 
 func (r ResourcePatchRequest) ToUpdateInput() ResourceUpdateInput {
 	return ResourceUpdateInput{
+		Name:            r.Name,
 		ResourceSubtype: r.ResourceSubtype,
 		DisplayName:     r.DisplayName,
 		EnvironmentID:   r.EnvironmentID,
