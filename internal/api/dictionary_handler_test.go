@@ -1,6 +1,6 @@
 // Package api provides HTTP handlers and routing for the ControlHub REST API.
 // input: internal/api, internal/model, net/http, net/http/httptest, encoding/json
-// output: TestListEnvironments/Owners/Roles/ResourceTypes/RelationTypes/LifecycleStatuses/HealthStatuses
+// output: TestListEnvironments/Owners/Roles/ResourceTypes/RelationTypes/LifecycleStatuses/HealthStatuses/ResourceSubtypes
 // pos: Validates all dictionary endpoints return correct items
 // note: if this file changes, update header and README.md
 package api
@@ -274,5 +274,80 @@ func TestListHealthStatuses(t *testing.T) {
 	}
 	if item.Description == "" {
 		t.Fatal("expected description to be set")
+	}
+}
+
+func TestListResourceSubtypes(t *testing.T) {
+	server := NewTestServer()
+	req := httptest.NewRequest(http.MethodGet, "/resource-subtypes?resourceType=database_instance", nil)
+	rec := httptest.NewRecorder()
+
+	server.Router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rec.Code)
+	}
+
+	var body struct {
+		ResourceType string                 `json:"resourceType"`
+		Subtypes     []model.DictionaryItem `json:"subtypes"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&body); err != nil {
+		t.Fatalf("failed to decode response: %v", err)
+	}
+
+	if body.ResourceType != "database_instance" {
+		t.Fatalf("expected resourceType database_instance, got %s", body.ResourceType)
+	}
+
+	if len(body.Subtypes) != 6 {
+		t.Fatalf("expected 6 subtypes for database_instance, got %d", len(body.Subtypes))
+	}
+
+	if body.Subtypes[0].Key != "mysql" {
+		t.Fatalf("expected first subtype key mysql, got %s", body.Subtypes[0].Key)
+	}
+	if body.Subtypes[0].Label != "MySQL" {
+		t.Fatalf("expected first subtype label MySQL, got %s", body.Subtypes[0].Label)
+	}
+}
+
+func TestListResourceSubtypes_MissingResourceType(t *testing.T) {
+	server := NewTestServer()
+	req := httptest.NewRequest(http.MethodGet, "/resource-subtypes", nil)
+	rec := httptest.NewRecorder()
+
+	server.Router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d", rec.Code)
+	}
+}
+
+func TestListResourceSubtypes_UnknownType(t *testing.T) {
+	server := NewTestServer()
+	req := httptest.NewRequest(http.MethodGet, "/resource-subtypes?resourceType=domain_name", nil)
+	rec := httptest.NewRecorder()
+
+	server.Router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rec.Code)
+	}
+
+	var body struct {
+		ResourceType string                 `json:"resourceType"`
+		Subtypes     []model.DictionaryItem `json:"subtypes"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&body); err != nil {
+		t.Fatalf("failed to decode response: %v", err)
+	}
+
+	if body.ResourceType != "domain_name" {
+		t.Fatalf("expected resourceType domain_name, got %s", body.ResourceType)
+	}
+
+	if len(body.Subtypes) != 0 {
+		t.Fatalf("expected 0 subtypes for type with no subtypes, got %d", len(body.Subtypes))
 	}
 }

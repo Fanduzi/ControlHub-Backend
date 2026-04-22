@@ -69,9 +69,17 @@ func (f *fakeResourceRepo) ListResources(_ context.Context, q model.ResourceList
 			}
 		if q.Query != "" {
 			lq := strings.ToLower(q.Query)
+			labelMatch := false
+			for _, v := range item.Labels {
+				if strings.Contains(strings.ToLower(v), lq) {
+					labelMatch = true
+					break
+				}
+			}
 			if !strings.Contains(strings.ToLower(item.Name), lq) &&
 				!strings.Contains(strings.ToLower(item.DisplayName), lq) &&
-				!strings.Contains(strings.ToLower(item.ExternalID), lq) {
+				!strings.Contains(strings.ToLower(item.ExternalID), lq) &&
+				!labelMatch {
 				continue
 			}
 		}
@@ -579,6 +587,7 @@ func NewTestServer() *TestServer {
 		RelationTypeService:     service.NewRelationTypeService(fakeRelationTypeRepo{}),
 		LifecycleStatusService:  service.NewLifecycleStatusService(fakeLifecycleStatusRepo{}),
 		HealthStatusService:     service.NewHealthStatusService(fakeHealthStatusRepo{}),
+		ResourceSubtypeService:  service.NewResourceSubtypeService(),
 	}
 
 	return &TestServer{Router: NewRouter(deps)}

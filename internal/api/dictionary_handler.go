@@ -109,3 +109,27 @@ func handleListRelationTypes(relationTypeService *service.RelationTypeService) h
 		}{Items: items})
 	}
 }
+
+func handleListResourceSubtypes(subtypeService *service.ResourceSubtypeService) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		resourceType := r.URL.Query().Get("resourceType")
+		if resourceType == "" {
+			http.Error(w, "resourceType query parameter is required", http.StatusBadRequest)
+			return
+		}
+
+		items, err := subtypeService.List(resourceType)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+
+		writeJSON(w, http.StatusOK, struct {
+			ResourceType string                 `json:"resourceType"`
+			Subtypes     []model.DictionaryItem `json:"subtypes"`
+		}{
+			ResourceType: resourceType,
+			Subtypes:     items,
+		})
+	}
+}

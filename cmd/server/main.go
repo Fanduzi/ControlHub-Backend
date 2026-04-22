@@ -47,6 +47,7 @@ func main() {
 		RelationTypeService:     service.NewRelationTypeService(dictRepo),
 		LifecycleStatusService:  service.NewLifecycleStatusService(dictRepo),
 		HealthStatusService:     service.NewHealthStatusService(dictRepo),
+		ResourceSubtypeService:  service.NewResourceSubtypeService(),
 	}
 
 	log.Printf("ControlHub starting on %s", cfg.HTTPAddress())
