@@ -376,6 +376,104 @@ paths:
                 $ref: "#/components/schemas/ResourceProfileResponse"
         "404":
           description: Resource not found
+    put:
+      summary: Replace typed profile fields for a resource
+      operationId: putResourceProfile
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+      responses:
+        "204":
+          description: Profile replaced
+        "400":
+          description: Validation failed or malformed JSON
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "404":
+          description: Resource not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "409":
+          description: Archived resource cannot be modified
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+    patch:
+      summary: Partially update typed profile fields for a resource
+      operationId: patchResourceProfile
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+      responses:
+        "204":
+          description: Profile updated
+        "400":
+          description: Validation failed or malformed JSON
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "404":
+          description: Resource not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "409":
+          description: Archived resource cannot be modified
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+    delete:
+      summary: Delete the typed profile row for a resource
+      operationId: deleteResourceProfile
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+      responses:
+        "204":
+          description: Profile deleted
+        "404":
+          description: Resource not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "409":
+          description: Archived resource cannot be modified
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
   /resources/{id}/relations:
     get:
       summary: List relations for a resource
@@ -1077,9 +1175,19 @@ components:
           type: object
           additionalProperties:
             type: string
+        profile:
+          type: object
+          additionalProperties: true
+          description: >-
+            Optional typed profile fields to persist during resource creation.
+            Supported keys depend on resourceType/resourceSubtype.
     ResourcePatchRequest:
       type: object
       properties:
+        name:
+          type: string
+          minLength: 1
+          pattern: "^[a-z0-9][a-z0-9._-]*$"
         resourceSubtype:
           type: string
         displayName:
@@ -1132,6 +1240,11 @@ components:
         message:
           type: string
           description: Human-readable error description
+        details:
+          type: object
+          additionalProperties:
+            type: string
+          description: Optional field-level validation details
     TopologyResponse:
       type: object
       required: [rootResourceId, depth, direction, nodes, edges, groups, isDatabaseTopology]
