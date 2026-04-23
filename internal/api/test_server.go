@@ -219,6 +219,9 @@ func (f *fakeResourceRepo) UpdateResource(_ context.Context, id string, input mo
 	}
 
 	updated := cloneResource(existing)
+	if input.Name != nil {
+		updated.Name = *input.Name
+	}
 	if input.ResourceSubtype != nil {
 		updated.ResourceSubtype = *input.ResourceSubtype
 	}

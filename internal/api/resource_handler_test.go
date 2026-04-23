@@ -1746,3 +1746,49 @@ func TestCreateResource_PersistsEmbeddedProfileThroughRouterWiring(t *testing.T)
 		t.Fatalf("expected port 3306, got %v", port)
 	}
 }
+
+// --- Task 3 closure: PATCH name + profile write endpoint coverage ---
+
+func TestPatchResource_AllowsNameUpdate(t *testing.T) {
+	server := NewTestServer()
+	req := httptest.NewRequest(http.MethodPatch, "/resources/res-1", strings.NewReader(`{"name":"order-mysql-primary-prod"}`))
+	rec := httptest.NewRecorder()
+
+	server.Router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+
+	var resp model.Resource
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if resp.Name != "order-mysql-primary-prod" {
+		t.Fatalf("expected updated name, got %s", resp.Name)
+	}
+}
+
+func TestPatchResourceProfile(t *testing.T) {
+	server := NewTestServer()
+	req := httptest.NewRequest(http.MethodPatch, "/resources/res-db-instance/profile", strings.NewReader(`{"version":"8.0.38"}`))
+	rec := httptest.NewRecorder()
+
+	server.Router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("expected 204, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestPatchResourceProfileRejectsMalformedJSON(t *testing.T) {
+	server := NewTestServer()
+	req := httptest.NewRequest(http.MethodPatch, "/resources/res-db-instance/profile", strings.NewReader(`{"version":`))
+	rec := httptest.NewRecorder()
+
+	server.Router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+}
