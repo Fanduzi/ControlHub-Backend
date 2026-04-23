@@ -1688,3 +1688,61 @@ func TestListResources_ResourceSubtypeNoMatch(t *testing.T) {
 		t.Errorf("expected 0 items for non-existent subtype, got %d", len(resp.Items))
 	}
 }
+
+func TestCreateResource_PersistsEmbeddedProfileThroughRouterWiring(t *testing.T) {
+	server := NewTestServer()
+	body := `{
+		"resourceType":"database_instance",
+		"resourceSubtype":"mysql",
+		"name":"order-mysql-03-prod",
+		"displayName":"Order MySQL 03 Prod",
+		"environmentId":"10000000-0000-0000-0000-000000000001",
+		"ownerId":"20000000-0000-0000-0000-000000000002",
+		"lifecycleStatus":"running",
+		"healthStatus":"healthy",
+		"source":"manual",
+		"externalId":"order-mysql-03-prod",
+		"labels":{"team":"order","tier":"data"},
+		"profile":{
+			"engine":"mysql",
+			"version":"8.0.37",
+			"host":"prod-db-host-03.internal",
+			"port":3306,
+			"role":"primary"
+		}
+	}`
+
+	createReq := httptest.NewRequest(http.MethodPost, "/resources", strings.NewReader(body))
+	createRec := httptest.NewRecorder()
+	server.Router.ServeHTTP(createRec, createReq)
+
+	if createRec.Code != http.StatusCreated {
+		t.Fatalf("expected 201, got %d; body: %s", createRec.Code, createRec.Body.String())
+	}
+
+	var created model.Resource
+	if err := json.NewDecoder(createRec.Body).Decode(&created); err != nil {
+		t.Fatalf("decode create response: %v", err)
+	}
+
+	profileReq := httptest.NewRequest(http.MethodGet, "/resources/"+created.ID+"/profile", nil)
+	profileRec := httptest.NewRecorder()
+	server.Router.ServeHTTP(profileRec, profileReq)
+
+	if profileRec.Code != http.StatusOK {
+		t.Fatalf("expected 200 from profile readback, got %d; body: %s", profileRec.Code, profileRec.Body.String())
+	}
+
+	var profileResp model.ResourceProfileResponse
+	if err := json.NewDecoder(profileRec.Body).Decode(&profileResp); err != nil {
+		t.Fatalf("decode profile response: %v", err)
+	}
+
+	checkProfileField(t, profileResp.Profile, "engine", "mysql")
+	checkProfileField(t, profileResp.Profile, "version", "8.0.37")
+	checkProfileField(t, profileResp.Profile, "host", "prod-db-host-03.internal")
+	checkProfileField(t, profileResp.Profile, "role", "primary")
+	if port := profileResp.Profile["port"]; port != float64(3306) {
+		t.Fatalf("expected port 3306, got %v", port)
+	}
+}

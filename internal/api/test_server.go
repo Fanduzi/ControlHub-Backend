@@ -45,6 +45,73 @@ func (f *fakeResourceRepo) GetResourceProfile(id string) (*model.ResourceProfile
 	}, nil
 }
 
+func (f *fakeResourceRepo) UpsertHostProfile(_ context.Context, resourceID, hostname, ipAddress, osName string) error {
+	res := f.resources[resourceID]
+	f.profiles[resourceID] = &model.ResourceProfileResponse{
+		ResourceID:      resourceID,
+		ResourceType:    model.ResourceTypeHost,
+		ResourceSubtype: res.ResourceSubtype,
+		Profile: map[string]any{
+			"hostname":  hostname,
+			"ipAddress": ipAddress,
+			"osName":    osName,
+		},
+	}
+	return nil
+}
+
+func (f *fakeResourceRepo) UpsertDatabaseInstanceProfile(_ context.Context, resourceID, engine, version, host string, port int, role string) error {
+	res := f.resources[resourceID]
+	f.profiles[resourceID] = &model.ResourceProfileResponse{
+		ResourceID:      resourceID,
+		ResourceType:    model.ResourceTypeDatabaseInstance,
+		ResourceSubtype: res.ResourceSubtype,
+		Profile: map[string]any{
+			"engine":  engine,
+			"version": version,
+			"host":    host,
+			"port":    port,
+			"role":    role,
+		},
+	}
+	return nil
+}
+
+func (f *fakeResourceRepo) UpsertDatabaseClusterProfile(_ context.Context, resourceID, engine, topologyMode, primaryEndpoint string) error {
+	res := f.resources[resourceID]
+	f.profiles[resourceID] = &model.ResourceProfileResponse{
+		ResourceID:      resourceID,
+		ResourceType:    model.ResourceTypeDatabaseCluster,
+		ResourceSubtype: res.ResourceSubtype,
+		Profile: map[string]any{
+			"engine":          engine,
+			"topologyMode":    topologyMode,
+			"primaryEndpoint": primaryEndpoint,
+		},
+	}
+	return nil
+}
+
+func (f *fakeResourceRepo) UpsertServiceProfile(_ context.Context, resourceID, systemName, repositoryUrl, runtimeEnv string) error {
+	res := f.resources[resourceID]
+	f.profiles[resourceID] = &model.ResourceProfileResponse{
+		ResourceID:      resourceID,
+		ResourceType:    model.ResourceTypeService,
+		ResourceSubtype: res.ResourceSubtype,
+		Profile: map[string]any{
+			"systemName":    systemName,
+			"repositoryUrl": repositoryUrl,
+			"runtimeEnv":    runtimeEnv,
+		},
+	}
+	return nil
+}
+
+func (f *fakeResourceRepo) DeleteProfile(_ context.Context, resourceID, _ string) error {
+	delete(f.profiles, resourceID)
+	return nil
+}
+
 func (f *fakeResourceRepo) ListResources(_ context.Context, q model.ResourceListQuery) ([]model.Resource, int, error) {
 	filtered := make([]model.Resource, 0, len(f.listOrder))
 	for _, id := range f.listOrder {
@@ -574,8 +641,10 @@ func NewTestServer() *TestServer {
 		relations: relationRepo,
 	}
 
+	profileSvc := service.NewProfileService(resourceRepo, resourceRepo)
+
 	deps := Dependencies{
-		ResourceService:         service.NewResourceService(resourceRepo),
+		ResourceService:         service.NewResourceService(resourceRepo, profileSvc),
 		RelationService:         service.NewRelationService(relationRepo),
 		TopologyService:         service.NewTopologyService(topologyRepo),
 		AuditService:            service.NewAuditService(fakeAuditRepo{}),
@@ -588,6 +657,7 @@ func NewTestServer() *TestServer {
 		LifecycleStatusService:  service.NewLifecycleStatusService(fakeLifecycleStatusRepo{}),
 		HealthStatusService:     service.NewHealthStatusService(fakeHealthStatusRepo{}),
 		ResourceSubtypeService:  service.NewResourceSubtypeService(),
+		ProfileService:          profileSvc,
 	}
 
 	return &TestServer{Router: NewRouter(deps)}
@@ -689,24 +759,6 @@ type fakeHealthStatusRepo struct{}
 
 func (fakeHealthStatusRepo) ListHealthStatuses() ([]model.DictionaryItem, error) {
 	return model.HealthStatusDictionary(), nil
-}
-
-type fakeProfileRepo struct{}
-
-func (fakeProfileRepo) UpsertHostProfile(_ context.Context, _ string, _, _, _ string) error {
-	return nil
-}
-func (fakeProfileRepo) UpsertDatabaseInstanceProfile(_ context.Context, _ string, _, _, _ string, _ int, _ string) error {
-	return nil
-}
-func (fakeProfileRepo) UpsertDatabaseClusterProfile(_ context.Context, _ string, _, _, _ string) error {
-	return nil
-}
-func (fakeProfileRepo) UpsertServiceProfile(_ context.Context, _ string, _, _, _ string) error {
-	return nil
-}
-func (fakeProfileRepo) DeleteProfile(_ context.Context, _, _ string) error {
-	return nil
 }
 
 func cloneResource(resource model.Resource) model.Resource {
