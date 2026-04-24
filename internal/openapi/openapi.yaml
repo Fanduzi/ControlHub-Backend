@@ -243,7 +243,7 @@ paths:
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/Resource"
+                $ref: "#/components/schemas/ResourceDetailResponse"
         "400":
           description: Invalid resource ID
           content:
@@ -1080,6 +1080,13 @@ components:
           type: string
         description:
           type: string
+    ResourceDetailResponse:
+      type: object
+      required:
+        - resource
+      properties:
+        resource:
+          $ref: "#/components/schemas/Resource"
     Resource:
       type: object
       required:

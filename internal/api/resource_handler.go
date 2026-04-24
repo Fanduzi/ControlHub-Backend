@@ -56,7 +56,9 @@ func handleGetResource(resourceService *service.ResourceService) http.HandlerFun
 			return
 		}
 
-		writeJSON(w, http.StatusOK, item)
+		writeJSON(w, http.StatusOK, struct {
+			Resource interface{} `json:"resource"`
+		}{Resource: item})
 	}
 }
 

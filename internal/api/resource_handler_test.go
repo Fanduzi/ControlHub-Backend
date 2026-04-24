@@ -1042,12 +1042,14 @@ func TestGetResource_ReturnsArchivedResource(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d", rec.Code)
 	}
-	var resp model.Resource
-	json.NewDecoder(rec.Body).Decode(&resp)
-	if resp.ID != 8 {
-		t.Fatalf("expected 8, got %d", resp.ID)
+	var wrapper struct {
+		Resource model.Resource `json:"resource"`
 	}
-	if resp.ArchivedAt == nil {
+	json.NewDecoder(rec.Body).Decode(&wrapper)
+	if wrapper.Resource.ID != 8 {
+		t.Fatalf("expected 8, got %d", wrapper.Resource.ID)
+	}
+	if wrapper.Resource.ArchivedAt == nil {
 		t.Fatal("expected archivedAt to be set")
 	}
 }
