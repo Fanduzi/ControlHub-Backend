@@ -1910,3 +1910,72 @@ func TestAuditHandlerJSONErrors(t *testing.T) {
 		}
 	})
 }
+
+	// --- Dictionary handler JSON error tests (Task 2) ---
+
+	type failingEnvRepo struct{}
+
+	func (failingEnvRepo) ListEnvironments() ([]model.Environment, error) {
+		return nil, fmt.Errorf("db connection lost")
+	}
+
+	func TestDictionaryHandlerJSONErrors(t *testing.T) {
+		t.Run("environments returns JSON on service failure", func(t *testing.T) {
+			svc := service.NewEnvironmentService(failingEnvRepo{})
+			handler := handleListEnvironments(svc)
+
+			w := httptest.NewRecorder()
+			r := httptest.NewRequest("GET", "/environments", nil)
+			handler.ServeHTTP(w, r)
+
+			if w.Code != http.StatusInternalServerError {
+				t.Fatalf("expected 500, got %d; body: %s", w.Code, w.Body.String())
+			}
+			ct := w.Header().Get("Content-Type")
+			if ct != "application/json" {
+				t.Fatalf("expected Content-Type application/json, got %q", ct)
+			}
+
+			var body apiErrorResponse
+			if err := json.NewDecoder(w.Body).Decode(&body); err != nil {
+				t.Fatalf("decode response: %v", err)
+			}
+			if body.Error != "internal_error" {
+				t.Fatalf("expected error code internal_error, got %q", body.Error)
+			}
+			if body.Message == "" {
+				t.Fatal("expected non-empty error message")
+			}
+		})
+
+		t.Run("resource-subtypes returns JSON 400 when missing resourceType", func(t *testing.T) {
+			svc := service.NewResourceSubtypeService()
+			handler := handleListResourceSubtypes(svc)
+
+			w := httptest.NewRecorder()
+			r := httptest.NewRequest("GET", "/resource-subtypes", nil)
+			handler.ServeHTTP(w, r)
+
+			if w.Code != http.StatusBadRequest {
+				t.Fatalf("expected 400, got %d; body: %s", w.Code, w.Body.String())
+			}
+			ct := w.Header().Get("Content-Type")
+			if ct != "application/json" {
+				t.Fatalf("expected Content-Type application/json, got %q", ct)
+			}
+
+			var body apiErrorResponse
+			if err := json.NewDecoder(w.Body).Decode(&body); err != nil {
+				t.Fatalf("decode response: %v", err)
+			}
+			if body.Error != "validation_failed" {
+				t.Fatalf("expected error code validation_failed, got %q", body.Error)
+			}
+			if body.Message == "" {
+				t.Fatal("expected non-empty error message")
+			}
+			if !strings.Contains(body.Message, "resourceType") {
+				t.Fatalf("expected message to mention resourceType, got %q", body.Message)
+			}
+		})
+	}

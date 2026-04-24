@@ -16,7 +16,7 @@ func handleListEnvironments(envService *service.EnvironmentService) http.Handler
 	return func(w http.ResponseWriter, r *http.Request) {
 		items, err := envService.List()
 		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
+			writeJSONError(w, http.StatusInternalServerError, "internal_error", "unexpected server failure")
 			return
 		}
 
@@ -30,7 +30,7 @@ func handleListOwners(ownerService *service.OwnerService) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		items, err := ownerService.List()
 		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
+			writeJSONError(w, http.StatusInternalServerError, "internal_error", "unexpected server failure")
 			return
 		}
 
@@ -44,7 +44,7 @@ func handleListRoles(roleService *service.RoleService) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		items, err := roleService.List()
 		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
+			writeJSONError(w, http.StatusInternalServerError, "internal_error", "unexpected server failure")
 			return
 		}
 
@@ -58,7 +58,7 @@ func handleListLifecycleStatuses(lifecycleStatusService *service.LifecycleStatus
 	return func(w http.ResponseWriter, r *http.Request) {
 		items, err := lifecycleStatusService.List()
 		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
+			writeJSONError(w, http.StatusInternalServerError, "internal_error", "unexpected server failure")
 			return
 		}
 
@@ -72,7 +72,7 @@ func handleListHealthStatuses(healthStatusService *service.HealthStatusService) 
 	return func(w http.ResponseWriter, r *http.Request) {
 		items, err := healthStatusService.List()
 		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
+			writeJSONError(w, http.StatusInternalServerError, "internal_error", "unexpected server failure")
 			return
 		}
 
@@ -86,7 +86,7 @@ func handleListResourceTypes(resourceTypeService *service.ResourceTypeService) h
 	return func(w http.ResponseWriter, r *http.Request) {
 		items, err := resourceTypeService.List()
 		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
+			writeJSONError(w, http.StatusInternalServerError, "internal_error", "unexpected server failure")
 			return
 		}
 
@@ -100,7 +100,7 @@ func handleListRelationTypes(relationTypeService *service.RelationTypeService) h
 	return func(w http.ResponseWriter, r *http.Request) {
 		items, err := relationTypeService.List()
 		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
+			writeJSONError(w, http.StatusInternalServerError, "internal_error", "unexpected server failure")
 			return
 		}
 
@@ -114,13 +114,13 @@ func handleListResourceSubtypes(subtypeService *service.ResourceSubtypeService) 
 	return func(w http.ResponseWriter, r *http.Request) {
 		resourceType := r.URL.Query().Get("resourceType")
 		if resourceType == "" {
-			http.Error(w, "resourceType query parameter is required", http.StatusBadRequest)
+			writeJSONError(w, http.StatusBadRequest, "validation_failed", "resourceType query parameter is required")
 			return
 		}
 
 		items, err := subtypeService.List(resourceType)
 		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
+			writeJSONError(w, http.StatusInternalServerError, "internal_error", "unexpected server failure")
 			return
 		}
 
