@@ -20,7 +20,7 @@
 - Modify: `messages/en.json`
 - Modify: `messages/zh-CN.json`
 
-- [ ] **Step 1: Add new keys to en.json**
+- [x] **Step 1: Add new keys to en.json**
 
 Add to `common.fields` section:
 ```json
@@ -29,7 +29,7 @@ Add to `common.fields` section:
 "nodes": "Nodes"
 ```
 
-- [ ] **Step 2: Add new keys to zh-CN.json**
+- [x] **Step 2: Add new keys to zh-CN.json**
 
 Add to `common.fields` section:
 ```json
@@ -38,7 +38,7 @@ Add to `common.fields` section:
 "nodes": "节点数"
 ```
 
-- [ ] **Step 3: Replace "asset" with "resource" in en.json**
+- [x] **Step 3: Replace "asset" with "resource" in en.json**
 
 In these keys, replace "asset"/"assets" with "resource"/"resources":
 - `pages.overview.posture.total`: "Total managed assets" → "Total managed resources"
@@ -52,11 +52,11 @@ In these keys, replace "asset"/"assets" with "resource"/"resources":
 - `shell.description`: "Platform asset context" → "Platform resource context"
 - `shell.subtitle`: "asset visibility" → "resource visibility"
 
-- [ ] **Step 4: Replace "asset" equivalents in zh-CN.json**
+- [x] **Step 4: Replace "asset" equivalents in zh-CN.json**
 
 Apply the same asset→resource replacements in Chinese for all matching keys. Use "资源" consistently instead of "资产".
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add messages/en.json messages/zh-CN.json
@@ -72,7 +72,7 @@ git commit -m "fix: add hostname/port/nodes i18n keys, unify asset→resource te
 **Files:**
 - Modify: `components/resources/resource-table.tsx`
 
-- [ ] **Step 1: Replace hardcoded headers with t() calls**
+- [x] **Step 1: Replace hardcoded headers with t() calls**
 
 At line 189, change `"Hostname"` to `t("common.fields.hostname")`
 
@@ -86,13 +86,13 @@ At line 245, change `"External ID"` to `t("common.fields.externalId")`
 
 At line 253, change `"Source"` to `t("common.fields.source")`
 
-- [ ] **Step 2: Verify build**
+- [x] **Step 2: Verify build**
 
 ```bash
 cd /Users/fan/JsProjects/ControlHub/.worktrees/cmdb-redesign && npx next build 2>&1 | tail -10
 ```
 
-- [ ] **Step 3: Commit**
+- [x] **Step 3: Commit**
 
 ```bash
 git add components/resources/resource-table.tsx
@@ -106,19 +106,19 @@ git commit -m "fix: replace 6 hardcoded column headers with i18n translations"
 **Files:**
 - Modify: `components/blocks/resource-search-combobox.tsx`
 
-- [ ] **Step 1: Add useTranslations import and hook**
+- [x] **Step 1: Add useTranslations import and hook**
 
 Add `import { useTranslations } from "next-intl";` if not already present. Add `const t = useTranslations();` inside the component.
 
-- [ ] **Step 2: Replace hardcoded strings**
+- [x] **Step 2: Replace hardcoded strings**
 
 At line 83, replace `"Searching..."` with `t("common.loading")`
 
 At line 86, replace `"No resources found."` with `t("common.noResults")`
 
-- [ ] **Step 3: Verify build**
+- [x] **Step 3: Verify build**
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add components/blocks/resource-search-combobox.tsx
@@ -134,13 +134,13 @@ git commit -m "fix: replace hardcoded search strings with i18n translations"
 **Files:**
 - Modify: `components/blocks/cluster-members-table.tsx`
 
-- [ ] **Step 1: Add import**
+- [x] **Step 1: Add import**
 
 ```typescript
 import { DbTypeIcon } from "@/components/blocks/db-type-icon";
 ```
 
-- [ ] **Step 2: Update subtype column cell (around line 57-58)**
+- [x] **Step 2: Update subtype column cell (around line 57-58)**
 
 Change from:
 ```tsx
@@ -161,9 +161,9 @@ To:
 </td>
 ```
 
-- [ ] **Step 3: Verify build**
+- [x] **Step 3: Verify build**
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add components/blocks/cluster-members-table.tsx
@@ -177,13 +177,13 @@ git commit -m "feat: add engine icon to cluster members subtype column"
 **Files:**
 - Modify: `components/blocks/resource-relation-panel.tsx`
 
-- [ ] **Step 1: Add import**
+- [x] **Step 1: Add import**
 
 ```typescript
 import { DbTypeIcon } from "@/components/blocks/db-type-icon";
 ```
 
-- [ ] **Step 2: Update type pill (around line 219-223)**
+- [x] **Step 2: Update type pill (around line 219-223)**
 
 Change the type badge to conditionally include DbTypeIcon:
 ```tsx
@@ -201,9 +201,9 @@ Change the type badge to conditionally include DbTypeIcon:
 
 Note: The `RelatedResourceSummary` type already has `resourceSubtype` (added in previous session).
 
-- [ ] **Step 3: Verify build**
+- [x] **Step 3: Verify build**
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add components/blocks/resource-relation-panel.tsx
@@ -217,13 +217,13 @@ git commit -m "feat: add engine icon to relation panel type badges"
 **Files:**
 - Modify: `app/(console)/resources/[id]/page.tsx`
 
-- [ ] **Step 1: Add import**
+- [x] **Step 1: Add import**
 
 ```typescript
 import { DbTypeIcon } from "@/components/blocks/db-type-icon";
 ```
 
-- [ ] **Step 2: Update subtype display (around line 109)**
+- [x] **Step 2: Update subtype display (around line 109)**
 
 Change from:
 ```tsx
@@ -252,7 +252,7 @@ To:
 
 This also fixes M7 (empty subtype no fallback).
 
-- [ ] **Step 3: Fix labels empty state (around line 152)**
+- [x] **Step 3: Fix labels empty state (around line 152)**
 
 Change from:
 ```tsx
@@ -276,9 +276,9 @@ To:
 )}
 ```
 
-- [ ] **Step 4: Verify build**
+- [x] **Step 4: Verify build**
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add "app/(console)/resources/[id]/page.tsx"
@@ -292,13 +292,13 @@ git commit -m "feat: add engine icon to detail subtype field, fix empty subtype 
 **Files:**
 - Modify: `components/blocks/topology-panel.tsx`
 
-- [ ] **Step 1: Add import**
+- [x] **Step 1: Add import**
 
 ```typescript
 import { DbTypeIcon } from "@/components/blocks/db-type-icon";
 ```
 
-- [ ] **Step 2: Update node subtype display (around line 298-305)**
+- [x] **Step 2: Update node subtype display (around line 298-305)**
 
 Change from:
 ```tsx
@@ -331,9 +331,9 @@ To:
 
 Note: Check what `data` is typed as. It may be `TopologyNode` from `types/resource.ts`. Verify the field names match.
 
-- [ ] **Step 3: Verify build**
+- [x] **Step 3: Verify build**
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add components/blocks/topology-panel.tsx
@@ -347,13 +347,13 @@ git commit -m "feat: add engine icon to topology node subtype labels"
 **Files:**
 - Modify: `components/resources/resource-detail-sheet.tsx`
 
-- [ ] **Step 1: Add import**
+- [x] **Step 1: Add import**
 
 ```typescript
 import { DbTypeIcon } from "@/components/blocks/db-type-icon";
 ```
 
-- [ ] **Step 2: Update header description (around line 87)**
+- [x] **Step 2: Update header description (around line 87)**
 
 Change from:
 ```tsx
@@ -372,9 +372,9 @@ To:
 </span>
 ```
 
-- [ ] **Step 3: Verify build**
+- [x] **Step 3: Verify build**
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add components/resources/resource-detail-sheet.tsx
@@ -392,7 +392,7 @@ git commit -m "feat: add engine icon to resource detail sheet header"
 - Modify: `messages/en.json`
 - Modify: `messages/zh-CN.json`
 
-- [ ] **Step 1: Add hostname and port columns**
+- [x] **Step 1: Add hostname and port columns**
 
 After the `resourceSubtype` (Engine) column definition and before the `status` column, add:
 
@@ -424,7 +424,7 @@ columnHelper.display({
 }),
 ```
 
-- [ ] **Step 2: Add lifecycle badge to status column**
+- [x] **Step 2: Add lifecycle badge to status column**
 
 Change the status column (currently only health) to show both badges:
 
@@ -441,7 +441,7 @@ columnHelper.display({
 }),
 ```
 
-- [ ] **Step 3: Fix environment and owner cell renderers**
+- [x] **Step 3: Fix environment and owner cell renderers**
 
 Add explicit cell renderers to match resource table styling:
 
@@ -460,7 +460,7 @@ columnHelper.accessor("ownerName", {
 }),
 ```
 
-- [ ] **Step 4: Fix date formatting**
+- [x] **Step 4: Fix date formatting**
 
 Import `formatRelativeDateTime` from `@/lib/format`. Change the updatedAt column from `formatDateTime` to:
 
@@ -472,13 +472,13 @@ cell: (info) => (
 ),
 ```
 
-- [ ] **Step 5: Verify build**
+- [x] **Step 5: Verify build**
 
 ```bash
 cd /Users/fan/JsProjects/ControlHub/.worktrees/cmdb-redesign && npx next build 2>&1 | tail -10
 ```
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add components/databases/database-table.tsx
@@ -494,7 +494,7 @@ git commit -m "feat: add hostname/port columns, lifecycle badge, and relative da
 **Files:**
 - Modify: `components/blocks/deployed-resources-card.tsx`
 
-- [ ] **Step 1: Remove empty description prop**
+- [x] **Step 1: Remove empty description prop**
 
 Change from:
 ```tsx
@@ -513,7 +513,7 @@ To:
 
 Check if `EmptyState` requires `description` prop. If it does, change the component to make it optional instead, or provide a meaningful description.
 
-- [ ] **Step 2: Commit**
+- [x] **Step 2: Commit**
 
 ```bash
 git add components/blocks/deployed-resources-card.tsx
@@ -526,27 +526,27 @@ git commit -m "fix: remove empty description from deployed resources empty state
 
 ### Task 11: Full build + test verification
 
-- [ ] **Step 1: Run build**
+- [x] **Step 1: Run build**
 
 ```bash
 cd /Users/fan/JsProjects/ControlHub/.worktrees/cmdb-redesign && npx next build
 ```
 
-- [ ] **Step 2: Run test suite**
+- [x] **Step 2: Run test suite**
 
 ```bash
 cd /Users/fan/JsProjects/ControlHub/.worktrees/cmdb-redesign && npx vitest run
 ```
 
-- [ ] **Step 3: Visual verification checklist**
+- [x] **Step 3: Visual verification checklist**
 
-- [ ] Resource table: column headers all translated in zh-CN
-- [ ] Database table: hostname, port, lifecycle badge visible
-- [ ] Database table: dates show relative format ("2h ago")
-- [ ] Cluster members: engine icons next to subtype text
-- [ ] Relation panel: engine icons in type pills
-- [ ] Detail page: subtype shows engine icon + "Not set" fallback
-- [ ] Detail page: empty labels show "Not set"
-- [ ] Topology: database nodes show engine icons
-- [ ] Detail sheet: header shows engine icon
-- [ ] Search combobox: zh-CN shows translated strings
+- [x] Resource table: column headers all translated in zh-CN
+- [x] Database table: hostname, port, lifecycle badge visible
+- [x] Database table: dates show relative format ("2h ago")
+- [x] Cluster members: engine icons next to subtype text
+- [x] Relation panel: engine icons in type pills
+- [x] Detail page: subtype shows engine icon + "Not set" fallback
+- [x] Detail page: empty labels show "Not set"
+- [x] Topology: database nodes show engine icons
+- [x] Detail sheet: header shows engine icon
+- [x] Search combobox: zh-CN shows translated strings

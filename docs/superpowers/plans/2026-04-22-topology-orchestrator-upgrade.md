@@ -15,7 +15,7 @@
 **Files:**
 - Modify: `internal/model/topology.go`
 
-- [ ] **Step 1: Add new fields to TopologyNode and new types**
+- [x] **Step 1: Add new fields to TopologyNode and new types**
 
 In `internal/model/topology.go`, add to `TopologyNode` struct (after `ReplicationParentID`):
 
@@ -51,12 +51,12 @@ Add `Problems` field to `TopologyResponse`:
 Problems []TopologyProblemSummary `json:"problems,omitempty"`
 ```
 
-- [ ] **Step 2: Verify it compiles**
+- [x] **Step 2: Verify it compiles**
 
 Run: `go build ./...`
 Expected: PASS
 
-- [ ] **Step 3: Commit**
+- [x] **Step 3: Commit**
 
 ```bash
 git add internal/model/topology.go
@@ -70,7 +70,7 @@ git commit -m "feat: add profile fields and problem types to topology model"
 **Files:**
 - Modify: `internal/service/topology_service.go`
 
-- [ ] **Step 1: Extract profile data and labels in buildTopologyNodes**
+- [x] **Step 1: Extract profile data and labels in buildTopologyNodes**
 
 In `buildTopologyNodes()`, after setting `IsDatabaseTopology`, add:
 
@@ -83,7 +83,7 @@ if res.ProfileSummary != nil {
 node.Labels = res.Labels
 ```
 
-- [ ] **Step 2: Add problem detection function**
+- [x] **Step 2: Add problem detection function**
 
 Add after `buildTopologyNodes()`:
 
@@ -118,7 +118,7 @@ func detectNodeProblems(res *model.Resource) []model.TopologyProblem {
 }
 ```
 
-- [ ] **Step 3: Call problem detection in buildTopologyNodes**
+- [x] **Step 3: Call problem detection in buildTopologyNodes**
 
 After profile data extraction, add:
 
@@ -126,7 +126,7 @@ After profile data extraction, add:
 node.Problems = detectNodeProblems(res)
 ```
 
-- [ ] **Step 4: Build problem summary in BuildTopology**
+- [x] **Step 4: Build problem summary in BuildTopology**
 
 In `BuildTopology()`, after building nodes and edges, add problem summary assembly:
 
@@ -156,12 +156,12 @@ for _, n := range nodes {
 
 Set `response.Problems = problemSummaries` when building the response.
 
-- [ ] **Step 5: Verify it compiles and passes tests**
+- [x] **Step 5: Verify it compiles and passes tests**
 
 Run: `go build ./... && go test ./internal/service/ -v -run TestTopology -count=1`
 Expected: BUILD PASS, existing tests still pass
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add internal/service/topology_service.go
@@ -175,11 +175,11 @@ git commit -m "feat: extract profile data and detect problems in topology servic
 **Files:**
 - Modify: `internal/service/topology_service_test.go` (or create if needed)
 
-- [ ] **Step 1: Write test for profile data enrichment**
+- [x] **Step 1: Write test for profile data enrichment**
 
 Test that `buildTopologyNodes` correctly maps `ProfileSummary.Hostname/IP/Port` to `TopologyNode`.
 
-- [ ] **Step 2: Write test for problem detection**
+- [x] **Step 2: Write test for problem detection**
 
 Test `detectNodeProblems` for each case:
 - healthy + running → no problems
@@ -189,12 +189,12 @@ Test `detectNodeProblems` for each case:
 - provisioning lifecycle → warning problem
 - critical + stopped → two problems
 
-- [ ] **Step 3: Run tests**
+- [x] **Step 3: Run tests**
 
 Run: `go test ./internal/service/ -v -count=1`
 Expected: ALL PASS
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add internal/service/topology_service_test.go
@@ -208,7 +208,7 @@ git commit -m "test: add topology problem detection and profile enrichment tests
 **Files:**
 - Modify: `/Users/fan/JsProjects/ControlHub/.worktrees/cmdb-redesign/types/resource.ts`
 
-- [ ] **Step 1: Add new fields to TopologyNode type**
+- [x] **Step 1: Add new fields to TopologyNode type**
 
 Add to the `TopologyNode` type:
 
@@ -220,7 +220,7 @@ problems?: TopologyProblem[];
 labels?: Record<string, string>;
 ```
 
-- [ ] **Step 2: Add new types**
+- [x] **Step 2: Add new types**
 
 After `TopologyNode`:
 
@@ -240,7 +240,7 @@ type TopologyProblemSummary = {
 };
 ```
 
-- [ ] **Step 3: Update TopologyResponse**
+- [x] **Step 3: Update TopologyResponse**
 
 Add to `TopologyResponse`:
 
@@ -248,7 +248,7 @@ Add to `TopologyResponse`:
 problems?: TopologyProblemSummary[];
 ```
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add types/resource.ts
@@ -262,7 +262,7 @@ git commit -m "feat: add profile, problem types to topology frontend types"
 **Files:**
 - Modify: `/Users/fan/JsProjects/ControlHub/.worktrees/cmdb-redesign/components/blocks/topology-panel.tsx`
 
-- [ ] **Step 1: Add status-to-color mapping**
+- [x] **Step 1: Add status-to-color mapping**
 
 Add constants at top of file:
 
@@ -284,7 +284,7 @@ function getNodeStatusStyle(data: TopologyNodeData) {
 }
 ```
 
-- [ ] **Step 2: Rewrite the topologyNode component body**
+- [x] **Step 2: Rewrite the topologyNode component body**
 
 Replace the node content to show:
 - Line 1: DbTypeIcon + engine name + role label
@@ -343,11 +343,11 @@ const address = addressParts.join(":");
 </div>
 ```
 
-- [ ] **Step 3: Verify rendering in browser**
+- [x] **Step 3: Verify rendering in browser**
 
 Run dev server, navigate to a resource detail page with topology, verify nodes show IP:port, hostname, and status coloring.
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add components/blocks/topology-panel.tsx
@@ -363,7 +363,7 @@ git commit -m "feat: Orchestrator-style node rendering with IP/port, hostname, s
 - Modify: `/Users/fan/JsProjects/ControlHub/.worktrees/cmdb-redesign/messages/en.json`
 - Modify: `/Users/fan/JsProjects/ControlHub/.worktrees/cmdb-redesign/messages/zh-CN.json`
 
-- [ ] **Step 1: Add i18n keys**
+- [x] **Step 1: Add i18n keys**
 
 In `en.json`, add under `"topology"`:
 
@@ -389,7 +389,7 @@ In `zh-CN.json`, add under `"topology"`:
 "problemNoReplica": "无可用健康副本"
 ```
 
-- [ ] **Step 2: Add problem panel component**
+- [x] **Step 2: Add problem panel component**
 
 In `topology-panel.tsx`, add a collapsible problem panel above the ReactFlow container. It renders when `topologyData.problems?.length > 0`:
 
@@ -429,7 +429,7 @@ In `topology-panel.tsx`, add a collapsible problem panel above the ReactFlow con
 
 Add `problemsExpanded` state and `highlightNode` function (uses ReactFlow's `setNodes` to highlight a node by adding a temporary ring class).
 
-- [ ] **Step 3: Commit**
+- [x] **Step 3: Commit**
 
 ```bash
 git add components/blocks/topology-panel.tsx messages/en.json messages/zh-CN.json
@@ -445,7 +445,7 @@ git commit -m "feat: add problem summary panel to topology view"
 - Modify: `/Users/fan/JsProjects/ControlHub/.worktrees/cmdb-redesign/messages/en.json`
 - Modify: `/Users/fan/JsProjects/ControlHub/.worktrees/cmdb-redesign/messages/zh-CN.json`
 
-- [ ] **Step 1: Replace fixed overlay with node-anchored floating panel**
+- [x] **Step 1: Replace fixed overlay with node-anchored floating panel**
 
 Replace the current `renderNodePopup()` fixed overlay (`fixed inset-0 flex items-center justify-center`) with a **node-anchored floating panel** positioned at the clicked node's screen coordinates.
 
@@ -499,7 +499,7 @@ The popup shows:
 - Problems list (if any, with severity-colored text)
 - "View Full Details" link navigating to `/resources/{id}`
 
-- [ ] **Step 2: Update i18n**
+- [x] **Step 2: Update i18n**
 
 Add keys for popup labels:
 
@@ -517,7 +517,7 @@ Add keys for popup labels:
 "zone": "可用区"
 ```
 
-- [ ] **Step 3: Commit**
+- [x] **Step 3: Commit**
 
 ```bash
 git add components/blocks/topology-panel.tsx messages/en.json messages/zh-CN.json
@@ -531,7 +531,7 @@ git commit -m "feat: node-anchored detail popup with datacenter/zone in topology
 **Files:**
 - Modify: `/Users/fan/JsProjects/ControlHub/.worktrees/cmdb-redesign/components/blocks/topology-panel.tsx`
 
-- [ ] **Step 1: Add zone color palette**
+- [x] **Step 1: Add zone color palette**
 
 ```typescript
 const ZONE_PALETTE = [
@@ -548,11 +548,11 @@ function getZoneColor(zoneKey: string) {
 }
 ```
 
-- [ ] **Step 2: Apply zone colors to group boxes**
+- [x] **Step 2: Apply zone colors to group boxes**
 
 In the `topologyGroup` component, use `getZoneColor(data.label)` to set the border and background classes on the group box. Show a zone label tag at top-left.
 
-- [ ] **Step 3: Commit**
+- [x] **Step 3: Commit**
 
 ```bash
 git add components/blocks/topology-panel.tsx
@@ -566,22 +566,22 @@ git commit -m "feat: zone-aware group box coloring in topology view"
 **Files:**
 - None (verification only)
 
-- [ ] **Step 1: Run Next.js build**
+- [x] **Step 1: Run Next.js build**
 
 Run: `cd /Users/fan/JsProjects/ControlHub/.worktrees/cmdb-redesign && npx next build`
 Expected: BUILD PASS
 
-- [ ] **Step 2: Run Go tests**
+- [x] **Step 2: Run Go tests**
 
 Run: `cd /Users/fan/GolangProjects/ControlHub && go test ./internal/service/ -v -run TestTopology -count=1`
 Expected: ALL PASS
 
-- [ ] **Step 3: Run frontend test suite**
+- [x] **Step 3: Run frontend test suite**
 
 Run: `cd /Users/fan/JsProjects/ControlHub/.worktrees/cmdb-redesign && npx vitest run`
 Expected: ALL PASS
 
-- [ ] **Step 4: E2E browser verification**
+- [x] **Step 4: E2E browser verification**
 
 Open a resource detail page in the browser. Verify:
 1. Topology nodes show IP:port and hostname
@@ -590,4 +590,4 @@ Open a resource detail page in the browser. Verify:
 4. Clicking a node opens detail popover
 5. Group boxes have zone-colored borders
 
-- [ ] **Step 5: Final commit if any fixes needed**
+- [x] **Step 5: Final commit if any fixes needed**

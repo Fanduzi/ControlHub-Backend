@@ -31,7 +31,7 @@
 - Modify: `internal/api/resource_handler_test.go`
 - Verify only if needed: `cmd/server/main.go`
 
-- [ ] **Step 1: Write the failing router-level regression test**
+- [x] **Step 1: Write the failing router-level regression test**
 
 Add a new test to `internal/api/resource_handler_test.go` near `TestCreateResource`:
 
@@ -95,12 +95,12 @@ func TestCreateResource_PersistsEmbeddedProfileThroughRouterWiring(t *testing.T)
 }
 ```
 
-- [ ] **Step 2: Run the test and confirm the current failure mode**
+- [x] **Step 2: Run the test and confirm the current failure mode**
 
 Run: `go test ./internal/api -v -run TestCreateResource_PersistsEmbeddedProfileThroughRouterWiring -count=1`
 Expected: FAIL if `NewTestServer()` still wires `ResourceService` without `ProfileService`, or if the fake repo does not persist profile writes for created resources.
 
-- [ ] **Step 3: Make the fake router wiring match production wiring**
+- [x] **Step 3: Make the fake router wiring match production wiring**
 
 In `internal/api/test_server.go`, wire a shared profile service into both dependencies instead of constructing `ResourceService` alone:
 
@@ -125,7 +125,7 @@ In `internal/api/test_server.go`, wire a shared profile service into both depend
 	}
 ```
 
-- [ ] **Step 4: Persist profile writes in the fake repository instead of dropping them**
+- [x] **Step 4: Persist profile writes in the fake repository instead of dropping them**
 
 Extend `fakeResourceRepo` in `internal/api/test_server.go` with the profile-writer methods expected by `ProfileService`, updating `f.profiles` for supported resource types:
 
@@ -163,17 +163,17 @@ func (f *fakeResourceRepo) UpsertDatabaseInstanceProfile(_ context.Context, reso
 
 Add the equivalent `UpsertDatabaseClusterProfile`, `UpsertServiceProfile`, and `DeleteProfile` methods in the same style, using the existing `f.resources` map to keep `resourceType`/`resourceSubtype` aligned.
 
-- [ ] **Step 5: Re-run the targeted handler tests**
+- [x] **Step 5: Re-run the targeted handler tests**
 
 Run: `go test ./internal/api -v -run 'TestCreateResource|TestGetResourceProfile|TestCreateResource_PersistsEmbeddedProfileThroughRouterWiring' -count=1`
 Expected: PASS
 
-- [ ] **Step 6: Re-run the server wiring regression test**
+- [x] **Step 6: Re-run the server wiring regression test**
 
 Run: `go test ./cmd/server -v -run TestBuildDependencies_WiresProfileServiceIntoResourceService -count=1`
 Expected: PASS
 
-- [ ] **Step 7: Commit the regression coverage**
+- [x] **Step 7: Commit the regression coverage**
 
 ```bash
 git add internal/api/test_server.go internal/api/resource_handler_test.go
@@ -187,7 +187,7 @@ git commit -m "test: cover embedded profile persistence through router wiring"
 **Files:**
 - Modify: `internal/openapi/openapi.yaml`
 
-- [ ] **Step 1: Write a focused contract checklist in the schema comments while editing**
+- [x] **Step 1: Write a focused contract checklist in the schema comments while editing**
 
 Before changing content, use this checklist against the existing spec section:
 
@@ -202,7 +202,7 @@ Before changing content, use this checklist against the existing spec section:
 
 Do not keep the checklist comment in the final file; use it only as an editing guide.
 
-- [ ] **Step 2: Add embedded create profile to `ResourceCreateInput`**
+- [x] **Step 2: Add embedded create profile to `ResourceCreateInput`**
 
 Update `internal/openapi/openapi.yaml` under `components.schemas.ResourceCreateInput.properties`:
 
@@ -215,7 +215,7 @@ Update `internal/openapi/openapi.yaml` under `components.schemas.ResourceCreateI
             Supported keys depend on resourceType/resourceSubtype.
 ```
 
-- [ ] **Step 3: Add editable `name` to `ResourcePatchRequest`**
+- [x] **Step 3: Add editable `name` to `ResourcePatchRequest`**
 
 Update `components.schemas.ResourcePatchRequest.properties`:
 
@@ -226,7 +226,7 @@ Update `components.schemas.ResourcePatchRequest.properties`:
           pattern: "^[a-z0-9][a-z0-9._-]*$"
 ```
 
-- [ ] **Step 4: Document the profile write endpoints already implemented in the router**
+- [x] **Step 4: Document the profile write endpoints already implemented in the router**
 
 Expand `/resources/{id}/profile` in `internal/openapi/openapi.yaml` by adding `put`, `patch`, and `delete` alongside `get`:
 
@@ -299,7 +299,7 @@ Mirror the same structure for `patch` with `operationId: patchResourceProfile`, 
                 $ref: "#/components/schemas/ErrorResponse"
 ```
 
-- [ ] **Step 5: Reflect structured validation details in `ErrorResponse`**
+- [x] **Step 5: Reflect structured validation details in `ErrorResponse`**
 
 Update `components.schemas.ErrorResponse`:
 
@@ -321,12 +321,12 @@ Update `components.schemas.ErrorResponse`:
           description: Optional field-level validation details
 ```
 
-- [ ] **Step 6: Run OpenAPI validation**
+- [x] **Step 6: Run OpenAPI validation**
 
 Run: `make openapi-validate`
 Expected: PASS
 
-- [ ] **Step 7: Commit the contract alignment**
+- [x] **Step 7: Commit the contract alignment**
 
 ```bash
 git add internal/openapi/openapi.yaml
@@ -341,12 +341,12 @@ git commit -m "docs: close resource CRUD OpenAPI contract gaps"
 - Modify only if needed: `internal/api/resource_handler_test.go`
 - Modify only if needed: `internal/api/profile_handler.go`
 
-- [ ] **Step 1: Check whether PATCH `name` already has direct handler coverage**
+- [x] **Step 1: Check whether PATCH `name` already has direct handler coverage**
 
 Search `internal/api/resource_handler_test.go` for a test that patches only `name` and verifies success.
 Expected: if no direct success-path test exists, add one; if one already exists, skip to Step 3.
 
-- [ ] **Step 2: Add the missing PATCH `name` success test only if absent**
+- [x] **Step 2: Add the missing PATCH `name` success test only if absent**
 
 If needed, add this targeted test:
 
@@ -372,12 +372,12 @@ func TestPatchResource_AllowsNameUpdate(t *testing.T) {
 }
 ```
 
-- [ ] **Step 3: Check whether profile write endpoints already have any route-level tests**
+- [x] **Step 3: Check whether profile write endpoints already have any route-level tests**
 
 Search `internal/api/resource_handler_test.go` and adjacent test files for `PUT /resources/{id}/profile`, `PATCH /resources/{id}/profile`, and `DELETE /resources/{id}/profile` coverage.
 Expected: if none exist, add one concise happy-path test and one malformed-JSON/error-shape test; do not redesign the handlers in this closure pass unless tests expose a real contract mismatch.
 
-- [ ] **Step 4: Add the minimal profile write endpoint coverage only if absent**
+- [x] **Step 4: Add the minimal profile write endpoint coverage only if absent**
 
 If needed, add targeted tests like:
 
@@ -411,17 +411,17 @@ func TestPatchResourceProfileRejectsMalformedJSON(t *testing.T) {
 }
 ```
 
-- [ ] **Step 5: Run the narrow API test slice**
+- [x] **Step 5: Run the narrow API test slice**
 
 Run: `go test ./internal/api -v -run 'TestCreateResource|TestPatchResource|Test.*ResourceProfile' -count=1`
 Expected: PASS
 
-- [ ] **Step 6: Run the closure validation set**
+- [x] **Step 6: Run the closure validation set**
 
 Run: `go test ./cmd/server ./internal/api -count=1 && make openapi-validate`
 Expected: PASS
 
-- [ ] **Step 7: Commit the closure evidence**
+- [x] **Step 7: Commit the closure evidence**
 
 ```bash
 git add internal/api/resource_handler_test.go internal/api/profile_handler.go
@@ -436,17 +436,17 @@ git commit -m "test: add resource CRUD closure coverage"
 - No intended code changes
 - Evidence target: `docs/superpowers/notes/2026-04-23-resource-crud-redesign-closure.md` only if the user later asks to refresh the closure note after implementation
 
-- [ ] **Step 1: Run the unit/package verification set**
+- [x] **Step 1: Run the unit/package verification set**
 
 Run: `go test ./cmd/server ./internal/api ./internal/service -count=1`
 Expected: PASS
 
-- [ ] **Step 2: Run integration verification only if Docker is available and the user wants closure-grade extra confidence**
+- [x] **Step 2: Run integration verification only if Docker is available and the user wants closure-grade extra confidence**
 
 Run: `make test-integration`
 Expected: PASS
 
-- [ ] **Step 3: Record the exact closure evidence for handoff**
+- [x] **Step 3: Record the exact closure evidence for handoff**
 
 Capture these outputs in the implementation handoff message:
 
@@ -457,7 +457,7 @@ Capture these outputs in the implementation handoff message:
 - Profile write endpoints: route coverage present
 ```
 
-- [ ] **Step 4: Commit remaining changes**
+- [x] **Step 4: Commit remaining changes**
 
 ```bash
 git status --short

@@ -19,7 +19,7 @@
 **Files:**
 - Create: `lib/severity-colors.ts`
 
-- [ ] **Step 1: Write the module**
+- [x] **Step 1: Write the module**
 
 ```typescript
 // lib/severity-colors.ts
@@ -64,7 +64,7 @@ export const POSTURE_BAR_COLORS: Record<string, string> = {
 };
 ```
 
-- [ ] **Step 2: Commit**
+- [x] **Step 2: Commit**
 
 ```bash
 git add lib/severity-colors.ts
@@ -78,7 +78,7 @@ git commit -m "feat: add shared severity color map for consistent status indicat
 **Files:**
 - Create: `components/blocks/resource-link.tsx`
 
-- [ ] **Step 1: Write the component**
+- [x] **Step 1: Write the component**
 
 ```tsx
 // components/blocks/resource-link.tsx
@@ -111,7 +111,7 @@ export function ResourceLink({ href, children, className, onClick }: ResourceLin
 }
 ```
 
-- [ ] **Step 2: Commit**
+- [x] **Step 2: Commit**
 
 ```bash
 git add components/blocks/resource-link.tsx
@@ -127,7 +127,7 @@ git commit -m "feat: add shared ResourceLink component for consistent table link
 **Files:**
 - Modify: `components/blocks/status-badge.tsx`
 
-- [ ] **Step 1: Update the health tone class string**
+- [x] **Step 1: Update the health tone class string**
 
 Replace the `health` entry in `toneClasses` (line 15-16). Change the base from `bg-primary/10 text-primary` to `bg-muted text-muted-foreground`, so the default (no matching data-status) is neutral. The explicit `data-[status=healthy]` overrides already use emerald and will take precedence.
 
@@ -138,11 +138,11 @@ The full health string becomes:
 
 Also remove the trailing `data-[status=unknown]:bg-muted data-[status=unknown]:text-muted-foreground` since the base class now handles unknown.
 
-- [ ] **Step 2: Verify visually in browser**
+- [x] **Step 2: Verify visually in browser**
 
 Check that healthy badges show emerald (not accent color) and that unknown shows muted.
 
-- [ ] **Step 3: Commit**
+- [x] **Step 3: Commit**
 
 ```bash
 git add components/blocks/status-badge.tsx
@@ -156,7 +156,7 @@ git commit -m "fix: healthy badge uses fixed emerald color instead of accent-dep
 **Files:**
 - Modify: `components/audits/audit-table.tsx`
 
-- [ ] **Step 1: Replace local color maps with imports**
+- [x] **Step 1: Replace local color maps with imports**
 
 Remove `RESULT_DOT` (lines 47-51) and `RESULT_ROW_BORDER` (lines 53-56). Add imports:
 
@@ -166,7 +166,7 @@ import { AUDIT_RESULT_DOT, AUDIT_RESULT_BORDER } from "@/lib/severity-colors";
 
 Update references: `RESULT_DOT[...]` → `AUDIT_RESULT_DOT[...]`, `RESULT_ROW_BORDER[...]` → `AUDIT_RESULT_BORDER[...]`.
 
-- [ ] **Step 2: Wire the search input**
+- [x] **Step 2: Wire the search input**
 
 Add state and filter logic:
 
@@ -199,13 +199,13 @@ Update the Input (line 181-183) to be controlled:
 
 Update `useReactTable` data from `events` to `filteredEvents`.
 
-- [ ] **Step 3: Verify build**
+- [x] **Step 3: Verify build**
 
 ```bash
 cd /Users/fan/JsProjects/ControlHub/.worktrees/cmdb-redesign && npx next build 2>&1 | tail -10
 ```
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add components/audits/audit-table.tsx
@@ -219,7 +219,7 @@ git commit -m "fix: wire audit search input and use shared severity colors"
 **Files:**
 - Modify: `components/overview/overview-content.tsx`
 
-- [ ] **Step 1: Replace posture grid gap-px with divide approach**
+- [x] **Step 1: Replace posture grid gap-px with divide approach**
 
 Change line 149 from:
 ```
@@ -230,7 +230,7 @@ to:
 grid grid-cols-2 rounded-lg border border-border divide-x divide-border overflow-hidden sm:grid-cols-4 divide-y sm:divide-y-0
 ```
 
-- [ ] **Step 2: Import and use shared severity colors**
+- [x] **Step 2: Import and use shared severity colors**
 
 Add import:
 ```typescript
@@ -260,7 +260,7 @@ className={`mt-1 text-2xl font-semibold ${HEALTH_METRIC_TEXT.warning}`}
 className={`mt-1 text-2xl font-semibold ${HEALTH_METRIC_TEXT.pending}`}
 ```
 
-- [ ] **Step 3: Add ARIA to attention table**
+- [x] **Step 3: Add ARIA to attention table**
 
 Add `aria-label` to the `<table>` element (line 219):
 ```tsx
@@ -272,9 +272,9 @@ Add `scope="col"` to all `<th>` elements (lines 222-235):
 <th scope="col" className="px-3 py-2 ...">
 ```
 
-- [ ] **Step 4: Verify build**
+- [x] **Step 4: Verify build**
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add components/overview/overview-content.tsx
@@ -292,29 +292,29 @@ git commit -m "fix: overview posture grid dark mode, attention table ARIA, share
 - Modify: `components/resources/resource-table.tsx`
 - Modify: `components/databases/database-table.tsx`
 
-- [ ] **Step 1: Update base TableRow hover**
+- [x] **Step 1: Update base TableRow hover**
 
 In `ui/table.tsx` line 60, change `hover:bg-muted/50` to `hover:bg-muted/40`.
 
-- [ ] **Step 2: Remove redundant hover overrides in resource-table.tsx**
+- [x] **Step 2: Remove redundant hover overrides in resource-table.tsx**
 
 Line 523: remove `hover:bg-muted/40` (now matches base). Keep only the additional classes:
 ```tsx
 className={`cursor-pointer transition-colors${row.original.isArchived ? " opacity-60" : ""}`}
 ```
 
-- [ ] **Step 3: Remove redundant hover overrides in database-table.tsx**
+- [x] **Step 3: Remove redundant hover overrides in database-table.tsx**
 
 Line 242: remove `hover:bg-muted/40` from the row className:
 ```tsx
 className="cursor-pointer transition-colors"
 ```
 
-- [ ] **Step 4: Keep audit table hover at muted/30**
+- [x] **Step 4: Keep audit table hover at muted/30**
 
 Audit table rows (line 241) keep `hover:bg-muted/30` intentionally — severity borders provide primary signal.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add components/ui/table.tsx components/resources/resource-table.tsx components/databases/database-table.tsx
@@ -331,7 +331,7 @@ git commit -m "fix: standardize table row hover to muted/40 across all tables"
 - Modify: `components/audits/audit-table.tsx`
 - Modify: `components/blocks/cluster-members-table.tsx`
 
-- [ ] **Step 1: resource-table.tsx**
+- [x] **Step 1: resource-table.tsx**
 
 Add import:
 ```typescript
@@ -340,21 +340,21 @@ import { ResourceLink } from "@/components/blocks/resource-link";
 
 Replace the `<Link>` in the resource name cell (around line 146) with `<ResourceLink>`. Remove the old className from the Link. Keep the `onClick={(e) => e.stopPropagation()}` on ResourceLink.
 
-- [ ] **Step 2: database-table.tsx**
+- [x] **Step 2: database-table.tsx**
 
 Same pattern — replace `<Link>` with `<ResourceLink>`.
 
-- [ ] **Step 3: audit-table.tsx**
+- [x] **Step 3: audit-table.tsx**
 
 Replace the `<Link>` in targetResourceName cell (around line 132-137) with `<ResourceLink>`.
 
-- [ ] **Step 4: cluster-members-table.tsx**
+- [x] **Step 4: cluster-members-table.tsx**
 
 Replace `<Link>` with `<ResourceLink>`. The different underline-offset and hover opacity will now match the canonical style.
 
-- [ ] **Step 5: Verify build**
+- [x] **Step 5: Verify build**
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add components/resources/resource-table.tsx components/databases/database-table.tsx components/audits/audit-table.tsx components/blocks/cluster-members-table.tsx
@@ -369,7 +369,7 @@ git commit -m "refactor: use shared ResourceLink component across all tables"
 - Modify: `components/resources/resource-table.tsx`
 - Modify: `components/databases/database-table.tsx`
 
-- [ ] **Step 1: resource-table.tsx — add role and aria-label to clickable rows**
+- [x] **Step 1: resource-table.tsx — add role and aria-label to clickable rows**
 
 Find the `<TableRow>` with `tabIndex={0}` (around line 521). Add:
 ```tsx
@@ -377,7 +377,7 @@ role="button"
 aria-label={`View details for ${row.original.displayName}`}
 ```
 
-- [ ] **Step 2: database-table.tsx — same pattern**
+- [x] **Step 2: database-table.tsx — same pattern**
 
 Add to the clickable `<tr>` (around line 241):
 ```tsx
@@ -385,7 +385,7 @@ role="button"
 aria-label={`View details for ${row.original.displayName}`}
 ```
 
-- [ ] **Step 3: Commit**
+- [x] **Step 3: Commit**
 
 ```bash
 git add components/resources/resource-table.tsx components/databases/database-table.tsx
@@ -401,11 +401,11 @@ git commit -m "fix: add role=button and aria-label to clickable table rows"
 **Files:**
 - Modify: `components/blocks/detail-panel.tsx`
 
-- [ ] **Step 1: Change py-3 to py-4**
+- [x] **Step 1: Change py-3 to py-4**
 
 Line 22: change `px-4 py-3` to `px-4 py-4`.
 
-- [ ] **Step 2: Commit**
+- [x] **Step 2: Commit**
 
 ```bash
 git add components/blocks/detail-panel.tsx
@@ -419,7 +419,7 @@ git commit -m "fix: align DetailPanel header padding to py-4 matching DataTableS
 **Files:**
 - Modify: `components/blocks/multi-select-filter.tsx`
 
-- [ ] **Step 1: Update trigger classes**
+- [x] **Step 1: Update trigger classes**
 
 Line 68, change:
 ```
@@ -432,7 +432,7 @@ rounded-lg border border-border bg-background px-3 text-sm outline-none focus-vi
 
 Changes: `rounded-md` → `rounded-lg`, `focus:` → `focus-visible:`, `ring-ring/20` → `ring-ring/50`.
 
-- [ ] **Step 2: Commit**
+- [x] **Step 2: Commit**
 
 ```bash
 git add components/blocks/multi-select-filter.tsx
@@ -447,15 +447,15 @@ git commit -m "fix: align multi-select trigger radius and focus ring with Button
 - Modify: `components/app-shell/sidebar.tsx`
 - Modify: `app/(console)/resources/[id]/page.tsx`
 
-- [ ] **Step 1: Fix sidebar eyebrow tracking**
+- [x] **Step 1: Fix sidebar eyebrow tracking**
 
 In `sidebar.tsx` line 44, change `tracking-[0.18em]` to `tracking-[0.16em]`.
 
-- [ ] **Step 2: Fix archived badge padding**
+- [x] **Step 2: Fix archived badge padding**
 
 In `resources/[id]/page.tsx`, find the archived badge span (around line 79) with `px-2` and change to `px-1.5`.
 
-- [ ] **Step 3: Commit**
+- [x] **Step 3: Commit**
 
 ```bash
 git add components/app-shell/sidebar.tsx "app/(console)/resources/[id]/page.tsx"
@@ -474,7 +474,7 @@ git commit -m "fix: standardize eyebrow tracking and archived badge padding"
 - Modify: `messages/en.json`
 - Modify: `messages/zh-CN.json`
 
-- [ ] **Step 1: Add translation keys**
+- [x] **Step 1: Add translation keys**
 
 In `en.json`, add to `tables.resources`:
 ```json
@@ -496,7 +496,7 @@ Add to `zh-CN.json` in `relations`:
 "searchPlaceholder": "搜索资源..."
 ```
 
-- [ ] **Step 2: resource-table.tsx — column visibility label**
+- [x] **Step 2: resource-table.tsx — column visibility label**
 
 Around line 403, replace `"Columns"` with `{t("tables.resources.columnVisibility")}`.
 
@@ -515,15 +515,15 @@ Replace the dropdown item label (around line 410-413):
 </DropdownMenuCheckboxItem>
 ```
 
-- [ ] **Step 3: resource-search-combobox.tsx — replace hardcoded strings**
+- [x] **Step 3: resource-search-combobox.tsx — replace hardcoded strings**
 
 Around line 62, replace `"Search resources..."` with `t("relations.searchPlaceholder")`.
 
 Add `const t = useTranslations();` if not already present (check first — it may already have translations).
 
-- [ ] **Step 4: Verify build**
+- [x] **Step 4: Verify build**
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add components/resources/resource-table.tsx components/blocks/resource-search-combobox.tsx messages/en.json messages/zh-CN.json
@@ -537,7 +537,7 @@ git commit -m "fix: replace hardcoded strings with i18n translations"
 **Files:**
 - Modify: `components/blocks/resource-relation-panel.tsx`
 
-- [ ] **Step 1: Add confirmation dialog**
+- [x] **Step 1: Add confirmation dialog**
 
 Import AlertDialog components:
 ```typescript
@@ -587,9 +587,9 @@ Add AlertDialog component after the panel content:
 
 Note: Check that `@/components/ui/alert-dialog` exists. If not, add via shadcn CLI first: `npx shadcn@latest add alert-dialog`.
 
-- [ ] **Step 2: Verify build**
+- [x] **Step 2: Verify build**
 
-- [ ] **Step 3: Commit**
+- [x] **Step 3: Commit**
 
 ```bash
 git add components/blocks/resource-relation-panel.tsx
@@ -602,27 +602,27 @@ git commit -m "fix: add confirmation dialog before deleting resource relations"
 
 ### Task 14: Full build verification + visual check
 
-- [ ] **Step 1: Run build**
+- [x] **Step 1: Run build**
 
 ```bash
 cd /Users/fan/JsProjects/ControlHub/.worktrees/cmdb-redesign && npx next build
 ```
 
-- [ ] **Step 2: Run existing tests**
+- [x] **Step 2: Run existing tests**
 
 ```bash
 cd /Users/fan/JsProjects/ControlHub/.worktrees/cmdb-redesign && npx vitest run
 ```
 
-- [ ] **Step 3: Visual verification checklist**
+- [x] **Step 3: Visual verification checklist**
 
-- [ ] Overview: posture grid visible in both light and dark mode
-- [ ] Overview: attention table has aria-label
-- [ ] Resources: healthy badges show emerald (not accent color)
-- [ ] Resources: row hover consistent
-- [ ] Audits: search input filters events when typing
-- [ ] Audits: severity borders use -500 shade
-- [ ] Relations: delete shows confirmation dialog
-- [ ] Detail panel: header padding matches data table shell
-- [ ] Filter triggers: rounded-lg with focus-visible ring
-- [ ] zh-CN mode: "Columns" shows "列"
+- [x] Overview: posture grid visible in both light and dark mode
+- [x] Overview: attention table has aria-label
+- [x] Resources: healthy badges show emerald (not accent color)
+- [x] Resources: row hover consistent
+- [x] Audits: search input filters events when typing
+- [x] Audits: severity borders use -500 shade
+- [x] Relations: delete shows confirmation dialog
+- [x] Detail panel: header padding matches data table shell
+- [x] Filter triggers: rounded-lg with focus-visible ring
+- [x] zh-CN mode: "Columns" shows "列"

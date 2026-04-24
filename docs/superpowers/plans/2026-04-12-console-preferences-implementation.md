@@ -44,7 +44,7 @@
 - Modify: `/Users/fan/JsProjects/ControlHub/components/providers/app-providers.tsx`
 - Test: `/Users/fan/JsProjects/ControlHub/tests/components/accent-switcher.test.tsx`
 
-- [ ] **Step 1: Write the failing accent-switcher test**
+- [x] **Step 1: Write the failing accent-switcher test**
 
 ```tsx
 import { NextIntlClientProvider } from "next-intl";
@@ -75,12 +75,12 @@ describe("AccentSwitcher", () => {
 });
 ```
 
-- [ ] **Step 2: Run the test to verify it fails**
+- [x] **Step 2: Run the test to verify it fails**
 
 Run: `npx vitest run tests/components/accent-switcher.test.tsx`
 Expected: FAIL with missing `AccentProvider` or `AccentSwitcher`.
 
-- [ ] **Step 3: Write the minimal preference model**
+- [x] **Step 3: Write the minimal preference model**
 
 ```ts
 // /Users/fan/JsProjects/ControlHub/lib/preferences.ts
@@ -172,7 +172,7 @@ import { AccentProvider } from "@/components/providers/accent-provider";
 </ThemeProvider>
 ```
 
-- [ ] **Step 4: Add the minimal accent-switcher to make the test pass**
+- [x] **Step 4: Add the minimal accent-switcher to make the test pass**
 
 ```tsx
 // /Users/fan/JsProjects/ControlHub/components/settings/accent-switcher.tsx
@@ -204,12 +204,12 @@ export function AccentSwitcher() {
 }
 ```
 
-- [ ] **Step 5: Run the test to verify it passes**
+- [x] **Step 5: Run the test to verify it passes**
 
 Run: `npx vitest run tests/components/accent-switcher.test.tsx`
 Expected: PASS
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add components/providers/accent-provider.tsx components/providers/app-providers.tsx components/settings/accent-switcher.tsx lib/preferences.ts tests/components/accent-switcher.test.tsx
@@ -226,7 +226,7 @@ git commit -m "feat: add accent preference foundation"
 - Modify: `/Users/fan/JsProjects/ControlHub/tests/components/language-switcher.test.tsx`
 - Modify: `/Users/fan/JsProjects/ControlHub/tests/components/theme-toggle.test.tsx`
 
-- [ ] **Step 1: Update the failing language-switcher test to expect segmented buttons**
+- [x] **Step 1: Update the failing language-switcher test to expect segmented buttons**
 
 ```tsx
 it("renders direct Chinese and English switch buttons", () => {
@@ -241,12 +241,12 @@ it("renders direct Chinese and English switch buttons", () => {
 });
 ```
 
-- [ ] **Step 2: Run the language test to verify it fails**
+- [x] **Step 2: Run the language test to verify it fails**
 
 Run: `npx vitest run tests/components/language-switcher.test.tsx`
 Expected: FAIL because the component still renders a select.
 
-- [ ] **Step 3: Replace the select with a segmented switch**
+- [x] **Step 3: Replace the select with a segmented switch**
 
 ```tsx
 // /Users/fan/JsProjects/ControlHub/components/settings/language-switcher.tsx
@@ -300,7 +300,7 @@ export function LanguageSwitcher() {
 }
 ```
 
-- [ ] **Step 4: Make theme and accent controls align with topbar density**
+- [x] **Step 4: Make theme and accent controls align with topbar density**
 
 ```tsx
 // /Users/fan/JsProjects/ControlHub/components/app-shell/topbar.tsx
@@ -376,12 +376,12 @@ export function AccentSwitcher() {
 }
 ```
 
-- [ ] **Step 5: Run focused tests**
+- [x] **Step 5: Run focused tests**
 
 Run: `npx vitest run tests/components/language-switcher.test.tsx tests/components/theme-toggle.test.tsx tests/components/accent-switcher.test.tsx`
 Expected: PASS
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add components/app-shell/topbar.tsx components/settings/language-switcher.tsx components/settings/theme-toggle.tsx components/settings/accent-switcher.tsx tests/components/language-switcher.test.tsx tests/components/theme-toggle.test.tsx tests/components/accent-switcher.test.tsx
@@ -396,7 +396,7 @@ git commit -m "feat: add compact topbar preference controls"
 - Modify: `/Users/fan/JsProjects/ControlHub/messages/en.json`
 - Modify: `/Users/fan/JsProjects/ControlHub/messages/zh-CN.json`
 
-- [ ] **Step 1: Add failing manual expectation notes for accent tokens**
+- [x] **Step 1: Add failing manual expectation notes for accent tokens**
 
 ```text
 Expectation:
@@ -405,7 +405,7 @@ Expectation:
 - purple remains legible in both light and dark
 ```
 
-- [ ] **Step 2: Add per-accent token maps in globals.css**
+- [x] **Step 2: Add per-accent token maps in globals.css**
 
 ```css
 /* /Users/fan/JsProjects/ControlHub/app/globals.css */
@@ -441,7 +441,7 @@ Expectation:
 }
 ```
 
-- [ ] **Step 3: Add an appearance section to settings**
+- [x] **Step 3: Add an appearance section to settings**
 
 ```tsx
 // /Users/fan/JsProjects/ControlHub/app/(console)/settings/page.tsx
@@ -461,7 +461,7 @@ import { ThemeToggle } from "@/components/settings/theme-toggle";
 </DetailPanel>
 ```
 
-- [ ] **Step 4: Add i18n copy for accent labels**
+- [x] **Step 4: Add i18n copy for accent labels**
 
 ```json
 {
@@ -487,7 +487,7 @@ import { ThemeToggle } from "@/components/settings/theme-toggle";
 }
 ```
 
-- [ ] **Step 5: Run build and lint**
+- [x] **Step 5: Run build and lint**
 
 Run:
 
@@ -501,7 +501,7 @@ Expected:
 - `build` PASS
 - `lint` 0 errors, with only the existing TanStack warnings allowed
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add app/globals.css app/(console)/settings/page.tsx messages/en.json messages/zh-CN.json
@@ -513,7 +513,7 @@ git commit -m "feat: add appearance preferences and accent tokens"
 **Files:**
 - No new files required
 
-- [ ] **Step 1: Run the full frontend verification suite**
+- [x] **Step 1: Run the full frontend verification suite**
 
 Run:
 
@@ -529,7 +529,7 @@ Expected:
 - build PASS
 - lint has no errors
 
-- [ ] **Step 2: Run manual browser verification**
+- [x] **Step 2: Run manual browser verification**
 
 Verify:
 
@@ -549,7 +549,7 @@ Check:
 - purple remains readable in light and dark
 - health and audit semantic colors do not change with accent
 
-- [ ] **Step 3: Commit the verification pass**
+- [x] **Step 3: Commit the verification pass**
 
 ```bash
 git add -A

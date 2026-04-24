@@ -55,7 +55,7 @@
 **Files:**
 - Modify: `internal/model/taxonomy.go`
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Add to `internal/model/taxonomy_test.go` (or create it):
 
@@ -127,12 +127,12 @@ func TestResourceSubtypeDictionary_Empty(t *testing.T) {
 }
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `cd /Users/fan/GolangProjects/ControlHub && go test ./internal/model/ -v -run TestResourceSubtype -count=1`
 Expected: FAIL — `ValidateResourceSubtype` and `ResourceSubtypeDictionary` undefined
 
-- [ ] **Step 3: Implement subtype dictionary**
+- [x] **Step 3: Implement subtype dictionary**
 
 Add to `internal/model/taxonomy.go` after `resourceTypeDictionaryItems` (after line 76):
 
@@ -212,17 +212,17 @@ func ValidateResourceSubtype(resourceType, subtype string) error {
 }
 ```
 
-- [ ] **Step 4: Run test to verify it passes**
+- [x] **Step 4: Run test to verify it passes**
 
 Run: `go test ./internal/model/ -v -run TestResourceSubtype -count=1`
 Expected: ALL PASS
 
-- [ ] **Step 5: Run full model tests**
+- [x] **Step 5: Run full model tests**
 
 Run: `go test ./internal/model/ -v -count=1`
 Expected: ALL PASS (existing + new tests)
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add internal/model/taxonomy.go internal/model/taxonomy_test.go
@@ -239,7 +239,7 @@ git commit -m "feat: add resource subtype dictionary and validation to taxonomy"
 - Modify: `internal/api/router.go` (add route)
 - Modify: `internal/api/test_server.go` (wire into test deps)
 
-- [ ] **Step 1: Add ResourceSubtypeService**
+- [x] **Step 1: Add ResourceSubtypeService**
 
 Add to `internal/service/dictionary_service.go` (after existing dictionary services):
 
@@ -259,7 +259,7 @@ func (s *ResourceSubtypeService) List(resourceType string) ([]model.DictionaryIt
 }
 ```
 
-- [ ] **Step 2: Add handler**
+- [x] **Step 2: Add handler**
 
 Add to `internal/api/dictionary_handler.go` after `handleListResourceTypes` (after line 97):
 
@@ -287,7 +287,7 @@ func handleListResourceSubtypes(subtypeService *service.ResourceSubtypeService) 
 }
 ```
 
-- [ ] **Step 3: Add route and wire dependency**
+- [x] **Step 3: Add route and wire dependency**
 
 In `internal/api/router.go`, add after line 67 (`resource-types` route):
 
@@ -301,12 +301,12 @@ In `internal/api/test_server.go`, add `ResourceSubtypeService` to `Dependencies`
 ResourceSubtypeService: service.NewResourceSubtypeService(),
 ```
 
-- [ ] **Step 4: Verify it compiles and tests pass**
+- [x] **Step 4: Verify it compiles and tests pass**
 
 Run: `go build ./... && go test ./internal/api/ -v -count=1`
 Expected: BUILD PASS, ALL TESTS PASS
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add internal/service/dictionary_service.go internal/api/dictionary_handler.go internal/api/router.go internal/api/test_server.go
@@ -320,7 +320,7 @@ git commit -m "feat: add GET /resource-subtypes API endpoint"
 **Files:**
 - Modify: `internal/repository/mysql/resource_repository.go`
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Create `internal/repository/mysql/profile_write_test.go` with integration test stubs (build tag `integration`):
 
@@ -344,7 +344,7 @@ func TestUpsertDatabaseInstanceProfile(t *testing.T) {
 }
 ```
 
-- [ ] **Step 2: Add profile write methods to repository**
+- [x] **Step 2: Add profile write methods to repository**
 
 Add `ProfileWriter` interface to `internal/service/profile_service.go` (we'll create the full service in Task 4, but the interface is needed here):
 
@@ -412,12 +412,12 @@ func (r *MySQLResourceRepository) DeleteProfile(ctx context.Context, resourceID,
 }
 ```
 
-- [ ] **Step 3: Verify it compiles**
+- [x] **Step 3: Verify it compiles**
 
 Run: `go build ./...`
 Expected: BUILD PASS
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add internal/repository/mysql/resource_repository.go
@@ -434,7 +434,7 @@ git commit -m "feat: add profile write methods to MySQL repository"
 - Modify: `internal/api/router.go` (add profile routes)
 - Modify: `internal/api/test_server.go` (wire profile service)
 
-- [ ] **Step 1: Create ProfileService**
+- [x] **Step 1: Create ProfileService**
 
 Create `internal/service/profile_service.go`:
 
@@ -550,7 +550,7 @@ func getInt(m map[string]interface{}, key string) int {
 }
 ```
 
-- [ ] **Step 2: Create profile handler**
+- [x] **Step 2: Create profile handler**
 
 Create `internal/api/profile_handler.go`:
 
@@ -611,7 +611,7 @@ func handlePatchResourceProfile(profileService *service.ProfileService) http.Han
 }
 ```
 
-- [ ] **Step 3: Add routes**
+- [x] **Step 3: Add routes**
 
 In `internal/api/router.go`, add after the GET profile route (line 56):
 
@@ -620,7 +620,7 @@ router.Put("/resources/{id}/profile", handlePutResourceProfile(deps.ProfileServi
 router.Patch("/resources/{id}/profile", handlePatchResourceProfile(deps.ProfileService))
 ```
 
-- [ ] **Step 4: Wire in Dependencies and test_server**
+- [x] **Step 4: Wire in Dependencies and test_server**
 
 Add `ProfileService` to `Dependencies` struct in `resource_handler.go` or a central deps file. Add to `NewTestServer` in `test_server.go`:
 
@@ -652,12 +652,12 @@ func (f *fakeProfileRepo) DeleteProfile(ctx context.Context, resourceID, resourc
 
 Note: import `"context"` at the top of test_server.go.
 
-- [ ] **Step 5: Verify it compiles and tests pass**
+- [x] **Step 5: Verify it compiles and tests pass**
 
 Run: `go build ./... && go test ./... -count=1`
 Expected: BUILD PASS, ALL TESTS PASS
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add internal/service/profile_service.go internal/api/profile_handler.go internal/api/router.go internal/api/test_server.go
@@ -673,7 +673,7 @@ git commit -m "feat: add profile write service and PUT/PATCH API endpoints"
 - Modify: `internal/service/resource_service.go` (handle profile in Create)
 - Modify: `internal/api/resource_handler.go` (pass profile to service)
 
-- [ ] **Step 1: Add Profile field to ResourceCreateInput**
+- [x] **Step 1: Add Profile field to ResourceCreateInput**
 
 In `internal/model/resource_write.go`, add to `ResourceCreateInput` struct (after line 20, before Labels):
 
@@ -681,7 +681,7 @@ In `internal/model/resource_write.go`, add to `ResourceCreateInput` struct (afte
 Profile map[string]interface{} `json:"profile,omitempty"`
 ```
 
-- [ ] **Step 2: Update ResourceService to accept ProfileService**
+- [x] **Step 2: Update ResourceService to accept ProfileService**
 
 In `internal/service/resource_service.go`, add `profileService` field to `ResourceService`:
 
@@ -708,7 +708,7 @@ if len(input.Profile) > 0 && s.profileSvc != nil {
 }
 ```
 
-- [ ] **Step 3: Add subtype validation in create**
+- [x] **Step 3: Add subtype validation in create**
 
 In `validateResourceCreateInput`, add after resourceType validation (after line 199):
 
@@ -718,7 +718,7 @@ if err := ValidateResourceSubtype(string(input.ResourceType), input.ResourceSubt
 }
 ```
 
-- [ ] **Step 4: Update wiring in test_server.go AND cmd/server/main.go**
+- [x] **Step 4: Update wiring in test_server.go AND cmd/server/main.go**
 
 In `test_server.go`, update `NewResourceService` call to pass `profileService`:
 
@@ -733,12 +733,12 @@ profileService := service.NewProfileService(resourceRepo, resourceRepo)
 resourceService := service.NewResourceService(resourceRepo, profileService)
 ```
 
-- [ ] **Step 5: Verify it compiles and tests pass**
+- [x] **Step 5: Verify it compiles and tests pass**
 
 Run: `go build ./... && go test ./... -count=1`
 Expected: BUILD PASS, ALL TESTS PASS (existing tests still pass because Profile is optional)
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add internal/model/resource_write.go internal/service/resource_service.go internal/api/test_server.go
@@ -753,7 +753,7 @@ git commit -m "feat: support embedded profile in resource creation + subtype val
 - Modify: `internal/model/resource_write.go` (remove Name from HasImmutableFields)
 - Modify: `internal/service/resource_service.go` (add Name validation in Update)
 
-- [ ] **Step 1: Remove Name from HasImmutableFields**
+- [x] **Step 1: Remove Name from HasImmutableFields**
 
 In `internal/model/resource_write.go`, change `HasImmutableFields` (line 52-54):
 
@@ -765,7 +765,7 @@ func (r ResourcePatchRequest) HasImmutableFields() bool {
 
 (Name removed from the check)
 
-- [ ] **Step 2: Add Name to HasMutableFields**
+- [x] **Step 2: Add Name to HasMutableFields**
 
 In `internal/model/resource_write.go`, change `HasMutableFields` (line 56-60), add `r.Name != nil`:
 
@@ -775,7 +775,7 @@ func (r ResourcePatchRequest) HasMutableFields() bool {
 }
 ```
 
-- [ ] **Step 3: Add Name validation in Update method**
+- [x] **Step 3: Add Name validation in Update method**
 
 In `internal/service/resource_service.go`, in the `Update` method, add after the DisplayName validation block (after line 114):
 
@@ -796,7 +796,7 @@ if req.Name != nil {
 }
 ```
 
-- [ ] **Step 4: Add subtype validation in Update**
+- [x] **Step 4: Add subtype validation in Update**
 
 In `validateResourcePatchRequest`, add after the source validation (after line 123):
 
@@ -812,14 +812,14 @@ if input.ResourceSubtype != nil {
 }
 ```
 
-- [ ] **Step 5: Verify it compiles and tests pass**
+- [x] **Step 5: Verify it compiles and tests pass**
 
 Run: `go build ./... && go test ./... -count=1`
 Expected: BUILD PASS
 
 Update any existing tests that assert Name is immutable to now expect it to be mutable.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add internal/model/resource_write.go internal/service/resource_service.go
@@ -834,7 +834,7 @@ git commit -m "feat: allow name modification in PATCH + subtype validation in up
 - Modify: `internal/api/resource_handler.go` (return field-level errors)
 - Modify: `internal/service/resource_service.go` (structured validation errors)
 
-- [ ] **Step 1: Define ValidationError type**
+- [x] **Step 1: Define ValidationError type**
 
 Add to `internal/service/resource_service.go`:
 
@@ -862,7 +862,7 @@ func (e *ValidationError) WithField(field, msg string) *ValidationError {
 }
 ```
 
-- [ ] **Step 2: Update key validation points to use ValidationError**
+- [x] **Step 2: Update key validation points to use ValidationError**
 
 Change `validateName` to return `*ValidationError`:
 
@@ -914,7 +914,7 @@ func validateResourceCreateInput(input model.ResourceCreateInput) error {
 }
 ```
 
-- [ ] **Step 3: Handle ValidationError in writeServiceError**
+- [x] **Step 3: Handle ValidationError in writeServiceError**
 
 In `internal/api/resource_handler.go`, update `writeServiceError` to check for `*service.ValidationError`:
 
@@ -929,12 +929,12 @@ if errors.As(err, &ve) {
 }
 ```
 
-- [ ] **Step 4: Verify it compiles and tests pass**
+- [x] **Step 4: Verify it compiles and tests pass**
 
 Run: `go build ./... && go test ./... -count=1`
 Expected: BUILD PASS. Existing tests may need updating to handle new error type.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add internal/service/resource_service.go internal/api/resource_handler.go
@@ -945,17 +945,17 @@ git commit -m "feat: structured validation error responses with field-level deta
 
 ## Task 8: Backend — Run all tests
 
-- [ ] **Step 1: Run full Go test suite**
+- [x] **Step 1: Run full Go test suite**
 
 Run: `go test ./... -count=1`
 Expected: ALL PASS
 
-- [ ] **Step 2: Run integration tests (if Docker available)**
+- [x] **Step 2: Run integration tests (if Docker available)**
 
 Run: `make test-integration`
 Expected: ALL PASS
 
-- [ ] **Step 3: Fix any failures, then commit**
+- [x] **Step 3: Fix any failures, then commit**
 
 ```bash
 git add -A
@@ -972,7 +972,7 @@ git commit -m "fix: address test failures from CRUD redesign"
 - Modify: `/Users/fan/JsProjects/ControlHub/.worktrees/cmdb-redesign/services/api-client.ts`
 - Modify: `/Users/fan/JsProjects/ControlHub/.worktrees/cmdb-redesign/services/settings.ts`
 
-- [ ] **Step 1: Update TypeScript types**
+- [x] **Step 1: Update TypeScript types**
 
 In `types/resource.ts`:
 
@@ -988,7 +988,7 @@ Add `name` to `UpdateResourceInput` (after line 111):
 name?: string;
 ```
 
-- [ ] **Step 2: Fix api-client error handling**
+- [x] **Step 2: Fix api-client error handling**
 
 In `services/api-client.ts`, replace the error handling (lines 32-34) with:
 
@@ -1023,7 +1023,7 @@ export class ApiError extends Error {
 }
 ```
 
-- [ ] **Step 3: Add new service functions**
+- [x] **Step 3: Add new service functions**
 
 In `services/resources.ts`, add after `updateResource` (after line 188):
 
@@ -1058,12 +1058,12 @@ export async function listResourceSubtypes(
 
 Note: `DictionaryItem` type is `{ key: string; label: string; description?: string }` — check how it's defined in settings.ts and use the same type.
 
-- [ ] **Step 4: Verify it compiles**
+- [x] **Step 4: Verify it compiles**
 
 Run: `cd /Users/fan/JsProjects/ControlHub/.worktrees/cmdb-redesign && npx tsc --noEmit`
 Expected: PASS
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 cd /Users/fan/JsProjects/ControlHub/.worktrees/cmdb-redesign
@@ -1078,7 +1078,7 @@ git commit -m "feat: update types, add profile/subtype API services, structured 
 **Files:**
 - Create: `/Users/fan/JsProjects/ControlHub/.worktrees/cmdb-redesign/lib/profile-field-registry.ts`
 
-- [ ] **Step 1: Create profile field registry**
+- [x] **Step 1: Create profile field registry**
 
 Create `lib/profile-field-registry.ts`:
 
@@ -1163,12 +1163,12 @@ export function hasProfileFields(resourceType: string): boolean {
 }
 ```
 
-- [ ] **Step 2: Verify it compiles**
+- [x] **Step 2: Verify it compiles**
 
 Run: `cd /Users/fan/JsProjects/ControlHub/.worktrees/cmdb-redesign && npx tsc --noEmit`
 Expected: PASS
 
-- [ ] **Step 3: Commit**
+- [x] **Step 3: Commit**
 
 ```bash
 cd /Users/fan/JsProjects/ControlHub/.worktrees/cmdb-redesign
@@ -1184,7 +1184,7 @@ git commit -m "feat: add profile field registry with zod schemas per resource ty
 - Modify: `/Users/fan/JsProjects/ControlHub/.worktrees/cmdb-redesign/messages/en.json`
 - Modify: `/Users/fan/JsProjects/ControlHub/.worktrees/cmdb-redesign/messages/zh-CN.json`
 
-- [ ] **Step 1: Add English i18n keys**
+- [x] **Step 1: Add English i18n keys**
 
 Add under the `mutations` section in `messages/en.json`:
 
@@ -1239,7 +1239,7 @@ Add under the `mutations` section in `messages/en.json`:
 }
 ```
 
-- [ ] **Step 2: Add Chinese i18n keys**
+- [x] **Step 2: Add Chinese i18n keys**
 
 Add the same structure to `messages/zh-CN.json`:
 
@@ -1294,12 +1294,12 @@ Add the same structure to `messages/zh-CN.json`:
 }
 ```
 
-- [ ] **Step 3: Verify build**
+- [x] **Step 3: Verify build**
 
 Run: `cd /Users/fan/JsProjects/ControlHub/.worktrees/cmdb-redesign && npx next build`
 Expected: PASS
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 cd /Users/fan/JsProjects/ControlHub/.worktrees/cmdb-redesign
@@ -1322,7 +1322,7 @@ This is the largest frontend task. The component needs a complete rewrite to sup
 - localStorage memory for env/owner
 - Create success with "Continue" / "View Details" options
 
-- [ ] **Step 1: Rewrite the component**
+- [x] **Step 1: Rewrite the component**
 
 Key implementation points for the rewrite:
 
@@ -1387,17 +1387,17 @@ SheetContent
     [取消] [创建资源]
 ```
 
-- [ ] **Step 2: Verify build**
+- [x] **Step 2: Verify build**
 
 Run: `cd /Users/fan/JsProjects/ControlHub/.worktrees/cmdb-redesign && npx next build`
 Expected: PASS
 
-- [ ] **Step 3: Run existing tests**
+- [x] **Step 3: Run existing tests**
 
 Run: `cd /Users/fan/JsProjects/ControlHub/.worktrees/cmdb-redesign && npx vitest run`
 Expected: Update any failing tests to match new form structure
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 cd /Users/fan/JsProjects/ControlHub/.worktrees/cmdb-redesign
@@ -1412,7 +1412,7 @@ git commit -m "feat: rewrite create resource sheet as dynamic form with profile 
 **Files:**
 - Modify: `/Users/fan/JsProjects/ControlHub/.worktrees/cmdb-redesign/components/resources/edit-resource-sheet.tsx`
 
-- [ ] **Step 1: Rewrite the component**
+- [x] **Step 1: Rewrite the component**
 
 Key implementation points:
 
@@ -1453,17 +1453,17 @@ SheetContent
     [取消] [保存]
 ```
 
-- [ ] **Step 2: Verify build**
+- [x] **Step 2: Verify build**
 
 Run: `cd /Users/fan/JsProjects/ControlHub/.worktrees/cmdb-redesign && npx next build`
 Expected: PASS
 
-- [ ] **Step 3: Run existing tests**
+- [x] **Step 3: Run existing tests**
 
 Run: `cd /Users/fan/JsProjects/ControlHub/.worktrees/cmdb-redesign && npx vitest run`
 Expected: Update any failing tests
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 cd /Users/fan/JsProjects/ControlHub/.worktrees/cmdb-redesign
@@ -1479,7 +1479,7 @@ git commit -m "feat: rewrite edit resource sheet with profile editing, name edit
 - Modify: `/Users/fan/JsProjects/ControlHub/.worktrees/cmdb-redesign/tests/components/create-resource-sheet.test.tsx` (if exists)
 - Modify: `/Users/fan/JsProjects/ControlHub/.worktrees/cmdb-redesign/tests/components/edit-resource-sheet.test.tsx` (if exists)
 
-- [ ] **Step 1: Update create resource sheet tests**
+- [x] **Step 1: Update create resource sheet tests**
 
 Test scenarios:
 - Renders resource type selector
@@ -1491,7 +1491,7 @@ Test scenarios:
 - Submit sends profile in request body
 - Success shows "继续创建" and "查看详情" buttons
 
-- [ ] **Step 2: Update edit resource sheet tests**
+- [x] **Step 2: Update edit resource sheet tests**
 
 Test scenarios:
 - Loads profile data on open
@@ -1501,12 +1501,12 @@ Test scenarios:
 - Save button calls both PATCH endpoints when both areas changed
 - Save button only calls resource PATCH when only base changed
 
-- [ ] **Step 3: Run all tests**
+- [x] **Step 3: Run all tests**
 
 Run: `cd /Users/fan/JsProjects/ControlHub/.worktrees/cmdb-redesign && npx vitest run`
 Expected: ALL PASS
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 cd /Users/fan/JsProjects/ControlHub/.worktrees/cmdb-redesign
@@ -1518,22 +1518,22 @@ git commit -m "test: update create/edit resource sheet tests for dynamic form"
 
 ## Task 15: E2E verification
 
-- [ ] **Step 1: Run full Go test suite**
+- [x] **Step 1: Run full Go test suite**
 
 Run: `cd /Users/fan/GolangProjects/ControlHub && go test ./... -count=1`
 Expected: ALL PASS
 
-- [ ] **Step 2: Run full frontend test suite**
+- [x] **Step 2: Run full frontend test suite**
 
 Run: `cd /Users/fan/JsProjects/ControlHub/.worktrees/cmdb-redesign && npx vitest run`
 Expected: ALL PASS
 
-- [ ] **Step 3: Run frontend build**
+- [x] **Step 3: Run frontend build**
 
 Run: `cd /Users/fan/JsProjects/ControlHub/.worktrees/cmdb-redesign && npx next build`
 Expected: PASS
 
-- [ ] **Step 4: Browser E2E test — Create resource**
+- [x] **Step 4: Browser E2E test — Create resource**
 
 Start dev server, navigate to `/resources`:
 1. Click "创建资源" or equivalent
@@ -1547,7 +1547,7 @@ Start dev server, navigate to `/resources`:
 9. Click "查看详情", verify navigation to resource detail page
 10. Verify profile data is visible
 
-- [ ] **Step 5: Browser E2E test — Edit resource**
+- [x] **Step 5: Browser E2E test — Edit resource**
 
 Navigate to a resource detail page:
 1. Click "编辑"

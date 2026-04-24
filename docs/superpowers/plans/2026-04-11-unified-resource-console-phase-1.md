@@ -109,7 +109,7 @@
 - Create: `/Users/fan/GolangProjects/ControlHub/internal/api/health_handler.go`
 - Test: `/Users/fan/GolangProjects/ControlHub/internal/api/health_handler_test.go`
 
-- [ ] **Step 1: Write the failing backend health-route test**
+- [x] **Step 1: Write the failing backend health-route test**
 
 ```go
 package api
@@ -138,12 +138,12 @@ func TestHealthRoute(t *testing.T) {
 }
 ```
 
-- [ ] **Step 2: Run the test to verify the backend shell does not exist yet**
+- [x] **Step 2: Run the test to verify the backend shell does not exist yet**
 
 Run: `go test ./internal/api -run TestHealthRoute -v`  
 Expected: FAIL with missing package symbols such as `NewRouter` or missing files.
 
-- [ ] **Step 3: Write the minimal backend shell**
+- [x] **Step 3: Write the minimal backend shell**
 
 ```go
 // /Users/fan/GolangProjects/ControlHub/go.mod
@@ -253,7 +253,7 @@ DATABASE_DSN=root:password@tcp(127.0.0.1:3306)/controlhub?parseTime=true&charset
 JWT_SECRET=change-me
 ```
 
-- [ ] **Step 4: Adjust the health handler so the body matches the test exactly**
+- [x] **Step 4: Adjust the health handler so the body matches the test exactly**
 
 ```go
 func handleHealth(w http.ResponseWriter, _ *http.Request) {
@@ -263,12 +263,12 @@ func handleHealth(w http.ResponseWriter, _ *http.Request) {
 }
 ```
 
-- [ ] **Step 5: Run the backend test suite**
+- [x] **Step 5: Run the backend test suite**
 
 Run: `go test ./internal/api -run TestHealthRoute -v`  
 Expected: PASS
 
-- [ ] **Step 6: Commit the backend shell**
+- [x] **Step 6: Commit the backend shell**
 
 ```bash
 git add go.mod Makefile .env.example cmd/server/main.go internal/api internal/config
@@ -283,7 +283,7 @@ git commit -m "feat: bootstrap backend service shell"
 - Create: `/Users/fan/GolangProjects/ControlHub/internal/openapi/openapi.yaml`
 - Test: `/Users/fan/GolangProjects/ControlHub/internal/model/resource_test.go`
 
-- [ ] **Step 1: Write the failing resource type validation test**
+- [x] **Step 1: Write the failing resource type validation test**
 
 ```go
 package model
@@ -310,12 +310,12 @@ func TestResourceTypeValidation(t *testing.T) {
 }
 ```
 
-- [ ] **Step 2: Run the test to verify the model does not exist yet**
+- [x] **Step 2: Run the test to verify the model does not exist yet**
 
 Run: `go test ./internal/model -run TestResourceTypeValidation -v`  
 Expected: FAIL with undefined `ResourceType`.
 
-- [ ] **Step 3: Write the resource model and OpenAPI baseline**
+- [x] **Step 3: Write the resource model and OpenAPI baseline**
 
 ```go
 // /Users/fan/GolangProjects/ControlHub/internal/model/resource.go
@@ -447,12 +447,12 @@ components:
           type: string
 ```
 
-- [ ] **Step 4: Run the model test**
+- [x] **Step 4: Run the model test**
 
 Run: `go test ./internal/model -run TestResourceTypeValidation -v`  
 Expected: PASS
 
-- [ ] **Step 5: Commit the resource model baseline**
+- [x] **Step 5: Commit the resource model baseline**
 
 ```bash
 git add internal/model internal/openapi/openapi.yaml
@@ -466,7 +466,7 @@ git commit -m "feat: define resource core model and openapi baseline"
 - Create: `/Users/fan/GolangProjects/ControlHub/migrations/0002_seed_reference_data.sql`
 - Test: `/Users/fan/GolangProjects/ControlHub/migrations/verify_initial_schema.sql`
 
-- [ ] **Step 1: Write a schema verification SQL script**
+- [x] **Step 1: Write a schema verification SQL script**
 
 ```sql
 -- /Users/fan/GolangProjects/ControlHub/migrations/verify_initial_schema.sql
@@ -489,7 +489,7 @@ where table_schema = 'controlhub'
 order by table_name;
 ```
 
-- [ ] **Step 2: Write the initial schema migration**
+- [x] **Step 2: Write the initial schema migration**
 
 ```sql
 -- /Users/fan/GolangProjects/ControlHub/migrations/0001_initial_schema.sql
@@ -619,7 +619,7 @@ create index idx_relations_to on resource_relations(to_resource_id);
 create index idx_audit_target on audit_events(target_resource_id);
 ```
 
-- [ ] **Step 3: Write the seed migration**
+- [x] **Step 3: Write the seed migration**
 
 ```sql
 -- /Users/fan/GolangProjects/ControlHub/migrations/0002_seed_reference_data.sql
@@ -636,7 +636,7 @@ insert into owners (id, name, email) values
   ('20000000-0000-0000-0000-000000000002', 'DBA Team', 'dba@example.com');
 ```
 
-- [ ] **Step 4: Run the schema manually against local MySQL**
+- [x] **Step 4: Run the schema manually against local MySQL**
 
 Run:
 
@@ -649,7 +649,7 @@ mysql -u root controlhub < migrations/verify_initial_schema.sql
 
 Expected: the verification script prints the 11 expected table names.
 
-- [ ] **Step 5: Commit the initial schema**
+- [x] **Step 5: Commit the initial schema**
 
 ```bash
 git add migrations
@@ -674,7 +674,7 @@ git commit -m "feat: add initial mysql schema for resource console"
 - Create: `/Users/fan/GolangProjects/ControlHub/internal/model/relation.go`
 - Create: `/Users/fan/GolangProjects/ControlHub/internal/model/audit.go`
 
-- [ ] **Step 1: Write a failing resource-list handler test**
+- [x] **Step 1: Write a failing resource-list handler test**
 
 ```go
 package api
@@ -702,12 +702,12 @@ func TestListResources(t *testing.T) {
 }
 ```
 
-- [ ] **Step 2: Run the resource handler test**
+- [x] **Step 2: Run the resource handler test**
 
 Run: `go test ./internal/api -run TestListResources -v`  
 Expected: FAIL with missing `NewTestServer` or missing `/resources` route.
 
-- [ ] **Step 3: Add minimal service and handler contracts for resource list, detail, relations, and audits**
+- [x] **Step 3: Add minimal service and handler contracts for resource list, detail, relations, and audits**
 
 ```go
 // /Users/fan/GolangProjects/ControlHub/internal/service/resource_service.go
@@ -1007,7 +1007,7 @@ func NewTestServer() *TestServer {
 }
 ```
 
-- [ ] **Step 4: Wire the routes to the new handlers**
+- [x] **Step 4: Wire the routes to the new handlers**
 
 ```go
 // /Users/fan/GolangProjects/ControlHub/internal/api/router.go
@@ -1038,7 +1038,7 @@ func NewRouter(deps Dependencies) *chi.Mux {
 }
 ```
 
-- [ ] **Step 5: Add repository queries for list/detail/relations/audit**
+- [x] **Step 5: Add repository queries for list/detail/relations/audit**
 
 ```go
 // /Users/fan/GolangProjects/ControlHub/internal/repository/mysql/resource_repository.go
@@ -1169,7 +1169,7 @@ func (c Config) HTTPAddress() string {
 }
 ```
 
-- [ ] **Step 6: Run the backend tests and smoke-test the API**
+- [x] **Step 6: Run the backend tests and smoke-test the API**
 
 Run:
 
@@ -1183,7 +1183,7 @@ Expected:
 - tests PASS
 - `/resources` returns JSON with an `items` array
 
-- [ ] **Step 7: Commit the backend asset APIs**
+- [x] **Step 7: Commit the backend asset APIs**
 
 ```bash
 git add internal/api internal/service internal/repository
@@ -1224,12 +1224,12 @@ func TestLogin(t *testing.T) {
 }
 ```
 
-- [ ] **Step 2: Run the login test**
+- [x] **Step 2: Run the login test**
 
 Run: `go test ./internal/api -run TestLogin -v`  
 Expected: FAIL with missing `/auth/login`.
 
-- [ ] **Step 3: Add the auth model and handler**
+- [x] **Step 3: Add the auth model and handler**
 
 ```go
 // /Users/fan/GolangProjects/ControlHub/internal/model/auth.go
@@ -1285,7 +1285,7 @@ func handleLogin(w http.ResponseWriter, r *http.Request) {
 r.Post("/auth/login", handleLogin)
 ```
 
-- [ ] **Step 4: Replace the dev stub with service-backed credential check**
+- [x] **Step 4: Replace the dev stub with service-backed credential check**
 
 ```go
 // /Users/fan/GolangProjects/ControlHub/internal/service/auth_service.go
@@ -1324,12 +1324,12 @@ func (s *AuthService) Login(email string, password string) (*model.LoginResponse
 }
 ```
 
-- [ ] **Step 5: Run the auth tests**
+- [x] **Step 5: Run the auth tests**
 
 Run: `go test ./internal/api ./internal/service -run TestLogin -v`  
 Expected: PASS
 
-- [ ] **Step 6: Commit the auth slice**
+- [x] **Step 6: Commit the auth slice**
 
 ```bash
 git add internal/model/auth.go internal/service/auth_service.go internal/api/auth_handler.go internal/repository/mysql/user_repository.go
@@ -1346,7 +1346,7 @@ git commit -m "feat: add login and basic role handling"
 - Create: `/Users/fan/JsProjects/ControlHub/vitest.config.ts`
 - Test: `/Users/fan/JsProjects/ControlHub/tests/components/sidebar.test.tsx`
 
-- [ ] **Step 1: Create the Next.js app and install dependencies**
+- [x] **Step 1: Create the Next.js app and install dependencies**
 
 Run:
 
@@ -1361,7 +1361,7 @@ npx shadcn@latest add sheet badge button dropdown-menu command input table
 
 Expected: frontend scaffold files are created and dependencies install successfully.
 
-- [ ] **Step 2: Write the failing sidebar rendering test**
+- [x] **Step 2: Write the failing sidebar rendering test**
 
 ```tsx
 import { render, screen } from "@testing-library/react";
@@ -1379,12 +1379,12 @@ describe("Sidebar", () => {
 });
 ```
 
-- [ ] **Step 3: Run the frontend test to confirm the shell component is missing**
+- [x] **Step 3: Run the frontend test to confirm the shell component is missing**
 
 Run: `cd /Users/fan/JsProjects/ControlHub && npx vitest run tests/components/sidebar.test.tsx`  
 Expected: FAIL with missing `Sidebar` module.
 
-- [ ] **Step 4: Add the baseline frontend config and test setup**
+- [x] **Step 4: Add the baseline frontend config and test setup**
 
 ```ts
 // /Users/fan/JsProjects/ControlHub/vitest.config.ts
@@ -1425,12 +1425,12 @@ export default function RootLayout({ children }: { children: ReactNode }) {
 }
 ```
 
-- [ ] **Step 5: Run the frontend test suite again**
+- [x] **Step 5: Run the frontend test suite again**
 
 Run: `cd /Users/fan/JsProjects/ControlHub && npx vitest run tests/components/sidebar.test.tsx`  
 Expected: still FAIL because `Sidebar` is not implemented yet.
 
-- [ ] **Step 6: Commit the frontend scaffold**
+- [x] **Step 6: Commit the frontend scaffold**
 
 ```bash
 cd /Users/fan/JsProjects/ControlHub
@@ -1454,7 +1454,7 @@ git commit -m "feat: scaffold nextjs frontend foundation"
 - Create: `/Users/fan/JsProjects/ControlHub/components/blocks/empty-state.tsx`
 - Create: `/Users/fan/JsProjects/ControlHub/lib/navigation.ts`
 
-- [ ] **Step 1: Write the minimal navigation source**
+- [x] **Step 1: Write the minimal navigation source**
 
 ```ts
 // /Users/fan/JsProjects/ControlHub/lib/navigation.ts
@@ -1468,7 +1468,7 @@ export const primaryNavigation = [
 ];
 ```
 
-- [ ] **Step 2: Implement the sidebar so the existing test passes**
+- [x] **Step 2: Implement the sidebar so the existing test passes**
 
 ```tsx
 // /Users/fan/JsProjects/ControlHub/components/app-shell/sidebar.tsx
@@ -1497,7 +1497,7 @@ export function Sidebar() {
 }
 ```
 
-- [ ] **Step 3: Add the shell frame**
+- [x] **Step 3: Add the shell frame**
 
 ```tsx
 // /Users/fan/JsProjects/ControlHub/components/app-shell/app-shell.tsx
@@ -1565,7 +1565,7 @@ export default function ConsoleLayout({ children }: { children: ReactNode }) {
 }
 ```
 
-- [ ] **Step 4: Add the shared console blocks used by page routes**
+- [x] **Step 4: Add the shared console blocks used by page routes**
 
 ```tsx
 // /Users/fan/JsProjects/ControlHub/components/blocks/data-table-shell.tsx
@@ -1651,12 +1651,12 @@ export function EmptyState({ title, description }: { title: string; description:
 }
 ```
 
-- [ ] **Step 5: Run the sidebar test**
+- [x] **Step 5: Run the sidebar test**
 
 Run: `cd /Users/fan/JsProjects/ControlHub && npx vitest run tests/components/sidebar.test.tsx`  
 Expected: PASS
 
-- [ ] **Step 6: Commit the app shell**
+- [x] **Step 6: Commit the app shell**
 
 ```bash
 cd /Users/fan/JsProjects/ControlHub
@@ -1676,7 +1676,7 @@ git commit -m "feat: add shared console app shell"
 - Create: `/Users/fan/JsProjects/ControlHub/types/resource.ts`
 - Test: `/Users/fan/JsProjects/ControlHub/tests/components/resource-detail-sheet.test.tsx`
 
-- [ ] **Step 1: Write the failing detail-sheet test**
+- [x] **Step 1: Write the failing detail-sheet test**
 
 ```tsx
 import { render, screen } from "@testing-library/react";
@@ -1704,12 +1704,12 @@ describe("ResourceDetailSheet", () => {
 });
 ```
 
-- [ ] **Step 2: Run the failing detail-sheet test**
+- [x] **Step 2: Run the failing detail-sheet test**
 
 Run: `cd /Users/fan/JsProjects/ControlHub && npx vitest run tests/components/resource-detail-sheet.test.tsx`  
 Expected: FAIL with missing component.
 
-- [ ] **Step 3: Add the resource types and API client**
+- [x] **Step 3: Add the resource types and API client**
 
 ```ts
 // /Users/fan/JsProjects/ControlHub/types/resource.ts
@@ -1771,7 +1771,7 @@ export async function getResource(id: string): Promise<Resource> {
 }
 ```
 
-- [ ] **Step 4: Implement the detail sheet and table**
+- [x] **Step 4: Implement the detail sheet and table**
 
 ```tsx
 // /Users/fan/JsProjects/ControlHub/components/resources/resource-detail-sheet.tsx
@@ -1878,7 +1878,7 @@ export function ResourceTable({ resources }: { resources: Resource[] }) {
 }
 ```
 
-- [ ] **Step 5: Add the resources pages**
+- [x] **Step 5: Add the resources pages**
 
 ```tsx
 // /Users/fan/JsProjects/ControlHub/app/(console)/resources/page.tsx
@@ -1937,7 +1937,7 @@ export default async function ResourceDetailPage({ params }: { params: Promise<{
 }
 ```
 
-- [ ] **Step 6: Run the resource detail test and frontend smoke test**
+- [x] **Step 6: Run the resource detail test and frontend smoke test**
 
 Run:
 
@@ -1952,7 +1952,7 @@ Expected:
 - `/resources` renders the table and opens the right-side sheet on row click
 - `/resources/[id]` renders a full detail page with relations and activity sections
 
-- [ ] **Step 7: Commit the resources UI**
+- [x] **Step 7: Commit the resources UI**
 
 ```bash
 cd /Users/fan/JsProjects/ControlHub
@@ -1976,7 +1976,7 @@ git commit -m "feat: add unified resource list and detail panel"
 - Create: `/Users/fan/JsProjects/ControlHub/services/auth.ts`
 - Create: `/Users/fan/JsProjects/ControlHub/services/audits.ts`
 
-- [ ] **Step 1: Add audit types and service calls**
+- [x] **Step 1: Add audit types and service calls**
 
 ```ts
 // /Users/fan/JsProjects/ControlHub/services/auth.ts
@@ -2033,7 +2033,7 @@ export interface OwnerOption {
 }
 ```
 
-- [ ] **Step 2: Implement the overview and audit pages**
+- [x] **Step 2: Implement the overview and audit pages**
 
 ```tsx
 // /Users/fan/JsProjects/ControlHub/app/(console)/overview/page.tsx
@@ -2109,7 +2109,7 @@ export function AuditTable({ items }: { items: AuditEvent[] }) {
 }
 ```
 
-- [ ] **Step 3: Implement database and settings pages with the same shell language**
+- [x] **Step 3: Implement database and settings pages with the same shell language**
 
 ```tsx
 // /Users/fan/JsProjects/ControlHub/components/databases/database-table.tsx
@@ -2244,7 +2244,7 @@ export default function LoginPage() {
 }
 ```
 
-- [ ] **Step 4: Run the frontend smoke test**
+- [x] **Step 4: Run the frontend smoke test**
 
 Run:
 
@@ -2258,7 +2258,7 @@ Expected:
 - `/login` signs in and redirects to `/overview`
 - visual style stays dense and table-first instead of dashboard-card-first
 
-- [ ] **Step 5: Commit the remaining console pages**
+- [x] **Step 5: Commit the remaining console pages**
 
 ```bash
 cd /Users/fan/JsProjects/ControlHub
@@ -2273,7 +2273,7 @@ git commit -m "feat: add overview audits databases and settings pages"
 - Create: `/Users/fan/GolangProjects/ControlHub/README.md`
 - Create: `/Users/fan/JsProjects/ControlHub/README.md`
 
-- [ ] **Step 1: Add backend run instructions**
+- [x] **Step 1: Add backend run instructions**
 
 ```md
 # ControlHub Backend
@@ -2290,7 +2290,7 @@ git commit -m "feat: add overview audits databases and settings pages"
 Run `make test`
 ```
 
-- [ ] **Step 2: Add frontend run instructions**
+- [x] **Step 2: Add frontend run instructions**
 
 ```md
 # ControlHub Frontend
@@ -2306,7 +2306,7 @@ Run `make test`
 Run `npx vitest run`
 ```
 
-- [ ] **Step 3: Run final verification**
+- [x] **Step 3: Run final verification**
 
 Run:
 
@@ -2320,7 +2320,7 @@ Expected:
 - frontend tests PASS
 - manual browser smoke test confirms login, list, detail panel, and overview shell all work
 
-- [ ] **Step 4: Commit documentation and verification updates**
+- [x] **Step 4: Commit documentation and verification updates**
 
 ```bash
 cd /Users/fan/GolangProjects/ControlHub

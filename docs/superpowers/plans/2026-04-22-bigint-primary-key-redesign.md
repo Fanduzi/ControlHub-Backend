@@ -130,7 +130,7 @@
 - Modify: `migrations/0008_apply_demo_seed_cleanup_patch.sql`
 - Test: `internal/integration/mysql_test.go`
 
-- [ ] **Step 1: Write the failing schema assertions**
+- [x] **Step 1: Write the failing schema assertions**
 
 Add/replace bigint/FK assertions in `internal/integration/mysql_test.go`:
 
@@ -202,7 +202,7 @@ func TestProfileTablesUseUniqueResourceIDInsteadOfPrimaryKeyResourceID(t *testin
 }
 ```
 
-- [ ] **Step 2: Run the integration schema test to verify it fails**
+- [x] **Step 2: Run the integration schema test to verify it fails**
 
 Run:
 
@@ -212,7 +212,7 @@ go test -tags=integration -count=1 -run 'TestSchemaUsesBigintPrimaryKeysWithoutF
 
 Expected: FAIL because current migrations still create `char(36)` IDs and FK constraints.
 
-- [ ] **Step 3: Rewrite base and follow-up migrations**
+- [x] **Step 3: Rewrite base and follow-up migrations**
 
 Replace the core parts of `migrations/0001_initial_schema.sql` with bigint/no-FK DDL like:
 
@@ -307,7 +307,7 @@ SELECT 1;
 SELECT 1;
 ```
 
-- [ ] **Step 4: Re-run the schema integration tests**
+- [x] **Step 4: Re-run the schema integration tests**
 
 Run:
 
@@ -317,7 +317,7 @@ go test -tags=integration -count=1 -run 'TestSchemaUsesBigintPrimaryKeysWithoutF
 
 Expected: PASS.
 
-- [ ] **Step 5: Commit the schema rewrite**
+- [x] **Step 5: Commit the schema rewrite**
 
 ```bash
 git add migrations/0001_initial_schema.sql migrations/0002_seed_reference_data.sql migrations/0003_expand_resource_type_constraint.sql migrations/0004_seed_demo_data.sql migrations/0005_add_lifecycle_status_index.sql migrations/0006_add_resource_name_environment_unique.sql migrations/0007_add_resource_archive_fields.sql migrations/0008_apply_demo_seed_cleanup_patch.sql internal/integration/mysql_test.go
@@ -338,7 +338,7 @@ git commit -m "refactor: rebuild schema around bigint primary keys"
 - Test: `internal/model/resource_test.go`
 - Test: `internal/model/pagination_test.go`
 
-- [ ] **Step 1: Write failing model JSON tests**
+- [x] **Step 1: Write failing model JSON tests**
 
 Add a focused JSON contract test to `internal/model/resource_test.go`:
 
@@ -382,7 +382,7 @@ func TestRelationCreateInputJSONUsesNumericIDs(t *testing.T) {
 }
 ```
 
-- [ ] **Step 2: Run the model tests to verify they fail**
+- [x] **Step 2: Run the model tests to verify they fail**
 
 Run:
 
@@ -392,7 +392,7 @@ go test ./internal/model -run 'TestResourceJSONUsesNumericIDs|TestRelationCreate
 
 Expected: FAIL because current structs still declare string IDs.
 
-- [ ] **Step 3: Change every model ID field to `uint64`**
+- [x] **Step 3: Change every model ID field to `uint64`**
 
 Apply concrete type changes like:
 
@@ -451,7 +451,7 @@ type TopologyNode struct { ID uint64 `json:"id"`; EnvironmentID uint64 `json:"en
 type TopologyEdge struct { ID uint64 `json:"id"`; FromResourceID uint64 `json:"fromResourceId"`; ToResourceID uint64 `json:"toResourceId"` }
 ```
 
-- [ ] **Step 4: Re-run the model tests**
+- [x] **Step 4: Re-run the model tests**
 
 Run:
 
@@ -461,7 +461,7 @@ go test ./internal/model -run 'TestResourceJSONUsesNumericIDs|TestRelationCreate
 
 Expected: PASS.
 
-- [ ] **Step 5: Commit the model contract conversion**
+- [x] **Step 5: Commit the model contract conversion**
 
 ```bash
 git add internal/model/resource.go internal/model/resource_write.go internal/model/relation.go internal/model/relation_write.go internal/model/settings.go internal/model/auth.go internal/model/audit.go internal/model/topology.go internal/model/resource_test.go
@@ -485,7 +485,7 @@ git commit -m "refactor: convert backend model ids to uint64"
 - Test: `internal/integration/resource_test.go`
 - Test: `internal/integration/relation_test.go`
 
-- [ ] **Step 1: Write failing service/integration tests for numeric create paths**
+- [x] **Step 1: Write failing service/integration tests for numeric create paths**
 
 Add or update a backend test like this in `internal/service/resource_write_service_test.go`:
 
@@ -557,7 +557,7 @@ func TestResourceRepositoryCreate_UsesAutoIncrementID(t *testing.T) {
 }
 ```
 
-- [ ] **Step 2: Run the targeted tests to verify they fail**
+- [x] **Step 2: Run the targeted tests to verify they fail**
 
 Run:
 
@@ -568,7 +568,7 @@ go test -tags=integration -count=1 -run TestResourceRepositoryCreate_UsesAutoInc
 
 Expected: FAIL because repositories/services still use string IDs and `UUID()` generation.
 
-- [ ] **Step 3: Remove `UUID()` and use `LastInsertId()` throughout repositories**
+- [x] **Step 3: Remove `UUID()` and use `LastInsertId()` throughout repositories**
 
 Change repository create methods to this pattern:
 
@@ -619,7 +619,7 @@ type ResourceRepository interface {
 }
 ```
 
-- [ ] **Step 4: Re-run the repository/service tests**
+- [x] **Step 4: Re-run the repository/service tests**
 
 Run:
 
@@ -630,7 +630,7 @@ go test -tags=integration -count=1 -run 'TestResourceRepositoryCreate_UsesAutoIn
 
 Expected: PASS.
 
-- [ ] **Step 5: Commit the repository/service rewrite**
+- [x] **Step 5: Commit the repository/service rewrite**
 
 ```bash
 git add internal/repository/mysql/resource_repository.go internal/repository/mysql/relation_repository.go internal/repository/mysql/audit_repository.go internal/repository/mysql/dictionary_repository.go internal/repository/mysql/user_repository.go internal/service/resource_service.go internal/service/relation_service.go internal/service/profile_service.go internal/service/audit_service.go internal/service/topology_service.go internal/service/resource_write_service_test.go internal/integration/resource_test.go internal/integration/relation_test.go
@@ -651,7 +651,7 @@ git commit -m "refactor: switch repositories and services to bigint ids"
 - Test: `internal/api/topology_handler_test.go`
 - Test: `internal/api/audit_handler_test.go`
 
-- [ ] **Step 1: Write failing handler tests for numeric parsing and 400s**
+- [x] **Step 1: Write failing handler tests for numeric parsing and 400s**
 
 Add tests like this to `internal/api/resource_handler_test.go`:
 
@@ -695,7 +695,7 @@ func TestHandleCreateResource_AcceptsNumericReferenceIDs(t *testing.T) {
 }
 ```
 
-- [ ] **Step 2: Run the handler tests to verify they fail**
+- [x] **Step 2: Run the handler tests to verify they fail**
 
 Run:
 
@@ -705,7 +705,7 @@ go test ./internal/api -run 'TestHandleGetResource_InvalidNumericIDReturns400|Te
 
 Expected: FAIL because handlers and test fakes still assume string IDs.
 
-- [ ] **Step 3: Add shared numeric parsing helpers and update handler signatures**
+- [x] **Step 3: Add shared numeric parsing helpers and update handler signatures**
 
 Implement concrete helpers in `internal/api/resource_handler.go` (or a small helper file if you split it during execution):
 
@@ -759,7 +759,7 @@ Update `internal/api/test_server.go` fake repositories to store IDs as `uint64`:
 }
 ```
 
-- [ ] **Step 4: Re-run handler tests**
+- [x] **Step 4: Re-run handler tests**
 
 Run:
 
@@ -769,7 +769,7 @@ go test ./internal/api -run 'TestHandleGetResource_InvalidNumericIDReturns400|Te
 
 Expected: PASS.
 
-- [ ] **Step 5: Commit the API conversion**
+- [x] **Step 5: Commit the API conversion**
 
 ```bash
 git add internal/api/resource_handler.go internal/api/relation_handler.go internal/api/profile_handler.go internal/api/topology_handler.go internal/api/audit_handler.go internal/api/test_server.go internal/api/resource_handler_test.go internal/api/relation_handler_test.go internal/api/topology_handler_test.go internal/api/audit_handler_test.go
@@ -782,7 +782,7 @@ git commit -m "refactor: parse numeric ids across HTTP handlers"
 - Modify: `internal/openapi/openapi.yaml`
 - Modify: `internal/openapi/openapi_test.go`
 
-- [ ] **Step 1: Write a failing OpenAPI assertion for integer IDs**
+- [x] **Step 1: Write a failing OpenAPI assertion for integer IDs**
 
 Add a targeted assertion to `internal/openapi/openapi_test.go`:
 
@@ -801,7 +801,7 @@ func TestOpenAPIUsesIntegerIDs(t *testing.T) {
 }
 ```
 
-- [ ] **Step 2: Run the OpenAPI test to verify it fails**
+- [x] **Step 2: Run the OpenAPI test to verify it fails**
 
 Run:
 
@@ -811,7 +811,7 @@ go test ./internal/openapi -run TestOpenAPIUsesIntegerIDs
 
 Expected: FAIL because the spec still uses string/UUID examples and schemas.
 
-- [ ] **Step 3: Convert all ID schemas, parameters, and examples in `openapi.yaml`**
+- [x] **Step 3: Convert all ID schemas, parameters, and examples in `openapi.yaml`**
 
 Use concrete schema shapes like:
 
@@ -867,7 +867,7 @@ parameters:
       minimum: 1
 ```
 
-- [ ] **Step 4: Re-run OpenAPI validation**
+- [x] **Step 4: Re-run OpenAPI validation**
 
 Run:
 
@@ -878,7 +878,7 @@ make openapi-validate
 
 Expected: PASS.
 
-- [ ] **Step 5: Commit the OpenAPI rewrite**
+- [x] **Step 5: Commit the OpenAPI rewrite**
 
 ```bash
 git add internal/openapi/openapi.yaml internal/openapi/openapi_test.go
@@ -900,7 +900,7 @@ git commit -m "docs: switch OpenAPI id contract to integers"
 - Test: `/Users/fan/JsProjects/ControlHub/tests/services/audits.test.ts`
 - Test: `/Users/fan/JsProjects/ControlHub/tests/services/settings.test.ts`
 
-- [ ] **Step 1: Write failing frontend service tests for numeric IDs**
+- [x] **Step 1: Write failing frontend service tests for numeric IDs**
 
 Update/add tests in `/Users/fan/JsProjects/ControlHub/tests/services/resources.test.ts` like:
 
@@ -963,7 +963,7 @@ it("builds resource detail paths from numeric ids", async () => {
 });
 ```
 
-- [ ] **Step 2: Run the frontend service tests to verify they fail**
+- [x] **Step 2: Run the frontend service tests to verify they fail**
 
 Run:
 
@@ -973,7 +973,7 @@ cd /Users/fan/JsProjects/ControlHub && npm run test -- tests/services/resources.
 
 Expected: FAIL because type declarations and service signatures still use `string` IDs.
 
-- [ ] **Step 3: Convert frontend types and services to `number` IDs**
+- [x] **Step 3: Convert frontend types and services to `number` IDs**
 
 Apply concrete changes in `/Users/fan/JsProjects/ControlHub/types/resource.ts`:
 
@@ -1040,7 +1040,7 @@ export async function updateResource(id: number, input: UpdateResourceInput): Pr
 }
 ```
 
-- [ ] **Step 4: Re-run the frontend service tests**
+- [x] **Step 4: Re-run the frontend service tests**
 
 Run:
 
@@ -1050,7 +1050,7 @@ cd /Users/fan/JsProjects/ControlHub && npm run test -- tests/services/resources.
 
 Expected: PASS.
 
-- [ ] **Step 5: Commit the frontend wire-type conversion**
+- [x] **Step 5: Commit the frontend wire-type conversion**
 
 ```bash
 git -C /Users/fan/JsProjects/ControlHub add types/resource.ts types/audit.ts types/settings.ts types/view-models.ts services/resources.ts services/audits.ts services/settings.ts services/topology.ts tests/services/resources.test.ts tests/services/audits.test.ts tests/services/settings.test.ts
@@ -1076,7 +1076,7 @@ git -C /Users/fan/JsProjects/ControlHub commit -m "refactor: convert frontend ap
 - Test: `/Users/fan/JsProjects/ControlHub/tests/components/resource-relation-panel.test.tsx`
 - Test: `/Users/fan/JsProjects/ControlHub/tests/resource-detail-page.test.tsx`
 
-- [ ] **Step 1: Write failing UI tests for numeric IDs**
+- [x] **Step 1: Write failing UI tests for numeric IDs**
 
 Update tests to use numeric fixtures, for example in `/Users/fan/JsProjects/ControlHub/tests/components/resource-table.test.tsx`:
 
@@ -1118,7 +1118,7 @@ it("loads detail page with numeric route params", async () => {
 });
 ```
 
-- [ ] **Step 2: Run the focused frontend UI tests to verify they fail**
+- [x] **Step 2: Run the focused frontend UI tests to verify they fail**
 
 Run:
 
@@ -1128,7 +1128,7 @@ cd /Users/fan/JsProjects/ControlHub && npm run test -- tests/components/resource
 
 Expected: FAIL because components and page loaders still assume string IDs.
 
-- [ ] **Step 3: Convert pages/components to numeric IDs end-to-end**
+- [x] **Step 3: Convert pages/components to numeric IDs end-to-end**
 
 Apply concrete changes such as numeric param parsing in `/Users/fan/JsProjects/ControlHub/app/(console)/resources/[id]/page.tsx`:
 
@@ -1167,7 +1167,7 @@ export function ResourceLink({ resourceId, label }: { resourceId: number; label:
 }
 ```
 
-- [ ] **Step 4: Re-run the focused frontend UI tests**
+- [x] **Step 4: Re-run the focused frontend UI tests**
 
 Run:
 
@@ -1177,7 +1177,7 @@ cd /Users/fan/JsProjects/ControlHub && npm run test -- tests/components/resource
 
 Expected: PASS.
 
-- [ ] **Step 5: Commit the UI conversion**
+- [x] **Step 5: Commit the UI conversion**
 
 ```bash
 git -C /Users/fan/JsProjects/ControlHub add app/(console)/resources/[id]/page.tsx components/resources/resource-table.tsx components/resources/resource-detail-sheet.tsx components/resources/edit-resource-sheet.tsx components/resources/create-resource-sheet.tsx components/resources/resource-archive-button.tsx components/blocks/resource-link.tsx components/blocks/resource-relation-panel.tsx components/blocks/topology-panel.tsx lib/view-models.ts lib/topology-mapper.ts tests/components/resource-table.test.tsx tests/components/resource-detail-sheet.test.tsx tests/components/resource-relation-panel.test.tsx tests/resource-detail-page.test.tsx
@@ -1192,7 +1192,7 @@ git -C /Users/fan/JsProjects/ControlHub commit -m "refactor: update resource UI 
 - Modify: `/Users/fan/JsProjects/ControlHub/e2e/resource-archive.spec.ts`
 - Modify: `/Users/fan/JsProjects/ControlHub/e2e/topology.spec.ts`
 
-- [ ] **Step 1: Write failing E2E helper assertions for numeric IDs**
+- [x] **Step 1: Write failing E2E helper assertions for numeric IDs**
 
 Update `/Users/fan/JsProjects/ControlHub/e2e/api.helpers.ts` to expect numeric IDs in helper types:
 
@@ -1233,7 +1233,7 @@ test("detail route uses numeric resource id", async ({ page }) => {
 });
 ```
 
-- [ ] **Step 2: Run the E2E slice to verify it fails**
+- [x] **Step 2: Run the E2E slice to verify it fails**
 
 Run:
 
@@ -1243,7 +1243,7 @@ cd /Users/fan/JsProjects/ControlHub && npm run test:e2e -- e2e/resources-sheet.s
 
 Expected: FAIL because helper types and UI flows still assume string IDs.
 
-- [ ] **Step 3: Convert E2E helpers and scenarios to numeric ID semantics**
+- [x] **Step 3: Convert E2E helpers and scenarios to numeric ID semantics**
 
 Use numeric helper signatures:
 
@@ -1274,7 +1274,7 @@ test("create, view, edit, relate, and inspect topology with numeric ids", async 
 });
 ```
 
-- [ ] **Step 4: Re-run the E2E slice**
+- [x] **Step 4: Re-run the E2E slice**
 
 Run:
 
@@ -1284,7 +1284,7 @@ cd /Users/fan/JsProjects/ControlHub && npm run test:e2e -- e2e/resources-sheet.s
 
 Expected: PASS.
 
-- [ ] **Step 5: Commit the E2E rewrite**
+- [x] **Step 5: Commit the E2E rewrite**
 
 ```bash
 git -C /Users/fan/JsProjects/ControlHub add e2e/api.helpers.ts e2e/resources-sheet.spec.ts e2e/resource-archive.spec.ts e2e/topology.spec.ts
@@ -1297,7 +1297,7 @@ git -C /Users/fan/JsProjects/ControlHub commit -m "test: cover numeric id flows 
 - Modify: `docs/superpowers/specs/2026-04-22-bigint-primary-key-redesign-design.md` (only if review feedback changes the design)
 - Test: backend and frontend suites listed below
 
-- [ ] **Step 1: Run backend verification suite**
+- [x] **Step 1: Run backend verification suite**
 
 Run:
 
@@ -1309,7 +1309,7 @@ cd /Users/fan/GolangProjects/ControlHub && make openapi-validate
 
 Expected: all PASS.
 
-- [ ] **Step 2: Run frontend verification suite**
+- [x] **Step 2: Run frontend verification suite**
 
 Run:
 
@@ -1321,7 +1321,7 @@ cd /Users/fan/JsProjects/ControlHub && npm run test:e2e
 
 Expected: all PASS.
 
-- [ ] **Step 3: Dispatch the required parallel review agents**
+- [x] **Step 3: Dispatch the required parallel review agents**
 
 Run these review tracks in parallel after tests are green:
 
@@ -1351,7 +1351,7 @@ Each prompt must include:
 - Acceptance bar: no UUID assumptions, no foreign keys, no string/number dual-track, no critical UX/API/security regressions
 ```
 
-- [ ] **Step 4: Fix review findings and re-run the smallest failing validation**
+- [x] **Step 4: Fix review findings and re-run the smallest failing validation**
 
 Use the review output to patch only confirmed issues, then re-run the minimal necessary checks, e.g.:
 
@@ -1363,7 +1363,7 @@ cd /Users/fan/JsProjects/ControlHub && npm run test:e2e -- e2e/resources-sheet.s
 
 Expected: PASS after fixes.
 
-- [ ] **Step 5: Commit the verified final state**
+- [x] **Step 5: Commit the verified final state**
 
 ```bash
 git add docs/superpowers/specs/2026-04-22-bigint-primary-key-redesign-design.md
