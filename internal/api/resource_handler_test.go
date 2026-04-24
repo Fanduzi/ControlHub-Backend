@@ -8,6 +8,7 @@ package api
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -1736,8 +1737,8 @@ func TestCreateResource_PersistsEmbeddedProfileThroughRouterWiring(t *testing.T)
 		"resourceSubtype":"mysql",
 		"name":"order-mysql-03-prod",
 		"displayName":"Order MySQL 03 Prod",
-		"environmentId":"10000000-0000-0000-0000-000000000001",
-		"ownerId":"20000000-0000-0000-0000-000000000002",
+		"environmentId":1,
+		"ownerId":2,
 		"lifecycleStatus":"running",
 		"healthStatus":"healthy",
 		"source":"manual",
@@ -1765,7 +1766,7 @@ func TestCreateResource_PersistsEmbeddedProfileThroughRouterWiring(t *testing.T)
 		t.Fatalf("decode create response: %v", err)
 	}
 
-	profileReq := httptest.NewRequest(http.MethodGet, "/resources/"+created.ID+"/profile", nil)
+	profileReq := httptest.NewRequest(http.MethodGet, fmt.Sprintf("/resources/%d/profile", created.ID), nil)
 	profileRec := httptest.NewRecorder()
 	server.Router.ServeHTTP(profileRec, profileReq)
 
@@ -1791,7 +1792,7 @@ func TestCreateResource_PersistsEmbeddedProfileThroughRouterWiring(t *testing.T)
 
 func TestPatchResource_AllowsNameUpdate(t *testing.T) {
 	server := NewTestServer()
-	req := httptest.NewRequest(http.MethodPatch, "/resources/res-1", strings.NewReader(`{"name":"order-mysql-primary-prod"}`))
+	req := httptest.NewRequest(http.MethodPatch, "/resources/1", strings.NewReader(`{"name":"order-mysql-primary-prod"}`))
 	rec := httptest.NewRecorder()
 
 	server.Router.ServeHTTP(rec, req)
@@ -1811,7 +1812,7 @@ func TestPatchResource_AllowsNameUpdate(t *testing.T) {
 
 func TestPatchResourceProfile(t *testing.T) {
 	server := NewTestServer()
-	req := httptest.NewRequest(http.MethodPatch, "/resources/res-db-instance/profile", strings.NewReader(`{"version":"8.0.38"}`))
+	req := httptest.NewRequest(http.MethodPatch, "/resources/3/profile", strings.NewReader(`{"version":"8.0.38"}`))
 	rec := httptest.NewRecorder()
 
 	server.Router.ServeHTTP(rec, req)
@@ -1823,7 +1824,7 @@ func TestPatchResourceProfile(t *testing.T) {
 
 func TestPatchResourceProfileRejectsMalformedJSON(t *testing.T) {
 	server := NewTestServer()
-	req := httptest.NewRequest(http.MethodPatch, "/resources/res-db-instance/profile", strings.NewReader(`{"version":`))
+	req := httptest.NewRequest(http.MethodPatch, "/resources/3/profile", strings.NewReader(`{"version":`))
 	rec := httptest.NewRecorder()
 
 	server.Router.ServeHTTP(rec, req)
