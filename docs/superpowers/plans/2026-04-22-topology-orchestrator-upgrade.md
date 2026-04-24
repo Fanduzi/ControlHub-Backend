@@ -24,6 +24,7 @@ Hostname  string             `json:"hostname,omitempty"`
 IP        string             `json:"ip,omitempty"`
 Port      int                `json:"port,omitempty"`
 Problems  []TopologyProblem  `json:"problems,omitempty"`
+Labels    map[string]string  `json:"labels,omitempty"`
 ```
 
 Add new types after `TopologyResponse`:
@@ -69,7 +70,7 @@ git commit -m "feat: add profile fields and problem types to topology model"
 **Files:**
 - Modify: `internal/service/topology_service.go`
 
-- [ ] **Step 1: Extract profile data in buildTopologyNodes**
+- [ ] **Step 1: Extract profile data and labels in buildTopologyNodes**
 
 In `buildTopologyNodes()`, after setting `IsDatabaseTopology`, add:
 
@@ -79,6 +80,7 @@ if res.ProfileSummary != nil {
 	node.IP = res.ProfileSummary.IP
 	node.Port = res.ProfileSummary.Port
 }
+node.Labels = res.Labels
 ```
 
 - [ ] **Step 2: Add problem detection function**
@@ -215,6 +217,7 @@ hostname?: string;
 ip?: string;
 port?: number;
 problems?: TopologyProblem[];
+labels?: Record<string, string>;
 ```
 
 - [ ] **Step 2: Add new types**
@@ -435,48 +438,90 @@ git commit -m "feat: add problem summary panel to topology view"
 
 ---
 
-### Task 7: Frontend — Clickable node detail popup
+### Task 7: Frontend — Clickable node detail popup (node-anchored)
 
 **Files:**
 - Modify: `/Users/fan/JsProjects/ControlHub/.worktrees/cmdb-redesign/components/blocks/topology-panel.tsx`
 - Modify: `/Users/fan/JsProjects/ControlHub/.worktrees/cmdb-redesign/messages/en.json`
 - Modify: `/Users/fan/JsProjects/ControlHub/.worktrees/cmdb-redesign/messages/zh-CN.json`
 
-- [ ] **Step 1: Add node detail popover**
+- [ ] **Step 1: Replace fixed overlay with node-anchored floating panel**
 
-Add state for `selectedNodeData` and render a Popover anchored near the topology graph when a node is clicked (instead of navigating away). The popover shows:
+Replace the current `renderNodePopup()` fixed overlay (`fixed inset-0 flex items-center justify-center`) with a **node-anchored floating panel** positioned at the clicked node's screen coordinates.
 
-- displayName
+Implementation:
+1. Change `selectedNodeData` state to also store `popupPosition: { x: number; y: number }`
+2. In `handleNodeClick`, capture the node DOM position: `event.currentTarget.getBoundingClientRect()` → store as `popupPosition`
+3. Render the popup as `position: fixed; top: popupPosition.y; left: popupPosition.x + nodeWidth + 12` (right of node)
+4. Auto-flip to left side if near viewport right edge
+5. Auto-adjust vertically if near bottom edge
+
+```tsx
+const handleNodeClick: NodeMouseHandler = useCallback(
+  (event, node) => {
+    const rect = event.currentTarget.getBoundingClientRect();
+    setSelectedNodeData({
+      data: node.data as TopologyNodeData,
+      position: { x: rect.right + 12, y: rect.top },
+    });
+  },
+  [],
+);
+
+// Popup positioning logic
+const getPopupPosition = (pos: { x: number; y: number }) => {
+  const POPUP_WIDTH = 320;
+  const POPUP_HEIGHT = 400;
+  const vw = window.innerWidth;
+  const vh = window.innerHeight;
+  let x = pos.x;
+  let y = pos.y;
+  // Flip left if overflows right
+  if (x + POPUP_WIDTH > vw - 16) x = pos.x - POPUP_WIDTH - 12;
+  // Clamp vertical
+  if (y + POPUP_HEIGHT > vh - 16) y = Math.max(16, vh - POPUP_HEIGHT - 16);
+  return { x: Math.max(16, x), y };
+};
+```
+
+The popup shows:
+
+- displayName (with DbTypeIcon for DB types)
 - resourceType (localized)
-- engine (with DbTypeIcon)
-- hostname
-- IP:port
-- healthStatus badge
-- lifecycleStatus badge
-- role label
-- "View Full Details →" link to `/resources/{id}`
-
-Use shadcn Popover component. Position: `side="right"` with `sideOffset={8}`.
+- engine / resourceSubtype (with DbTypeIcon)
+- hostname (from profile)
+- Address: IP:port (from profile)
+- Datacenter: `labels.datacenter || labels.dc` (if present)
+- Zone: `labels.zone || labels.az` (if present)
+- Health status badge
+- Lifecycle status badge
+- Role label (localized topology role)
+- Problems list (if any, with severity-colored text)
+- "View Full Details" link navigating to `/resources/{id}`
 
 - [ ] **Step 2: Update i18n**
 
-Add keys for popover labels:
+Add keys for popup labels:
 
 ```json
-"viewDetails": "View Full Details →"
+"viewDetails": "View Full Details"
 "address": "Address"
+"datacenter": "Datacenter"
+"zone": "Zone"
 ```
 
 ```json
-"viewDetails": "查看完整详情 →"
+"viewDetails": "查看完整详情"
 "address": "地址"
+"datacenter": "数据中心"
+"zone": "可用区"
 ```
 
 - [ ] **Step 3: Commit**
 
 ```bash
 git add components/blocks/topology-panel.tsx messages/en.json messages/zh-CN.json
-git commit -m "feat: clickable node detail popup in topology view"
+git commit -m "feat: node-anchored detail popup with datacenter/zone in topology view"
 ```
 
 ---

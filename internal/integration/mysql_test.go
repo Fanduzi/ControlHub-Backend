@@ -193,3 +193,13 @@ func assertRelationExists(t *testing.T, db *sql.DB, relationID string) {
 		t.Fatalf("expected relation %s to exist exactly once, got %d", relationID, count)
 	}
 }
+
+func lookupResourceIDByName(t *testing.T, db *sql.DB, resourceName string) uint64 {
+	t.Helper()
+	var id uint64
+	err := db.QueryRow("SELECT id FROM resources WHERE name = ?", resourceName).Scan(&id)
+	if err != nil {
+		t.Fatalf("query resource id for %s: %v", resourceName, err)
+	}
+	return id
+}

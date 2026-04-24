@@ -32,6 +32,9 @@ type TopologyNode struct {
 
     // NEW: Topology-specific problem flags
     Problems []TopologyProblem `json:"problems,omitempty"`
+
+    // NEW: Labels for datacenter/zone display in popup
+    Labels map[string]string `json:"labels,omitempty"`
 }
 
 type TopologyProblem struct {
@@ -49,9 +52,10 @@ if res.ProfileSummary != nil {
     node.IP = res.ProfileSummary.IP
     node.Port = res.ProfileSummary.Port
 }
+node.Labels = res.Labels
 ```
 
-No new repository queries needed — `ProfileSummary` is already populated on the `Resource` model.
+No new repository queries needed — `ProfileSummary` and `Labels` are already populated on the `Resource` model.
 
 **Problem detection** in the topology service:
 
@@ -161,29 +165,49 @@ A collapsible panel **above** the topology graph:
 
 ### 5. Clickable Node Detail Popup (Frontend)
 
-On node click, instead of navigating away, show a **popover/sheet** with key details:
+On node click, instead of navigating away, show a **floating panel anchored to the clicked node** with key details — similar to MySQL Orchestrator's node tooltip:
 
 ```
-┌─────────────────────────────────────┐
-│  Order MySQL 01 Prod          [✕]   │
-│  ─────────────────────────────────  │
-│  Type        Database Instance      │
-│  Engine      MySQL 8.0              │
-│  Host        prod-db-host-01        │
-│  Address     10.0.10.20:3306        │
-│  Health      ● Healthy              │
-│  Lifecycle   ▸ Running              │
-│  Role        Primary                │
-│  ─────────────────────────────────  │
-│  [View Full Details →]             │
-└─────────────────────────────────────┘
+┌──────────────────────────────────────┐
+│  ● Order MySQL 01 Prod         [✕]  │
+│  ──────────────────────────────────  │
+│  Type        Database Instance       │
+│  Engine      MySQL 8.0               │
+│  Host        prod-db-host-01         │
+│  Address     10.0.10.20:3306         │
+│  Datacenter  us-east-1a              │
+│  Zone         az-b                   │
+│  Health      ● Healthy               │
+│  Lifecycle   ▸ Running               │
+│  Role        Primary                 │
+│  ──────────────────────────────────  │
+│  [View Full Details →]              │
+└──────────────────────────────────────┘
 ```
 
-- Uses a **Popover** component anchored to the clicked node
-- Shows: displayName, resourceType, engine, hostname, IP:port, health, lifecycle, role
-- "View Full Details" link navigates to `/resources/{id}`
-- Close on click-outside or Escape
-- The existing click-to-navigate behavior is preserved via the detail link
+**Positioning**: The popup is a **floating panel positioned relative to the clicked node's screen coordinates**. It appears to the right of the node (or left if near the right edge), offset by 12px. This is NOT a centered modal overlay — it's a node-anchored floating card, like Orchestrator's tooltip.
+
+**Implementation approach**:
+1. On node click, capture the node's DOM position via `event.currentTarget.getBoundingClientRect()`
+2. Render an absolute-positioned card at that location (using `position: fixed` with calculated `top`/`left`)
+3. Auto-adjust if near viewport edges
+4. Close on click-outside, Escape, or clicking another node
+
+**Data shown**:
+- displayName (with engine icon for DB types)
+- resourceType (localized)
+- engine (resourceSubtype, with DbTypeIcon)
+- hostname (from profile)
+- Address: IP:port (from profile)
+- Datacenter: from `labels.datacenter` or `labels.dc`
+- Zone: from `labels.zone` or `labels.az`
+- Health status badge
+- Lifecycle status badge
+- Role label (localized topology role)
+- Problems list (if any)
+- "View Full Details" link navigating to `/resources/{id}`
+
+**Labels for datacenter/zone**: The backend must pass `labels` through to `TopologyNode` so the popup can display `labels.datacenter`, `labels.zone`, etc. These are standard labels already on the `Resource` model.
 
 ### 6. Frontend Type Updates
 
@@ -195,6 +219,7 @@ type TopologyNode = {
   ip?: string;
   port?: number;
   problems?: TopologyProblem[];
+  labels?: Record<string, string>;
 };
 
 type TopologyProblem = {
@@ -241,8 +266,8 @@ type TopologyProblemSummary = {
 ## Files Changed
 
 ### Backend (Go)
-- `internal/model/topology.go` — Add `Hostname`, `IP`, `Port`, `Problems` to `TopologyNode`; add `TopologyProblem`, `TopologyProblemSummary` types; add `Problems` to `TopologyResponse`
-- `internal/service/topology_service.go` — Extract profile data in `buildTopologyNodes()`; add `detectProblems()` function; add problem summary to response
+- `internal/model/topology.go` — Add `Hostname`, `IP`, `Port`, `Problems`, `Labels` to `TopologyNode`; add `TopologyProblem`, `TopologyProblemSummary` types; add `Problems` to `TopologyResponse`
+- `internal/service/topology_service.go` — Extract profile data and labels in `buildTopologyNodes()`; add `detectProblems()` function; add problem summary to response
 
 ### Frontend (TSX/TS)
 - `types/resource.ts` — Add `hostname`, `ip`, `port`, `problems` to `TopologyNode`; add `TopologyProblem`, `TopologyProblemSummary` types

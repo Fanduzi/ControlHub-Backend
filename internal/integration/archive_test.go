@@ -255,7 +255,7 @@ func TestServiceArchive_NotFound(t *testing.T) {
 	repo := mysql.NewResourceRepository(db)
 	svc := service.NewResourceService(repo)
 
-	_, err := svc.Archive(context.Background(), "nonexistent-id", model.ArchiveRequest{})
+	_, err := svc.Archive(context.Background(), 999999999, model.ArchiveRequest{})
 	if err == nil {
 		t.Fatal("expected error for nonexistent resource")
 	}

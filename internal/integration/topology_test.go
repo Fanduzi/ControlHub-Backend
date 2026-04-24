@@ -20,7 +20,7 @@ import (
 //	host-A --runs_on--> db-instance-B --member_of--> db-cluster-C
 //
 // Returns (hostA_ID, instanceB_ID, clusterC_ID).
-func createTopologyFixturesWithName(t *testing.T, resRepo *mysql.ResourceRepository, relRepo *mysql.RelationRepository, ctx context.Context, prefix string) (string, string, string) {
+func createTopologyFixturesWithName(t *testing.T, resRepo *mysql.ResourceRepository, relRepo *mysql.RelationRepository, ctx context.Context, prefix string) (uint64, uint64, uint64) {
 	t.Helper()
 
 	hostA, err := resRepo.CreateResource(ctx, model.ResourceCreateInput{
