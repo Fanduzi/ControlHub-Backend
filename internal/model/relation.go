@@ -8,9 +8,9 @@ package model
 import "time"
 
 type ResourceRelation struct {
-	ID             string       `json:"id"`
-	FromResourceID string       `json:"fromResourceId"`
-	ToResourceID   string       `json:"toResourceId"`
+	ID             uint64       `json:"id"`
+	FromResourceID uint64       `json:"fromResourceId"`
+	ToResourceID   uint64       `json:"toResourceId"`
 	RelationType   RelationType `json:"relationType"`
 	CreatedAt      time.Time    `json:"createdAt"`
 }

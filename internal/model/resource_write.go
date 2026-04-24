@@ -8,29 +8,29 @@ package model
 import "time"
 
 type ResourceCreateInput struct {
-	ResourceType    ResourceType            `json:"resourceType"`
-	ResourceSubtype string                  `json:"resourceSubtype"`
-	Name            string                  `json:"name"`
-	DisplayName     string                  `json:"displayName"`
-	EnvironmentID   string                  `json:"environmentId"`
-	OwnerID         string                  `json:"ownerId"`
-	LifecycleStatus LifecycleStatus         `json:"lifecycleStatus"`
-	HealthStatus    HealthStatus            `json:"healthStatus"`
-	Source          string                  `json:"source"`
-	ExternalID      string                  `json:"externalId"`
-	Labels          map[string]string       `json:"labels"`
-	Profile         map[string]interface{}  `json:"profile,omitempty"`
+	ResourceType    ResourceType           `json:"resourceType"`
+	ResourceSubtype string                 `json:"resourceSubtype"`
+	Name            string                 `json:"name"`
+	DisplayName     string                 `json:"displayName"`
+	EnvironmentID   uint64                 `json:"environmentId"`
+	OwnerID         uint64                 `json:"ownerId"`
+	LifecycleStatus LifecycleStatus        `json:"lifecycleStatus"`
+	HealthStatus    HealthStatus           `json:"healthStatus"`
+	Source          string                 `json:"source"`
+	ExternalID      string                 `json:"externalId"`
+	Labels          map[string]string      `json:"labels"`
+	Profile         map[string]interface{} `json:"profile,omitempty"`
 }
 
 type ResourcePatchRequest struct {
-	ID              *string           `json:"id,omitempty"`
+	ID              *uint64           `json:"id,omitempty"`
 	ResourceType    *ResourceType     `json:"resourceType,omitempty"`
 	Name            *string           `json:"name,omitempty"`
 	CreatedAt       *time.Time        `json:"createdAt,omitempty"`
 	ResourceSubtype *string           `json:"resourceSubtype,omitempty"`
 	DisplayName     *string           `json:"displayName,omitempty"`
-	EnvironmentID   *string           `json:"environmentId,omitempty"`
-	OwnerID         *string           `json:"ownerId,omitempty"`
+	EnvironmentID   *uint64           `json:"environmentId,omitempty"`
+	OwnerID         *uint64           `json:"ownerId,omitempty"`
 	LifecycleStatus *LifecycleStatus  `json:"lifecycleStatus,omitempty"`
 	HealthStatus    *HealthStatus     `json:"healthStatus,omitempty"`
 	Source          *string           `json:"source,omitempty"`
@@ -42,8 +42,8 @@ type ResourceUpdateInput struct {
 	Name            *string
 	ResourceSubtype *string
 	DisplayName     *string
-	EnvironmentID   *string
-	OwnerID         *string
+	EnvironmentID   *uint64
+	OwnerID         *uint64
 	LifecycleStatus *LifecycleStatus
 	HealthStatus    *HealthStatus
 	Source          *string

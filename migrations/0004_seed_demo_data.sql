@@ -1,5 +1,4 @@
 -- ControlHub comprehensive demo data for frontend integration testing.
--- Down migration deletes by fixed ID patterns. Dev-oriented, NOT a production rollback strategy.
 
 -- +goose Up
 -- ============================================================
@@ -7,693 +6,425 @@
 -- ============================================================
 
 -- +goose StatementBegin
-insert ignore into environments (id, name, slug, description) values
-  ('10000000-0000-0000-0000-000000000003', 'Development', 'dev', 'Development and testing environment');
+insert ignore into environments (name, slug, description) values
+  ('Development', 'dev', 'Development and testing environment');
 -- +goose StatementEnd
 
 -- +goose StatementBegin
-insert ignore into owners (id, name, email) values
-  ('20000000-0000-0000-0000-000000000003', 'Order Team',     'order-team@example.com'),
-  ('20000000-0000-0000-0000-000000000004', 'Payment Team',   'payment-team@example.com'),
-  ('20000000-0000-0000-0000-000000000005', 'Analytics Team', 'analytics-team@example.com');
+insert ignore into owners (name, email) values
+  ('Order Team', 'order-team@example.com'),
+  ('Payment Team', 'payment-team@example.com'),
+  ('Analytics Team', 'analytics-team@example.com');
 -- +goose StatementEnd
 
 -- ============================================================
--- Section 2: Production Resources (39 new)
--- ============================================================
-
--- --- Production Hosts (7) ---
--- +goose StatementBegin
-insert into resources (
-  id, resource_type, resource_subtype, name, display_name,
-  environment_id, owner_id, lifecycle_status, health_status,
-  labels, source, external_id
-) values
-  ('41000000-0000-0000-0000-000000000001', 'host', 'vm',
-   'prod-db-host-02', 'Production DB Host 02',
-   '10000000-0000-0000-0000-000000000001', '20000000-0000-0000-0000-000000000001',
-   'running', 'healthy',
-   '{"team":"platform","tier":"infra","rack":"B12"}', 'manual', 'vmware-prod-db-host-02'),
-
-  ('41000000-0000-0000-0000-000000000002', 'host', 'vm',
-   'prod-db-host-03', 'Production DB Host 03',
-   '10000000-0000-0000-0000-000000000001', '20000000-0000-0000-0000-000000000001',
-   'running', 'healthy',
-   '{"team":"platform","tier":"infra","rack":"B13"}', 'manual', 'vmware-prod-db-host-03'),
-
-  ('41000000-0000-0000-0000-000000000003', 'host', 'vm',
-   'prod-db-host-04', 'Production DB Host 04',
-   '10000000-0000-0000-0000-000000000001', '20000000-0000-0000-0000-000000000001',
-   'running', 'healthy',
-   '{"team":"platform","tier":"infra","rack":"B14"}', 'manual', ''),
-
-  ('41000000-0000-0000-0000-000000000004', 'host', 'vm',
-   'prod-app-host-01', 'Production Application Host 01',
-   '10000000-0000-0000-0000-000000000001', '20000000-0000-0000-0000-000000000001',
-   'running', 'healthy',
-   '{"team":"platform","tier":"compute"}', 'manual', ''),
-
-  ('41000000-0000-0000-0000-000000000005', 'host', 'vm',
-   'prod-app-host-02', 'Production Application Host 02',
-   '10000000-0000-0000-0000-000000000001', '20000000-0000-0000-0000-000000000001',
-   'running', 'healthy',
-   '{"team":"platform","tier":"compute"}', 'terraform', ''),
-
-  ('41000000-0000-0000-0000-000000000006', 'host', 'physical',
-   'prod-ch-host-01', 'ClickHouse Host 01 (Production)',
-   '10000000-0000-0000-0000-000000000001', '20000000-0000-0000-0000-000000000001',
-   'running', 'healthy',
-   '{"team":"platform","tier":"infra","purpose":"analytics","disk_type":"nvme"}', 'discovery', 'bare-prod-ch-host-01'),
-
-  ('41000000-0000-0000-0000-000000000007', 'host', 'physical',
-   'prod-ch-host-02', 'ClickHouse Host 02 (Production)',
-   '10000000-0000-0000-0000-000000000001', '20000000-0000-0000-0000-000000000001',
-   'running', 'healthy',
-   '{"team":"platform","tier":"infra","purpose":"analytics","disk_type":"nvme"}', 'discovery', 'bare-prod-ch-host-02');
--- +goose StatementEnd
-
--- --- Production Database Clusters (4) ---
--- +goose StatementBegin
-insert into resources (
-  id, resource_type, resource_subtype, name, display_name,
-  environment_id, owner_id, lifecycle_status, health_status,
-  labels, source, external_id
-) values
-  ('41000000-0000-0000-0000-000000000010', 'database_cluster', 'mysql',
-   'payment-mysql-cluster-prod', 'Payment MySQL Cluster Production',
-   '10000000-0000-0000-0000-000000000001', '20000000-0000-0000-0000-000000000002',
-   'running', 'healthy',
-   '{"team":"payment","tier":"data","critical":"true","pci_scope":"yes"}', 'manual',
-   'dbaas-payment-mysql-cluster-prod'),
-
-  ('41000000-0000-0000-0000-000000000011', 'database_cluster', 'redis',
-   'user-redis-cluster-prod', 'User Session Redis Cluster Production',
-   '10000000-0000-0000-0000-000000000001', '20000000-0000-0000-0000-000000000002',
-   'running', 'healthy',
-   '{"team":"order","tier":"cache"}', 'manual',
-   'dbaas-user-redis-cluster-prod'),
-
-  ('41000000-0000-0000-0000-000000000012', 'database_cluster', 'clickhouse',
-   'analytics-ch-cluster-prod', 'Analytics ClickHouse Cluster Production',
-   '10000000-0000-0000-0000-000000000001', '20000000-0000-0000-0000-000000000002',
-   'running', 'healthy',
-   '{"team":"analytics","tier":"data","engine":"clickhouse"}', 'manual',
-   'dbaas-analytics-ch-cluster-prod'),
-
-  ('41000000-0000-0000-0000-000000000013', 'database_cluster', 'mysql',
-   'config-mysql-cluster-prod', 'Platform Config Service MySQL Cluster Production',
-   '10000000-0000-0000-0000-000000000001', '20000000-0000-0000-0000-000000000002',
-   'degraded', 'warning',
-   '{"team":"platform","tier":"data"}', 'manual', '');
--- +goose StatementEnd
-
--- --- Production Database Instances (10) ---
--- +goose StatementBegin
-insert into resources (
-  id, resource_type, resource_subtype, name, display_name,
-  environment_id, owner_id, lifecycle_status, health_status,
-  labels, source, external_id
-) values
-  ('41000000-0000-0000-0000-000000000020', 'database_instance', 'mysql',
-   'order-mysql-replica-01-prod', 'Order MySQL Replica 01 Production',
-   '10000000-0000-0000-0000-000000000001', '20000000-0000-0000-0000-000000000002',
-   'running', 'healthy',
-   '{"team":"order","tier":"data","replication_lag_seconds":"0"}', 'manual', ''),
-
-  ('41000000-0000-0000-0000-000000000021', 'database_instance', 'mysql',
-   'order-mysql-replica-02-prod', 'Order MySQL Replica 02 Production',
-   '10000000-0000-0000-0000-000000000001', '20000000-0000-0000-0000-000000000002',
-   'running', 'healthy',
-   '{"team":"order","tier":"data"}', 'manual', ''),
-
-  ('41000000-0000-0000-0000-000000000022', 'database_instance', 'mysql',
-   'payment-mysql-primary-prod', 'Payment MySQL Primary Production',
-   '10000000-0000-0000-0000-000000000001', '20000000-0000-0000-0000-000000000002',
-   'running', 'healthy',
-   '{"team":"payment","tier":"data","critical":"true"}', 'manual',
-   'dbaas-payment-mysql-primary-prod-inst'),
-
-  ('41000000-0000-0000-0000-000000000023', 'database_instance', 'mysql',
-   'payment-mysql-replica-01-prod', 'Payment MySQL Replica 01',
-   '10000000-0000-0000-0000-000000000001', '20000000-0000-0000-0000-000000000002',
-   'running', 'warning',
-   '{"team":"payment","tier":"data","replication_lag_seconds":"45","alert":"replication-lag"}', 'manual', ''),
-
-  ('41000000-0000-0000-0000-000000000024', 'database_instance', 'redis',
-   'user-redis-primary-prod', 'User Redis Primary Production',
-   '10000000-0000-0000-0000-000000000001', '20000000-0000-0000-0000-000000000002',
-   'running', 'healthy',
-   '{"team":"order","tier":"cache","memory_max_gb":"32"}', 'manual', ''),
-
-  ('41000000-0000-0000-0000-000000000025', 'database_instance', 'redis',
-   'user-redis-replica-01-prod', 'User Redis Replica 01 Production',
-   '10000000-0000-0000-0000-000000000001', '20000000-0000-0000-0000-000000000002',
-   'running', 'healthy',
-   '{"team":"order","tier":"cache"}', 'manual', ''),
-
-  ('41000000-0000-0000-0000-000000000026', 'database_instance', 'clickhouse',
-   'analytics-ch-node-01-prod', 'Analytics ClickHouse Node 01 Production',
-   '10000000-0000-0000-0000-000000000001', '20000000-0000-0000-0000-000000000002',
-   'running', 'healthy',
-   '{"team":"analytics","tier":"data","clickhouse_role":"replica"}', 'manual', ''),
-
-  ('41000000-0000-0000-0000-000000000027', 'database_instance', 'clickhouse',
-   'analytics-ch-node-02-prod', 'Analytics ClickHouse Node 02',
-   '10000000-0000-0000-0000-000000000001', '20000000-0000-0000-0000-000000000002',
-   'running', 'critical',
-   '{"team":"analytics","tier":"data","clickhouse_role":"replica","disk_usage_pct":"94","alert":"disk-pressure"}', 'manual', ''),
-
-  ('41000000-0000-0000-0000-000000000028', 'database_instance', 'mysql',
-   'config-mysql-primary-prod', 'Config Service MySQL Primary Production',
-   '10000000-0000-0000-0000-000000000001', '20000000-0000-0000-0000-000000000002',
-   'running', 'warning',
-   '{"team":"platform","tier":"data"}', 'manual', ''),
-
-  ('41000000-0000-0000-0000-000000000029', 'database_instance', 'mysql',
-   'config-mysql-replica-01-prod', 'Config Service MySQL Replica 01 Production',
-   '10000000-0000-0000-0000-000000000001', '20000000-0000-0000-0000-000000000002',
-   'running', 'warning',
-   '{"team":"platform","tier":"data","replication_lag_seconds":"12"}', 'manual', '');
--- +goose StatementEnd
-
--- --- Production Services (5) ---
--- +goose StatementBegin
-insert into resources (
-  id, resource_type, resource_subtype, name, display_name,
-  environment_id, owner_id, lifecycle_status, health_status,
-  labels, source, external_id
-) values
-  ('41000000-0000-0000-0000-000000000030', 'service', 'api',
-   'payment-api-prod', 'Payment Processing API Service Production',
-   '10000000-0000-0000-0000-000000000001', '20000000-0000-0000-0000-000000000004',
-   'running', 'healthy',
-   '{"team":"payment","tier":"app","runtime":"go","port":"8080"}', 'manual', ''),
-
-  ('41000000-0000-0000-0000-000000000031', 'service', 'api',
-   'user-api-prod', 'User Management API Service Production',
-   '10000000-0000-0000-0000-000000000001', '20000000-0000-0000-0000-000000000003',
-   'running', 'healthy',
-   '{"team":"order","tier":"app","runtime":"java","port":"8080"}', 'manual', ''),
-
-  ('41000000-0000-0000-0000-000000000032', 'service', 'worker',
-   'analytics-service-prod', 'Analytics Data Pipeline Worker Service Production',
-   '10000000-0000-0000-0000-000000000001', '20000000-0000-0000-0000-000000000005',
-   'running', 'healthy',
-   '{"team":"analytics","tier":"app","runtime":"python"}', 'manual', ''),
-
-  ('41000000-0000-0000-0000-000000000033', 'service', 'api',
-   'config-service-prod', 'Platform Configuration Service Production',
-   '10000000-0000-0000-0000-000000000001', '20000000-0000-0000-0000-000000000001',
-   'running', 'healthy',
-   '{"team":"platform","tier":"app"}', 'manual', ''),
-
-  ('41000000-0000-0000-0000-000000000034', 'service', 'worker',
-   'notification-service-prod', 'Notification Delivery Service',
-   '10000000-0000-0000-0000-000000000001', '20000000-0000-0000-0000-000000000003',
-   'stopped', 'unknown',
-   '{"team":"order","tier":"app","runtime":"node","disabled_reason":"kafka-migration"}', 'manual', '');
--- +goose StatementEnd
-
--- --- Production Database Proxies (4) ---
--- +goose StatementBegin
-insert into resources (
-  id, resource_type, resource_subtype, name, display_name,
-  environment_id, owner_id, lifecycle_status, health_status,
-  labels, source, external_id
-) values
-  ('41000000-0000-0000-0000-000000000040', 'database_proxy', 'proxysql',
-   'order-proxysql-prod', 'Order MySQL ProxySQL Production',
-   '10000000-0000-0000-0000-000000000001', '20000000-0000-0000-0000-000000000001',
-   'running', 'healthy',
-   '{"team":"platform","tier":"proxy","backend":"mysql"}', 'manual', ''),
-
-  ('41000000-0000-0000-0000-000000000041', 'database_proxy', 'proxysql',
-   'payment-proxysql-prod', 'Payment MySQL ProxySQL Production',
-   '10000000-0000-0000-0000-000000000001', '20000000-0000-0000-0000-000000000001',
-   'running', 'healthy',
-   '{"team":"platform","tier":"proxy","backend":"mysql","pci_scope":"yes"}', 'manual', ''),
-
-  ('41000000-0000-0000-0000-000000000042', 'database_proxy', 'chproxy',
-   'analytics-ch-proxy-prod', 'Analytics ClickHouse Proxy Production',
-   '10000000-0000-0000-0000-000000000001', '20000000-0000-0000-0000-000000000001',
-   'running', 'healthy',
-   '{"team":"platform","tier":"proxy","backend":"clickhouse"}', 'manual', ''),
-
-  ('41000000-0000-0000-0000-000000000043', 'database_proxy', 'proxysql',
-   'config-proxysql-prod', 'Config Service ProxySQL Production',
-   '10000000-0000-0000-0000-000000000001', '20000000-0000-0000-0000-000000000001',
-   'degraded', 'warning',
-   '{"team":"platform","tier":"proxy","backend":"mysql"}', 'manual', ''),
-
-  ('41000000-0000-0000-0000-000000000044', 'database_proxy', 'proxysql',
-   'payment-proxysql-02-prod', 'Payment ProxySQL Standby',
-   '10000000-0000-0000-0000-000000000001', '20000000-0000-0000-0000-000000000001',
-   'stopped', 'unknown',
-   '{"team":"platform","tier":"proxy","backend":"mysql","pci_scope":"yes","role":"standby"}', 'manual', '');
--- +goose StatementEnd
-
--- --- Production Virtual IPs (3) ---
--- +goose StatementBegin
-insert into resources (
-  id, resource_type, resource_subtype, name, display_name,
-  environment_id, owner_id, lifecycle_status, health_status,
-  labels, source, external_id
-) values
-  ('41000000-0000-0000-0000-000000000050', 'virtual_ip', 'floating',
-   'order-vip-prod', 'Order Service Virtual IP Production',
-   '10000000-0000-0000-0000-000000000001', '20000000-0000-0000-0000-000000000001',
-   'running', 'healthy',
-   '{"team":"platform","tier":"network","ip":"10.0.10.100"}', 'manual', ''),
-
-  ('41000000-0000-0000-0000-000000000051', 'virtual_ip', 'floating',
-   'payment-vip-prod', 'Payment Service Virtual IP Production',
-   '10000000-0000-0000-0000-000000000001', '20000000-0000-0000-0000-000000000001',
-   'running', 'healthy',
-   '{"team":"platform","tier":"network","ip":"10.0.10.101"}', 'manual', ''),
-
-  ('41000000-0000-0000-0000-000000000052', 'virtual_ip', 'floating',
-   'analytics-vip-prod', 'Analytics Service Virtual IP Production',
-   '10000000-0000-0000-0000-000000000001', '20000000-0000-0000-0000-000000000001',
-   'running', 'healthy',
-   '{"team":"platform","tier":"network","ip":"10.0.10.102"}', 'manual', '');
--- +goose StatementEnd
-
--- --- Production Domain Names (4) ---
--- +goose StatementBegin
-insert into resources (
-  id, resource_type, resource_subtype, name, display_name,
-  environment_id, owner_id, lifecycle_status, health_status,
-  labels, source, external_id
-) values
-  ('41000000-0000-0000-0000-000000000060', 'domain_name', 'dns',
-   'api.order.internal', 'Order Service API Endpoint',
-   '10000000-0000-0000-0000-000000000001', '20000000-0000-0000-0000-000000000003',
-   'running', 'healthy',
-   '{"team":"order","tier":"network","zone":"internal"}', 'manual', ''),
-
-  ('41000000-0000-0000-0000-000000000061', 'domain_name', 'dns',
-   'api.payment.internal', 'Payment Service API Endpoint',
-   '10000000-0000-0000-0000-000000000001', '20000000-0000-0000-0000-000000000004',
-   'running', 'healthy',
-   '{"team":"payment","tier":"network","zone":"internal"}', 'manual', ''),
-
-  ('41000000-0000-0000-0000-000000000062', 'domain_name', 'dns',
-   'api.user.internal', 'User Service Internal API Domain',
-   '10000000-0000-0000-0000-000000000001', '20000000-0000-0000-0000-000000000003',
-   'running', 'healthy',
-   '{"team":"order","tier":"network"}', 'manual', ''),
-
-  ('41000000-0000-0000-0000-000000000063', 'domain_name', 'dns',
-   'analytics.internal', 'Analytics Platform Internal Domain',
-   '10000000-0000-0000-0000-000000000001', '20000000-0000-0000-0000-000000000005',
-   'running', 'healthy',
-   '{"team":"analytics","tier":"network"}', 'manual', '');
--- +goose StatementEnd
-
--- --- Production Control Plane Components (2) ---
--- +goose StatementBegin
-insert into resources (
-  id, resource_type, resource_subtype, name, display_name,
-  environment_id, owner_id, lifecycle_status, health_status,
-  labels, source, external_id
-) values
-  ('41000000-0000-0000-0000-000000000070', 'control_plane_component', 'orchestrator',
-   'db-orchestrator-prod', 'Database Orchestrator - Production Control Plane',
-   '10000000-0000-0000-0000-000000000001', '20000000-0000-0000-0000-000000000001',
-   'running', 'healthy',
-   '{"team":"platform","tier":"control-plane","managed_clusters":"4"}', 'manual', ''),
-
-  ('41000000-0000-0000-0000-000000000071', 'control_plane_component', 'ha',
-   'ha-manager-prod', 'High Availability Manager - Production Control Plane',
-   '10000000-0000-0000-0000-000000000001', '20000000-0000-0000-0000-000000000001',
-   'running', 'healthy',
-   '{"team":"platform","tier":"control-plane"}', 'manual', '');
--- +goose StatementEnd
-
--- ============================================================
--- Section 3: Staging Resources (14)
+-- Section 2: Resources
 -- ============================================================
 
 -- +goose StatementBegin
 insert into resources (
-  id, resource_type, resource_subtype, name, display_name,
+  resource_type, resource_subtype, name, display_name,
   environment_id, owner_id, lifecycle_status, health_status,
   labels, source, external_id
-) values
-  ('41000000-0000-0000-0000-000000000080', 'host', 'vm',
-   'staging-db-host-01', 'Staging DB Host 01',
-   '10000000-0000-0000-0000-000000000002', '20000000-0000-0000-0000-000000000001',
-   'running', 'healthy',
-   '{"team":"platform","tier":"infra"}', 'manual', ''),
-
-  ('41000000-0000-0000-0000-000000000081', 'host', 'vm',
-   'staging-db-host-02', 'Staging DB Host 02',
-   '10000000-0000-0000-0000-000000000002', '20000000-0000-0000-0000-000000000001',
-   'running', 'healthy',
-   '{"team":"platform","tier":"infra"}', 'manual', ''),
-
-  ('41000000-0000-0000-0000-000000000082', 'host', 'vm',
-   'staging-app-host-01', 'Staging Application Host 01',
-   '10000000-0000-0000-0000-000000000002', '20000000-0000-0000-0000-000000000001',
-   'running', 'healthy',
-   '{"team":"platform","tier":"compute"}', 'manual', ''),
-
-  ('41000000-0000-0000-0000-000000000083', 'database_cluster', 'mysql',
-   'order-mysql-cluster-staging', 'Order MySQL Cluster Staging',
-   '10000000-0000-0000-0000-000000000002', '20000000-0000-0000-0000-000000000002',
-   'running', 'healthy',
-   '{"team":"order","tier":"data"}', 'manual', ''),
-
-  ('41000000-0000-0000-0000-000000000084', 'database_cluster', 'mysql',
-   'payment-mysql-cluster-staging', 'Payment MySQL Cluster Staging',
-   '10000000-0000-0000-0000-000000000002', '20000000-0000-0000-0000-000000000002',
-   'running', 'healthy',
-   '{"team":"payment","tier":"data"}', 'manual', ''),
-
-  ('41000000-0000-0000-0000-000000000085', 'database_instance', 'mysql',
-   'order-mysql-primary-staging', 'Order MySQL Primary Staging',
-   '10000000-0000-0000-0000-000000000002', '20000000-0000-0000-0000-000000000002',
-   'running', 'healthy',
-   '{"team":"order","tier":"data"}', 'manual', ''),
-
-  ('41000000-0000-0000-0000-000000000086', 'database_instance', 'mysql',
-   'order-mysql-replica-staging', 'Order MySQL Replica Staging',
-   '10000000-0000-0000-0000-000000000002', '20000000-0000-0000-0000-000000000002',
-   'running', 'healthy',
-   '{"team":"order","tier":"data"}', 'manual', ''),
-
-  ('41000000-0000-0000-0000-000000000087', 'database_instance', 'mysql',
-   'payment-mysql-primary-staging', 'Payment MySQL Primary Staging',
-   '10000000-0000-0000-0000-000000000002', '20000000-0000-0000-0000-000000000002',
-   'provisioning', 'healthy',
-   '{"team":"payment","tier":"data"}', 'manual', ''),
-
-  ('41000000-0000-0000-0000-000000000088', 'service', 'api',
-   'order-api-staging', 'Order API Staging',
-   '10000000-0000-0000-0000-000000000002', '20000000-0000-0000-0000-000000000003',
-   'running', 'healthy',
-   '{"team":"order","tier":"app"}', 'manual', ''),
-
-  ('41000000-0000-0000-0000-000000000089', 'service', 'api',
-   'payment-api-staging', 'Payment API Staging',
-   '10000000-0000-0000-0000-000000000002', '20000000-0000-0000-0000-000000000004',
-   'running', 'healthy',
-   '{"team":"payment","tier":"app"}', 'manual', ''),
-
-  ('41000000-0000-0000-0000-000000000090', 'database_proxy', 'proxysql',
-   'order-proxysql-staging', 'Order ProxySQL Staging',
-   '10000000-0000-0000-0000-000000000002', '20000000-0000-0000-0000-000000000001',
-   'running', 'healthy',
-   '{"team":"platform","tier":"proxy"}', 'manual', ''),
-
-  ('41000000-0000-0000-0000-000000000091', 'virtual_ip', 'floating',
-   'order-vip-staging', 'Order Service Virtual IP Staging',
-   '10000000-0000-0000-0000-000000000002', '20000000-0000-0000-0000-000000000001',
-   'running', 'healthy',
-   '{"team":"platform","tier":"network","ip":"10.1.10.100"}', 'manual', ''),
-
-  ('41000000-0000-0000-0000-000000000092', 'domain_name', 'dns',
-   'staging.order.internal', 'Order Service Staging Internal Domain',
-   '10000000-0000-0000-0000-000000000002', '20000000-0000-0000-0000-000000000003',
-   'running', 'healthy',
-   '{"team":"order","tier":"network"}', 'manual', ''),
-
-  ('41000000-0000-0000-0000-000000000093', 'control_plane_component', 'orchestrator',
-   'db-orchestrator-staging', 'Database Orchestrator - Staging Control Plane',
-   '10000000-0000-0000-0000-000000000002', '20000000-0000-0000-0000-000000000001',
-   'running', 'healthy',
-   '{"team":"platform","tier":"control-plane"}', 'manual', '');
--- +goose StatementEnd
-
--- ============================================================
--- Section 4: Development Resources (7)
--- ============================================================
-
--- +goose StatementBegin
-insert into resources (
-  id, resource_type, resource_subtype, name, display_name,
-  environment_id, owner_id, lifecycle_status, health_status,
-  labels, source, external_id
-) values
-  ('41000000-0000-0000-0000-000000000094', 'host', 'vm',
-   'dev-db-host-01', 'Development DB Host 01',
-   '10000000-0000-0000-0000-000000000003', '20000000-0000-0000-0000-000000000001',
-   'running', 'healthy',
-   '{"team":"platform","tier":"infra"}', 'manual', ''),
-
-  ('41000000-0000-0000-0000-000000000095', 'database_cluster', 'mysql',
-   'dev-mysql-cluster', 'Development MySQL Cluster',
-   '10000000-0000-0000-0000-000000000003', '20000000-0000-0000-0000-000000000002',
-   'running', 'healthy',
-   '{"team":"platform","tier":"data"}', 'manual', ''),
-
-  ('41000000-0000-0000-0000-000000000096', 'database_instance', 'mysql',
-   'dev-mysql-primary', 'Development MySQL Primary Instance',
-   '10000000-0000-0000-0000-000000000003', '20000000-0000-0000-0000-000000000002',
-   'running', 'healthy',
-   '{"team":"platform","tier":"data"}', 'manual', ''),
-
-  ('41000000-0000-0000-0000-000000000097', 'service', 'api',
-   'order-api-dev', 'Order API Development',
-   '10000000-0000-0000-0000-000000000003', '20000000-0000-0000-0000-000000000003',
-   'running', 'healthy',
-   '{"team":"order","tier":"app"}', 'manual', ''),
-
-  ('41000000-0000-0000-0000-000000000098', 'database_proxy', 'proxysql',
-   'dev-proxysql', 'Development ProxySQL',
-   '10000000-0000-0000-0000-000000000003', '20000000-0000-0000-0000-000000000001',
-   'running', 'healthy',
-   '{"team":"platform","tier":"proxy"}', 'manual', ''),
-
-  ('41000000-0000-0000-0000-000000000099', 'virtual_ip', 'floating',
-   'dev-vip', 'Development Virtual IP',
-   '10000000-0000-0000-0000-000000000003', '20000000-0000-0000-0000-000000000001',
-   'running', 'healthy',
-   '{"team":"platform","tier":"network","ip":"10.2.10.100"}', 'manual', ''),
-
-  ('41000000-0000-0000-0000-000000000100', 'domain_name', 'dns',
-   'dev.order.internal', 'Order Service Development Internal Domain',
-   '10000000-0000-0000-0000-000000000003', '20000000-0000-0000-0000-000000000003',
-   'running', 'healthy',
-   '{}', 'manual', '');
--- +goose StatementEnd
-
--- ============================================================
--- Section 5: Profiles
--- ============================================================
-
--- +goose StatementBegin
-insert into resource_profiles_host (resource_id, hostname, ip_address, os_name, spec) values
-  ('41000000-0000-0000-0000-000000000001', 'prod-db-host-02.internal', '10.0.10.22', 'Ubuntu 24.04', '{"provider":"vmware","cpu":16,"memory_gb":128}'),
-  ('41000000-0000-0000-0000-000000000002', 'prod-db-host-03.internal', '10.0.10.23', 'Ubuntu 24.04', '{"provider":"vmware","cpu":16,"memory_gb":128}'),
-  ('41000000-0000-0000-0000-000000000003', 'prod-db-host-04.internal', '10.0.10.24', 'CentOS 9 Stream', '{"provider":"vmware","cpu":8,"memory_gb":64}'),
-  ('41000000-0000-0000-0000-000000000004', 'prod-app-host-01.internal', '10.0.20.10', 'Ubuntu 22.04', '{"provider":"vmware","cpu":8,"memory_gb":32,"kubernetes_node":"true"}'),
-  ('41000000-0000-0000-0000-000000000005', 'prod-app-host-02.internal', '10.0.20.11', 'Ubuntu 22.04', '{"provider":"vmware","cpu":8,"memory_gb":32,"kubernetes_node":"true"}'),
-  ('41000000-0000-0000-0000-000000000006', 'prod-ch-host-01.internal', '10.0.30.10', 'Ubuntu 24.04', '{"provider":"bare-metal","cpu":32,"memory_gb":256,"disk_tb":8,"disk_type":"nvme"}'),
-  ('41000000-0000-0000-0000-000000000007', 'prod-ch-host-02.internal', '10.0.30.11', 'Ubuntu 24.04', '{"provider":"bare-metal","cpu":32,"memory_gb":256,"disk_tb":8,"disk_type":"nvme"}');
+)
+select
+  seed.resource_type,
+  seed.resource_subtype,
+  seed.name,
+  seed.display_name,
+  environments.id,
+  owners.id,
+  seed.lifecycle_status,
+  seed.health_status,
+  seed.labels,
+  seed.source,
+  seed.external_id
+from (
+  select 'host' as resource_type, 'vm' as resource_subtype, 'prod-db-host-02' as name, 'Production DB Host 02' as display_name, 'prod' as environment_slug, 'platform@example.com' as owner_email, 'running' as lifecycle_status, 'healthy' as health_status, '{"team":"platform","tier":"infra","rack":"B12"}' as labels, 'manual' as source, 'vmware-prod-db-host-02' as external_id
+  union all select 'host', 'vm', 'prod-db-host-03', 'Production DB Host 03', 'prod', 'platform@example.com', 'running', 'healthy', '{"team":"platform","tier":"infra","rack":"B13"}', 'manual', 'vmware-prod-db-host-03'
+  union all select 'host', 'vm', 'prod-db-host-04', 'Production DB Host 04', 'prod', 'platform@example.com', 'running', 'healthy', '{"team":"platform","tier":"infra","rack":"B14"}', 'manual', ''
+  union all select 'host', 'vm', 'prod-app-host-01', 'Production Application Host 01', 'prod', 'platform@example.com', 'running', 'healthy', '{"team":"platform","tier":"compute"}', 'manual', ''
+  union all select 'host', 'vm', 'prod-app-host-02', 'Production Application Host 02', 'prod', 'platform@example.com', 'running', 'healthy', '{"team":"platform","tier":"compute"}', 'terraform', ''
+  union all select 'host', 'physical', 'prod-ch-host-01', 'ClickHouse Host 01 (Production)', 'prod', 'platform@example.com', 'running', 'healthy', '{"team":"platform","tier":"infra","purpose":"analytics","disk_type":"nvme"}', 'discovery', 'bare-prod-ch-host-01'
+  union all select 'host', 'physical', 'prod-ch-host-02', 'ClickHouse Host 02 (Production)', 'prod', 'platform@example.com', 'running', 'healthy', '{"team":"platform","tier":"infra","purpose":"analytics","disk_type":"nvme"}', 'discovery', 'bare-prod-ch-host-02'
+  union all select 'database_cluster', 'mysql', 'payment-mysql-cluster-prod', 'Payment MySQL Cluster Production', 'prod', 'dba@example.com', 'running', 'healthy', '{"team":"payment","tier":"data","critical":"true","pci_scope":"yes"}', 'manual', 'dbaas-payment-mysql-cluster-prod'
+  union all select 'database_cluster', 'redis', 'user-redis-cluster-prod', 'User Session Redis Cluster Production', 'prod', 'dba@example.com', 'running', 'healthy', '{"team":"order","tier":"cache"}', 'manual', 'dbaas-user-redis-cluster-prod'
+  union all select 'database_cluster', 'clickhouse', 'analytics-ch-cluster-prod', 'Analytics ClickHouse Cluster Production', 'prod', 'dba@example.com', 'running', 'healthy', '{"team":"analytics","tier":"data","engine":"clickhouse"}', 'manual', 'dbaas-analytics-ch-cluster-prod'
+  union all select 'database_cluster', 'mysql', 'config-mysql-cluster-prod', 'Platform Config Service MySQL Cluster Production', 'prod', 'dba@example.com', 'degraded', 'warning', '{"team":"platform","tier":"data"}', 'manual', ''
+  union all select 'database_instance', 'mysql', 'order-mysql-replica-01-prod', 'Order MySQL Replica 01 Production', 'prod', 'dba@example.com', 'running', 'healthy', '{"team":"order","tier":"data","replication_lag_seconds":"0"}', 'manual', ''
+  union all select 'database_instance', 'mysql', 'order-mysql-replica-02-prod', 'Order MySQL Replica 02 Production', 'prod', 'dba@example.com', 'running', 'healthy', '{"team":"order","tier":"data"}', 'manual', ''
+  union all select 'database_instance', 'mysql', 'payment-mysql-primary-prod', 'Payment MySQL Primary Production', 'prod', 'dba@example.com', 'running', 'healthy', '{"team":"payment","tier":"data","critical":"true"}', 'manual', 'dbaas-payment-mysql-primary-prod-inst'
+  union all select 'database_instance', 'mysql', 'payment-mysql-replica-01-prod', 'Payment MySQL Replica 01', 'prod', 'dba@example.com', 'running', 'warning', '{"team":"payment","tier":"data","replication_lag_seconds":"45","alert":"replication-lag"}', 'manual', ''
+  union all select 'database_instance', 'redis', 'user-redis-primary-prod', 'User Redis Primary Production', 'prod', 'dba@example.com', 'running', 'healthy', '{"team":"order","tier":"cache","memory_max_gb":"32"}', 'manual', ''
+  union all select 'database_instance', 'redis', 'user-redis-replica-01-prod', 'User Redis Replica 01 Production', 'prod', 'dba@example.com', 'running', 'healthy', '{"team":"order","tier":"cache"}', 'manual', ''
+  union all select 'database_instance', 'clickhouse', 'analytics-ch-node-01-prod', 'Analytics ClickHouse Node 01 Production', 'prod', 'dba@example.com', 'running', 'healthy', '{"team":"analytics","tier":"data","clickhouse_role":"replica"}', 'manual', ''
+  union all select 'database_instance', 'clickhouse', 'analytics-ch-node-02-prod', 'Analytics ClickHouse Node 02', 'prod', 'dba@example.com', 'running', 'critical', '{"team":"analytics","tier":"data","clickhouse_role":"replica","disk_usage_pct":"94","alert":"disk-pressure"}', 'manual', ''
+  union all select 'database_instance', 'mysql', 'config-mysql-primary-prod', 'Config Service MySQL Primary Production', 'prod', 'dba@example.com', 'running', 'warning', '{"team":"platform","tier":"data"}', 'manual', ''
+  union all select 'database_instance', 'mysql', 'config-mysql-replica-01-prod', 'Config Service MySQL Replica 01 Production', 'prod', 'dba@example.com', 'running', 'warning', '{"team":"platform","tier":"data","replication_lag_seconds":"12"}', 'manual', ''
+  union all select 'service', 'api', 'payment-api-prod', 'Payment Processing API Service Production', 'prod', 'payment-team@example.com', 'running', 'healthy', '{"team":"payment","tier":"app","runtime":"go","port":"8080"}', 'manual', ''
+  union all select 'service', 'api', 'user-api-prod', 'User Management API Service Production', 'prod', 'order-team@example.com', 'running', 'healthy', '{"team":"order","tier":"app","runtime":"java","port":"8080"}', 'manual', ''
+  union all select 'service', 'worker', 'analytics-service-prod', 'Analytics Data Pipeline Worker Service Production', 'prod', 'analytics-team@example.com', 'running', 'healthy', '{"team":"analytics","tier":"app","runtime":"python"}', 'manual', ''
+  union all select 'service', 'api', 'config-service-prod', 'Platform Configuration Service Production', 'prod', 'platform@example.com', 'running', 'healthy', '{"team":"platform","tier":"app"}', 'manual', ''
+  union all select 'service', 'worker', 'notification-service-prod', 'Notification Delivery Service', 'prod', 'order-team@example.com', 'stopped', 'unknown', '{"team":"order","tier":"app","runtime":"node","disabled_reason":"kafka-migration"}', 'manual', ''
+  union all select 'database_proxy', 'proxysql', 'order-proxysql-prod', 'Order MySQL ProxySQL Production', 'prod', 'platform@example.com', 'running', 'healthy', '{"team":"platform","tier":"proxy","backend":"mysql"}', 'manual', ''
+  union all select 'database_proxy', 'proxysql', 'payment-proxysql-prod', 'Payment MySQL ProxySQL Production', 'prod', 'platform@example.com', 'running', 'healthy', '{"team":"platform","tier":"proxy","backend":"mysql","pci_scope":"yes"}', 'manual', ''
+  union all select 'database_proxy', 'chproxy', 'analytics-ch-proxy-prod', 'Analytics ClickHouse Proxy Production', 'prod', 'platform@example.com', 'running', 'healthy', '{"team":"platform","tier":"proxy","backend":"clickhouse"}', 'manual', ''
+  union all select 'database_proxy', 'proxysql', 'config-proxysql-prod', 'Config Service ProxySQL Production', 'prod', 'platform@example.com', 'degraded', 'warning', '{"team":"platform","tier":"proxy","backend":"mysql"}', 'manual', ''
+  union all select 'database_proxy', 'proxysql', 'payment-proxysql-02-prod', 'Payment ProxySQL Standby', 'prod', 'platform@example.com', 'stopped', 'unknown', '{"team":"platform","tier":"proxy","backend":"mysql","pci_scope":"yes","role":"standby"}', 'manual', ''
+  union all select 'virtual_ip', 'floating', 'order-vip-prod', 'Order Service Virtual IP Production', 'prod', 'platform@example.com', 'running', 'healthy', '{"team":"platform","tier":"network","ip":"10.0.10.100"}', 'manual', ''
+  union all select 'virtual_ip', 'floating', 'payment-vip-prod', 'Payment Service Virtual IP Production', 'prod', 'platform@example.com', 'running', 'healthy', '{"team":"platform","tier":"network","ip":"10.0.10.101"}', 'manual', ''
+  union all select 'virtual_ip', 'floating', 'analytics-vip-prod', 'Analytics Service Virtual IP Production', 'prod', 'platform@example.com', 'running', 'healthy', '{"team":"platform","tier":"network","ip":"10.0.10.102"}', 'manual', ''
+  union all select 'domain_name', 'dns', 'api.order.internal', 'Order Service API Endpoint', 'prod', 'order-team@example.com', 'running', 'healthy', '{"team":"order","tier":"network","zone":"internal"}', 'manual', ''
+  union all select 'domain_name', 'dns', 'api.payment.internal', 'Payment Service API Endpoint', 'prod', 'payment-team@example.com', 'running', 'healthy', '{"team":"payment","tier":"network","zone":"internal"}', 'manual', ''
+  union all select 'domain_name', 'dns', 'api.user.internal', 'User Service Internal API Domain', 'prod', 'order-team@example.com', 'running', 'healthy', '{"team":"order","tier":"network"}', 'manual', ''
+  union all select 'domain_name', 'dns', 'analytics.internal', 'Analytics Platform Internal Domain', 'prod', 'analytics-team@example.com', 'running', 'healthy', '{"team":"analytics","tier":"network"}', 'manual', ''
+  union all select 'control_plane_component', 'orchestrator', 'db-orchestrator-prod', 'Database Orchestrator - Production Control Plane', 'prod', 'platform@example.com', 'running', 'healthy', '{"team":"platform","tier":"control-plane","managed_clusters":"4"}', 'manual', ''
+  union all select 'control_plane_component', 'ha', 'ha-manager-prod', 'High Availability Manager - Production Control Plane', 'prod', 'platform@example.com', 'running', 'healthy', '{"team":"platform","tier":"control-plane"}', 'manual', ''
+  union all select 'host', 'vm', 'staging-db-host-01', 'Staging DB Host 01', 'staging', 'platform@example.com', 'running', 'healthy', '{"team":"platform","tier":"infra"}', 'manual', ''
+  union all select 'host', 'vm', 'staging-db-host-02', 'Staging DB Host 02', 'staging', 'platform@example.com', 'running', 'healthy', '{"team":"platform","tier":"infra"}', 'manual', ''
+  union all select 'host', 'vm', 'staging-app-host-01', 'Staging Application Host 01', 'staging', 'platform@example.com', 'running', 'healthy', '{"team":"platform","tier":"compute"}', 'manual', ''
+  union all select 'database_cluster', 'mysql', 'order-mysql-cluster-staging', 'Order MySQL Cluster Staging', 'staging', 'dba@example.com', 'running', 'healthy', '{"team":"order","tier":"data"}', 'manual', ''
+  union all select 'database_cluster', 'mysql', 'payment-mysql-cluster-staging', 'Payment MySQL Cluster Staging', 'staging', 'dba@example.com', 'running', 'healthy', '{"team":"payment","tier":"data"}', 'manual', ''
+  union all select 'database_instance', 'mysql', 'order-mysql-primary-staging', 'Order MySQL Primary Staging', 'staging', 'dba@example.com', 'running', 'healthy', '{"team":"order","tier":"data"}', 'manual', ''
+  union all select 'database_instance', 'mysql', 'order-mysql-replica-staging', 'Order MySQL Replica Staging', 'staging', 'dba@example.com', 'running', 'healthy', '{"team":"order","tier":"data"}', 'manual', ''
+  union all select 'database_instance', 'mysql', 'payment-mysql-primary-staging', 'Payment MySQL Primary Staging', 'staging', 'dba@example.com', 'provisioning', 'healthy', '{"team":"payment","tier":"data"}', 'manual', ''
+  union all select 'service', 'api', 'order-api-staging', 'Order API Staging', 'staging', 'order-team@example.com', 'running', 'healthy', '{"team":"order","tier":"app"}', 'manual', ''
+  union all select 'service', 'api', 'payment-api-staging', 'Payment API Staging', 'staging', 'payment-team@example.com', 'running', 'healthy', '{"team":"payment","tier":"app"}', 'manual', ''
+  union all select 'database_proxy', 'proxysql', 'order-proxysql-staging', 'Order ProxySQL Staging', 'staging', 'platform@example.com', 'running', 'healthy', '{"team":"platform","tier":"proxy"}', 'manual', ''
+  union all select 'virtual_ip', 'floating', 'order-vip-staging', 'Order Service Virtual IP Staging', 'staging', 'platform@example.com', 'running', 'healthy', '{"team":"platform","tier":"network","ip":"10.1.10.100"}', 'manual', ''
+  union all select 'domain_name', 'dns', 'staging.order.internal', 'Order Service Staging Internal Domain', 'staging', 'order-team@example.com', 'running', 'healthy', '{"team":"order","tier":"network"}', 'manual', ''
+  union all select 'control_plane_component', 'orchestrator', 'db-orchestrator-staging', 'Database Orchestrator - Staging Control Plane', 'staging', 'platform@example.com', 'running', 'healthy', '{"team":"platform","tier":"control-plane"}', 'manual', ''
+  union all select 'host', 'vm', 'dev-db-host-01', 'Development DB Host 01', 'dev', 'platform@example.com', 'running', 'healthy', '{"team":"platform","tier":"infra"}', 'manual', ''
+  union all select 'database_cluster', 'mysql', 'dev-mysql-cluster', 'Development MySQL Cluster', 'dev', 'dba@example.com', 'running', 'healthy', '{"team":"platform","tier":"data"}', 'manual', ''
+  union all select 'database_instance', 'mysql', 'dev-mysql-primary', 'Development MySQL Primary Instance', 'dev', 'dba@example.com', 'running', 'healthy', '{"team":"platform","tier":"data"}', 'manual', ''
+  union all select 'service', 'api', 'order-api-dev', 'Order API Development', 'dev', 'order-team@example.com', 'running', 'healthy', '{"team":"order","tier":"app"}', 'manual', ''
+  union all select 'database_proxy', 'proxysql', 'dev-proxysql', 'Development ProxySQL', 'dev', 'platform@example.com', 'running', 'healthy', '{"team":"platform","tier":"proxy"}', 'manual', ''
+  union all select 'virtual_ip', 'floating', 'dev-vip', 'Development Virtual IP', 'dev', 'platform@example.com', 'running', 'healthy', '{"team":"platform","tier":"network","ip":"10.2.10.100"}', 'manual', ''
+  union all select 'domain_name', 'dns', 'dev.order.internal', 'Order Service Development Internal Domain', 'dev', 'order-team@example.com', 'running', 'healthy', '{}', 'manual', ''
+) seed
+join environments on environments.slug = seed.environment_slug
+join owners on owners.email = seed.owner_email;
 -- +goose StatementEnd
 
 -- +goose StatementBegin
-insert into resource_profiles_host (resource_id, hostname, ip_address, os_name, spec) values
-  ('41000000-0000-0000-0000-000000000080', 'staging-db-host-01.internal', '10.1.10.20', 'Ubuntu 24.04', '{"provider":"vmware","cpu":4,"memory_gb":32}'),
-  ('41000000-0000-0000-0000-000000000081', 'staging-db-host-02.internal', '10.1.10.21', 'Ubuntu 24.04', '{"provider":"vmware","cpu":4,"memory_gb":32}'),
-  ('41000000-0000-0000-0000-000000000082', 'staging-app-host-01.internal', '10.1.20.10', 'Ubuntu 22.04', '{"cpu":4,"memory_gb":16}'),
-  ('41000000-0000-0000-0000-000000000094', 'dev-db-host-01.internal', '10.2.10.20', 'Ubuntu 24.04', '{"cpu":2,"memory_gb":8}');
+insert into resource_profiles_host (resource_id, hostname, ip_address, os_name, spec)
+select resources.id, seed.hostname, seed.ip_address, seed.os_name, seed.spec
+from (
+  select 'prod-db-host-02' as resource_name, 'prod-db-host-02.internal' as hostname, '10.0.10.22' as ip_address, 'Ubuntu 24.04' as os_name, '{"provider":"vmware","cpu":16,"memory_gb":128}' as spec
+  union all select 'prod-db-host-03', 'prod-db-host-03.internal', '10.0.10.23', 'Ubuntu 24.04', '{"provider":"vmware","cpu":16,"memory_gb":128}'
+  union all select 'prod-db-host-04', 'prod-db-host-04.internal', '10.0.10.24', 'CentOS 9 Stream', '{"provider":"vmware","cpu":8,"memory_gb":64}'
+  union all select 'prod-app-host-01', 'prod-app-host-01.internal', '10.0.20.10', 'Ubuntu 22.04', '{"provider":"vmware","cpu":8,"memory_gb":32,"kubernetes_node":"true"}'
+  union all select 'prod-app-host-02', 'prod-app-host-02.internal', '10.0.20.11', 'Ubuntu 22.04', '{"provider":"vmware","cpu":8,"memory_gb":32,"kubernetes_node":"true"}'
+  union all select 'prod-ch-host-01', 'prod-ch-host-01.internal', '10.0.30.10', 'Ubuntu 24.04', '{"provider":"bare-metal","cpu":32,"memory_gb":256,"disk_tb":8,"disk_type":"nvme"}'
+  union all select 'prod-ch-host-02', 'prod-ch-host-02.internal', '10.0.30.11', 'Ubuntu 24.04', '{"provider":"bare-metal","cpu":32,"memory_gb":256,"disk_tb":8,"disk_type":"nvme"}'
+  union all select 'staging-db-host-01', 'staging-db-host-01.internal', '10.1.10.20', 'Ubuntu 24.04', '{"provider":"vmware","cpu":4,"memory_gb":32}'
+  union all select 'staging-db-host-02', 'staging-db-host-02.internal', '10.1.10.21', 'Ubuntu 24.04', '{"provider":"vmware","cpu":4,"memory_gb":32}'
+  union all select 'staging-app-host-01', 'staging-app-host-01.internal', '10.1.20.10', 'Ubuntu 22.04', '{"cpu":4,"memory_gb":16}'
+  union all select 'dev-db-host-01', 'dev-db-host-01.internal', '10.2.10.20', 'Ubuntu 24.04', '{"cpu":2,"memory_gb":8}'
+) seed
+join resources on resources.name = seed.resource_name;
 -- +goose StatementEnd
 
 -- +goose StatementBegin
-insert into resource_profiles_database_cluster (resource_id, engine, topology_mode, primary_endpoint, spec) values
-  ('41000000-0000-0000-0000-000000000010', 'mysql',        'primary-replica',  'payment-mysql-cluster-prod.internal:3306',  '{"replicas":1,"storage_class":"ssd","backup_enabled":true}'),
-  ('41000000-0000-0000-0000-000000000011', 'redis',        'cluster',          'user-redis-cluster-prod.internal:6379',     '{"shards":3,"replicas_per_shard":1,"memory_max_gb":"32"}'),
-  ('41000000-0000-0000-0000-000000000012', 'clickhouse',   'replicated',       'analytics-ch-cluster-prod.internal:8123',   '{"replicas":2,"storage_gb":8000,"compression":"lz4"}'),
-  ('41000000-0000-0000-0000-000000000013', 'mysql',        'primary-replica',  'config-mysql-cluster-prod.internal:3306',   '{}'),
-  ('41000000-0000-0000-0000-000000000083', 'mysql',        'primary-replica',  'order-mysql-cluster-staging.internal:3306', '{"replicas":1}'),
-  ('41000000-0000-0000-0000-000000000084', 'mysql',        'primary-replica',  'payment-mysql-cluster-staging.internal:3306', '{}'),
-  ('41000000-0000-0000-0000-000000000095', 'mysql',        'single',           'dev-mysql-cluster.internal:3306',           '{}');
+insert into resource_profiles_database_cluster (resource_id, engine, topology_mode, primary_endpoint, spec)
+select resources.id, seed.engine, seed.topology_mode, seed.primary_endpoint, seed.spec
+from (
+  select 'payment-mysql-cluster-prod' as resource_name, 'mysql' as engine, 'primary-replica' as topology_mode, 'payment-mysql-cluster-prod.internal:3306' as primary_endpoint, '{"replicas":1,"storage_class":"ssd","backup_enabled":true}' as spec
+  union all select 'user-redis-cluster-prod', 'redis', 'cluster', 'user-redis-cluster-prod.internal:6379', '{"shards":3,"replicas_per_shard":1,"memory_max_gb":"32"}'
+  union all select 'analytics-ch-cluster-prod', 'clickhouse', 'replicated', 'analytics-ch-cluster-prod.internal:8123', '{"replicas":2,"storage_gb":8000,"compression":"lz4"}'
+  union all select 'config-mysql-cluster-prod', 'mysql', 'primary-replica', 'config-mysql-cluster-prod.internal:3306', '{}'
+  union all select 'order-mysql-cluster-staging', 'mysql', 'primary-replica', 'order-mysql-cluster-staging.internal:3306', '{"replicas":1}'
+  union all select 'payment-mysql-cluster-staging', 'mysql', 'primary-replica', 'payment-mysql-cluster-staging.internal:3306', '{}'
+  union all select 'dev-mysql-cluster', 'mysql', 'single', 'dev-mysql-cluster.internal:3306', '{}'
+) seed
+join resources on resources.name = seed.resource_name;
 -- +goose StatementEnd
 
 -- +goose StatementBegin
-insert into resource_profiles_database_instance (resource_id, engine, version, host, port, role, spec) values
-  ('41000000-0000-0000-0000-000000000020', 'mysql',      '8.0.36', 'prod-db-host-02.internal',     3306, 'replica', '{"storage_class":"ssd","delayed":false}'),
-  ('41000000-0000-0000-0000-000000000022', 'mysql',      '8.0.36', 'prod-db-host-02.internal',     3307, 'primary', '{"storage_class":"ssd","innodb_buffer_pool_gb":"64"}'),
-  ('41000000-0000-0000-0000-000000000023', 'mysql',      '8.0.36', 'prod-db-host-03.internal',     3306, 'replica', '{"storage_class":"ssd"}'),
-  ('41000000-0000-0000-0000-000000000024', 'redis',      '7.2.4',  'prod-db-host-03.internal',     6379, 'primary', '{"maxmemory_policy":"allkeys-lru"}'),
-  ('41000000-0000-0000-0000-000000000025', 'redis',      '7.2.4',  'prod-db-host-04.internal',     6379, 'replica', '{}'),
-  ('41000000-0000-0000-0000-000000000026', 'clickhouse', '24.3',   'prod-ch-host-01.internal',     8123, 'replica',  '{"clickhouse_servers_version":"24.3.5.37"}'),
-  ('41000000-0000-0000-0000-000000000027', 'clickhouse', '24.3',   'prod-ch-host-02.internal',     8123, 'replica',  '{"clickhouse_servers_version":"24.3.5.37","disk_usage_pct":"94"}'),
-  ('41000000-0000-0000-0000-000000000028', 'mysql',      '8.0.36', 'prod-db-host-04.internal',     3306, 'primary', '{"storage_class":"hdd"}'),
-  ('41000000-0000-0000-0000-000000000029', 'mysql',      '8.0.36', 'prod-db-host-04.internal',     3307, 'replica', '{}'),
-  ('41000000-0000-0000-0000-000000000085', 'mysql',      '8.0.36', 'staging-db-host-01.internal',  3306, 'primary', '{}'),
-  ('41000000-0000-0000-0000-000000000086', 'mysql',      '8.0.36', 'staging-db-host-01.internal',  3307, 'replica', '{}'),
-  ('41000000-0000-0000-0000-000000000096', 'mysql',      '8.0.36', 'dev-db-host-01.internal',      3306, 'primary', '{}');
+insert into resource_profiles_database_instance (resource_id, engine, version, host, port, role, spec)
+select resources.id, seed.engine, seed.version, seed.host, seed.port, seed.role, seed.spec
+from (
+  select 'order-mysql-replica-01-prod' as resource_name, 'mysql' as engine, '8.0.36' as version, 'prod-db-host-02.internal' as host, 3306 as port, 'replica' as role, '{"storage_class":"ssd","delayed":false}' as spec
+  union all select 'payment-mysql-primary-prod', 'mysql', '8.0.36', 'prod-db-host-02.internal', 3307, 'primary', '{"storage_class":"ssd","innodb_buffer_pool_gb":"64"}'
+  union all select 'payment-mysql-replica-01-prod', 'mysql', '8.0.36', 'prod-db-host-03.internal', 3306, 'replica', '{"storage_class":"ssd"}'
+  union all select 'user-redis-primary-prod', 'redis', '7.2.4', 'prod-db-host-03.internal', 6379, 'primary', '{"maxmemory_policy":"allkeys-lru"}'
+  union all select 'user-redis-replica-01-prod', 'redis', '7.2.4', 'prod-db-host-04.internal', 6379, 'replica', '{}'
+  union all select 'analytics-ch-node-01-prod', 'clickhouse', '24.3', 'prod-ch-host-01.internal', 8123, 'replica', '{"clickhouse_servers_version":"24.3.5.37"}'
+  union all select 'analytics-ch-node-02-prod', 'clickhouse', '24.3', 'prod-ch-host-02.internal', 8123, 'replica', '{"clickhouse_servers_version":"24.3.5.37","disk_usage_pct":"94"}'
+  union all select 'config-mysql-primary-prod', 'mysql', '8.0.36', 'prod-db-host-04.internal', 3306, 'primary', '{"storage_class":"hdd"}'
+  union all select 'config-mysql-replica-01-prod', 'mysql', '8.0.36', 'prod-db-host-04.internal', 3307, 'replica', '{}'
+  union all select 'order-mysql-primary-staging', 'mysql', '8.0.36', 'staging-db-host-01.internal', 3306, 'primary', '{}'
+  union all select 'order-mysql-replica-staging', 'mysql', '8.0.36', 'staging-db-host-01.internal', 3307, 'replica', '{}'
+  union all select 'dev-mysql-primary', 'mysql', '8.0.36', 'dev-db-host-01.internal', 3306, 'primary', '{}'
+) seed
+join resources on resources.name = seed.resource_name;
 -- +goose StatementEnd
 
 -- +goose StatementBegin
-insert into resource_profiles_service (resource_id, system_name, repository_url, runtime_env, spec) values
-  ('41000000-0000-0000-0000-000000000030', 'payment-api',   'https://git.internal/payment/api',   'kubernetes', '{"language":"go","framework":"gin","replicas":3}'),
-  ('41000000-0000-0000-0000-000000000031', 'user-api',      'https://git.internal/user/api',      'kubernetes', '{"language":"java","framework":"spring-boot","replicas":2}'),
-  ('41000000-0000-0000-0000-000000000032', 'analytics-pipeline', 'https://git.internal/analytics/pipeline', 'kubernetes', '{"language":"python","framework":"celery"}'),
-  ('41000000-0000-0000-0000-000000000033', 'config-service', 'https://git.internal/platform/config', 'vm', '{}'),
-  ('41000000-0000-0000-0000-000000000088', 'order-api',     'https://git.internal/order/api',     'kubernetes', '{"language":"go"}'),
-  ('41000000-0000-0000-0000-000000000089', 'payment-api',   'https://git.internal/payment/api',   'kubernetes', '{"language":"go"}'),
-  ('41000000-0000-0000-0000-000000000097', 'order-api',     'https://git.internal/order/api',     'docker-compose', '{}');
--- +goose StatementEnd
-
--- ============================================================
--- Section 6: Relations (~57 new)
--- ============================================================
-
--- +goose StatementBegin
-insert into resource_relations (id, from_resource_id, to_resource_id, relation_type) values
-  ('51000000-0000-0000-0000-000000000001', '41000000-0000-0000-0000-000000000020', '40000000-0000-0000-0000-000000000001', 'member_of'),
-  ('51000000-0000-0000-0000-000000000002', '41000000-0000-0000-0000-000000000021', '40000000-0000-0000-0000-000000000001', 'member_of'),
-  ('51000000-0000-0000-0000-000000000003', '41000000-0000-0000-0000-000000000022', '41000000-0000-0000-0000-000000000010', 'member_of'),
-  ('51000000-0000-0000-0000-000000000004', '41000000-0000-0000-0000-000000000023', '41000000-0000-0000-0000-000000000010', 'member_of'),
-  ('51000000-0000-0000-0000-000000000005', '41000000-0000-0000-0000-000000000024', '41000000-0000-0000-0000-000000000011', 'member_of'),
-  ('51000000-0000-0000-0000-000000000006', '41000000-0000-0000-0000-000000000025', '41000000-0000-0000-0000-000000000011', 'member_of'),
-  ('51000000-0000-0000-0000-000000000007', '41000000-0000-0000-0000-000000000026', '41000000-0000-0000-0000-000000000012', 'member_of'),
-  ('51000000-0000-0000-0000-000000000008', '41000000-0000-0000-0000-000000000027', '41000000-0000-0000-0000-000000000012', 'member_of'),
-  ('51000000-0000-0000-0000-000000000009', '41000000-0000-0000-0000-000000000028', '41000000-0000-0000-0000-000000000013', 'member_of'),
-  ('51000000-0000-0000-0000-000000000010', '41000000-0000-0000-0000-000000000029', '41000000-0000-0000-0000-000000000013', 'member_of'),
-  ('51000000-0000-0000-0000-000000000011', '41000000-0000-0000-0000-000000000085', '41000000-0000-0000-0000-000000000083', 'member_of'),
-  ('51000000-0000-0000-0000-000000000012', '41000000-0000-0000-0000-000000000086', '41000000-0000-0000-0000-000000000083', 'member_of'),
-  ('51000000-0000-0000-0000-000000000013', '41000000-0000-0000-0000-000000000087', '41000000-0000-0000-0000-000000000084', 'member_of'),
-  ('51000000-0000-0000-0000-000000000014', '41000000-0000-0000-0000-000000000096', '41000000-0000-0000-0000-000000000095', 'member_of');
+insert into resource_profiles_service (resource_id, system_name, repository_url, runtime_env, spec)
+select resources.id, seed.system_name, seed.repository_url, seed.runtime_env, seed.spec
+from (
+  select 'payment-api-prod' as resource_name, 'payment-api' as system_name, 'https://git.internal/payment/api' as repository_url, 'kubernetes' as runtime_env, '{"language":"go","framework":"gin","replicas":3}' as spec
+  union all select 'user-api-prod', 'user-api', 'https://git.internal/user/api', 'kubernetes', '{"language":"java","framework":"spring-boot","replicas":2}'
+  union all select 'analytics-service-prod', 'analytics-pipeline', 'https://git.internal/analytics/pipeline', 'kubernetes', '{"language":"python","framework":"celery"}'
+  union all select 'config-service-prod', 'config-service', 'https://git.internal/platform/config', 'vm', '{}'
+  union all select 'order-api-staging', 'order-api', 'https://git.internal/order/api', 'kubernetes', '{"language":"go"}'
+  union all select 'payment-api-staging', 'payment-api', 'https://git.internal/payment/api', 'kubernetes', '{"language":"go"}'
+  union all select 'order-api-dev', 'order-api', 'https://git.internal/order/api', 'docker-compose', '{}'
+) seed
+join resources on resources.name = seed.resource_name;
 -- +goose StatementEnd
 
 -- +goose StatementBegin
-insert into resource_relations (id, from_resource_id, to_resource_id, relation_type) values
-  ('51000000-0000-0000-0000-000000000020', '41000000-0000-0000-0000-000000000020', '41000000-0000-0000-0000-000000000001', 'runs_on'),
-  ('51000000-0000-0000-0000-000000000021', '41000000-0000-0000-0000-000000000021', '41000000-0000-0000-0000-000000000002', 'runs_on'),
-  ('51000000-0000-0000-0000-000000000022', '41000000-0000-0000-0000-000000000022', '41000000-0000-0000-0000-000000000002', 'runs_on'),
-  ('51000000-0000-0000-0000-000000000023', '41000000-0000-0000-0000-000000000023', '41000000-0000-0000-0000-000000000003', 'runs_on'),
-  ('51000000-0000-0000-0000-000000000024', '41000000-0000-0000-0000-000000000024', '41000000-0000-0000-0000-000000000003', 'runs_on'),
-  ('51000000-0000-0000-0000-000000000025', '41000000-0000-0000-0000-000000000025', '41000000-0000-0000-0000-000000000003', 'runs_on'),
-  ('51000000-0000-0000-0000-000000000026', '41000000-0000-0000-0000-000000000026', '41000000-0000-0000-0000-000000000006', 'runs_on'),
-  ('51000000-0000-0000-0000-000000000027', '41000000-0000-0000-0000-000000000027', '41000000-0000-0000-0000-000000000007', 'runs_on'),
-  ('51000000-0000-0000-0000-000000000028', '41000000-0000-0000-0000-000000000028', '41000000-0000-0000-0000-000000000003', 'runs_on'),
-  ('51000000-0000-0000-0000-000000000029', '41000000-0000-0000-0000-000000000029', '41000000-0000-0000-0000-000000000003', 'runs_on'),
-  ('51000000-0000-0000-0000-000000000030', '41000000-0000-0000-0000-000000000085', '41000000-0000-0000-0000-000000000080', 'runs_on'),
-  ('51000000-0000-0000-0000-000000000031', '41000000-0000-0000-0000-000000000086', '41000000-0000-0000-0000-000000000080', 'runs_on'),
-  ('51000000-0000-0000-0000-000000000032', '41000000-0000-0000-0000-000000000096', '41000000-0000-0000-0000-000000000094', 'runs_on');
+insert into resource_relations (from_resource_id, to_resource_id, relation_type)
+select src.id, dst.id, seed.relation_type
+from (
+  select 'order-mysql-replica-01-prod' as from_name, 'order-mysql-cluster-prod' as to_name, 'member_of' as relation_type
+  union all select 'order-mysql-replica-02-prod', 'order-mysql-cluster-prod', 'member_of'
+  union all select 'payment-mysql-primary-prod', 'payment-mysql-cluster-prod', 'member_of'
+  union all select 'payment-mysql-replica-01-prod', 'payment-mysql-cluster-prod', 'member_of'
+  union all select 'user-redis-primary-prod', 'user-redis-cluster-prod', 'member_of'
+  union all select 'user-redis-replica-01-prod', 'user-redis-cluster-prod', 'member_of'
+  union all select 'analytics-ch-node-01-prod', 'analytics-ch-cluster-prod', 'member_of'
+  union all select 'analytics-ch-node-02-prod', 'analytics-ch-cluster-prod', 'member_of'
+  union all select 'config-mysql-primary-prod', 'config-mysql-cluster-prod', 'member_of'
+  union all select 'config-mysql-replica-01-prod', 'config-mysql-cluster-prod', 'member_of'
+  union all select 'order-mysql-primary-staging', 'order-mysql-cluster-staging', 'member_of'
+  union all select 'order-mysql-replica-staging', 'order-mysql-cluster-staging', 'member_of'
+  union all select 'payment-mysql-primary-staging', 'payment-mysql-cluster-staging', 'member_of'
+  union all select 'dev-mysql-primary', 'dev-mysql-cluster', 'member_of'
+  union all select 'order-mysql-replica-01-prod', 'prod-db-host-02', 'runs_on'
+  union all select 'order-mysql-replica-02-prod', 'prod-db-host-03', 'runs_on'
+  union all select 'payment-mysql-primary-prod', 'prod-db-host-03', 'runs_on'
+  union all select 'payment-mysql-replica-01-prod', 'prod-db-host-04', 'runs_on'
+  union all select 'user-redis-primary-prod', 'prod-db-host-03', 'runs_on'
+  union all select 'user-redis-replica-01-prod', 'prod-db-host-04', 'runs_on'
+  union all select 'analytics-ch-node-01-prod', 'prod-ch-host-01', 'runs_on'
+  union all select 'analytics-ch-node-02-prod', 'prod-ch-host-02', 'runs_on'
+  union all select 'config-mysql-primary-prod', 'prod-db-host-04', 'runs_on'
+  union all select 'config-mysql-replica-01-prod', 'prod-db-host-04', 'runs_on'
+  union all select 'order-mysql-primary-staging', 'staging-db-host-01', 'runs_on'
+  union all select 'order-mysql-replica-staging', 'staging-db-host-01', 'runs_on'
+  union all select 'dev-mysql-primary', 'dev-db-host-01', 'runs_on'
+  union all select 'payment-api-prod', 'payment-mysql-cluster-prod', 'depends_on'
+  union all select 'payment-api-prod', 'payment-proxysql-prod', 'depends_on'
+  union all select 'user-api-prod', 'user-redis-cluster-prod', 'depends_on'
+  union all select 'analytics-service-prod', 'analytics-ch-proxy-prod', 'depends_on'
+  union all select 'config-service-prod', 'config-mysql-cluster-prod', 'depends_on'
+  union all select 'notification-service-prod', 'config-mysql-cluster-prod', 'depends_on'
+  union all select 'order-api-prod', 'order-proxysql-prod', 'depends_on'
+  union all select 'order-api-staging', 'order-mysql-cluster-staging', 'depends_on'
+  union all select 'payment-api-staging', 'payment-mysql-cluster-staging', 'depends_on'
+  union all select 'order-proxysql-prod', 'order-mysql-cluster-prod', 'fronts'
+  union all select 'payment-proxysql-prod', 'payment-mysql-cluster-prod', 'fronts'
+  union all select 'analytics-ch-proxy-prod', 'analytics-ch-cluster-prod', 'fronts'
+  union all select 'config-proxysql-prod', 'config-mysql-cluster-prod', 'fronts'
+  union all select 'order-proxysql-staging', 'order-mysql-cluster-staging', 'fronts'
+  union all select 'dev-proxysql', 'dev-mysql-cluster', 'fronts'
+  union all select 'payment-proxysql-02-prod', 'payment-mysql-cluster-prod', 'fronts'
+  union all select 'order-vip-prod', 'order-proxysql-prod', 'fronts'
+  union all select 'payment-vip-prod', 'payment-proxysql-prod', 'fronts'
+  union all select 'analytics-vip-prod', 'analytics-ch-proxy-prod', 'fronts'
+  union all select 'order-vip-staging', 'order-proxysql-staging', 'fronts'
+  union all select 'dev-vip', 'dev-proxysql', 'fronts'
+  union all select 'api.order.internal', 'order-vip-prod', 'points_to'
+  union all select 'api.payment.internal', 'payment-vip-prod', 'points_to'
+  union all select 'api.user.internal', 'user-api-prod', 'points_to'
+  union all select 'analytics.internal', 'analytics-vip-prod', 'points_to'
+  union all select 'staging.order.internal', 'order-vip-staging', 'points_to'
+  union all select 'dev.order.internal', 'dev-vip', 'points_to'
+  union all select 'db-orchestrator-prod', 'order-mysql-cluster-prod', 'manages'
+  union all select 'db-orchestrator-prod', 'payment-mysql-cluster-prod', 'manages'
+  union all select 'ha-manager-prod', 'config-mysql-cluster-prod', 'manages'
+  union all select 'ha-manager-prod', 'user-redis-cluster-prod', 'manages'
+  union all select 'db-orchestrator-staging', 'order-mysql-cluster-staging', 'manages'
+  union all select 'payment-mysql-primary-prod', 'payment-mysql-replica-01-prod', 'replicates_to'
+) seed
+join resources src on src.name = seed.from_name
+join resources dst on dst.name = seed.to_name;
 -- +goose StatementEnd
 
 -- +goose StatementBegin
-insert into resource_relations (id, from_resource_id, to_resource_id, relation_type) values
-  ('51000000-0000-0000-0000-000000000040', '41000000-0000-0000-0000-000000000030', '41000000-0000-0000-0000-000000000010', 'depends_on'),
-  ('51000000-0000-0000-0000-000000000041', '41000000-0000-0000-0000-000000000030', '41000000-0000-0000-0000-000000000041', 'depends_on'),
-  ('51000000-0000-0000-0000-000000000042', '41000000-0000-0000-0000-000000000031', '41000000-0000-0000-0000-000000000011', 'depends_on'),
-  ('51000000-0000-0000-0000-000000000043', '41000000-0000-0000-0000-000000000032', '41000000-0000-0000-0000-000000000042', 'depends_on'),
-  ('51000000-0000-0000-0000-000000000044', '41000000-0000-0000-0000-000000000033', '41000000-0000-0000-0000-000000000013', 'depends_on'),
-  ('51000000-0000-0000-0000-000000000045', '41000000-0000-0000-0000-000000000034', '41000000-0000-0000-0000-000000000013', 'depends_on'),
-  ('51000000-0000-0000-0000-000000000046', '40000000-0000-0000-0000-000000000003', '41000000-0000-0000-0000-000000000040', 'depends_on'),
-  ('51000000-0000-0000-0000-000000000047', '41000000-0000-0000-0000-000000000088', '41000000-0000-0000-0000-000000000083', 'depends_on'),
-  ('51000000-0000-0000-0000-000000000048', '41000000-0000-0000-0000-000000000089', '41000000-0000-0000-0000-000000000084', 'depends_on');
--- +goose StatementEnd
-
--- +goose StatementBegin
-insert into resource_relations (id, from_resource_id, to_resource_id, relation_type) values
-  ('51000000-0000-0000-0000-000000000050', '41000000-0000-0000-0000-000000000040', '40000000-0000-0000-0000-000000000001', 'fronts'),
-  ('51000000-0000-0000-0000-000000000051', '41000000-0000-0000-0000-000000000041', '41000000-0000-0000-0000-000000000010', 'fronts'),
-  ('51000000-0000-0000-0000-000000000052', '41000000-0000-0000-0000-000000000042', '41000000-0000-0000-0000-000000000012', 'fronts'),
-  ('51000000-0000-0000-0000-000000000053', '41000000-0000-0000-0000-000000000043', '41000000-0000-0000-0000-000000000013', 'fronts'),
-  ('51000000-0000-0000-0000-000000000054', '41000000-0000-0000-0000-000000000090', '41000000-0000-0000-0000-000000000083', 'fronts'),
-  ('51000000-0000-0000-0000-000000000055', '41000000-0000-0000-0000-000000000098', '41000000-0000-0000-0000-000000000095', 'fronts'),
-  ('51000000-0000-0000-0000-000000000090', '41000000-0000-0000-0000-000000000044', '41000000-0000-0000-0000-000000000010', 'fronts');
--- +goose StatementEnd
-
--- +goose StatementBegin
-insert into resource_relations (id, from_resource_id, to_resource_id, relation_type) values
-  ('51000000-0000-0000-0000-000000000060', '41000000-0000-0000-0000-000000000050', '41000000-0000-0000-0000-000000000040', 'fronts'),
-  ('51000000-0000-0000-0000-000000000061', '41000000-0000-0000-0000-000000000051', '41000000-0000-0000-0000-000000000041', 'fronts'),
-  ('51000000-0000-0000-0000-000000000062', '41000000-0000-0000-0000-000000000052', '41000000-0000-0000-0000-000000000042', 'fronts'),
-  ('51000000-0000-0000-0000-000000000063', '41000000-0000-0000-0000-000000000091', '41000000-0000-0000-0000-000000000090', 'fronts'),
-  ('51000000-0000-0000-0000-000000000064', '41000000-0000-0000-0000-000000000099', '41000000-0000-0000-0000-000000000098', 'fronts');
--- +goose StatementEnd
-
--- +goose StatementBegin
-insert into resource_relations (id, from_resource_id, to_resource_id, relation_type) values
-  ('51000000-0000-0000-0000-000000000070', '41000000-0000-0000-0000-000000000060', '41000000-0000-0000-0000-000000000050', 'points_to'),
-  ('51000000-0000-0000-0000-000000000071', '41000000-0000-0000-0000-000000000061', '41000000-0000-0000-0000-000000000051', 'points_to'),
-  ('51000000-0000-0000-0000-000000000072', '41000000-0000-0000-0000-000000000062', '41000000-0000-0000-0000-000000000031', 'points_to'),
-  ('51000000-0000-0000-0000-000000000073', '41000000-0000-0000-0000-000000000063', '41000000-0000-0000-0000-000000000052', 'points_to'),
-  ('51000000-0000-0000-0000-000000000074', '41000000-0000-0000-0000-000000000092', '41000000-0000-0000-0000-000000000091', 'points_to'),
-  ('51000000-0000-0000-0000-000000000075', '41000000-0000-0000-0000-000000000100', '41000000-0000-0000-0000-000000000099', 'points_to');
--- +goose StatementEnd
-
--- +goose StatementBegin
-insert into resource_relations (id, from_resource_id, to_resource_id, relation_type) values
-  ('51000000-0000-0000-0000-000000000080', '41000000-0000-0000-0000-000000000070', '40000000-0000-0000-0000-000000000001', 'manages'),
-  ('51000000-0000-0000-0000-000000000081', '41000000-0000-0000-0000-000000000070', '41000000-0000-0000-0000-000000000010', 'manages'),
-  ('51000000-0000-0000-0000-000000000082', '41000000-0000-0000-0000-000000000071', '41000000-0000-0000-0000-000000000013', 'manages'),
-  ('51000000-0000-0000-0000-000000000083', '41000000-0000-0000-0000-000000000071', '41000000-0000-0000-0000-000000000011', 'manages'),
-  ('51000000-0000-0000-0000-000000000084', '41000000-0000-0000-0000-000000000093', '41000000-0000-0000-0000-000000000083', 'manages');
--- +goose StatementEnd
-
--- +goose StatementBegin
-insert into resource_relations (id, from_resource_id, to_resource_id, relation_type) values
-  ('51000000-0000-0000-0000-000000000091', '41000000-0000-0000-0000-000000000022', '41000000-0000-0000-0000-000000000023', 'replicates_to');
--- +goose StatementEnd
-
--- ============================================================
--- Section 7: Audit Events (25)
--- ============================================================
-
--- +goose StatementBegin
-insert into audit_events (id, actor_user_id, target_resource_id, event_type, result, created_at) values
-  ('61000000-0000-0000-0000-000000000001', '30000000-0000-0000-0000-000000000001', '41000000-0000-0000-0000-000000000001', 'resource.created',       'success', '2026-04-10 09:00:00'),
-  ('61000000-0000-0000-0000-000000000002', '30000000-0000-0000-0000-000000000001', '41000000-0000-0000-0000-000000000002', 'resource.created',       'success', '2026-04-10 09:02:00'),
-  ('61000000-0000-0000-0000-000000000003', '30000000-0000-0000-0000-000000000001', '41000000-0000-0000-0000-000000000003', 'resource.created',       'success', '2026-04-10 09:05:00'),
-  ('61000000-0000-0000-0000-000000000004', '30000000-0000-0000-0000-000000000001', '41000000-0000-0000-0000-000000000010', 'resource.created',       'success', '2026-04-10 09:30:00'),
-  ('61000000-0000-0000-0000-000000000005', '30000000-0000-0000-0000-000000000002', '41000000-0000-0000-0000-000000000020', 'resource.created',       'success', '2026-04-10 10:00:00'),
-  ('61000000-0000-0000-0000-000000000006', '30000000-0000-0000-0000-000000000001', '41000000-0000-0000-0000-000000000020', 'relation.created',       'success', '2026-04-10 10:15:00'),
-  ('61000000-0000-0000-0000-000000000007', '30000000-0000-0000-0000-000000000001', '41000000-0000-0000-0000-000000000022', 'resource.created',       'success', '2026-04-10 10:30:00'),
-  ('61000000-0000-0000-0000-000000000008', '30000000-0000-0000-0000-000000000001', '41000000-0000-0000-0000-000000000023', 'resource.created',       'success', '2026-04-10 10:45:00'),
-  ('61000000-0000-0000-0000-000000000009', '30000000-0000-0000-0000-000000000001', '41000000-0000-0000-0000-000000000011', 'resource.created',       'success', '2026-04-10 11:00:00'),
-  ('61000000-0000-0000-0000-000000000010', '30000000-0000-0000-0000-000000000002', '41000000-0000-0000-0000-000000000030', 'resource.created',       'success', '2026-04-10 14:00:00'),
-  ('61000000-0000-0000-0000-000000000011', '30000000-0000-0000-0000-000000000002', '41000000-0000-0000-0000-000000000031', 'resource.created',       'success', '2026-04-10 14:10:00'),
-  ('61000000-0000-0000-0000-000000000012', '30000000-0000-0000-0000-000000000002', '41000000-0000-0000-0000-000000000040', 'resource.created',       'success', '2026-04-10 14:30:00'),
-  ('61000000-0000-0000-0000-000000000013', '30000000-0000-0000-0000-000000000002', '41000000-0000-0000-0000-000000000041', 'resource.created',       'success', '2026-04-10 14:35:00'),
-  ('61000000-0000-0000-0000-000000000014', '30000000-0000-0000-0000-000000000001', '41000000-0000-0000-0000-000000000033', 'resource.created',       'success', '2026-04-11 08:00:00'),
-  ('61000000-0000-0000-0000-000000000015', '30000000-0000-0000-0000-000000000001', '41000000-0000-0000-0000-000000000033', 'resource.updated',       'success', '2026-04-11 08:30:00'),
-  ('61000000-0000-0000-0000-000000000016', '30000000-0000-0000-0000-000000000001', '41000000-0000-0000-0000-000000000034', 'resource.created',       'success', '2026-04-11 09:00:00'),
-  ('61000000-0000-0000-0000-000000000017', '30000000-0000-0000-0000-000000000002', '41000000-0000-0000-0000-000000000034', 'resource.lifecycle_changed', 'success', '2026-04-11 10:00:00'),
-  ('61000000-0000-0000-0000-000000000018', '30000000-0000-0000-0000-000000000001', '41000000-0000-0000-0000-000000000023', 'resource.health_changed', 'success', '2026-04-11 15:00:00'),
-  ('61000000-0000-0000-0000-000000000019', '30000000-0000-0000-0000-000000000001', '41000000-0000-0000-0000-000000000027', 'resource.health_changed', 'success', '2026-04-11 16:00:00'),
-  ('61000000-0000-0000-0000-000000000020', '30000000-0000-0000-0000-000000000002', '41000000-0000-0000-0000-000000000013', 'resource.health_changed', 'partial', '2026-04-11 16:30:00'),
-  ('61000000-0000-0000-0000-000000000021', '30000000-0000-0000-0000-000000000002', '41000000-0000-0000-0000-000000000043', 'resource.updated',       'failure', '2026-04-12 09:00:00'),
-  ('61000000-0000-0000-0000-000000000022', '30000000-0000-0000-0000-000000000002', '41000000-0000-0000-0000-000000000043', 'resource.updated',       'success', '2026-04-12 09:15:00'),
-  ('61000000-0000-0000-0000-000000000023', '30000000-0000-0000-0000-000000000001', '41000000-0000-0000-0000-000000000050', 'relation.created',       'success', '2026-04-12 10:00:00'),
-  ('61000000-0000-0000-0000-000000000024', '30000000-0000-0000-0000-000000000001', '41000000-0000-0000-0000-000000000060', 'relation.created',       'failure', '2026-04-12 10:05:00'),
-  ('61000000-0000-0000-0000-000000000025', '30000000-0000-0000-0000-000000000001', '41000000-0000-0000-0000-000000000060', 'relation.created',       'success', '2026-04-12 10:10:00');
+insert into audit_events (actor_user_id, target_resource_id, event_type, result, created_at)
+select users.id, resources.id, seed.event_type, seed.result, seed.created_at
+from (
+  select 'admin@example.com' as actor_email, 'prod-db-host-02' as resource_name, 'resource.created' as event_type, 'success' as result, '2026-04-10 09:00:00' as created_at
+  union all select 'admin@example.com', 'prod-db-host-03', 'resource.created', 'success', '2026-04-10 09:02:00'
+  union all select 'admin@example.com', 'prod-db-host-04', 'resource.created', 'success', '2026-04-10 09:05:00'
+  union all select 'admin@example.com', 'payment-mysql-cluster-prod', 'resource.created', 'success', '2026-04-10 09:30:00'
+  union all select 'editor@example.com', 'order-mysql-replica-01-prod', 'resource.created', 'success', '2026-04-10 10:00:00'
+  union all select 'admin@example.com', 'order-mysql-replica-01-prod', 'relation.created', 'success', '2026-04-10 10:15:00'
+  union all select 'admin@example.com', 'payment-mysql-primary-prod', 'resource.created', 'success', '2026-04-10 10:30:00'
+  union all select 'admin@example.com', 'payment-mysql-replica-01-prod', 'resource.created', 'success', '2026-04-10 10:45:00'
+  union all select 'admin@example.com', 'user-redis-cluster-prod', 'resource.created', 'success', '2026-04-10 11:00:00'
+  union all select 'editor@example.com', 'payment-api-prod', 'resource.created', 'success', '2026-04-10 14:00:00'
+  union all select 'editor@example.com', 'user-api-prod', 'resource.created', 'success', '2026-04-10 14:10:00'
+  union all select 'editor@example.com', 'order-proxysql-prod', 'resource.created', 'success', '2026-04-10 14:30:00'
+  union all select 'editor@example.com', 'payment-proxysql-prod', 'resource.created', 'success', '2026-04-10 14:35:00'
+  union all select 'admin@example.com', 'config-service-prod', 'resource.created', 'success', '2026-04-11 08:00:00'
+  union all select 'admin@example.com', 'config-service-prod', 'resource.updated', 'success', '2026-04-11 08:30:00'
+  union all select 'admin@example.com', 'notification-service-prod', 'resource.created', 'success', '2026-04-11 09:00:00'
+  union all select 'editor@example.com', 'notification-service-prod', 'resource.lifecycle_changed', 'success', '2026-04-11 10:00:00'
+  union all select 'admin@example.com', 'payment-mysql-replica-01-prod', 'resource.health_changed', 'success', '2026-04-11 15:00:00'
+  union all select 'admin@example.com', 'analytics-ch-node-02-prod', 'resource.health_changed', 'success', '2026-04-11 16:00:00'
+  union all select 'editor@example.com', 'config-mysql-cluster-prod', 'resource.health_changed', 'partial', '2026-04-11 16:30:00'
+  union all select 'editor@example.com', 'config-proxysql-prod', 'resource.updated', 'failure', '2026-04-12 09:00:00'
+  union all select 'editor@example.com', 'config-proxysql-prod', 'resource.updated', 'success', '2026-04-12 09:15:00'
+  union all select 'admin@example.com', 'order-vip-prod', 'relation.created', 'success', '2026-04-12 10:00:00'
+  union all select 'admin@example.com', 'api.order.internal', 'relation.created', 'failure', '2026-04-12 10:05:00'
+  union all select 'admin@example.com', 'api.order.internal', 'relation.created', 'success', '2026-04-12 10:10:00'
+) seed
+join users on users.email = seed.actor_email
+join resources on resources.name = seed.resource_name;
 -- +goose StatementEnd
 
 -- +goose Down
--- WARNING: Deletes demo data by fixed ID patterns. Dev-oriented, NOT a production rollback strategy.
 -- +goose StatementBegin
-delete from audit_events where id like '61000000-%';
+delete from audit_events
+where (actor_user_id, target_resource_id, event_type, result, created_at) in (
+  select users.id, resources.id, seed.event_type, seed.result, seed.created_at
+  from (
+    select 'admin@example.com' as actor_email, 'prod-db-host-02' as resource_name, 'resource.created' as event_type, 'success' as result, '2026-04-10 09:00:00' as created_at
+    union all select 'admin@example.com', 'prod-db-host-03', 'resource.created', 'success', '2026-04-10 09:02:00'
+    union all select 'admin@example.com', 'prod-db-host-04', 'resource.created', 'success', '2026-04-10 09:05:00'
+    union all select 'admin@example.com', 'payment-mysql-cluster-prod', 'resource.created', 'success', '2026-04-10 09:30:00'
+    union all select 'editor@example.com', 'order-mysql-replica-01-prod', 'resource.created', 'success', '2026-04-10 10:00:00'
+    union all select 'admin@example.com', 'order-mysql-replica-01-prod', 'relation.created', 'success', '2026-04-10 10:15:00'
+    union all select 'admin@example.com', 'payment-mysql-primary-prod', 'resource.created', 'success', '2026-04-10 10:30:00'
+    union all select 'admin@example.com', 'payment-mysql-replica-01-prod', 'resource.created', 'success', '2026-04-10 10:45:00'
+    union all select 'admin@example.com', 'user-redis-cluster-prod', 'resource.created', 'success', '2026-04-10 11:00:00'
+    union all select 'editor@example.com', 'payment-api-prod', 'resource.created', 'success', '2026-04-10 14:00:00'
+    union all select 'editor@example.com', 'user-api-prod', 'resource.created', 'success', '2026-04-10 14:10:00'
+    union all select 'editor@example.com', 'order-proxysql-prod', 'resource.created', 'success', '2026-04-10 14:30:00'
+    union all select 'editor@example.com', 'payment-proxysql-prod', 'resource.created', 'success', '2026-04-10 14:35:00'
+    union all select 'admin@example.com', 'config-service-prod', 'resource.created', 'success', '2026-04-11 08:00:00'
+    union all select 'admin@example.com', 'config-service-prod', 'resource.updated', 'success', '2026-04-11 08:30:00'
+    union all select 'admin@example.com', 'notification-service-prod', 'resource.created', 'success', '2026-04-11 09:00:00'
+    union all select 'editor@example.com', 'notification-service-prod', 'resource.lifecycle_changed', 'success', '2026-04-11 10:00:00'
+    union all select 'admin@example.com', 'payment-mysql-replica-01-prod', 'resource.health_changed', 'success', '2026-04-11 15:00:00'
+    union all select 'admin@example.com', 'analytics-ch-node-02-prod', 'resource.health_changed', 'success', '2026-04-11 16:00:00'
+    union all select 'editor@example.com', 'config-mysql-cluster-prod', 'resource.health_changed', 'partial', '2026-04-11 16:30:00'
+    union all select 'editor@example.com', 'config-proxysql-prod', 'resource.updated', 'failure', '2026-04-12 09:00:00'
+    union all select 'editor@example.com', 'config-proxysql-prod', 'resource.updated', 'success', '2026-04-12 09:15:00'
+    union all select 'admin@example.com', 'order-vip-prod', 'relation.created', 'success', '2026-04-12 10:00:00'
+    union all select 'admin@example.com', 'api.order.internal', 'relation.created', 'failure', '2026-04-12 10:05:00'
+    union all select 'admin@example.com', 'api.order.internal', 'relation.created', 'success', '2026-04-12 10:10:00'
+  ) seed
+  join users on users.email = seed.actor_email
+  join resources on resources.name = seed.resource_name
+);
 -- +goose StatementEnd
 -- +goose StatementBegin
-delete from resource_relations where id like '51000000-%';
+delete rel
+from resource_relations rel
+join resources src on src.id = rel.from_resource_id
+join resources dst on dst.id = rel.to_resource_id
+where (src.name, dst.name, rel.relation_type) in (
+  ('order-mysql-replica-01-prod', 'order-mysql-cluster-prod', 'member_of'),
+  ('order-mysql-replica-02-prod', 'order-mysql-cluster-prod', 'member_of'),
+  ('payment-mysql-primary-prod', 'payment-mysql-cluster-prod', 'member_of'),
+  ('payment-mysql-replica-01-prod', 'payment-mysql-cluster-prod', 'member_of'),
+  ('user-redis-primary-prod', 'user-redis-cluster-prod', 'member_of'),
+  ('user-redis-replica-01-prod', 'user-redis-cluster-prod', 'member_of'),
+  ('analytics-ch-node-01-prod', 'analytics-ch-cluster-prod', 'member_of'),
+  ('analytics-ch-node-02-prod', 'analytics-ch-cluster-prod', 'member_of'),
+  ('config-mysql-primary-prod', 'config-mysql-cluster-prod', 'member_of'),
+  ('config-mysql-replica-01-prod', 'config-mysql-cluster-prod', 'member_of'),
+  ('order-mysql-primary-staging', 'order-mysql-cluster-staging', 'member_of'),
+  ('order-mysql-replica-staging', 'order-mysql-cluster-staging', 'member_of'),
+  ('payment-mysql-primary-staging', 'payment-mysql-cluster-staging', 'member_of'),
+  ('dev-mysql-primary', 'dev-mysql-cluster', 'member_of'),
+  ('order-mysql-replica-01-prod', 'prod-db-host-02', 'runs_on'),
+  ('order-mysql-replica-02-prod', 'prod-db-host-03', 'runs_on'),
+  ('payment-mysql-primary-prod', 'prod-db-host-03', 'runs_on'),
+  ('payment-mysql-replica-01-prod', 'prod-db-host-04', 'runs_on'),
+  ('user-redis-primary-prod', 'prod-db-host-03', 'runs_on'),
+  ('user-redis-replica-01-prod', 'prod-db-host-04', 'runs_on'),
+  ('analytics-ch-node-01-prod', 'prod-ch-host-01', 'runs_on'),
+  ('analytics-ch-node-02-prod', 'prod-ch-host-02', 'runs_on'),
+  ('config-mysql-primary-prod', 'prod-db-host-04', 'runs_on'),
+  ('config-mysql-replica-01-prod', 'prod-db-host-04', 'runs_on'),
+  ('order-mysql-primary-staging', 'staging-db-host-01', 'runs_on'),
+  ('order-mysql-replica-staging', 'staging-db-host-01', 'runs_on'),
+  ('dev-mysql-primary', 'dev-db-host-01', 'runs_on'),
+  ('payment-api-prod', 'payment-mysql-cluster-prod', 'depends_on'),
+  ('payment-api-prod', 'payment-proxysql-prod', 'depends_on'),
+  ('user-api-prod', 'user-redis-cluster-prod', 'depends_on'),
+  ('analytics-service-prod', 'analytics-ch-proxy-prod', 'depends_on'),
+  ('config-service-prod', 'config-mysql-cluster-prod', 'depends_on'),
+  ('notification-service-prod', 'config-mysql-cluster-prod', 'depends_on'),
+  ('order-api-prod', 'order-proxysql-prod', 'depends_on'),
+  ('order-api-staging', 'order-mysql-cluster-staging', 'depends_on'),
+  ('payment-api-staging', 'payment-mysql-cluster-staging', 'depends_on'),
+  ('order-proxysql-prod', 'order-mysql-cluster-prod', 'fronts'),
+  ('payment-proxysql-prod', 'payment-mysql-cluster-prod', 'fronts'),
+  ('analytics-ch-proxy-prod', 'analytics-ch-cluster-prod', 'fronts'),
+  ('config-proxysql-prod', 'config-mysql-cluster-prod', 'fronts'),
+  ('order-proxysql-staging', 'order-mysql-cluster-staging', 'fronts'),
+  ('dev-proxysql', 'dev-mysql-cluster', 'fronts'),
+  ('payment-proxysql-02-prod', 'payment-mysql-cluster-prod', 'fronts'),
+  ('order-vip-prod', 'order-proxysql-prod', 'fronts'),
+  ('payment-vip-prod', 'payment-proxysql-prod', 'fronts'),
+  ('analytics-vip-prod', 'analytics-ch-proxy-prod', 'fronts'),
+  ('order-vip-staging', 'order-proxysql-staging', 'fronts'),
+  ('dev-vip', 'dev-proxysql', 'fronts'),
+  ('api.order.internal', 'order-vip-prod', 'points_to'),
+  ('api.payment.internal', 'payment-vip-prod', 'points_to'),
+  ('api.user.internal', 'user-api-prod', 'points_to'),
+  ('analytics.internal', 'analytics-vip-prod', 'points_to'),
+  ('staging.order.internal', 'order-vip-staging', 'points_to'),
+  ('dev.order.internal', 'dev-vip', 'points_to'),
+  ('db-orchestrator-prod', 'order-mysql-cluster-prod', 'manages'),
+  ('db-orchestrator-prod', 'payment-mysql-cluster-prod', 'manages'),
+  ('ha-manager-prod', 'config-mysql-cluster-prod', 'manages'),
+  ('ha-manager-prod', 'user-redis-cluster-prod', 'manages'),
+  ('db-orchestrator-staging', 'order-mysql-cluster-staging', 'manages'),
+  ('payment-mysql-primary-prod', 'payment-mysql-replica-01-prod', 'replicates_to')
+);
 -- +goose StatementEnd
 -- +goose StatementBegin
-delete from resource_profiles_service where resource_id like '41000000-%';
+delete prof
+from resource_profiles_service prof
+join resources on resources.id = prof.resource_id
+where resources.name in ('payment-api-prod', 'user-api-prod', 'analytics-service-prod', 'config-service-prod', 'order-api-staging', 'payment-api-staging', 'order-api-dev');
 -- +goose StatementEnd
 -- +goose StatementBegin
-delete from resource_profiles_database_instance where resource_id like '41000000-%';
+delete prof
+from resource_profiles_database_instance prof
+join resources on resources.id = prof.resource_id
+where resources.name in ('order-mysql-replica-01-prod', 'payment-mysql-primary-prod', 'payment-mysql-replica-01-prod', 'user-redis-primary-prod', 'user-redis-replica-01-prod', 'analytics-ch-node-01-prod', 'analytics-ch-node-02-prod', 'config-mysql-primary-prod', 'config-mysql-replica-01-prod', 'order-mysql-primary-staging', 'order-mysql-replica-staging', 'dev-mysql-primary');
 -- +goose StatementEnd
 -- +goose StatementBegin
-delete from resource_profiles_database_cluster where resource_id like '41000000-%';
+delete prof
+from resource_profiles_database_cluster prof
+join resources on resources.id = prof.resource_id
+where resources.name in ('payment-mysql-cluster-prod', 'user-redis-cluster-prod', 'analytics-ch-cluster-prod', 'config-mysql-cluster-prod', 'order-mysql-cluster-staging', 'payment-mysql-cluster-staging', 'dev-mysql-cluster');
 -- +goose StatementEnd
 -- +goose StatementBegin
-delete from resource_profiles_host where resource_id like '41000000-%';
+delete prof
+from resource_profiles_host prof
+join resources on resources.id = prof.resource_id
+where resources.name in ('prod-db-host-02', 'prod-db-host-03', 'prod-db-host-04', 'prod-app-host-01', 'prod-app-host-02', 'prod-ch-host-01', 'prod-ch-host-02', 'staging-db-host-01', 'staging-db-host-02', 'staging-app-host-01', 'dev-db-host-01');
 -- +goose StatementEnd
 -- +goose StatementBegin
-delete from resources where id like '41000000-%';
+delete from resources where name in (
+  'prod-db-host-02', 'prod-db-host-03', 'prod-db-host-04', 'prod-app-host-01', 'prod-app-host-02', 'prod-ch-host-01', 'prod-ch-host-02',
+  'payment-mysql-cluster-prod', 'user-redis-cluster-prod', 'analytics-ch-cluster-prod', 'config-mysql-cluster-prod',
+  'order-mysql-replica-01-prod', 'order-mysql-replica-02-prod', 'payment-mysql-primary-prod', 'payment-mysql-replica-01-prod', 'user-redis-primary-prod', 'user-redis-replica-01-prod', 'analytics-ch-node-01-prod', 'analytics-ch-node-02-prod', 'config-mysql-primary-prod', 'config-mysql-replica-01-prod',
+  'payment-api-prod', 'user-api-prod', 'analytics-service-prod', 'config-service-prod', 'notification-service-prod',
+  'order-proxysql-prod', 'payment-proxysql-prod', 'analytics-ch-proxy-prod', 'config-proxysql-prod', 'payment-proxysql-02-prod',
+  'order-vip-prod', 'payment-vip-prod', 'analytics-vip-prod',
+  'api.order.internal', 'api.payment.internal', 'api.user.internal', 'analytics.internal',
+  'db-orchestrator-prod', 'ha-manager-prod',
+  'staging-db-host-01', 'staging-db-host-02', 'staging-app-host-01',
+  'order-mysql-cluster-staging', 'payment-mysql-cluster-staging', 'order-mysql-primary-staging', 'order-mysql-replica-staging', 'payment-mysql-primary-staging',
+  'order-api-staging', 'payment-api-staging', 'order-proxysql-staging', 'order-vip-staging', 'staging.order.internal', 'db-orchestrator-staging',
+  'dev-db-host-01', 'dev-mysql-cluster', 'dev-mysql-primary', 'order-api-dev', 'dev-proxysql', 'dev-vip', 'dev.order.internal'
+);
 -- +goose StatementEnd
 -- +goose StatementBegin
-delete from owners where id in ('20000000-0000-0000-0000-000000000003', '20000000-0000-0000-0000-000000000004', '20000000-0000-0000-0000-000000000005');
+delete from owners where email in ('order-team@example.com', 'payment-team@example.com', 'analytics-team@example.com');
 -- +goose StatementEnd
 -- +goose StatementBegin
-delete from environments where id = '10000000-0000-0000-0000-000000000003';
+delete from environments where slug = 'dev';
 -- +goose StatementEnd

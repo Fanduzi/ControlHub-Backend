@@ -25,7 +25,7 @@ type PageInfo struct {
 type ResourceListQuery struct {
 	ResourceTypes    []string // repeated ?resourceType= values
 	ResourceSubtypes []string // repeated ?resourceSubtype= values
-	EnvironmentIDs   []string // repeated ?environmentId= values
+	EnvironmentIDs   []uint64 // repeated ?environmentId= values
 	LifecycleStatus  []string // repeated ?lifecycleStatus= values
 	HealthStatuses   []string // repeated ?healthStatus= values
 	Query            string   // free-text search over name, display_name, external_id
@@ -38,7 +38,7 @@ type ResourceListQuery struct {
 // AuditListQuery holds all query parameters for GET /audit-events.
 // Repeated query parameters are collected into slices for multi-select filtering.
 type AuditListQuery struct {
-	TargetResourceID string   // kept single-value — naturally unique filter
+	TargetResourceID *uint64  // kept single-value — naturally unique filter
 	EventTypes       []string // repeated ?eventType= values
 	Results          []string // repeated ?result= values
 	Page             int

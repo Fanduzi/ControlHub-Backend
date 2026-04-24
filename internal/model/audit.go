@@ -8,9 +8,9 @@ package model
 import "time"
 
 type AuditEvent struct {
-	ID               string    `json:"id"`
-	ActorUserID      string    `json:"actorUserId"`
-	TargetResourceID string    `json:"targetResourceId"`
+	ID               uint64    `json:"id"`
+	ActorUserID      uint64    `json:"actorUserId"`
+	TargetResourceID *uint64   `json:"targetResourceId"`
 	EventType        string    `json:"eventType"`
 	Result           string    `json:"result"`
 	CreatedAt        time.Time `json:"createdAt"`

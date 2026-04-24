@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -17,8 +18,8 @@ import (
 
 func TestCreateResourceRelation(t *testing.T) {
 	server := NewTestServer()
-	body := `{"toResourceId":"res-2","relationType":"depends_on"}`
-	req := httptest.NewRequest(http.MethodPost, "/resources/res-1/relations", strings.NewReader(body))
+	body := `{"toResourceId":2,"relationType":"depends_on"}`
+	req := httptest.NewRequest(http.MethodPost, "/resources/1/relations", strings.NewReader(body))
 	rec := httptest.NewRecorder()
 
 	server.Router.ServeHTTP(rec, req)
@@ -31,11 +32,11 @@ func TestCreateResourceRelation(t *testing.T) {
 	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
 		t.Fatalf("decode response: %v", err)
 	}
-	if resp.FromResourceID != "res-1" {
-		t.Fatalf("expected fromResourceId res-1, got %s", resp.FromResourceID)
+	if resp.FromResourceID != 1 {
+		t.Fatalf("expected fromResourceId 1, got %d", resp.FromResourceID)
 	}
-	if resp.ToResourceID != "res-2" {
-		t.Fatalf("expected toResourceId res-2, got %s", resp.ToResourceID)
+	if resp.ToResourceID != 2 {
+		t.Fatalf("expected toResourceId 2, got %d", resp.ToResourceID)
 	}
 	if resp.RelationType != model.RelationTypeDependsOn {
 		t.Fatalf("expected relationType depends_on, got %s", resp.RelationType)
@@ -44,8 +45,8 @@ func TestCreateResourceRelation(t *testing.T) {
 
 func TestCreateResourceRelationRejectsMissingTarget(t *testing.T) {
 	server := NewTestServer()
-	body := `{"toResourceId":"missing-resource","relationType":"depends_on"}`
-	req := httptest.NewRequest(http.MethodPost, "/resources/res-1/relations", strings.NewReader(body))
+	body := `{"toResourceId":999,"relationType":"depends_on"}`
+	req := httptest.NewRequest(http.MethodPost, "/resources/1/relations", strings.NewReader(body))
 	rec := httptest.NewRecorder()
 
 	server.Router.ServeHTTP(rec, req)
@@ -55,8 +56,8 @@ func TestCreateResourceRelationRejectsMissingTarget(t *testing.T) {
 
 func TestCreateResourceRelationRejectsUnsupportedRelationType(t *testing.T) {
 	server := NewTestServer()
-	body := `{"toResourceId":"res-2","relationType":"unsupported"}`
-	req := httptest.NewRequest(http.MethodPost, "/resources/res-1/relations", strings.NewReader(body))
+	body := `{"toResourceId":2,"relationType":"unsupported"}`
+	req := httptest.NewRequest(http.MethodPost, "/resources/1/relations", strings.NewReader(body))
 	rec := httptest.NewRecorder()
 
 	server.Router.ServeHTTP(rec, req)
@@ -66,16 +67,16 @@ func TestCreateResourceRelationRejectsUnsupportedRelationType(t *testing.T) {
 
 func TestCreateResourceRelationRejectsDuplicate(t *testing.T) {
 	server := NewTestServer()
-	body := `{"toResourceId":"res-2","relationType":"depends_on"}`
+	body := `{"toResourceId":2,"relationType":"depends_on"}`
 
-	firstReq := httptest.NewRequest(http.MethodPost, "/resources/res-1/relations", strings.NewReader(body))
+	firstReq := httptest.NewRequest(http.MethodPost, "/resources/1/relations", strings.NewReader(body))
 	firstRec := httptest.NewRecorder()
 	server.Router.ServeHTTP(firstRec, firstReq)
 	if firstRec.Code != http.StatusCreated {
 		t.Fatalf("expected first create 201, got %d; body: %s", firstRec.Code, firstRec.Body.String())
 	}
 
-	secondReq := httptest.NewRequest(http.MethodPost, "/resources/res-1/relations", strings.NewReader(body))
+	secondReq := httptest.NewRequest(http.MethodPost, "/resources/1/relations", strings.NewReader(body))
 	secondRec := httptest.NewRecorder()
 	server.Router.ServeHTTP(secondRec, secondReq)
 
@@ -84,8 +85,8 @@ func TestCreateResourceRelationRejectsDuplicate(t *testing.T) {
 
 func TestCreateResourceRelationRejectsSelfRelation(t *testing.T) {
 	server := NewTestServer()
-	body := `{"toResourceId":"res-1","relationType":"depends_on"}`
-	req := httptest.NewRequest(http.MethodPost, "/resources/res-1/relations", strings.NewReader(body))
+	body := `{"toResourceId":1,"relationType":"depends_on"}`
+	req := httptest.NewRequest(http.MethodPost, "/resources/1/relations", strings.NewReader(body))
 	rec := httptest.NewRecorder()
 
 	server.Router.ServeHTTP(rec, req)
@@ -95,7 +96,7 @@ func TestCreateResourceRelationRejectsSelfRelation(t *testing.T) {
 
 func TestCreateResourceRelationRejectsMalformedJSON(t *testing.T) {
 	server := NewTestServer()
-	req := httptest.NewRequest(http.MethodPost, "/resources/res-1/relations", strings.NewReader(`{"toResourceId":`))
+	req := httptest.NewRequest(http.MethodPost, "/resources/1/relations", strings.NewReader(`{"toResourceId":`))
 	rec := httptest.NewRecorder()
 
 	server.Router.ServeHTTP(rec, req)
@@ -105,8 +106,8 @@ func TestCreateResourceRelationRejectsMalformedJSON(t *testing.T) {
 
 func TestCreateResourceRelationRejectsEmptyToResourceId(t *testing.T) {
 	server := NewTestServer()
-	body := `{"toResourceId":"","relationType":"depends_on"}`
-	req := httptest.NewRequest(http.MethodPost, "/resources/res-1/relations", strings.NewReader(body))
+	body := `{"toResourceId":0,"relationType":"depends_on"}`
+	req := httptest.NewRequest(http.MethodPost, "/resources/1/relations", strings.NewReader(body))
 	rec := httptest.NewRecorder()
 
 	server.Router.ServeHTTP(rec, req)
@@ -117,7 +118,7 @@ func TestCreateResourceRelationRejectsEmptyToResourceId(t *testing.T) {
 func TestCreateResourceRelationRejectsMissingToResourceId(t *testing.T) {
 	server := NewTestServer()
 	body := `{"relationType":"depends_on"}`
-	req := httptest.NewRequest(http.MethodPost, "/resources/res-1/relations", strings.NewReader(body))
+	req := httptest.NewRequest(http.MethodPost, "/resources/1/relations", strings.NewReader(body))
 	rec := httptest.NewRecorder()
 
 	server.Router.ServeHTTP(rec, req)
@@ -127,8 +128,8 @@ func TestCreateResourceRelationRejectsMissingToResourceId(t *testing.T) {
 
 func TestCreateResourceRelationRejectsMissingRelationType(t *testing.T) {
 	server := NewTestServer()
-	body := `{"toResourceId":"res-2"}`
-	req := httptest.NewRequest(http.MethodPost, "/resources/res-1/relations", strings.NewReader(body))
+	body := `{"toResourceId":2}`
+	req := httptest.NewRequest(http.MethodPost, "/resources/1/relations", strings.NewReader(body))
 	rec := httptest.NewRecorder()
 
 	server.Router.ServeHTTP(rec, req)
@@ -138,8 +139,8 @@ func TestCreateResourceRelationRejectsMissingRelationType(t *testing.T) {
 
 func TestDeleteResourceRelation(t *testing.T) {
 	server := NewTestServer()
-	body := `{"toResourceId":"res-2","relationType":"depends_on"}`
-	createReq := httptest.NewRequest(http.MethodPost, "/resources/res-1/relations", strings.NewReader(body))
+	body := `{"toResourceId":2,"relationType":"depends_on"}`
+	createReq := httptest.NewRequest(http.MethodPost, "/resources/1/relations", strings.NewReader(body))
 	createRec := httptest.NewRecorder()
 	server.Router.ServeHTTP(createRec, createReq)
 	if createRec.Code != http.StatusCreated {
@@ -151,7 +152,7 @@ func TestDeleteResourceRelation(t *testing.T) {
 		t.Fatalf("decode created relation: %v", err)
 	}
 
-	deleteReq := httptest.NewRequest(http.MethodDelete, "/resource-relations/"+created.ID, nil)
+	deleteReq := httptest.NewRequest(http.MethodDelete, "/resource-relations/"+strconv.FormatUint(created.ID, 10), nil)
 	deleteRec := httptest.NewRecorder()
 	server.Router.ServeHTTP(deleteRec, deleteReq)
 
@@ -159,7 +160,7 @@ func TestDeleteResourceRelation(t *testing.T) {
 		t.Fatalf("expected 204, got %d; body: %s", deleteRec.Code, deleteRec.Body.String())
 	}
 
-	listReq := httptest.NewRequest(http.MethodGet, "/resources/res-1/relations", nil)
+	listReq := httptest.NewRequest(http.MethodGet, "/resources/1/relations", nil)
 	listRec := httptest.NewRecorder()
 	server.Router.ServeHTTP(listRec, listReq)
 
@@ -171,14 +172,14 @@ func TestDeleteResourceRelation(t *testing.T) {
 	}
 	for _, item := range listed.Items {
 		if item.ID == created.ID {
-			t.Fatalf("expected relation %s to be deleted", created.ID)
+			t.Fatalf("expected relation %d to be deleted", created.ID)
 		}
 	}
 }
 
 func TestDeleteResourceRelationRejectsMissingRelation(t *testing.T) {
 	server := NewTestServer()
-	req := httptest.NewRequest(http.MethodDelete, "/resource-relations/missing-relation", nil)
+	req := httptest.NewRequest(http.MethodDelete, "/resource-relations/999", nil)
 	rec := httptest.NewRecorder()
 
 	server.Router.ServeHTTP(rec, req)
@@ -188,15 +189,15 @@ func TestDeleteResourceRelationRejectsMissingRelation(t *testing.T) {
 
 func TestListResourceRelationsReflectsCreate(t *testing.T) {
 	server := NewTestServer()
-	body := `{"toResourceId":"res-2","relationType":"depends_on"}`
-	createReq := httptest.NewRequest(http.MethodPost, "/resources/res-1/relations", strings.NewReader(body))
+	body := `{"toResourceId":2,"relationType":"depends_on"}`
+	createReq := httptest.NewRequest(http.MethodPost, "/resources/1/relations", strings.NewReader(body))
 	createRec := httptest.NewRecorder()
 	server.Router.ServeHTTP(createRec, createReq)
 	if createRec.Code != http.StatusCreated {
 		t.Fatalf("expected create 201, got %d; body: %s", createRec.Code, createRec.Body.String())
 	}
 
-	listReq := httptest.NewRequest(http.MethodGet, "/resources/res-1/relations", nil)
+	listReq := httptest.NewRequest(http.MethodGet, "/resources/1/relations", nil)
 	listRec := httptest.NewRecorder()
 	server.Router.ServeHTTP(listRec, listReq)
 
@@ -213,7 +214,7 @@ func TestListResourceRelationsReflectsCreate(t *testing.T) {
 
 func TestListResourceRelations(t *testing.T) {
 	server := NewTestServer()
-	req := httptest.NewRequest(http.MethodGet, "/resources/res-1/relations", nil)
+	req := httptest.NewRequest(http.MethodGet, "/resources/1/relations", nil)
 	rec := httptest.NewRecorder()
 
 	server.Router.ServeHTTP(rec, req)

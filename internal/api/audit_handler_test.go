@@ -117,7 +117,7 @@ func TestListAuditEvents_FilterByResult(t *testing.T) {
 
 func TestListAuditEvents_FilterByTargetResourceId(t *testing.T) {
 	server := NewTestServer()
-	req := httptest.NewRequest(http.MethodGet, "/audit-events?targetResourceId=res-1", nil)
+	req := httptest.NewRequest(http.MethodGet, "/audit-events?targetResourceId=1", nil)
 	rec := httptest.NewRecorder()
 
 	server.Router.ServeHTTP(rec, req)
@@ -128,10 +128,78 @@ func TestListAuditEvents_FilterByTargetResourceId(t *testing.T) {
 	}
 
 	if len(resp.Items) != 1 {
-		t.Fatalf("expected 1 event for res-1, got %d", len(resp.Items))
+		t.Fatalf("expected 1 event for targetResourceId=1, got %d", len(resp.Items))
 	}
-	if resp.Items[0].TargetResourceID != "res-1" {
-		t.Fatalf("expected targetResourceId res-1, got %s", resp.Items[0].TargetResourceID)
+	if resp.Items[0].TargetResourceID == nil || *resp.Items[0].TargetResourceID != 1 {
+		t.Fatalf("expected targetResourceId 1, got %v", resp.Items[0].TargetResourceID)
+	}
+}
+
+func TestListAuditEvents_RejectsInvalidTargetResourceId(t *testing.T) {
+	server := NewTestServer()
+	req := httptest.NewRequest(http.MethodGet, "/audit-events?targetResourceId=abc", nil)
+	rec := httptest.NewRecorder()
+
+	server.Router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+
+	var resp apiErrorResponse
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if resp.Error != "validation_failed" {
+		t.Fatalf("expected validation_failed, got %s", resp.Error)
+	}
+}
+
+func TestListAuditEvents_RejectsEmptyTargetResourceId(t *testing.T) {
+	server := NewTestServer()
+	req := httptest.NewRequest(http.MethodGet, "/audit-events?targetResourceId=", nil)
+	rec := httptest.NewRecorder()
+
+	server.Router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+
+	var resp apiErrorResponse
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if resp.Error != "validation_failed" {
+		t.Fatalf("expected validation_failed, got %s", resp.Error)
+	}
+}
+
+func TestListAuditEvents_NullTargetResourceIDRendersAsJSONNull(t *testing.T) {
+	server := NewTestServer()
+	req := httptest.NewRequest(http.MethodGet, "/audit-events", nil)
+	rec := httptest.NewRecorder()
+
+	server.Router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+
+	var resp struct {
+		Items []struct {
+			ID               uint64  `json:"id"`
+			TargetResourceID *uint64 `json:"targetResourceId"`
+		} `json:"items"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if len(resp.Items) != 2 {
+		t.Fatalf("expected 2 items, got %d", len(resp.Items))
+	}
+	if resp.Items[1].TargetResourceID != nil {
+		t.Fatalf("expected second event targetResourceId to be null, got %v", *resp.Items[1].TargetResourceID)
 	}
 }
 
@@ -157,7 +225,7 @@ func TestListAuditEvents_NoMatch(t *testing.T) {
 
 func TestListResourceAuditEvents_Unchanged(t *testing.T) {
 	server := NewTestServer()
-	req := httptest.NewRequest(http.MethodGet, "/resources/res-1/audit-events", nil)
+	req := httptest.NewRequest(http.MethodGet, "/resources/1/audit-events", nil)
 	rec := httptest.NewRecorder()
 
 	server.Router.ServeHTTP(rec, req)
@@ -176,6 +244,26 @@ func TestListResourceAuditEvents_Unchanged(t *testing.T) {
 	}
 	if _, ok := raw["pageInfo"]; ok {
 		t.Fatal("nested audit route should not have pageInfo")
+	}
+}
+
+func TestListResourceAuditEvents_RejectsZeroID(t *testing.T) {
+	server := NewTestServer()
+	req := httptest.NewRequest(http.MethodGet, "/resources/0/audit-events", nil)
+	rec := httptest.NewRecorder()
+
+	server.Router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+
+	var resp apiErrorResponse
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if resp.Message != "resource id must be a positive integer" {
+		t.Fatalf("expected positive integer message, got %q", resp.Message)
 	}
 }
 

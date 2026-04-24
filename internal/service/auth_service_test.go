@@ -23,7 +23,7 @@ func (f fakeUserCredentialRepo) FindByEmail(_ string) (*model.UserCredential, er
 func TestAuthServiceLogin(t *testing.T) {
 	svc := NewAuthService(fakeUserCredentialRepo{
 		user: &model.UserCredential{
-			ID:           "user-1",
+			ID:           1,
 			Email:        "admin@example.com",
 			RoleName:     "admin",
 			PasswordHash: "fcf730b6d95236ecd3c9fc2d92d7b6b2bb061514961aec041d6c7a7192f592e4",
@@ -47,7 +47,7 @@ func TestAuthServiceLogin(t *testing.T) {
 func TestAuthServiceLoginInvalidPassword(t *testing.T) {
 	svc := NewAuthService(fakeUserCredentialRepo{
 		user: &model.UserCredential{
-			ID:           "user-1",
+			ID:           1,
 			Email:        "admin@example.com",
 			RoleName:     "admin",
 			PasswordHash: "fcf730b6d95236ecd3c9fc2d92d7b6b2bb061514961aec041d6c7a7192f592e4",

@@ -12,20 +12,20 @@ type ResourceType string
 // ResourceProfileResponse is the read-only projection returned by
 // GET /resources/{id}/profile. Profile keys vary by resource type.
 type ResourceProfileResponse struct {
-	ResourceID      string         `json:"resourceId"`
+	ResourceID      uint64         `json:"resourceId"`
 	ResourceType    ResourceType   `json:"resourceType"`
 	ResourceSubtype string         `json:"resourceSubtype"`
 	Profile         map[string]any `json:"profile"`
 }
 
 type Resource struct {
-	ID              string            `json:"id"`
+	ID              uint64            `json:"id"`
 	ResourceType    ResourceType      `json:"resourceType"`
 	ResourceSubtype string            `json:"resourceSubtype"`
 	Name            string            `json:"name"`
 	DisplayName     string            `json:"displayName"`
-	EnvironmentID   string            `json:"environmentId"`
-	OwnerID         string            `json:"ownerId"`
+	EnvironmentID   uint64            `json:"environmentId"`
+	OwnerID         uint64            `json:"ownerId"`
 	LifecycleStatus string            `json:"lifecycleStatus"`
 	HealthStatus    string            `json:"healthStatus"`
 	Source          string            `json:"source"`
@@ -35,7 +35,7 @@ type Resource struct {
 	CreatedAt       time.Time         `json:"createdAt"`
 	UpdatedAt       time.Time         `json:"updatedAt"`
 	ArchivedAt      *time.Time        `json:"archivedAt,omitempty"`
-	ArchivedBy      *string           `json:"archivedBy,omitempty"`
+	ArchivedBy      *uint64           `json:"archivedBy,omitempty"`
 	ArchiveReason   *string           `json:"archiveReason,omitempty"`
 }
 

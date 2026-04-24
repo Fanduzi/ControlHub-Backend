@@ -8,7 +8,7 @@ package model
 import "time"
 
 type Environment struct {
-	ID          string    `json:"id"`
+	ID          uint64    `json:"id"`
 	Name        string    `json:"name"`
 	Slug        string    `json:"slug"`
 	Description string    `json:"description"`
@@ -16,14 +16,14 @@ type Environment struct {
 }
 
 type Owner struct {
-	ID        string    `json:"id"`
+	ID        uint64    `json:"id"`
 	Name      string    `json:"name"`
 	Email     string    `json:"email"`
 	CreatedAt time.Time `json:"createdAt"`
 }
 
 type Role struct {
-	ID          string    `json:"id"`
+	ID          uint64    `json:"id"`
 	Name        string    `json:"name"`
 	Description string    `json:"description"`
 	CreatedAt   time.Time `json:"createdAt"`

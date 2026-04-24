@@ -29,12 +29,12 @@ var resourceNamePattern = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]*$`)
 
 type ResourceRepository interface {
 	ListResources(ctx context.Context, q model.ResourceListQuery) ([]model.Resource, int, error)
-	GetResource(id string) (*model.Resource, error)
-	GetResourceProfile(id string) (*model.ResourceProfileResponse, error)
+	GetResource(id uint64) (*model.Resource, error)
+	GetResourceProfile(id uint64) (*model.ResourceProfileResponse, error)
 	CreateResource(ctx context.Context, input model.ResourceCreateInput) (*model.Resource, error)
-	UpdateResource(ctx context.Context, id string, input model.ResourceUpdateInput) (*model.Resource, error)
-	ArchiveResource(ctx context.Context, id string, reason string) (*model.Resource, error)
-	UnarchiveResource(ctx context.Context, id string) (*model.Resource, error)
+	UpdateResource(ctx context.Context, id uint64, input model.ResourceUpdateInput) (*model.Resource, error)
+	ArchiveResource(ctx context.Context, id uint64, reason string) (*model.Resource, error)
+	UnarchiveResource(ctx context.Context, id uint64) (*model.Resource, error)
 }
 
 type ResourceService struct {
@@ -64,7 +64,7 @@ func (s *ResourceService) List(ctx context.Context, q model.ResourceListQuery) (
 	return items, pageInfo, nil
 }
 
-func (s *ResourceService) Get(id string) (*model.Resource, error) {
+func (s *ResourceService) Get(id uint64) (*model.Resource, error) {
 	item, err := s.repo.GetResource(id)
 	if err != nil {
 		return nil, err
@@ -75,7 +75,7 @@ func (s *ResourceService) Get(id string) (*model.Resource, error) {
 	return item, nil
 }
 
-func (s *ResourceService) GetProfile(id string) (*model.ResourceProfileResponse, error) {
+func (s *ResourceService) GetProfile(id uint64) (*model.ResourceProfileResponse, error) {
 	profile, err := s.repo.GetResourceProfile(id)
 	if err != nil {
 		return nil, err
@@ -100,8 +100,8 @@ func (s *ResourceService) Create(ctx context.Context, input model.ResourceCreate
 	return created, nil
 }
 
-func (s *ResourceService) Update(ctx context.Context, id string, patch model.ResourcePatchRequest) (*model.Resource, error) {
-	if id == "" {
+func (s *ResourceService) Update(ctx context.Context, id uint64, patch model.ResourcePatchRequest) (*model.Resource, error) {
+	if id == 0 {
 		return nil, wrapValidation("resource id is required")
 	}
 	existing, err := s.Get(id)
@@ -133,10 +133,10 @@ func (s *ResourceService) Update(ctx context.Context, id string, patch model.Res
 	if patch.DisplayName != nil && *patch.DisplayName == "" {
 		return nil, wrapValidation("displayName is required")
 	}
-	if patch.EnvironmentID != nil && *patch.EnvironmentID == "" {
+	if patch.EnvironmentID != nil && *patch.EnvironmentID == 0 {
 		return nil, wrapValidation("environmentId is required")
 	}
-	if patch.OwnerID != nil && *patch.OwnerID == "" {
+	if patch.OwnerID != nil && *patch.OwnerID == 0 {
 		return nil, wrapValidation("ownerId is required")
 	}
 	if patch.Source != nil && *patch.Source != "manual" {
@@ -176,8 +176,8 @@ func (s *ResourceService) Update(ctx context.Context, id string, patch model.Res
 	return updated, nil
 }
 
-func (s *ResourceService) Archive(ctx context.Context, id string, req model.ArchiveRequest) (*model.Resource, error) {
-	if id == "" {
+func (s *ResourceService) Archive(ctx context.Context, id uint64, req model.ArchiveRequest) (*model.Resource, error) {
+	if id == 0 {
 		return nil, wrapValidation("resource id is required")
 	}
 	if req.Reason != nil {
@@ -200,8 +200,8 @@ func (s *ResourceService) Archive(ctx context.Context, id string, req model.Arch
 	return s.repo.ArchiveResource(ctx, id, reason)
 }
 
-func (s *ResourceService) Unarchive(ctx context.Context, id string) (*model.Resource, error) {
-	if id == "" {
+func (s *ResourceService) Unarchive(ctx context.Context, id uint64) (*model.Resource, error) {
+	if id == 0 {
 		return nil, wrapValidation("resource id is required")
 	}
 	existing, err := s.Get(id)
@@ -232,11 +232,11 @@ func validateResourceCreateInput(input model.ResourceCreateInput) error {
 		if ve == nil { ve = newValidationError("validation failed") }
 		ve.WithField("displayName", "Display name is required")
 	}
-	if input.EnvironmentID == "" {
+	if input.EnvironmentID == 0 {
 		if ve == nil { ve = newValidationError("validation failed") }
 		ve.WithField("environmentId", "Environment is required")
 	}
-	if input.OwnerID == "" {
+	if input.OwnerID == 0 {
 		if ve == nil { ve = newValidationError("validation failed") }
 		ve.WithField("ownerId", "Owner is required")
 	}
@@ -263,26 +263,12 @@ func validateResourceCreateInput(input model.ResourceCreateInput) error {
 	return nil
 }
 
-func validateReferenceIDs(environmentID, ownerID string) error {
-	validEnvironmentIDs := []string{
-		"env-prod",
-		"env-staging",
-		"10000000-0000-0000-0000-000000000001",
-		"10000000-0000-0000-0000-000000000002",
-		"10000000-0000-0000-0000-000000000003",
-	}
+func validateReferenceIDs(environmentID, ownerID uint64) error {
+	validEnvironmentIDs := []uint64{1, 2, 3}
 	if !slices.Contains(validEnvironmentIDs, environmentID) {
 		return ErrEnvironmentNotFound
 	}
-	validOwnerIDs := []string{
-		"owner-dba",
-		"owner-platform",
-		"20000000-0000-0000-0000-000000000001",
-		"20000000-0000-0000-0000-000000000002",
-		"20000000-0000-0000-0000-000000000003",
-		"20000000-0000-0000-0000-000000000004",
-		"20000000-0000-0000-0000-000000000005",
-	}
+	validOwnerIDs := []uint64{1, 2, 3, 4, 5}
 	if !slices.Contains(validOwnerIDs, ownerID) {
 		return ErrOwnerNotFound
 	}

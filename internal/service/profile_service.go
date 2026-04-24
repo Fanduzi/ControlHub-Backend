@@ -15,11 +15,11 @@ import (
 // ProfileRepository defines the data access interface for typed profile upserts and deletes.
 // The concrete MySQL implementation lives in internal/repository/mysql/resource_repository.go.
 type ProfileRepository interface {
-	UpsertHostProfile(ctx context.Context, resourceID string, hostname, ipAddress, osName string) error
-	UpsertDatabaseInstanceProfile(ctx context.Context, resourceID string, engine, version, host string, port int, role string) error
-	UpsertDatabaseClusterProfile(ctx context.Context, resourceID string, engine, topologyMode, primaryEndpoint string) error
-	UpsertServiceProfile(ctx context.Context, resourceID string, systemName, repositoryUrl, runtimeEnv string) error
-	DeleteProfile(ctx context.Context, resourceID, resourceType string) error
+	UpsertHostProfile(ctx context.Context, resourceID uint64, hostname, ipAddress, osName string) error
+	UpsertDatabaseInstanceProfile(ctx context.Context, resourceID uint64, engine, version, host string, port int, role string) error
+	UpsertDatabaseClusterProfile(ctx context.Context, resourceID uint64, engine, topologyMode, primaryEndpoint string) error
+	UpsertServiceProfile(ctx context.Context, resourceID uint64, systemName, repositoryUrl, runtimeEnv string) error
+	DeleteProfile(ctx context.Context, resourceID uint64, resourceType string) error
 }
 
 // ProfileService handles profile write operations for resources.
@@ -36,7 +36,7 @@ func NewProfileService(profileRepo ProfileRepository, resourceRepo ResourceRepos
 // PutProfile replaces (upserts) the full profile for a resource.
 // Returns ErrResourceNotFound if the resource does not exist,
 // or ErrResourceArchived if the resource is archived.
-func (s *ProfileService) PutProfile(ctx context.Context, resourceID string, fields map[string]interface{}) error {
+func (s *ProfileService) PutProfile(ctx context.Context, resourceID uint64, fields map[string]interface{}) error {
 	res, err := s.resourceRepo.GetResource(resourceID)
 	if err != nil {
 		return err
@@ -50,7 +50,7 @@ func (s *ProfileService) PutProfile(ctx context.Context, resourceID string, fiel
 // PatchProfile partially updates the profile for a resource.
 // Currently behaves identically to PutProfile since all profile fields are
 // replaced via ON DUPLICATE KEY UPDATE semantics.
-func (s *ProfileService) PatchProfile(ctx context.Context, resourceID string, fields map[string]interface{}) error {
+func (s *ProfileService) PatchProfile(ctx context.Context, resourceID uint64, fields map[string]interface{}) error {
 	res, err := s.resourceRepo.GetResource(resourceID)
 	if err != nil {
 		return err
@@ -64,7 +64,7 @@ func (s *ProfileService) PatchProfile(ctx context.Context, resourceID string, fi
 // DeleteProfile removes the profile row for a resource.
 // Returns ErrResourceNotFound if the resource does not exist,
 // or ErrResourceArchived if the resource is archived.
-func (s *ProfileService) DeleteProfile(ctx context.Context, resourceID string) error {
+func (s *ProfileService) DeleteProfile(ctx context.Context, resourceID uint64) error {
 	res, err := s.resourceRepo.GetResource(resourceID)
 	if err != nil {
 		return err
@@ -75,7 +75,7 @@ func (s *ProfileService) DeleteProfile(ctx context.Context, resourceID string) e
 	return s.profileRepo.DeleteProfile(ctx, resourceID, string(res.ResourceType))
 }
 
-func (s *ProfileService) writeProfile(ctx context.Context, resourceID string, resourceType model.ResourceType, fields map[string]interface{}) error {
+func (s *ProfileService) writeProfile(ctx context.Context, resourceID uint64, resourceType model.ResourceType, fields map[string]interface{}) error {
 	switch resourceType {
 	case model.ResourceTypeHost:
 		return s.profileRepo.UpsertHostProfile(ctx, resourceID,

@@ -6,7 +6,7 @@
 package model
 
 type RelationCreateInput struct {
-	FromResourceID string       `json:"-"`
-	ToResourceID   string       `json:"toResourceId"`
+	FromResourceID uint64       `json:"-"`
+	ToResourceID   uint64       `json:"toResourceId"`
 	RelationType   RelationType `json:"relationType"`
 }

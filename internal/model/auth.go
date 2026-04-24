@@ -6,7 +6,7 @@
 package model
 
 type UserCredential struct {
-	ID           string `json:"id"`
+	ID           uint64 `json:"id"`
 	Email        string `json:"email"`
 	RoleName     string `json:"roleName"`
 	PasswordHash string `json:"-"`

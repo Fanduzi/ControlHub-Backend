@@ -19,10 +19,10 @@ var (
 )
 
 type RelationRepository interface {
-	ListByResourceID(resourceID string) ([]model.ResourceRelation, error)
-	GetResource(id string) (*model.Resource, error)
+	ListByResourceID(resourceID uint64) ([]model.ResourceRelation, error)
+	GetResource(id uint64) (*model.Resource, error)
 	CreateRelation(ctx context.Context, input model.RelationCreateInput) (*model.ResourceRelation, error)
-	DeleteRelation(ctx context.Context, relationID string) error
+	DeleteRelation(ctx context.Context, relationID uint64) error
 }
 
 type RelationService struct {
@@ -33,15 +33,15 @@ func NewRelationService(repo RelationRepository) *RelationService {
 	return &RelationService{repo: repo}
 }
 
-func (s *RelationService) ListByResourceID(resourceID string) ([]model.ResourceRelation, error) {
+func (s *RelationService) ListByResourceID(resourceID uint64) ([]model.ResourceRelation, error) {
 	return s.repo.ListByResourceID(resourceID)
 }
 
-func (s *RelationService) Create(ctx context.Context, fromResourceID string, input model.RelationCreateInput) (*model.ResourceRelation, error) {
-	if fromResourceID == "" {
+func (s *RelationService) Create(ctx context.Context, fromResourceID uint64, input model.RelationCreateInput) (*model.ResourceRelation, error) {
+	if fromResourceID == 0 {
 		return nil, fmt.Errorf("%w: from resource id is required", ErrValidationFailed)
 	}
-	if input.ToResourceID == "" {
+	if input.ToResourceID == 0 {
 		return nil, fmt.Errorf("%w: toResourceId is required", ErrValidationFailed)
 	}
 	if input.ToResourceID == fromResourceID {
@@ -68,8 +68,8 @@ func (s *RelationService) Create(ctx context.Context, fromResourceID string, inp
 	return s.repo.CreateRelation(ctx, input)
 }
 
-func (s *RelationService) Delete(ctx context.Context, relationID string) error {
-	if relationID == "" {
+func (s *RelationService) Delete(ctx context.Context, relationID uint64) error {
+	if relationID == 0 {
 		return fmt.Errorf("%w: relation id is required", ErrValidationFailed)
 	}
 	return s.repo.DeleteRelation(ctx, relationID)

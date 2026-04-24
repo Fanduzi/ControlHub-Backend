@@ -2,6 +2,7 @@ package openapi_test
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/getkin/kin-openapi/openapi3"
@@ -18,5 +19,200 @@ func TestOpenAPIYAMLIsValid(t *testing.T) {
 
 	if err := doc.Validate(context.Background()); err != nil {
 		t.Fatalf("openapi.yaml validation failed: %v", err)
+	}
+}
+
+func TestOpenAPINumericIDsUseInt64(t *testing.T) {
+	loader := openapi3.NewLoader()
+	doc, err := loader.LoadFromData(openapi.YAML)
+	if err != nil {
+		t.Fatalf("failed to parse openapi.yaml: %v", err)
+	}
+
+	assertPathParamInt64(t, doc, "/resources/{id}", "get", "id")
+	assertPathParamInt64(t, doc, "/resources/{id}", "patch", "id")
+	assertPathParamInt64(t, doc, "/resources/{id}/archive", "post", "id")
+	assertPathParamInt64(t, doc, "/resources/{id}/unarchive", "post", "id")
+	assertPathParamInt64(t, doc, "/resources/{id}/profile", "get", "id")
+	assertPathParamInt64(t, doc, "/resources/{id}/relations", "get", "id")
+	assertPathParamInt64(t, doc, "/resources/{id}/relations", "post", "id")
+	assertPathParamInt64(t, doc, "/resource-relations/{id}", "delete", "id")
+	assertPathParamInt64(t, doc, "/resources/{id}/audit-events", "get", "id")
+	assertPathParamInt64(t, doc, "/resources/{id}/topology", "get", "id")
+	assertQueryParamArrayItemsInt64(t, doc, "/resources", "get", "environmentId")
+	assertQueryParamInt64(t, doc, "/audit-events", "get", "targetResourceId")
+
+	assertSchemaPropertyInt64(t, doc, "Resource", "id")
+	assertSchemaPropertyInt64(t, doc, "Resource", "environmentId")
+	assertSchemaPropertyInt64(t, doc, "Resource", "ownerId")
+	assertSchemaPropertyInt64(t, doc, "ResourceRelation", "id")
+	assertSchemaPropertyInt64(t, doc, "ResourceRelation", "fromResourceId")
+	assertSchemaPropertyInt64(t, doc, "ResourceRelation", "toResourceId")
+	assertSchemaPropertyInt64(t, doc, "AuditEvent", "id")
+	assertSchemaPropertyInt64(t, doc, "AuditEvent", "actorUserId")
+	assertSchemaPropertyInt64(t, doc, "AuditEvent", "targetResourceId")
+	assertSchemaPropertyInt64(t, doc, "Environment", "id")
+	assertSchemaPropertyInt64(t, doc, "Owner", "id")
+	assertSchemaPropertyInt64(t, doc, "Role", "id")
+	assertSchemaPropertyInt64(t, doc, "ResourceProfileResponse", "resourceId")
+	assertSchemaPropertyInt64(t, doc, "ResourceCreateInput", "environmentId")
+	assertSchemaPropertyInt64(t, doc, "ResourceCreateInput", "ownerId")
+	assertSchemaPropertyInt64(t, doc, "ResourcePatchRequest", "environmentId")
+	assertSchemaPropertyInt64(t, doc, "ResourcePatchRequest", "ownerId")
+	assertSchemaPropertyInt64(t, doc, "RelationCreateInput", "toResourceId")
+	assertSchemaPropertyInt64(t, doc, "TopologyResponse", "rootResourceId")
+	assertSchemaPropertyInt64(t, doc, "TopologyNode", "id")
+	assertSchemaPropertyInt64(t, doc, "TopologyNode", "environmentId")
+	assertSchemaPropertyInt64(t, doc, "TopologyNode", "ownerId")
+	assertSchemaPropertyInt64(t, doc, "TopologyNode", "replicationParentId")
+	assertSchemaPropertyInt64(t, doc, "TopologyEdge", "id")
+	assertSchemaPropertyInt64(t, doc, "TopologyEdge", "fromResourceId")
+	assertSchemaPropertyInt64(t, doc, "TopologyEdge", "toResourceId")
+	assertSchemaArrayItemsInt64(t, doc, "TopologyGroup", "nodeIds")
+}
+
+func TestOpenAPITopologyPrimaryOmitsReplicationParentID(t *testing.T) {
+	if strings.Contains(string(openapi.YAML), "replicationParentId: 0") {
+		t.Fatal("expected topology example to omit replicationParentId for primary nodes")
+	}
+	if strings.Contains(string(openapi.YAML), "Zero for the primary (root of the chain).") {
+		t.Fatal("expected topology schema description to describe omission, not zero sentinel")
+	}
+}
+
+func TestOpenAPIStringIdentifiersRemainStrings(t *testing.T) {
+	loader := openapi3.NewLoader()
+	doc, err := loader.LoadFromData(openapi.YAML)
+	if err != nil {
+		t.Fatalf("failed to parse openapi.yaml: %v", err)
+	}
+
+	assertSchemaPropertyString(t, doc, "Resource", "externalId")
+	assertSchemaPropertyString(t, doc, "TopologyNode", "groupKey")
+	assertSchemaPropertyInt64(t, doc, "TopologyGroup", "id")
+}
+
+func assertPathParamInt64(t *testing.T, doc *openapi3.T, path string, method string, paramName string) {
+	t.Helper()
+
+	schema := findOperationParamSchema(t, doc, path, method, paramName)
+	assertIntegerInt64(t, path+" "+method+" parameter "+paramName, schema)
+}
+
+func assertSchemaPropertyInt64(t *testing.T, doc *openapi3.T, schemaName string, propertyName string) {
+	t.Helper()
+
+	property := findSchemaProperty(t, doc, schemaName, propertyName)
+	assertIntegerInt64(t, schemaName+"."+propertyName, property)
+}
+
+func assertSchemaPropertyString(t *testing.T, doc *openapi3.T, schemaName string, propertyName string) {
+	t.Helper()
+
+	property := findSchemaProperty(t, doc, schemaName, propertyName)
+	if property.Type == nil || !property.Type.Is("string") {
+		t.Fatalf("expected %s.%s type string, got %#v", schemaName, propertyName, property.Type)
+	}
+}
+
+func assertQueryParamInt64(t *testing.T, doc *openapi3.T, path string, method string, paramName string) {
+	t.Helper()
+
+	schema := findOperationParamSchema(t, doc, path, method, paramName)
+	assertIntegerInt64(t, path+" "+method+" query parameter "+paramName, schema)
+}
+
+func assertQueryParamArrayItemsInt64(t *testing.T, doc *openapi3.T, path string, method string, paramName string) {
+	t.Helper()
+
+	schema := findOperationParamSchema(t, doc, path, method, paramName)
+	if schema.Items == nil || schema.Items.Value == nil {
+		t.Fatalf("array items not found for %s %s query parameter %s", path, method, paramName)
+	}
+
+	assertIntegerInt64(t, path+" "+method+" query parameter "+paramName+"[]", schema.Items.Value)
+}
+
+func assertSchemaArrayItemsInt64(t *testing.T, doc *openapi3.T, schemaName string, propertyName string) {
+	t.Helper()
+
+	schemaRef := doc.Components.Schemas[schemaName]
+	if schemaRef == nil || schemaRef.Value == nil {
+		t.Fatalf("schema %q not found", schemaName)
+	}
+
+	propertyRef := schemaRef.Value.Properties[propertyName]
+	if propertyRef == nil || propertyRef.Value == nil {
+		t.Fatalf("property %q not found in schema %q", propertyName, schemaName)
+	}
+	if propertyRef.Value.Items == nil || propertyRef.Value.Items.Value == nil {
+		t.Fatalf("array items not found for %s.%s", schemaName, propertyName)
+	}
+
+	assertIntegerInt64(t, schemaName+"."+propertyName+"[]", propertyRef.Value.Items.Value)
+}
+
+func findOperationParamSchema(t *testing.T, doc *openapi3.T, path string, method string, paramName string) *openapi3.Schema {
+	t.Helper()
+
+	pathItem := doc.Paths.Value(path)
+	if pathItem == nil {
+		t.Fatalf("path %q not found", path)
+	}
+
+	var operation *openapi3.Operation
+	switch method {
+	case "get":
+		operation = pathItem.Get
+	case "patch":
+		operation = pathItem.Patch
+	case "post":
+		operation = pathItem.Post
+	case "delete":
+		operation = pathItem.Delete
+	default:
+		t.Fatalf("unsupported method %q", method)
+	}
+	if operation == nil {
+		t.Fatalf("operation %s %s not found", method, path)
+	}
+
+	for _, paramRef := range operation.Parameters {
+		if paramRef.Value != nil && paramRef.Value.Name == paramName {
+			if paramRef.Value.Schema == nil || paramRef.Value.Schema.Value == nil {
+				t.Fatalf("schema not found for %s %s parameter %s", method, path, paramName)
+			}
+			return paramRef.Value.Schema.Value
+		}
+	}
+
+	t.Fatalf("parameter %q not found for %s %s", paramName, method, path)
+	return nil
+}
+
+func findSchemaProperty(t *testing.T, doc *openapi3.T, schemaName string, propertyName string) *openapi3.Schema {
+	t.Helper()
+
+	schemaRef := doc.Components.Schemas[schemaName]
+	if schemaRef == nil || schemaRef.Value == nil {
+		t.Fatalf("schema %q not found", schemaName)
+	}
+
+	propertyRef := schemaRef.Value.Properties[propertyName]
+	if propertyRef == nil || propertyRef.Value == nil {
+		t.Fatalf("property %q not found in schema %q", propertyName, schemaName)
+	}
+
+	return propertyRef.Value
+}
+
+func assertIntegerInt64(t *testing.T, field string, schema *openapi3.Schema) {
+	t.Helper()
+
+	if schema.Type == nil || !schema.Type.Is("integer") {
+		t.Fatalf("expected %s type integer, got %#v", field, schema.Type)
+	}
+	if schema.Format != "int64" {
+		t.Fatalf("expected %s format int64, got %q", field, schema.Format)
 	}
 }

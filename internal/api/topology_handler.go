@@ -17,9 +17,9 @@ import (
 
 func handleGetTopology(topologyService *service.TopologyService) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		rootID := chi.URLParam(r, "id")
-		if rootID == "" {
-			writeJSONError(w, http.StatusBadRequest, "validation_failed", "resource id is required")
+		rootID, err := parseUint64IDParam(chi.URLParam(r, "id"), "resource id")
+		if err != nil {
+			writeJSONError(w, http.StatusBadRequest, "validation_failed", err.Error())
 			return
 		}
 

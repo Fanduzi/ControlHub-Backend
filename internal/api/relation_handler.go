@@ -16,7 +16,12 @@ import (
 
 func handleListResourceRelations(relationService *service.RelationService) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		items, err := relationService.ListByResourceID(chi.URLParam(r, "id"))
+		id, err := parseUint64IDParam(chi.URLParam(r, "id"), "resource id")
+		if err != nil {
+			writeJSONError(w, http.StatusBadRequest, "validation_failed", err.Error())
+			return
+		}
+		items, err := relationService.ListByResourceID(id)
 		if err != nil {
 			writeServiceError(w, err)
 			return
@@ -36,7 +41,12 @@ func handleCreateResourceRelation(relationService *service.RelationService) http
 			return
 		}
 
-		created, err := relationService.Create(r.Context(), chi.URLParam(r, "id"), input)
+		id, err := parseUint64IDParam(chi.URLParam(r, "id"), "resource id")
+		if err != nil {
+			writeJSONError(w, http.StatusBadRequest, "validation_failed", err.Error())
+			return
+		}
+		created, err := relationService.Create(r.Context(), id, input)
 		if err != nil {
 			writeServiceError(w, err)
 			return
@@ -48,7 +58,12 @@ func handleCreateResourceRelation(relationService *service.RelationService) http
 
 func handleDeleteResourceRelation(relationService *service.RelationService) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		if err := relationService.Delete(r.Context(), chi.URLParam(r, "id")); err != nil {
+		id, err := parseUint64IDParam(chi.URLParam(r, "id"), "relation id")
+		if err != nil {
+			writeJSONError(w, http.StatusBadRequest, "validation_failed", err.Error())
+			return
+		}
+		if err := relationService.Delete(r.Context(), id); err != nil {
 			writeServiceError(w, err)
 			return
 		}

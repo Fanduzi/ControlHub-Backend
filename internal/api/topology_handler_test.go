@@ -18,7 +18,7 @@ func TestGetTopology_DefaultParams(t *testing.T) {
 	server := NewTestServer()
 
 	// res-db-cluster has relations from res-db-instance (member_of)
-	req := httptest.NewRequest(http.MethodGet, "/resources/res-db-cluster/topology", nil)
+	req := httptest.NewRequest(http.MethodGet, "/resources/4/topology", nil)
 	w := httptest.NewRecorder()
 	server.Router.ServeHTTP(w, req)
 
@@ -30,8 +30,8 @@ func TestGetTopology_DefaultParams(t *testing.T) {
 	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
-	if resp.RootResourceID != "res-db-cluster" {
-		t.Errorf("root = %q, want res-db-cluster", resp.RootResourceID)
+	if resp.RootResourceID != 4 {
+		t.Errorf("root = %d, want 4", resp.RootResourceID)
 	}
 	if resp.Depth != 1 {
 		t.Errorf("depth = %d, want 1", resp.Depth)
@@ -50,7 +50,7 @@ func TestGetTopology_DefaultParams(t *testing.T) {
 func TestGetTopology_Depth2(t *testing.T) {
 	server := NewTestServer()
 
-	req := httptest.NewRequest(http.MethodGet, "/resources/res-db-cluster/topology?depth=2", nil)
+	req := httptest.NewRequest(http.MethodGet, "/resources/4/topology?depth=2", nil)
 	w := httptest.NewRecorder()
 	server.Router.ServeHTTP(w, req)
 
@@ -70,7 +70,7 @@ func TestGetTopology_Depth2(t *testing.T) {
 func TestGetTopology_DirectionUpstream(t *testing.T) {
 	server := NewTestServer()
 
-	req := httptest.NewRequest(http.MethodGet, "/resources/res-db-cluster/topology?direction=upstream", nil)
+	req := httptest.NewRequest(http.MethodGet, "/resources/4/topology?direction=upstream", nil)
 	w := httptest.NewRecorder()
 	server.Router.ServeHTTP(w, req)
 
@@ -90,7 +90,7 @@ func TestGetTopology_DirectionUpstream(t *testing.T) {
 func TestGetTopology_DirectionDownstream(t *testing.T) {
 	server := NewTestServer()
 
-	req := httptest.NewRequest(http.MethodGet, "/resources/res-db-instance/topology?direction=downstream", nil)
+	req := httptest.NewRequest(http.MethodGet, "/resources/3/topology?direction=downstream", nil)
 	w := httptest.NewRecorder()
 	server.Router.ServeHTTP(w, req)
 
@@ -110,7 +110,7 @@ func TestGetTopology_DirectionDownstream(t *testing.T) {
 func TestGetTopology_RelationTypeFilter(t *testing.T) {
 	server := NewTestServer()
 
-	req := httptest.NewRequest(http.MethodGet, "/resources/res-db-cluster/topology?relationType=member_of", nil)
+	req := httptest.NewRequest(http.MethodGet, "/resources/4/topology?relationType=member_of", nil)
 	w := httptest.NewRecorder()
 	server.Router.ServeHTTP(w, req)
 
@@ -132,7 +132,7 @@ func TestGetTopology_RelationTypeFilter(t *testing.T) {
 func TestGetTopology_MissingRoot(t *testing.T) {
 	server := NewTestServer()
 
-	req := httptest.NewRequest(http.MethodGet, "/resources/nonexistent/topology", nil)
+	req := httptest.NewRequest(http.MethodGet, "/resources/999/topology", nil)
 	w := httptest.NewRecorder()
 	server.Router.ServeHTTP(w, req)
 
@@ -144,7 +144,7 @@ func TestGetTopology_MissingRoot(t *testing.T) {
 func TestGetTopology_InvalidDepth(t *testing.T) {
 	server := NewTestServer()
 
-	req := httptest.NewRequest(http.MethodGet, "/resources/res-db-cluster/topology?depth=5", nil)
+	req := httptest.NewRequest(http.MethodGet, "/resources/4/topology?depth=5", nil)
 	w := httptest.NewRecorder()
 	server.Router.ServeHTTP(w, req)
 
@@ -156,7 +156,7 @@ func TestGetTopology_InvalidDepth(t *testing.T) {
 func TestGetTopology_InvalidDirection(t *testing.T) {
 	server := NewTestServer()
 
-	req := httptest.NewRequest(http.MethodGet, "/resources/res-db-cluster/topology?direction=sideways", nil)
+	req := httptest.NewRequest(http.MethodGet, "/resources/4/topology?direction=sideways", nil)
 	w := httptest.NewRecorder()
 	server.Router.ServeHTTP(w, req)
 
@@ -168,7 +168,7 @@ func TestGetTopology_InvalidDirection(t *testing.T) {
 func TestGetTopology_RootWithNoRelations(t *testing.T) {
 	server := NewTestServer()
 
-	req := httptest.NewRequest(http.MethodGet, "/resources/res-no-profile/topology", nil)
+	req := httptest.NewRequest(http.MethodGet, "/resources/7/topology", nil)
 	w := httptest.NewRecorder()
 	server.Router.ServeHTTP(w, req)
 
@@ -186,15 +186,15 @@ func TestGetTopology_RootWithNoRelations(t *testing.T) {
 	if len(resp.Edges) != 0 {
 		t.Errorf("edges = %d, want 0", len(resp.Edges))
 	}
-	if resp.Nodes[0].ID != "res-no-profile" {
-		t.Errorf("node id = %q, want res-no-profile", resp.Nodes[0].ID)
+	if resp.Nodes[0].ID != 7 {
+		t.Errorf("node id = %d, want 7", resp.Nodes[0].ID)
 	}
 }
 
 func TestGetTopology_GroupsPresent(t *testing.T) {
 	server := NewTestServer()
 
-	req := httptest.NewRequest(http.MethodGet, "/resources/res-db-cluster/topology", nil)
+	req := httptest.NewRequest(http.MethodGet, "/resources/4/topology", nil)
 	w := httptest.NewRecorder()
 	server.Router.ServeHTTP(w, req)
 
@@ -210,7 +210,7 @@ func TestGetTopology_GroupsPresent(t *testing.T) {
 func TestGetTopology_InvalidRelationType(t *testing.T) {
 	server := NewTestServer()
 
-	req := httptest.NewRequest(http.MethodGet, "/resources/res-db-cluster/topology?relationType=invalid_type", nil)
+	req := httptest.NewRequest(http.MethodGet, "/resources/4/topology?relationType=invalid_type", nil)
 	w := httptest.NewRecorder()
 	server.Router.ServeHTTP(w, req)
 
@@ -230,7 +230,7 @@ func TestGetTopology_InvalidRelationType(t *testing.T) {
 func TestGetTopology_ValidRelationTypeStillWorks(t *testing.T) {
 	server := NewTestServer()
 
-	req := httptest.NewRequest(http.MethodGet, "/resources/res-db-cluster/topology?relationType=member_of", nil)
+	req := httptest.NewRequest(http.MethodGet, "/resources/4/topology?relationType=member_of", nil)
 	w := httptest.NewRecorder()
 	server.Router.ServeHTTP(w, req)
 

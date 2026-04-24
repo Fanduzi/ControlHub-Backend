@@ -13,7 +13,7 @@ import (
 )
 
 // createTestResources is a helper that creates two resources and returns their IDs.
-func createTestResources(t *testing.T, repo *mysql.ResourceRepository, ctx context.Context, namePrefix string) (string, string) {
+func createTestResources(t *testing.T, repo *mysql.ResourceRepository, ctx context.Context, namePrefix string) (uint64, uint64) {
 	t.Helper()
 
 	resA, err := repo.CreateResource(ctx, model.ResourceCreateInput{
@@ -67,11 +67,11 @@ func TestRelationRepository_CreateAndFetch(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create relation: %v", err)
 	}
-	if rel.ID == "" {
-		t.Fatal("expected non-empty relation ID")
+	if rel.ID == 0 {
+		t.Fatal("expected auto-increment relation ID")
 	}
 	if rel.FromResourceID != idA || rel.ToResourceID != idB {
-		t.Fatalf("relation ids mismatch: from=%q to=%q", rel.FromResourceID, rel.ToResourceID)
+		t.Fatalf("relation ids mismatch: from=%d to=%d", rel.FromResourceID, rel.ToResourceID)
 	}
 
 	// Fetch by resource ID.
@@ -151,7 +151,7 @@ func TestRelationRepository_DeleteUnknown_NotFound(t *testing.T) {
 	relRepo := mysql.NewRelationRepository(db)
 	ctx := context.Background()
 
-	err := relRepo.DeleteRelation(ctx, "00000000-0000-0000-0000-999999999999")
+	err := relRepo.DeleteRelation(ctx, 999999999999)
 	if !errors.Is(err, service.ErrRelationNotFound) {
 		t.Fatalf("delete unknown err = %v, want ErrRelationNotFound", err)
 	}

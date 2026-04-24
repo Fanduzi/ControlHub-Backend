@@ -25,23 +25,43 @@ make migrate-up
 cp .env.example .env
 ```
 
-### Existing Local DB
+### Local Bigint Cutover With Historical Import
 
-If you already have a `controlhub` database that was migrated manually before goose was introduced, baseline it:
+If your daily local `controlhub` database still contains the older UUID-backed schema and demo/mock/history data you want to preserve, use the repo-local preserve-then-import cutover flow instead of `migrate-reset-dev`.
+
+What this does:
+
+- Preserves the current runtime database as `controlhub_v1`
+- Recreates a fresh bigint-backed `controlhub`
+- Runs the current goose migration chain on the rebuilt target
+- Imports historical UUID-backed data from `controlhub_v1` into the new bigint schema
+
+Preconditions:
+
+- Stop anything actively using `controlhub`
+- Keep `DATABASE_DSN` pointed at `controlhub`
+- Ensure the DSN includes `parseTime=true`
+- Ensure `controlhub_v1` does not already contain tables you need to keep
+
+Run the cutover:
 
 ```bash
-mysql -u root controlhub -e "
-CREATE TABLE IF NOT EXISTS goose_db_version (
-    id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
-    version_id bigint NOT NULL,
-    is_applied boolean NOT NULL,
-    tstamp timestamp NULL DEFAULT CURRENT_TIMESTAMP
-) ENGINE=InnoDB;
-INSERT INTO goose_db_version (version_id, is_applied) VALUES
-(0,true),(1,true),(2,true),(3,true),(4,true),(5,true),(6,true),(7,true);
-"
-make migrate-status   # confirm all 8 show as Applied
+cp .env.example .env
+CONFIRM=yes make cutover-local
 ```
+
+If the first run already preserved `controlhub_v1` and rebuilt `controlhub` but stopped before import finished, resume explicitly:
+
+```bash
+go run ./cmd/cutover-local --target-db controlhub --preserve-db controlhub_v1 --resume
+```
+
+Notes:
+
+- `make cutover-local` is the safe historical-import path for this bigint redesign.
+- `--resume` is intentionally explicit; it is only for continuing an interrupted preserve-then-import cutover.
+- `CONFIRM=yes make migrate-reset-dev` is destructive and rebuilds from migrations only; it does not preserve your current local historical/mock data.
+- Keep `controlhub_v1` after a successful cutover so you can compare or roll back later.
 
 ### Migration Commands
 
@@ -50,7 +70,8 @@ make migrate-status   # confirm all 8 show as Applied
 | `make migrate-up` | Apply all pending migrations |
 | `make migrate-status` | Show current migration state |
 | `make migrate-down-one` | Roll back one migration |
-| `CONFIRM=yes make migrate-reset-dev` | Drop + recreate DB + apply all (destructive) |
+| `CONFIRM=yes make cutover-local` | Preserve old `controlhub` as `controlhub_v1`, rebuild bigint `controlhub`, import historical data |
+| `CONFIRM=yes make migrate-reset-dev` | Drop + recreate DB + apply all (destructive, no historical import) |
 
 Migrations are **not** run automatically on server startup.
 
@@ -99,7 +120,7 @@ Additional API smoke test:
 
 ```bash
 curl http://localhost:8080/resources
-curl http://localhost:8080/resources/40000000-0000-0000-0000-000000000002/profile
+curl http://localhost:8080/resources/1/profile
 curl http://localhost:8080/environments
 curl http://localhost:8080/owners
 curl http://localhost:8080/roles

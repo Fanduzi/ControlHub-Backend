@@ -8,6 +8,7 @@ package api
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"strconv"
 
@@ -24,7 +25,11 @@ type errorResponse struct {
 
 func handleListResources(resourceService *service.ResourceService) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		query := parseResourceListQuery(r)
+		query, err := parseResourceListQuery(r)
+		if err != nil {
+			writeJSONError(w, http.StatusBadRequest, "validation_failed", err.Error())
+			return
+		}
 		items, pageInfo, err := resourceService.List(r.Context(), query)
 		if err != nil {
 			writeServiceError(w, err)
@@ -40,7 +45,12 @@ func handleListResources(resourceService *service.ResourceService) http.HandlerF
 
 func handleGetResource(resourceService *service.ResourceService) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		item, err := resourceService.Get(chi.URLParam(r, "id"))
+		id, err := parseUint64IDParam(chi.URLParam(r, "id"), "resource id")
+		if err != nil {
+			writeJSONError(w, http.StatusBadRequest, "validation_failed", err.Error())
+			return
+		}
+		item, err := resourceService.Get(id)
 		if err != nil {
 			writeServiceError(w, err)
 			return
@@ -76,7 +86,13 @@ func handlePatchResource(resourceService *service.ResourceService) http.HandlerF
 			return
 		}
 
-		updated, err := resourceService.Update(r.Context(), chi.URLParam(r, "id"), patch)
+		id, err := parseUint64IDParam(chi.URLParam(r, "id"), "resource id")
+		if err != nil {
+			writeJSONError(w, http.StatusBadRequest, "validation_failed", err.Error())
+			return
+		}
+
+		updated, err := resourceService.Update(r.Context(), id, patch)
 		if err != nil {
 			writeServiceError(w, err)
 			return
@@ -88,7 +104,12 @@ func handlePatchResource(resourceService *service.ResourceService) http.HandlerF
 
 func handleGetResourceProfile(resourceService *service.ResourceService) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		profile, err := resourceService.GetProfile(chi.URLParam(r, "id"))
+		id, err := parseUint64IDParam(chi.URLParam(r, "id"), "resource id")
+		if err != nil {
+			writeJSONError(w, http.StatusBadRequest, "validation_failed", err.Error())
+			return
+		}
+		profile, err := resourceService.GetProfile(id)
 		if err != nil {
 			writeServiceError(w, err)
 			return
@@ -106,7 +127,12 @@ func handleArchiveResource(resourceService *service.ResourceService) http.Handle
 			return
 		}
 
-		archived, err := resourceService.Archive(r.Context(), chi.URLParam(r, "id"), req)
+		id, err := parseUint64IDParam(chi.URLParam(r, "id"), "resource id")
+		if err != nil {
+			writeJSONError(w, http.StatusBadRequest, "validation_failed", err.Error())
+			return
+		}
+		archived, err := resourceService.Archive(r.Context(), id, req)
 		if err != nil {
 			writeServiceError(w, err)
 			return
@@ -118,7 +144,12 @@ func handleArchiveResource(resourceService *service.ResourceService) http.Handle
 
 func handleUnarchiveResource(resourceService *service.ResourceService) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		unarchived, err := resourceService.Unarchive(r.Context(), chi.URLParam(r, "id"))
+		id, err := parseUint64IDParam(chi.URLParam(r, "id"), "resource id")
+		if err != nil {
+			writeJSONError(w, http.StatusBadRequest, "validation_failed", err.Error())
+			return
+		}
+		unarchived, err := resourceService.Unarchive(r.Context(), id)
 		if err != nil {
 			writeServiceError(w, err)
 			return
@@ -128,24 +159,28 @@ func handleUnarchiveResource(resourceService *service.ResourceService) http.Hand
 	}
 }
 
-func parseResourceListQuery(r *http.Request) model.ResourceListQuery {
+func parseResourceListQuery(r *http.Request) (model.ResourceListQuery, error) {
 	q := r.URL.Query()
 	page, pageSize := model.NormalizePagination(
 		parseIntDefault(q.Get("page"), model.DefaultPage),
 		parseIntDefault(q.Get("pageSize"), model.DefaultPageSize),
 	)
-	return model.ResourceListQuery{
-		ResourceTypes:   model.DedupStrings(q["resourceType"]),
-		ResourceSubtypes: model.DedupStrings(q["resourceSubtype"]),
-		EnvironmentIDs:  model.DedupStrings(q["environmentId"]),
-		LifecycleStatus: model.DedupStrings(q["lifecycleStatus"]),
-		HealthStatuses:  model.DedupStrings(q["healthStatus"]),
-		Query:           q.Get("q"),
-		IncludeArchived: q.Get("includeArchived") == "true",
-		ArchivedOnly:    q.Get("archivedOnly") == "true",
-		Page:            page,
-		PageSize:        pageSize,
+	environmentIDs, err := parseUint64QueryValues(q["environmentId"], "environmentId")
+	if err != nil {
+		return model.ResourceListQuery{}, err
 	}
+	return model.ResourceListQuery{
+		ResourceTypes:    model.DedupStrings(q["resourceType"]),
+		ResourceSubtypes: model.DedupStrings(q["resourceSubtype"]),
+		EnvironmentIDs:   environmentIDs,
+		LifecycleStatus:  model.DedupStrings(q["lifecycleStatus"]),
+		HealthStatuses:   model.DedupStrings(q["healthStatus"]),
+		Query:            q.Get("q"),
+		IncludeArchived:  q.Get("includeArchived") == "true",
+		ArchivedOnly:     q.Get("archivedOnly") == "true",
+		Page:             page,
+		PageSize:         pageSize,
+	}, nil
 }
 
 func parseIntDefault(s string, def int) int {
@@ -157,6 +192,43 @@ func parseIntDefault(s string, def int) int {
 		return def
 	}
 	return n
+}
+
+func parseUint64IDParam(raw, name string) (uint64, error) {
+	if raw == "" {
+		return 0, fmt.Errorf("%s is required", name)
+	}
+	id, err := strconv.ParseUint(raw, 10, 64)
+	if err != nil || id == 0 {
+		return 0, fmt.Errorf("%s must be a positive integer", name)
+	}
+	return id, nil
+}
+
+func parseUint64QueryValues(values []string, name string) ([]uint64, error) {
+	if len(values) == 0 {
+		return nil, nil
+	}
+	seen := make(map[uint64]bool, len(values))
+	result := make([]uint64, 0, len(values))
+	for _, raw := range values {
+		if raw == "" {
+			return nil, fmt.Errorf("%s must be a positive integer", name)
+		}
+		id, err := strconv.ParseUint(raw, 10, 64)
+		if err != nil || id == 0 {
+			return nil, fmt.Errorf("%s must be a positive integer", name)
+		}
+		if seen[id] {
+			continue
+		}
+		seen[id] = true
+		result = append(result, id)
+	}
+	if len(result) == 0 {
+		return nil, nil
+	}
+	return result, nil
 }
 
 func decodeJSONBody(r *http.Request, target any) error {

@@ -7,7 +7,6 @@ package api
 
 import (
 	"context"
-	"fmt"
 	"strings"
 	"time"
 
@@ -22,14 +21,14 @@ type TestServer struct {
 }
 
 type fakeResourceRepo struct {
-	resources map[string]model.Resource
-	listOrder []string
-	profiles  map[string]*model.ResourceProfileResponse
-	nextID    int
+	resources map[uint64]model.Resource
+	listOrder []uint64
+	profiles  map[uint64]*model.ResourceProfileResponse
+	nextID    uint64
 	now       time.Time
 }
 
-func (f *fakeResourceRepo) GetResourceProfile(id string) (*model.ResourceProfileResponse, error) {
+func (f *fakeResourceRepo) GetResourceProfile(id uint64) (*model.ResourceProfileResponse, error) {
 	res, err := f.GetResource(id)
 	if err != nil {
 		return nil, err
@@ -45,10 +44,10 @@ func (f *fakeResourceRepo) GetResourceProfile(id string) (*model.ResourceProfile
 	}, nil
 }
 
-func (f *fakeResourceRepo) UpsertHostProfile(_ context.Context, resourceID, hostname, ipAddress, osName string) error {
+func (f *fakeResourceRepo) UpsertHostProfile(_ context.Context, resourceID uint64, hostname, ipAddress, osName string) error {
 	res := f.resources[resourceID]
 	f.profiles[resourceID] = &model.ResourceProfileResponse{
-		ResourceID:      resourceID,
+		ResourceID:      res.ID,
 		ResourceType:    model.ResourceTypeHost,
 		ResourceSubtype: res.ResourceSubtype,
 		Profile: map[string]any{
@@ -60,10 +59,10 @@ func (f *fakeResourceRepo) UpsertHostProfile(_ context.Context, resourceID, host
 	return nil
 }
 
-func (f *fakeResourceRepo) UpsertDatabaseInstanceProfile(_ context.Context, resourceID, engine, version, host string, port int, role string) error {
+func (f *fakeResourceRepo) UpsertDatabaseInstanceProfile(_ context.Context, resourceID uint64, engine, version, host string, port int, role string) error {
 	res := f.resources[resourceID]
 	f.profiles[resourceID] = &model.ResourceProfileResponse{
-		ResourceID:      resourceID,
+		ResourceID:      res.ID,
 		ResourceType:    model.ResourceTypeDatabaseInstance,
 		ResourceSubtype: res.ResourceSubtype,
 		Profile: map[string]any{
@@ -77,10 +76,10 @@ func (f *fakeResourceRepo) UpsertDatabaseInstanceProfile(_ context.Context, reso
 	return nil
 }
 
-func (f *fakeResourceRepo) UpsertDatabaseClusterProfile(_ context.Context, resourceID, engine, topologyMode, primaryEndpoint string) error {
+func (f *fakeResourceRepo) UpsertDatabaseClusterProfile(_ context.Context, resourceID uint64, engine, topologyMode, primaryEndpoint string) error {
 	res := f.resources[resourceID]
 	f.profiles[resourceID] = &model.ResourceProfileResponse{
-		ResourceID:      resourceID,
+		ResourceID:      res.ID,
 		ResourceType:    model.ResourceTypeDatabaseCluster,
 		ResourceSubtype: res.ResourceSubtype,
 		Profile: map[string]any{
@@ -92,10 +91,10 @@ func (f *fakeResourceRepo) UpsertDatabaseClusterProfile(_ context.Context, resou
 	return nil
 }
 
-func (f *fakeResourceRepo) UpsertServiceProfile(_ context.Context, resourceID, systemName, repositoryUrl, runtimeEnv string) error {
+func (f *fakeResourceRepo) UpsertServiceProfile(_ context.Context, resourceID uint64, systemName, repositoryUrl, runtimeEnv string) error {
 	res := f.resources[resourceID]
 	f.profiles[resourceID] = &model.ResourceProfileResponse{
-		ResourceID:      resourceID,
+		ResourceID:      res.ID,
 		ResourceType:    model.ResourceTypeService,
 		ResourceSubtype: res.ResourceSubtype,
 		Profile: map[string]any{
@@ -107,7 +106,7 @@ func (f *fakeResourceRepo) UpsertServiceProfile(_ context.Context, resourceID, s
 	return nil
 }
 
-func (f *fakeResourceRepo) DeleteProfile(_ context.Context, resourceID, _ string) error {
+func (f *fakeResourceRepo) DeleteProfile(_ context.Context, resourceID uint64, _ string) error {
 	delete(f.profiles, resourceID)
 	return nil
 }
@@ -122,7 +121,7 @@ func (f *fakeResourceRepo) ListResources(_ context.Context, q model.ResourceList
 		if len(q.ResourceTypes) > 0 && !containsString(q.ResourceTypes, string(item.ResourceType)) {
 			continue
 		}
-		if len(q.EnvironmentIDs) > 0 && !containsString(q.EnvironmentIDs, item.EnvironmentID) {
+		if len(q.EnvironmentIDs) > 0 && !containsUint64(q.EnvironmentIDs, item.EnvironmentID) {
 			continue
 		}
 		if len(q.LifecycleStatus) > 0 && !containsString(q.LifecycleStatus, item.LifecycleStatus) {
@@ -131,9 +130,9 @@ func (f *fakeResourceRepo) ListResources(_ context.Context, q model.ResourceList
 		if len(q.HealthStatuses) > 0 && !containsString(q.HealthStatuses, item.HealthStatus) {
 			continue
 		}
-			if len(q.ResourceSubtypes) > 0 && !containsString(q.ResourceSubtypes, item.ResourceSubtype) {
-				continue
-			}
+		if len(q.ResourceSubtypes) > 0 && !containsString(q.ResourceSubtypes, item.ResourceSubtype) {
+			continue
+		}
 		if q.Query != "" {
 			lq := strings.ToLower(q.Query)
 			labelMatch := false
@@ -150,12 +149,12 @@ func (f *fakeResourceRepo) ListResources(_ context.Context, q model.ResourceList
 				continue
 			}
 		}
-			if q.ArchivedOnly && !item.IsArchived() {
-					continue
-				}
-				if !q.ArchivedOnly && !q.IncludeArchived && item.IsArchived() {
-				continue
-			}
+		if q.ArchivedOnly && !item.IsArchived() {
+			continue
+		}
+		if !q.ArchivedOnly && !q.IncludeArchived && item.IsArchived() {
+			continue
+		}
 		filtered = append(filtered, cloneResource(item))
 	}
 
@@ -171,7 +170,7 @@ func (f *fakeResourceRepo) ListResources(_ context.Context, q model.ResourceList
 	return filtered[offset:end], total, nil
 }
 
-func (f *fakeResourceRepo) GetResource(id string) (*model.Resource, error) {
+func (f *fakeResourceRepo) GetResource(id uint64) (*model.Resource, error) {
 	res, ok := f.resources[id]
 	if !ok {
 		return nil, service.ErrResourceNotFound
@@ -190,7 +189,7 @@ func (f *fakeResourceRepo) CreateResource(_ context.Context, input model.Resourc
 	f.nextID++
 	createdAt := f.now.Add(time.Duration(f.nextID) * time.Minute)
 	created := model.Resource{
-		ID:              fmt.Sprintf("res-created-%d", f.nextID),
+		ID:              10000 + f.nextID,
 		ResourceType:    input.ResourceType,
 		ResourceSubtype: input.ResourceSubtype,
 		Name:            input.Name,
@@ -212,7 +211,7 @@ func (f *fakeResourceRepo) CreateResource(_ context.Context, input model.Resourc
 	return &cloned, nil
 }
 
-func (f *fakeResourceRepo) UpdateResource(_ context.Context, id string, input model.ResourceUpdateInput) (*model.Resource, error) {
+func (f *fakeResourceRepo) UpdateResource(_ context.Context, id uint64, input model.ResourceUpdateInput) (*model.Resource, error) {
 	existing, ok := f.resources[id]
 	if !ok {
 		return nil, service.ErrResourceNotFound
@@ -256,7 +255,7 @@ func (f *fakeResourceRepo) UpdateResource(_ context.Context, id string, input mo
 	return &cloned, nil
 }
 
-func (f *fakeResourceRepo) ArchiveResource(_ context.Context, id string, reason string) (*model.Resource, error) {
+func (f *fakeResourceRepo) ArchiveResource(_ context.Context, id uint64, reason string) (*model.Resource, error) {
 	res, ok := f.resources[id]
 	if !ok {
 		return nil, service.ErrResourceNotFound
@@ -269,7 +268,7 @@ func (f *fakeResourceRepo) ArchiveResource(_ context.Context, id string, reason 
 	return &cloned, nil
 }
 
-func (f *fakeResourceRepo) UnarchiveResource(_ context.Context, id string) (*model.Resource, error) {
+func (f *fakeResourceRepo) UnarchiveResource(_ context.Context, id uint64) (*model.Resource, error) {
 	res, ok := f.resources[id]
 	if !ok {
 		return nil, service.ErrResourceNotFound
@@ -284,13 +283,13 @@ func (f *fakeResourceRepo) UnarchiveResource(_ context.Context, id string) (*mod
 
 type fakeRelationRepo struct {
 	resources *fakeResourceRepo
-	relations map[string]model.ResourceRelation
-	order     []string
-	nextID    int
+	relations map[uint64]model.ResourceRelation
+	order     []uint64
+	nextID    uint64
 	now       time.Time
 }
 
-func (f *fakeRelationRepo) ListByResourceID(resourceID string) ([]model.ResourceRelation, error) {
+func (f *fakeRelationRepo) ListByResourceID(resourceID uint64) ([]model.ResourceRelation, error) {
 	items := make([]model.ResourceRelation, 0)
 	for _, id := range f.order {
 		relation, ok := f.relations[id]
@@ -304,7 +303,7 @@ func (f *fakeRelationRepo) ListByResourceID(resourceID string) ([]model.Resource
 	return items, nil
 }
 
-func (f *fakeRelationRepo) GetResource(id string) (*model.Resource, error) {
+func (f *fakeRelationRepo) GetResource(id uint64) (*model.Resource, error) {
 	return f.resources.GetResource(id)
 }
 
@@ -317,7 +316,7 @@ func (f *fakeRelationRepo) CreateRelation(_ context.Context, input model.Relatio
 
 	f.nextID++
 	relation := model.ResourceRelation{
-		ID:             fmt.Sprintf("rel-created-%d", f.nextID),
+		ID:             20000 + f.nextID,
 		FromResourceID: input.FromResourceID,
 		ToResourceID:   input.ToResourceID,
 		RelationType:   input.RelationType,
@@ -329,12 +328,12 @@ func (f *fakeRelationRepo) CreateRelation(_ context.Context, input model.Relatio
 	return &relation, nil
 }
 
-func (f *fakeRelationRepo) DeleteRelation(_ context.Context, relationID string) error {
+func (f *fakeRelationRepo) DeleteRelation(_ context.Context, relationID uint64) error {
 	if _, ok := f.relations[relationID]; !ok {
 		return service.ErrRelationNotFound
 	}
 	delete(f.relations, relationID)
-	filtered := make([]string, 0, len(f.order))
+	filtered := make([]uint64, 0, len(f.order))
 	for _, id := range f.order {
 		if id != relationID {
 			filtered = append(filtered, id)
@@ -349,12 +348,12 @@ type fakeTopologyRepo struct {
 	relations *fakeRelationRepo
 }
 
-func (f *fakeTopologyRepo) GetResource(id string) (*model.Resource, error) {
+func (f *fakeTopologyRepo) GetResource(id uint64) (*model.Resource, error) {
 	return f.resources.GetResource(id)
 }
 
-func (f *fakeTopologyRepo) ListRelationsByResourceIDs(ids []string) ([]model.ResourceRelation, error) {
-	idSet := make(map[string]bool, len(ids))
+func (f *fakeTopologyRepo) ListRelationsByResourceIDs(ids []uint64) ([]model.ResourceRelation, error) {
+	idSet := make(map[uint64]bool, len(ids))
 	for _, id := range ids {
 		idSet[id] = true
 	}
@@ -374,29 +373,18 @@ func (f *fakeTopologyRepo) ListRelationsByResourceIDs(ids []string) ([]model.Res
 type fakeAuditRepo struct{}
 
 func (fakeAuditRepo) ListAuditEvents(_ context.Context, q model.AuditListQuery) ([]model.AuditEvent, int, error) {
+	targetResourceID := uint64(1)
 	all := []model.AuditEvent{
-		{
-			ID:               "audit-1",
-			ActorUserID:      "user-1",
-			TargetResourceID: "res-1",
-			EventType:        "resource.updated",
-			Result:           "success",
-			CreatedAt:        time.Date(2026, 4, 11, 21, 0, 0, 0, time.UTC),
-		},
-		{
-			ID:               "audit-2",
-			ActorUserID:      "user-2",
-			TargetResourceID: "res-2",
-			EventType:        "resource.created",
-			Result:           "failure",
-			CreatedAt:        time.Date(2026, 4, 11, 22, 0, 0, 0, time.UTC),
-		},
+		{ID: 1, ActorUserID: 1, TargetResourceID: &targetResourceID, EventType: "resource.updated", Result: "success", CreatedAt: time.Date(2026, 4, 11, 21, 0, 0, 0, time.UTC)},
+		{ID: 2, ActorUserID: 2, TargetResourceID: nil, EventType: "resource.created", Result: "failure", CreatedAt: time.Date(2026, 4, 11, 22, 0, 0, 0, time.UTC)},
 	}
 
 	filtered := make([]model.AuditEvent, 0)
 	for _, item := range all {
-		if q.TargetResourceID != "" && item.TargetResourceID != q.TargetResourceID {
-			continue
+		if q.TargetResourceID != nil {
+			if item.TargetResourceID == nil || *item.TargetResourceID != *q.TargetResourceID {
+				continue
+			}
 		}
 		if len(q.EventTypes) > 0 && !containsString(q.EventTypes, item.EventType) {
 			continue
@@ -419,231 +407,46 @@ func (fakeAuditRepo) ListAuditEvents(_ context.Context, q model.AuditListQuery) 
 	return filtered[offset:end], total, nil
 }
 
-func (fakeAuditRepo) ListByResourceID(resourceID string) ([]model.AuditEvent, error) {
-	return []model.AuditEvent{
-		{
-			ID:               "audit-1",
-			ActorUserID:      "user-1",
-			TargetResourceID: resourceID,
-			EventType:        "resource.updated",
-			Result:           "success",
-			CreatedAt:        time.Date(2026, 4, 11, 21, 0, 0, 0, time.UTC),
-		},
-	}, nil
+func (fakeAuditRepo) ListByResourceID(resourceID uint64) ([]model.AuditEvent, error) {
+	return []model.AuditEvent{{ID: 1, ActorUserID: 1, TargetResourceID: &resourceID, EventType: "resource.updated", Result: "success", CreatedAt: time.Date(2026, 4, 11, 21, 0, 0, 0, time.UTC)}}, nil
 }
 
 func NewTestServer() *TestServer {
 	archivedAt := time.Date(2026, 4, 11, 22, 0, 0, 0, time.UTC)
 	archiveReason := "retired"
 	resourceRepo := &fakeResourceRepo{
-		resources: map[string]model.Resource{
-			"res-1": {
-				ID:              "res-1",
-				ResourceType:    model.ResourceTypeDatabaseInstance,
-				ResourceSubtype: "mysql",
-				Name:            "order-mysql-prod",
-				DisplayName:     "Order MySQL Prod",
-				EnvironmentID:   "env-prod",
-				OwnerID:         "owner-dba",
-				LifecycleStatus: "running",
-				HealthStatus:    "healthy",
-				Source:          "manual",
-				ExternalID:      "ext-order-mysql",
-				Labels:          map[string]string{"team": "order"},
-				CreatedAt:       time.Date(2026, 4, 11, 20, 0, 0, 0, time.UTC),
-				UpdatedAt:       time.Date(2026, 4, 11, 20, 0, 0, 0, time.UTC),
-			},
-			"res-2": {
-				ID:              "res-2",
-				ResourceType:    model.ResourceTypeHost,
-				ResourceSubtype: "vm",
-				Name:            "prod-host-01",
-				DisplayName:     "Prod Host 01",
-				EnvironmentID:   "env-staging",
-				OwnerID:         "owner-platform",
-				LifecycleStatus: "degraded",
-				HealthStatus:    "warning",
-				Source:          "manual",
-				ExternalID:      "ext-prod-host",
-				Labels:          map[string]string{"team": "platform"},
-				CreatedAt:       time.Date(2026, 4, 11, 20, 0, 0, 0, time.UTC),
-				UpdatedAt:       time.Date(2026, 4, 11, 20, 0, 0, 0, time.UTC),
-			},
-			"res-db-instance": {
-				ID:              "res-db-instance",
-				ResourceType:    model.ResourceTypeDatabaseInstance,
-				ResourceSubtype: "mysql",
-				Name:            "order-mysql-prod",
-				DisplayName:     "Order MySQL Prod",
-				EnvironmentID:   "env-prod",
-				OwnerID:         "owner-dba",
-				LifecycleStatus: "running",
-				HealthStatus:    "healthy",
-				Source:          "manual",
-				Labels:          map[string]string{"team": "order"},
-				CreatedAt:       time.Date(2026, 4, 11, 20, 0, 0, 0, time.UTC),
-				UpdatedAt:       time.Date(2026, 4, 11, 20, 0, 0, 0, time.UTC),
-			},
-			"res-db-cluster": {
-				ID:              "res-db-cluster",
-				ResourceType:    model.ResourceTypeDatabaseCluster,
-				ResourceSubtype: "mysql",
-				Name:            "order-mysql-cluster-prod",
-				DisplayName:     "Order MySQL Cluster Prod",
-				EnvironmentID:   "env-prod",
-				OwnerID:         "owner-dba",
-				LifecycleStatus: "running",
-				HealthStatus:    "healthy",
-				Source:          "manual",
-				Labels:          map[string]string{"team": "order"},
-				CreatedAt:       time.Date(2026, 4, 11, 20, 0, 0, 0, time.UTC),
-				UpdatedAt:       time.Date(2026, 4, 11, 20, 0, 0, 0, time.UTC),
-			},
-			"res-service": {
-				ID:              "res-service",
-				ResourceType:    model.ResourceTypeService,
-				ResourceSubtype: "api",
-				Name:            "order-api-prod",
-				DisplayName:     "Order API Prod",
-				EnvironmentID:   "env-prod",
-				OwnerID:         "owner-platform",
-				LifecycleStatus: "running",
-				HealthStatus:    "healthy",
-				Source:          "manual",
-				Labels:          map[string]string{"team": "order"},
-				CreatedAt:       time.Date(2026, 4, 11, 20, 0, 0, 0, time.UTC),
-				UpdatedAt:       time.Date(2026, 4, 11, 20, 0, 0, 0, time.UTC),
-			},
-			"res-host": {
-				ID:              "res-host",
-				ResourceType:    model.ResourceTypeHost,
-				ResourceSubtype: "vm",
-				Name:            "prod-db-host-01",
-				DisplayName:     "Prod DB Host 01",
-				EnvironmentID:   "env-prod",
-				OwnerID:         "owner-platform",
-				LifecycleStatus: "running",
-				HealthStatus:    "healthy",
-				Source:          "manual",
-				Labels:          map[string]string{"team": "platform"},
-				CreatedAt:       time.Date(2026, 4, 11, 20, 0, 0, 0, time.UTC),
-				UpdatedAt:       time.Date(2026, 4, 11, 20, 0, 0, 0, time.UTC),
-			},
-			"res-no-profile": {
-				ID:              "res-no-profile",
-				ResourceType:    model.ResourceTypeHost,
-				ResourceSubtype: "vm",
-				Name:            "bare-host",
-				DisplayName:     "Bare Host",
-				EnvironmentID:   "env-prod",
-				OwnerID:         "owner-platform",
-				LifecycleStatus: "running",
-				HealthStatus:    "healthy",
-				Source:          "manual",
-				Labels:          map[string]string{},
-				CreatedAt:       time.Date(2026, 4, 11, 20, 0, 0, 0, time.UTC),
-				UpdatedAt:       time.Date(2026, 4, 11, 20, 0, 0, 0, time.UTC),
-			},
-				"res-archived": {
-					ID:              "res-archived",
-					ResourceType:    model.ResourceTypeHost,
-					ResourceSubtype: "vm",
-					Name:            "archived-host",
-					DisplayName:     "Archived Host",
-					EnvironmentID:   "env-prod",
-					OwnerID:         "owner-platform",
-					LifecycleStatus: "decommissioned",
-					HealthStatus:    "unknown",
-					Source:          "manual",
-					Labels:          map[string]string{},
-					CreatedAt:       time.Date(2026, 4, 11, 19, 0, 0, 0, time.UTC),
-					UpdatedAt:       time.Date(2026, 4, 11, 19, 0, 0, 0, time.UTC),
-					ArchivedAt:      &archivedAt,
-					ArchiveReason:   &archiveReason,
-				},
-			},
-			listOrder: []string{"res-1", "res-2", "res-archived"},
-		profiles: map[string]*model.ResourceProfileResponse{
-			"res-db-instance": {
-				ResourceID:      "res-db-instance",
-				ResourceType:    model.ResourceTypeDatabaseInstance,
-				ResourceSubtype: "mysql",
-				Profile: map[string]any{
-					"engine":  "mysql",
-					"version": "8.0.36",
-					"host":    "prod-db-host-01.internal",
-					"port":    3306,
-					"role":    "primary",
-				},
-			},
-			"res-db-cluster": {
-				ResourceID:      "res-db-cluster",
-				ResourceType:    model.ResourceTypeDatabaseCluster,
-				ResourceSubtype: "mysql",
-				Profile: map[string]any{
-					"engine":          "mysql",
-					"topologyMode":    "primary-replica",
-					"primaryEndpoint": "order-mysql-cluster-prod.internal:3306",
-				},
-			},
-			"res-service": {
-				ResourceID:      "res-service",
-				ResourceType:    model.ResourceTypeService,
-				ResourceSubtype: "api",
-				Profile: map[string]any{
-					"systemName":    "order-api",
-					"repositoryUrl": "https://example.com/repos/order-api",
-					"runtimeEnv":    "kubernetes",
-				},
-			},
-			"res-host": {
-				ResourceID:      "res-host",
-				ResourceType:    model.ResourceTypeHost,
-				ResourceSubtype: "vm",
-				Profile: map[string]any{
-					"hostname":  "prod-db-host-01.internal",
-					"ipAddress": "10.0.10.21",
-					"osName":    "Ubuntu 24.04",
-				},
-			},
+		resources: map[uint64]model.Resource{
+			1: {ID: 1, ResourceType: model.ResourceTypeDatabaseInstance, ResourceSubtype: "mysql", Name: "order-mysql-prod", DisplayName: "Order MySQL Prod", EnvironmentID: 1, OwnerID: 2, LifecycleStatus: "running", HealthStatus: "healthy", Source: "manual", ExternalID: "ext-order-mysql", Labels: map[string]string{"team": "order"}, CreatedAt: time.Date(2026, 4, 11, 20, 0, 0, 0, time.UTC), UpdatedAt: time.Date(2026, 4, 11, 20, 0, 0, 0, time.UTC)},
+			2: {ID: 2, ResourceType: model.ResourceTypeHost, ResourceSubtype: "vm", Name: "prod-host-01", DisplayName: "Prod Host 01", EnvironmentID: 2, OwnerID: 3, LifecycleStatus: "degraded", HealthStatus: "warning", Source: "manual", ExternalID: "ext-prod-host", Labels: map[string]string{"team": "platform"}, CreatedAt: time.Date(2026, 4, 11, 20, 0, 0, 0, time.UTC), UpdatedAt: time.Date(2026, 4, 11, 20, 0, 0, 0, time.UTC)},
+			3: {ID: 3, ResourceType: model.ResourceTypeDatabaseInstance, ResourceSubtype: "mysql", Name: "order-mysql-prod", DisplayName: "Order MySQL Prod", EnvironmentID: 1, OwnerID: 2, LifecycleStatus: "running", HealthStatus: "healthy", Source: "manual", Labels: map[string]string{"team": "order"}, CreatedAt: time.Date(2026, 4, 11, 20, 0, 0, 0, time.UTC), UpdatedAt: time.Date(2026, 4, 11, 20, 0, 0, 0, time.UTC)},
+			4: {ID: 4, ResourceType: model.ResourceTypeDatabaseCluster, ResourceSubtype: "mysql", Name: "order-mysql-cluster-prod", DisplayName: "Order MySQL Cluster Prod", EnvironmentID: 1, OwnerID: 2, LifecycleStatus: "running", HealthStatus: "healthy", Source: "manual", Labels: map[string]string{"team": "order"}, CreatedAt: time.Date(2026, 4, 11, 20, 0, 0, 0, time.UTC), UpdatedAt: time.Date(2026, 4, 11, 20, 0, 0, 0, time.UTC)},
+			5: {ID: 5, ResourceType: model.ResourceTypeService, ResourceSubtype: "api", Name: "order-api-prod", DisplayName: "Order API Prod", EnvironmentID: 1, OwnerID: 3, LifecycleStatus: "running", HealthStatus: "healthy", Source: "manual", Labels: map[string]string{"team": "order"}, CreatedAt: time.Date(2026, 4, 11, 20, 0, 0, 0, time.UTC), UpdatedAt: time.Date(2026, 4, 11, 20, 0, 0, 0, time.UTC)},
+			6: {ID: 6, ResourceType: model.ResourceTypeHost, ResourceSubtype: "vm", Name: "prod-db-host-01", DisplayName: "Prod DB Host 01", EnvironmentID: 1, OwnerID: 3, LifecycleStatus: "running", HealthStatus: "healthy", Source: "manual", Labels: map[string]string{"team": "platform"}, CreatedAt: time.Date(2026, 4, 11, 20, 0, 0, 0, time.UTC), UpdatedAt: time.Date(2026, 4, 11, 20, 0, 0, 0, time.UTC)},
+			7: {ID: 7, ResourceType: model.ResourceTypeHost, ResourceSubtype: "vm", Name: "bare-host", DisplayName: "Bare Host", EnvironmentID: 1, OwnerID: 3, LifecycleStatus: "running", HealthStatus: "healthy", Source: "manual", Labels: map[string]string{}, CreatedAt: time.Date(2026, 4, 11, 20, 0, 0, 0, time.UTC), UpdatedAt: time.Date(2026, 4, 11, 20, 0, 0, 0, time.UTC)},
+			8: {ID: 8, ResourceType: model.ResourceTypeHost, ResourceSubtype: "vm", Name: "archived-host", DisplayName: "Archived Host", EnvironmentID: 1, OwnerID: 3, LifecycleStatus: "decommissioned", HealthStatus: "unknown", Source: "manual", Labels: map[string]string{}, CreatedAt: time.Date(2026, 4, 11, 19, 0, 0, 0, time.UTC), UpdatedAt: time.Date(2026, 4, 11, 19, 0, 0, 0, time.UTC), ArchivedAt: &archivedAt, ArchiveReason: &archiveReason},
+		},
+		listOrder: []uint64{1, 2, 8},
+		profiles: map[uint64]*model.ResourceProfileResponse{
+			3: {ResourceID: 3, ResourceType: model.ResourceTypeDatabaseInstance, ResourceSubtype: "mysql", Profile: map[string]any{"engine": "mysql", "version": "8.0.36", "host": "prod-db-host-01.internal", "port": 3306, "role": "primary"}},
+			4: {ResourceID: 4, ResourceType: model.ResourceTypeDatabaseCluster, ResourceSubtype: "mysql", Profile: map[string]any{"engine": "mysql", "topologyMode": "primary-replica", "primaryEndpoint": "order-mysql-cluster-prod.internal:3306"}},
+			5: {ResourceID: 5, ResourceType: model.ResourceTypeService, ResourceSubtype: "api", Profile: map[string]any{"systemName": "order-api", "repositoryUrl": "https://example.com/repos/order-api", "runtimeEnv": "kubernetes"}},
+			6: {ResourceID: 6, ResourceType: model.ResourceTypeHost, ResourceSubtype: "vm", Profile: map[string]any{"hostname": "prod-db-host-01.internal", "ipAddress": "10.0.10.21", "osName": "Ubuntu 24.04"}},
 		},
 		now: time.Date(2026, 4, 11, 20, 0, 0, 0, time.UTC),
 	}
 
 	relationRepo := &fakeRelationRepo{
 		resources: resourceRepo,
-		relations: map[string]model.ResourceRelation{
-			"rel-1": {
-				ID:             "rel-1",
-				FromResourceID: "res-service",
-				ToResourceID:   "res-db-instance",
-				RelationType:   model.RelationTypeDependsOn,
-				CreatedAt:      time.Date(2026, 4, 11, 21, 0, 0, 0, time.UTC),
-			},
-			"rel-2": {
-				ID:             "rel-2",
-				FromResourceID: "res-db-instance",
-				ToResourceID:   "res-db-cluster",
-				RelationType:   model.RelationTypeMemberOf,
-				CreatedAt:      time.Date(2026, 4, 11, 21, 1, 0, 0, time.UTC),
-			},
-			"rel-3": {
-				ID:             "rel-3",
-				FromResourceID: "res-db-instance",
-				ToResourceID:   "res-host",
-				RelationType:   model.RelationTypeRunsOn,
-				CreatedAt:      time.Date(2026, 4, 11, 21, 2, 0, 0, time.UTC),
-			},
+		relations: map[uint64]model.ResourceRelation{
+			1: {ID: 1, FromResourceID: 5, ToResourceID: 3, RelationType: model.RelationTypeDependsOn, CreatedAt: time.Date(2026, 4, 11, 21, 0, 0, 0, time.UTC)},
+			2: {ID: 2, FromResourceID: 3, ToResourceID: 4, RelationType: model.RelationTypeMemberOf, CreatedAt: time.Date(2026, 4, 11, 21, 1, 0, 0, time.UTC)},
+			3: {ID: 3, FromResourceID: 3, ToResourceID: 6, RelationType: model.RelationTypeRunsOn, CreatedAt: time.Date(2026, 4, 11, 21, 2, 0, 0, time.UTC)},
 		},
-		order: []string{"rel-1", "rel-2", "rel-3"},
+		order: []uint64{1, 2, 3},
 		now:   time.Date(2026, 4, 11, 21, 0, 0, 0, time.UTC),
 	}
 
-	topologyRepo := &fakeTopologyRepo{
-		resources: resourceRepo,
-		relations: relationRepo,
-	}
-
+	topologyRepo := &fakeTopologyRepo{resources: resourceRepo, relations: relationRepo}
 	profileSvc := service.NewProfileService(resourceRepo, resourceRepo)
 
 	deps := Dependencies{
@@ -672,85 +475,34 @@ func (fakeUserCredentialRepo) FindByEmail(email string) (*model.UserCredential, 
 	if email != "admin@example.com" {
 		return nil, nil
 	}
-
-	return &model.UserCredential{
-		ID:           "user-1",
-		Email:        "admin@example.com",
-		RoleName:     "admin",
-		PasswordHash: "fcf730b6d95236ecd3c9fc2d92d7b6b2bb061514961aec041d6c7a7192f592e4",
-	}, nil
+	return &model.UserCredential{ID: 1, Email: "admin@example.com", RoleName: "admin", PasswordHash: "fcf730b6d95236ecd3c9fc2d92d7b6b2bb061514961aec041d6c7a7192f592e4"}, nil
 }
 
 type fakeEnvironmentRepo struct{}
 
 func (fakeEnvironmentRepo) ListEnvironments() ([]model.Environment, error) {
-	return []model.Environment{
-		{
-			ID:          "10000000-0000-0000-0000-000000000001",
-			Name:        "Production",
-			Slug:        "prod",
-			Description: "Production environment",
-			CreatedAt:   time.Date(2026, 4, 11, 20, 0, 0, 0, time.UTC),
-		},
-		{
-			ID:          "10000000-0000-0000-0000-000000000002",
-			Name:        "Staging",
-			Slug:        "staging",
-			Description: "Staging environment",
-			CreatedAt:   time.Date(2026, 4, 11, 20, 0, 0, 0, time.UTC),
-		},
-	}, nil
+	return []model.Environment{{ID: 1, Name: "Production", Slug: "prod", Description: "Production environment", CreatedAt: time.Date(2026, 4, 11, 20, 0, 0, 0, time.UTC)}, {ID: 2, Name: "Staging", Slug: "staging", Description: "Staging environment", CreatedAt: time.Date(2026, 4, 11, 20, 0, 0, 0, time.UTC)}}, nil
 }
 
 type fakeOwnerRepo struct{}
 
 func (fakeOwnerRepo) ListOwners() ([]model.Owner, error) {
-	return []model.Owner{
-		{
-			ID:        "20000000-0000-0000-0000-000000000001",
-			Name:      "Platform Team",
-			Email:     "platform@example.com",
-			CreatedAt: time.Date(2026, 4, 11, 20, 0, 0, 0, time.UTC),
-		},
-		{
-			ID:        "20000000-0000-0000-0000-000000000002",
-			Name:      "DBA Team",
-			Email:     "dba@example.com",
-			CreatedAt: time.Date(2026, 4, 11, 20, 0, 0, 0, time.UTC),
-		},
-	}, nil
+	return []model.Owner{{ID: 1, Name: "Platform Team", Email: "platform@example.com", CreatedAt: time.Date(2026, 4, 11, 20, 0, 0, 0, time.UTC)}, {ID: 2, Name: "DBA Team", Email: "dba@example.com", CreatedAt: time.Date(2026, 4, 11, 20, 0, 0, 0, time.UTC)}}, nil
 }
 
 type fakeRoleRepo struct{}
 
 func (fakeRoleRepo) ListRoles() ([]model.Role, error) {
-	return []model.Role{
-		{
-			ID:          "00000000-0000-0000-0000-000000000001",
-			Name:        "admin",
-			Description: "Full platform access",
-			CreatedAt:   time.Date(2026, 4, 11, 20, 0, 0, 0, time.UTC),
-		},
-		{
-			ID:          "00000000-0000-0000-0000-000000000002",
-			Name:        "editor",
-			Description: "Can manage assets and relations",
-			CreatedAt:   time.Date(2026, 4, 11, 20, 0, 0, 0, time.UTC),
-		},
-	}, nil
+	return []model.Role{{ID: 1, Name: "admin", Description: "Full platform access", CreatedAt: time.Date(2026, 4, 11, 20, 0, 0, 0, time.UTC)}, {ID: 2, Name: "editor", Description: "Can manage assets and relations", CreatedAt: time.Date(2026, 4, 11, 20, 0, 0, 0, time.UTC)}}, nil
 }
 
 type fakeResourceTypeRepo struct{}
 
-func (fakeResourceTypeRepo) ListResourceTypes() ([]model.DictionaryItem, error) {
-	return model.ResourceTypeDictionary(), nil
-}
+func (fakeResourceTypeRepo) ListResourceTypes() ([]model.DictionaryItem, error) { return model.ResourceTypeDictionary(), nil }
 
 type fakeRelationTypeRepo struct{}
 
-func (fakeRelationTypeRepo) ListRelationTypes() ([]model.DictionaryItem, error) {
-	return model.RelationTypeDictionary(), nil
-}
+func (fakeRelationTypeRepo) ListRelationTypes() ([]model.DictionaryItem, error) { return model.RelationTypeDictionary(), nil }
 
 type fakeLifecycleStatusRepo struct{}
 
@@ -760,9 +512,7 @@ func (fakeLifecycleStatusRepo) ListLifecycleStatuses() ([]model.DictionaryItem, 
 
 type fakeHealthStatusRepo struct{}
 
-func (fakeHealthStatusRepo) ListHealthStatuses() ([]model.DictionaryItem, error) {
-	return model.HealthStatusDictionary(), nil
-}
+func (fakeHealthStatusRepo) ListHealthStatuses() ([]model.DictionaryItem, error) { return model.HealthStatusDictionary(), nil }
 
 func cloneResource(resource model.Resource) model.Resource {
 	resource.Labels = cloneLabels(resource.Labels)
@@ -772,6 +522,15 @@ func cloneResource(resource model.Resource) model.Resource {
 func containsString(slice []string, val string) bool {
 	for _, s := range slice {
 		if s == val {
+			return true
+		}
+	}
+	return false
+}
+
+func containsUint64(slice []uint64, val uint64) bool {
+	for _, v := range slice {
+		if v == val {
 			return true
 		}
 	}
@@ -793,12 +552,7 @@ func cloneProfileResponse(profile *model.ResourceProfileResponse) *model.Resourc
 	if profile == nil {
 		return nil
 	}
-	cloned := &model.ResourceProfileResponse{
-		ResourceID:      profile.ResourceID,
-		ResourceType:    profile.ResourceType,
-		ResourceSubtype: profile.ResourceSubtype,
-		Profile:         make(map[string]any, len(profile.Profile)),
-	}
+	cloned := &model.ResourceProfileResponse{ResourceID: profile.ResourceID, ResourceType: profile.ResourceType, ResourceSubtype: profile.ResourceSubtype, Profile: make(map[string]any, len(profile.Profile))}
 	for key, value := range profile.Profile {
 		cloned.Profile[key] = value
 	}

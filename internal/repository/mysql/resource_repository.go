@@ -128,7 +128,7 @@ func buildInClause(n int) string {
 	return strings.Join(placeholders, ", ")
 }
 
-func (r *ResourceRepository) GetResource(id string) (*model.Resource, error) {
+func (r *ResourceRepository) GetResource(id uint64) (*model.Resource, error) {
 	query := "select " + resourceColumns + " from resources where id = ?"
 
 	row := r.db.QueryRowContext(context.Background(), query, id)
@@ -144,7 +144,7 @@ func (r *ResourceRepository) GetResource(id string) (*model.Resource, error) {
 	return &item, nil
 }
 
-func (r *ResourceRepository) GetResourceProfile(id string) (*model.ResourceProfileResponse, error) {
+func (r *ResourceRepository) GetResourceProfile(id uint64) (*model.ResourceProfileResponse, error) {
 	res, err := r.GetResource(id)
 	if err != nil {
 		return nil, err
@@ -163,7 +163,7 @@ func (r *ResourceRepository) GetResourceProfile(id string) (*model.ResourceProfi
 	}, nil
 }
 
-func (r *ResourceRepository) fetchProfile(resourceID string, resourceType model.ResourceType) (map[string]any, error) {
+func (r *ResourceRepository) fetchProfile(resourceID uint64, resourceType model.ResourceType) (map[string]any, error) {
 	ctx := context.Background()
 
 	switch resourceType {
@@ -180,7 +180,7 @@ func (r *ResourceRepository) fetchProfile(resourceID string, resourceType model.
 	}
 }
 
-func (r *ResourceRepository) fetchDatabaseInstanceProfile(ctx context.Context, id string) (map[string]any, error) {
+func (r *ResourceRepository) fetchDatabaseInstanceProfile(ctx context.Context, id uint64) (map[string]any, error) {
 	var engine, version, host, role string
 	var port int
 	err := r.db.QueryRowContext(ctx,
@@ -202,7 +202,7 @@ func (r *ResourceRepository) fetchDatabaseInstanceProfile(ctx context.Context, i
 	}, nil
 }
 
-func (r *ResourceRepository) fetchDatabaseClusterProfile(ctx context.Context, id string) (map[string]any, error) {
+func (r *ResourceRepository) fetchDatabaseClusterProfile(ctx context.Context, id uint64) (map[string]any, error) {
 	var engine, topologyMode, primaryEndpoint string
 	err := r.db.QueryRowContext(ctx,
 		`select engine, topology_mode, primary_endpoint from resource_profiles_database_cluster where resource_id = ?`,
@@ -221,7 +221,7 @@ func (r *ResourceRepository) fetchDatabaseClusterProfile(ctx context.Context, id
 	}, nil
 }
 
-func (r *ResourceRepository) fetchServiceProfile(ctx context.Context, id string) (map[string]any, error) {
+func (r *ResourceRepository) fetchServiceProfile(ctx context.Context, id uint64) (map[string]any, error) {
 	var systemName, repoURL, runtimeEnv string
 	err := r.db.QueryRowContext(ctx,
 		`select system_name, repository_url, runtime_env from resource_profiles_service where resource_id = ?`,
@@ -240,7 +240,7 @@ func (r *ResourceRepository) fetchServiceProfile(ctx context.Context, id string)
 	}, nil
 }
 
-func (r *ResourceRepository) fetchHostProfile(ctx context.Context, id string) (map[string]any, error) {
+func (r *ResourceRepository) fetchHostProfile(ctx context.Context, id uint64) (map[string]any, error) {
 	var hostname, ipAddress, osName string
 	err := r.db.QueryRowContext(ctx,
 		`select hostname, ip_address, os_name from resource_profiles_host where resource_id = ?`,
@@ -259,7 +259,7 @@ func (r *ResourceRepository) fetchHostProfile(ctx context.Context, id string) (m
 	}, nil
 }
 
-func (r *ResourceRepository) UpsertHostProfile(ctx context.Context, resourceID string, hostname, ipAddress, osName string) error {
+func (r *ResourceRepository) UpsertHostProfile(ctx context.Context, resourceID uint64, hostname, ipAddress, osName string) error {
 	_, err := r.db.ExecContext(ctx,
 		`INSERT INTO resource_profiles_host (resource_id, hostname, ip_address, os_name)
 		 VALUES (?, ?, ?, ?)
@@ -269,7 +269,7 @@ func (r *ResourceRepository) UpsertHostProfile(ctx context.Context, resourceID s
 	return err
 }
 
-func (r *ResourceRepository) UpsertDatabaseInstanceProfile(ctx context.Context, resourceID string, engine, version, host string, port int, role string) error {
+func (r *ResourceRepository) UpsertDatabaseInstanceProfile(ctx context.Context, resourceID uint64, engine, version, host string, port int, role string) error {
 	_, err := r.db.ExecContext(ctx,
 		`INSERT INTO resource_profiles_database_instance (resource_id, engine, version, host, port, role)
 		 VALUES (?, ?, ?, ?, ?, ?)
@@ -279,7 +279,7 @@ func (r *ResourceRepository) UpsertDatabaseInstanceProfile(ctx context.Context, 
 	return err
 }
 
-func (r *ResourceRepository) UpsertDatabaseClusterProfile(ctx context.Context, resourceID string, engine, topologyMode, primaryEndpoint string) error {
+func (r *ResourceRepository) UpsertDatabaseClusterProfile(ctx context.Context, resourceID uint64, engine, topologyMode, primaryEndpoint string) error {
 	_, err := r.db.ExecContext(ctx,
 		`INSERT INTO resource_profiles_database_cluster (resource_id, engine, topology_mode, primary_endpoint)
 		 VALUES (?, ?, ?, ?)
@@ -289,7 +289,7 @@ func (r *ResourceRepository) UpsertDatabaseClusterProfile(ctx context.Context, r
 	return err
 }
 
-func (r *ResourceRepository) UpsertServiceProfile(ctx context.Context, resourceID string, systemName, repositoryUrl, runtimeEnv string) error {
+func (r *ResourceRepository) UpsertServiceProfile(ctx context.Context, resourceID uint64, systemName, repositoryUrl, runtimeEnv string) error {
 	_, err := r.db.ExecContext(ctx,
 		`INSERT INTO resource_profiles_service (resource_id, system_name, repository_url, runtime_env)
 		 VALUES (?, ?, ?, ?)
@@ -299,7 +299,7 @@ func (r *ResourceRepository) UpsertServiceProfile(ctx context.Context, resourceI
 	return err
 }
 
-func (r *ResourceRepository) DeleteProfile(ctx context.Context, resourceID, resourceType string) error {
+func (r *ResourceRepository) DeleteProfile(ctx context.Context, resourceID uint64, resourceType string) error {
 	tableMap := map[string]string{
 		"host":              "resource_profiles_host",
 		"database_instance": "resource_profiles_database_instance",
@@ -320,19 +320,13 @@ func (r *ResourceRepository) CreateResource(ctx context.Context, input model.Res
 		return nil, fmt.Errorf("marshal labels: %w", err)
 	}
 
-	var id string
-	if err := r.db.QueryRowContext(ctx, "SELECT UUID()").Scan(&id); err != nil {
-		return nil, fmt.Errorf("generate id: %w", err)
-	}
-
 	query := `insert into resources
-	(id, resource_type, resource_subtype, name, display_name,
-	 environment_id, owner_id, lifecycle_status, health_status,
-	 source, external_id, labels, created_at, updated_at)
-	values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), NOW())`
+		(resource_type, resource_subtype, name, display_name,
+		 environment_id, owner_id, lifecycle_status, health_status,
+		 source, external_id, labels, created_at, updated_at)
+		values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), NOW())`
 
-	_, err = r.db.ExecContext(ctx, query,
-		id,
+	result, err := r.db.ExecContext(ctx, query,
 		input.ResourceType, input.ResourceSubtype,
 		input.Name, input.DisplayName,
 		input.EnvironmentID, input.OwnerID,
@@ -348,10 +342,15 @@ func (r *ResourceRepository) CreateResource(ctx context.Context, input model.Res
 		return nil, fmt.Errorf("insert resource: %w", err)
 	}
 
-	return r.GetResource(id)
+	insertID, err := result.LastInsertId()
+	if err != nil {
+		return nil, fmt.Errorf("resource last insert id: %w", err)
+	}
+
+	return r.GetResource(uint64(insertID))
 }
 
-func (r *ResourceRepository) UpdateResource(ctx context.Context, id string, input model.ResourceUpdateInput) (*model.Resource, error) {
+func (r *ResourceRepository) UpdateResource(ctx context.Context, id uint64, input model.ResourceUpdateInput) (*model.Resource, error) {
 	existing, err := r.GetResource(id)
 	if err != nil {
 		return nil, err
@@ -412,27 +411,27 @@ func (r *ResourceRepository) UpdateResource(ctx context.Context, id string, inpu
 	query := "update resources set " + strings.Join(setClauses, ", ") + " where id = ?"
 
 	if _, err := r.db.ExecContext(ctx, query, args...); err != nil {
-		return nil, fmt.Errorf("update resource %s: %w", id, err)
+		return nil, fmt.Errorf("update resource %d: %w", id, err)
 	}
 
 	return r.GetResource(id)
 }
 
-func (r *ResourceRepository) ArchiveResource(ctx context.Context, id string, reason string) (*model.Resource, error) {
+func (r *ResourceRepository) ArchiveResource(ctx context.Context, id uint64, reason string) (*model.Resource, error) {
 	query := `update resources set archived_at = NOW(6), archived_by = NULL, archive_reason = ? where id = ? and archived_at is null`
 	_, err := r.db.ExecContext(ctx, query, reason, id)
 	if err != nil {
-		return nil, fmt.Errorf("archive resource %s: %w", id, err)
+		return nil, fmt.Errorf("archive resource %d: %w", id, err)
 	}
 
 	return r.GetResource(id)
 }
 
-func (r *ResourceRepository) UnarchiveResource(ctx context.Context, id string) (*model.Resource, error) {
+func (r *ResourceRepository) UnarchiveResource(ctx context.Context, id uint64) (*model.Resource, error) {
 	query := `update resources set archived_at = NULL, archived_by = NULL, archive_reason = NULL where id = ? and archived_at is not null`
 	_, err := r.db.ExecContext(ctx, query, id)
 	if err != nil {
-		return nil, fmt.Errorf("unarchive resource %s: %w", id, err)
+		return nil, fmt.Errorf("unarchive resource %d: %w", id, err)
 	}
 
 	return r.GetResource(id)
@@ -444,10 +443,10 @@ type resourceScanner interface {
 
 func scanResource(scanner resourceScanner) (model.Resource, error) {
 	var (
-		item         model.Resource
-		rawLabels    string
-		archivedAt   sql.NullTime
-		archivedBy   sql.NullString
+		item          model.Resource
+		rawLabels     string
+		archivedAt    sql.NullTime
+		archivedBy    sql.NullInt64
 		archiveReason sql.NullString
 	)
 
@@ -478,7 +477,8 @@ func scanResource(scanner resourceScanner) (model.Resource, error) {
 		item.ArchivedAt = &archivedAt.Time
 	}
 	if archivedBy.Valid {
-		item.ArchivedBy = &archivedBy.String
+		archivedByValue := uint64(archivedBy.Int64)
+		item.ArchivedBy = &archivedByValue
 	}
 	if archiveReason.Valid {
 		item.ArchiveReason = &archiveReason.String

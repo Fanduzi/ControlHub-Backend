@@ -5,7 +5,10 @@
 // note: if this file changes, update header and README.md
 package model
 
-import "testing"
+import (
+	"encoding/json"
+	"testing"
+)
 
 func TestResourceTypeValidation(t *testing.T) {
 	valid := []ResourceType{
@@ -192,5 +195,47 @@ func TestHealthStatusDictionaryItems(t *testing.T) {
 		if item.Description == "" {
 			t.Fatalf("expected description for health status %s", item.Key)
 		}
+	}
+}
+
+func TestResourceJSONUsesNumericIDs(t *testing.T) {
+	payload := []byte(`{"id":101,"resourceType":"host","resourceSubtype":"linux","name":"host-1","displayName":"Host 1","environmentId":202,"ownerId":303,"lifecycleStatus":"running","healthStatus":"healthy","source":"discovery","externalId":"ext-1","labels":{"tier":"prod"}}`)
+
+	var resource Resource
+	if err := json.Unmarshal(payload, &resource); err != nil {
+		t.Fatalf("expected JSON unmarshal to succeed: %v", err)
+	}
+
+	if resource.ID != 101 {
+		t.Fatalf("expected id 101, got %v", resource.ID)
+	}
+	if resource.EnvironmentID != 202 {
+		t.Fatalf("expected environmentId 202, got %v", resource.EnvironmentID)
+	}
+	if resource.OwnerID != 303 {
+		t.Fatalf("expected ownerId 303, got %v", resource.OwnerID)
+	}
+
+	legacyPayload := []byte(`{"id":"101","resourceType":"host","resourceSubtype":"linux","name":"host-1","displayName":"Host 1","environmentId":"202","ownerId":"303","lifecycleStatus":"running","healthStatus":"healthy","source":"discovery","externalId":"ext-1","labels":{"tier":"prod"}}`)
+	if err := json.Unmarshal(legacyPayload, &resource); err == nil {
+		t.Fatal("expected legacy string-form resource ids to fail unmarshal")
+	}
+}
+
+func TestRelationCreateInputJSONUsesNumericIDs(t *testing.T) {
+	payload := []byte(`{"toResourceId":404,"relationType":"depends_on"}`)
+
+	var input RelationCreateInput
+	if err := json.Unmarshal(payload, &input); err != nil {
+		t.Fatalf("expected JSON unmarshal to succeed: %v", err)
+	}
+
+	if input.ToResourceID != 404 {
+		t.Fatalf("expected toResourceId 404, got %v", input.ToResourceID)
+	}
+
+	legacyPayload := []byte(`{"toResourceId":"404","relationType":"depends_on"}`)
+	if err := json.Unmarshal(legacyPayload, &input); err == nil {
+		t.Fatal("expected legacy string-form relation ids to fail unmarshal")
 	}
 }

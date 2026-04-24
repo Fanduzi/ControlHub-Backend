@@ -14,14 +14,24 @@ import (
 	"github.com/fan/controlhub/internal/model"
 )
 
+const (
+	testResourceCreatedID uint64 = 100
+	testRelationCreatedID uint64 = 200
+	testResource1ID      uint64 = 101
+	testResource2ID      uint64 = 102
+	testMissingID        uint64 = 999999
+	testEnvID            uint64 = 1
+	testOwnerID          uint64 = 2
+)
+
 type fakeResourceWriteRepo struct {
-	resources        map[string]model.Resource
+	resources        map[uint64]model.Resource
 	createErr        error
 	updateErr        error
 	getProfileResult *model.ResourceProfileResponse
 }
 
-func (f *fakeResourceWriteRepo) ListResources(_ context.Context, q model.ResourceListQuery) ([]model.Resource, int, error) {
+func (f *fakeResourceWriteRepo) ListResources(_ context.Context, _ model.ResourceListQuery) ([]model.Resource, int, error) {
 	items := make([]model.Resource, 0)
 	for _, item := range f.resources {
 		items = append(items, item)
@@ -29,7 +39,7 @@ func (f *fakeResourceWriteRepo) ListResources(_ context.Context, q model.Resourc
 	return items, len(items), nil
 }
 
-func (f *fakeResourceWriteRepo) GetResource(id string) (*model.Resource, error) {
+func (f *fakeResourceWriteRepo) GetResource(id uint64) (*model.Resource, error) {
 	item, ok := f.resources[id]
 	if !ok {
 		return nil, ErrResourceNotFound
@@ -38,7 +48,7 @@ func (f *fakeResourceWriteRepo) GetResource(id string) (*model.Resource, error) 
 	return &copy, nil
 }
 
-func (f *fakeResourceWriteRepo) GetResourceProfile(_ string) (*model.ResourceProfileResponse, error) {
+func (f *fakeResourceWriteRepo) GetResourceProfile(_ uint64) (*model.ResourceProfileResponse, error) {
 	if f.getProfileResult == nil {
 		return &model.ResourceProfileResponse{Profile: map[string]any{}}, nil
 	}
@@ -50,7 +60,7 @@ func (f *fakeResourceWriteRepo) CreateResource(_ context.Context, input model.Re
 		return nil, f.createErr
 	}
 	created := model.Resource{
-		ID:              "created-resource",
+		ID:              testResourceCreatedID,
 		ResourceType:    input.ResourceType,
 		ResourceSubtype: input.ResourceSubtype,
 		Name:            input.Name,
@@ -66,19 +76,22 @@ func (f *fakeResourceWriteRepo) CreateResource(_ context.Context, input model.Re
 		UpdatedAt:       time.Now().UTC(),
 	}
 	if f.resources == nil {
-		f.resources = map[string]model.Resource{}
+		f.resources = map[uint64]model.Resource{}
 	}
 	f.resources[created.ID] = created
 	return &created, nil
 }
 
-func (f *fakeResourceWriteRepo) UpdateResource(_ context.Context, id string, input model.ResourceUpdateInput) (*model.Resource, error) {
+func (f *fakeResourceWriteRepo) UpdateResource(_ context.Context, id uint64, input model.ResourceUpdateInput) (*model.Resource, error) {
 	if f.updateErr != nil {
 		return nil, f.updateErr
 	}
 	item, ok := f.resources[id]
 	if !ok {
 		return nil, ErrResourceNotFound
+	}
+	if input.Name != nil {
+		item.Name = *input.Name
 	}
 	if input.ResourceSubtype != nil {
 		item.ResourceSubtype = *input.ResourceSubtype
@@ -113,7 +126,7 @@ func (f *fakeResourceWriteRepo) UpdateResource(_ context.Context, id string, inp
 	return &copy, nil
 }
 
-func (f *fakeResourceWriteRepo) ArchiveResource(_ context.Context, id string, reason string) (*model.Resource, error) {
+func (f *fakeResourceWriteRepo) ArchiveResource(_ context.Context, id uint64, reason string) (*model.Resource, error) {
 	item, ok := f.resources[id]
 	if !ok {
 		return nil, ErrResourceNotFound
@@ -126,7 +139,7 @@ func (f *fakeResourceWriteRepo) ArchiveResource(_ context.Context, id string, re
 	return &copy, nil
 }
 
-func (f *fakeResourceWriteRepo) UnarchiveResource(_ context.Context, id string) (*model.Resource, error) {
+func (f *fakeResourceWriteRepo) UnarchiveResource(_ context.Context, id uint64) (*model.Resource, error) {
 	item, ok := f.resources[id]
 	if !ok {
 		return nil, ErrResourceNotFound
@@ -140,13 +153,13 @@ func (f *fakeResourceWriteRepo) UnarchiveResource(_ context.Context, id string) 
 }
 
 type fakeRelationWriteRepo struct {
-	resources map[string]model.Resource
-	relations map[string]model.ResourceRelation
+	resources map[uint64]model.Resource
+	relations map[uint64]model.ResourceRelation
 	createErr error
 	deleteErr error
 }
 
-func (f *fakeRelationWriteRepo) ListByResourceID(resourceID string) ([]model.ResourceRelation, error) {
+func (f *fakeRelationWriteRepo) ListByResourceID(resourceID uint64) ([]model.ResourceRelation, error) {
 	items := make([]model.ResourceRelation, 0)
 	for _, item := range f.relations {
 		if item.FromResourceID == resourceID || item.ToResourceID == resourceID {
@@ -156,7 +169,7 @@ func (f *fakeRelationWriteRepo) ListByResourceID(resourceID string) ([]model.Res
 	return items, nil
 }
 
-func (f *fakeRelationWriteRepo) GetResource(id string) (*model.Resource, error) {
+func (f *fakeRelationWriteRepo) GetResource(id uint64) (*model.Resource, error) {
 	item, ok := f.resources[id]
 	if !ok {
 		return nil, ErrResourceNotFound
@@ -170,20 +183,20 @@ func (f *fakeRelationWriteRepo) CreateRelation(_ context.Context, input model.Re
 		return nil, f.createErr
 	}
 	created := model.ResourceRelation{
-		ID:             "rel-created",
+		ID:             testRelationCreatedID,
 		FromResourceID: input.FromResourceID,
 		ToResourceID:   input.ToResourceID,
 		RelationType:   input.RelationType,
 		CreatedAt:      time.Now().UTC(),
 	}
 	if f.relations == nil {
-		f.relations = map[string]model.ResourceRelation{}
+		f.relations = map[uint64]model.ResourceRelation{}
 	}
 	f.relations[created.ID] = created
 	return &created, nil
 }
 
-func (f *fakeRelationWriteRepo) DeleteRelation(_ context.Context, relationID string) error {
+func (f *fakeRelationWriteRepo) DeleteRelation(_ context.Context, relationID uint64) error {
 	if f.deleteErr != nil {
 		return f.deleteErr
 	}
@@ -195,7 +208,7 @@ func (f *fakeRelationWriteRepo) DeleteRelation(_ context.Context, relationID str
 }
 
 func TestResourceServiceCreate(t *testing.T) {
-	repo := &fakeResourceWriteRepo{resources: map[string]model.Resource{}}
+	repo := &fakeResourceWriteRepo{resources: map[uint64]model.Resource{}}
 	svc := NewResourceService(repo)
 
 	created, err := svc.Create(context.Background(), model.ResourceCreateInput{
@@ -203,8 +216,8 @@ func TestResourceServiceCreate(t *testing.T) {
 		ResourceSubtype: "mysql",
 		Name:            "order-mysql-02-prod",
 		DisplayName:     "Order MySQL 02 Prod",
-		EnvironmentID:   "10000000-0000-0000-0000-000000000001",
-		OwnerID:         "20000000-0000-0000-0000-000000000002",
+		EnvironmentID:   testEnvID,
+		OwnerID:         testOwnerID,
 		LifecycleStatus: model.LifecycleStatusRunning,
 		HealthStatus:    model.HealthStatusHealthy,
 		Source:          "manual",
@@ -226,8 +239,8 @@ func TestResourceServiceCreateRejectsUnsupportedResourceType(t *testing.T) {
 		ResourceType:    model.ResourceType("unsupported"),
 		Name:            "bad-resource",
 		DisplayName:     "Bad Resource",
-		EnvironmentID:   "10000000-0000-0000-0000-000000000001",
-		OwnerID:         "20000000-0000-0000-0000-000000000002",
+		EnvironmentID:   testEnvID,
+		OwnerID:         testOwnerID,
 		LifecycleStatus: model.LifecycleStatusRunning,
 		HealthStatus:    model.HealthStatusHealthy,
 		Source:          "manual",
@@ -246,8 +259,8 @@ func TestResourceServiceCreateRejectsMissingEnvironment(t *testing.T) {
 		ResourceSubtype: "mysql",
 		Name:            "missing-env",
 		DisplayName:     "Missing Env",
-		EnvironmentID:   "missing-env",
-		OwnerID:         "20000000-0000-0000-0000-000000000002",
+		EnvironmentID:   testMissingID,
+		OwnerID:         testOwnerID,
 		LifecycleStatus: model.LifecycleStatusRunning,
 		HealthStatus:    model.HealthStatusHealthy,
 		Source:          "manual",
@@ -266,8 +279,8 @@ func TestResourceServiceCreateRejectsMissingOwner(t *testing.T) {
 		ResourceSubtype: "mysql",
 		Name:            "missing-owner",
 		DisplayName:     "Missing Owner",
-		EnvironmentID:   "10000000-0000-0000-0000-000000000001",
-		OwnerID:         "missing-owner",
+		EnvironmentID:   testEnvID,
+		OwnerID:         testMissingID,
 		LifecycleStatus: model.LifecycleStatusRunning,
 		HealthStatus:    model.HealthStatusHealthy,
 		Source:          "manual",
@@ -287,8 +300,8 @@ func TestResourceServiceCreateRejectsDuplicateNameWithinEnvironment(t *testing.T
 		ResourceSubtype: "mysql",
 		Name:            "order-mysql-prod",
 		DisplayName:     "Duplicate",
-		EnvironmentID:   "10000000-0000-0000-0000-000000000001",
-		OwnerID:         "20000000-0000-0000-0000-000000000002",
+		EnvironmentID:   testEnvID,
+		OwnerID:         testOwnerID,
 		LifecycleStatus: model.LifecycleStatusRunning,
 		HealthStatus:    model.HealthStatusHealthy,
 		Source:          "manual",
@@ -300,20 +313,20 @@ func TestResourceServiceCreateRejectsDuplicateNameWithinEnvironment(t *testing.T
 }
 
 func TestResourceServiceUpdateRejectsImmutableFields(t *testing.T) {
-	repo := &fakeResourceWriteRepo{resources: map[string]model.Resource{"res-1": {
-		ID:            "res-1",
+	repo := &fakeResourceWriteRepo{resources: map[uint64]model.Resource{testResource1ID: {
+		ID:            testResource1ID,
 		ResourceType:  model.ResourceTypeDatabaseInstance,
 		Name:          "order-mysql-prod",
 		DisplayName:   "Order MySQL Prod",
-		EnvironmentID: "10000000-0000-0000-0000-000000000001",
-		OwnerID:       "20000000-0000-0000-0000-000000000002",
+		EnvironmentID: testEnvID,
+		OwnerID:       testOwnerID,
 		Source:        "manual",
 		Labels:        map[string]string{},
 	}}}
 	svc := NewResourceService(repo)
 	rt := model.ResourceTypeHost
 
-	_, err := svc.Update(context.Background(), "res-1", model.ResourcePatchRequest{ResourceType: &rt})
+	_, err := svc.Update(context.Background(), testResource1ID, model.ResourcePatchRequest{ResourceType: &rt})
 	if !errors.Is(err, ErrValidationFailed) {
 		t.Fatalf("expected ErrValidationFailed, got %v", err)
 	}
@@ -321,33 +334,33 @@ func TestResourceServiceUpdateRejectsImmutableFields(t *testing.T) {
 
 func TestRelationServiceCreate(t *testing.T) {
 	repo := &fakeRelationWriteRepo{
-		resources: map[string]model.Resource{
-			"res-1": {ID: "res-1", Name: "order-api-prod"},
-			"res-2": {ID: "res-2", Name: "order-mysql-prod"},
+		resources: map[uint64]model.Resource{
+			testResource1ID: {ID: testResource1ID, Name: "order-api-prod"},
+			testResource2ID: {ID: testResource2ID, Name: "order-mysql-prod"},
 		},
 	}
 	svc := NewRelationService(repo)
 
-	created, err := svc.Create(context.Background(), "res-1", model.RelationCreateInput{
-		ToResourceID: "res-2",
+	created, err := svc.Create(context.Background(), testResource1ID, model.RelationCreateInput{
+		ToResourceID: testResource2ID,
 		RelationType: model.RelationTypeDependsOn,
 	})
 	if err != nil {
 		t.Fatalf("expected no error, got %v", err)
 	}
-	if created.FromResourceID != "res-1" {
-		t.Fatalf("expected fromResourceID res-1, got %s", created.FromResourceID)
+	if created.FromResourceID != testResource1ID {
+		t.Fatalf("expected fromResourceID %d, got %d", testResource1ID, created.FromResourceID)
 	}
 }
 
 func TestRelationServiceCreateRejectsMissingTarget(t *testing.T) {
-	repo := &fakeRelationWriteRepo{resources: map[string]model.Resource{
-		"res-1": {ID: "res-1", Name: "order-api-prod"},
+	repo := &fakeRelationWriteRepo{resources: map[uint64]model.Resource{
+		testResource1ID: {ID: testResource1ID, Name: "order-api-prod"},
 	}}
 	svc := NewRelationService(repo)
 
-	_, err := svc.Create(context.Background(), "res-1", model.RelationCreateInput{
-		ToResourceID: "missing",
+	_, err := svc.Create(context.Background(), testResource1ID, model.RelationCreateInput{
+		ToResourceID: testMissingID,
 		RelationType: model.RelationTypeDependsOn,
 	})
 	if !errors.Is(err, ErrResourceNotFound) {
@@ -356,14 +369,14 @@ func TestRelationServiceCreateRejectsMissingTarget(t *testing.T) {
 }
 
 func TestRelationServiceCreateRejectsUnsupportedRelationType(t *testing.T) {
-	repo := &fakeRelationWriteRepo{resources: map[string]model.Resource{
-		"res-1": {ID: "res-1", Name: "order-api-prod"},
-		"res-2": {ID: "res-2", Name: "order-mysql-prod"},
+	repo := &fakeRelationWriteRepo{resources: map[uint64]model.Resource{
+		testResource1ID: {ID: testResource1ID, Name: "order-api-prod"},
+		testResource2ID: {ID: testResource2ID, Name: "order-mysql-prod"},
 	}}
 	svc := NewRelationService(repo)
 
-	_, err := svc.Create(context.Background(), "res-1", model.RelationCreateInput{
-		ToResourceID: "res-2",
+	_, err := svc.Create(context.Background(), testResource1ID, model.RelationCreateInput{
+		ToResourceID: testResource2ID,
 		RelationType: model.RelationType("unsupported"),
 	})
 	if !errors.Is(err, ErrValidationFailed) {
@@ -373,16 +386,16 @@ func TestRelationServiceCreateRejectsUnsupportedRelationType(t *testing.T) {
 
 func TestRelationServiceCreateRejectsDuplicate(t *testing.T) {
 	repo := &fakeRelationWriteRepo{
-		resources: map[string]model.Resource{
-			"res-1": {ID: "res-1", Name: "order-api-prod"},
-			"res-2": {ID: "res-2", Name: "order-mysql-prod"},
+		resources: map[uint64]model.Resource{
+			testResource1ID: {ID: testResource1ID, Name: "order-api-prod"},
+			testResource2ID: {ID: testResource2ID, Name: "order-mysql-prod"},
 		},
 		createErr: ErrRelationConflict,
 	}
 	svc := NewRelationService(repo)
 
-	_, err := svc.Create(context.Background(), "res-1", model.RelationCreateInput{
-		ToResourceID: "res-2",
+	_, err := svc.Create(context.Background(), testResource1ID, model.RelationCreateInput{
+		ToResourceID: testResource2ID,
 		RelationType: model.RelationTypeDependsOn,
 	})
 	if !errors.Is(err, ErrRelationConflict) {
@@ -391,23 +404,23 @@ func TestRelationServiceCreateRejectsDuplicate(t *testing.T) {
 }
 
 func TestRelationServiceDelete(t *testing.T) {
-	repo := &fakeRelationWriteRepo{relations: map[string]model.ResourceRelation{
-		"rel-1": {ID: "rel-1", FromResourceID: "res-1", ToResourceID: "res-2", RelationType: model.RelationTypeDependsOn},
+	repo := &fakeRelationWriteRepo{relations: map[uint64]model.ResourceRelation{
+		testRelationCreatedID: {ID: testRelationCreatedID, FromResourceID: testResource1ID, ToResourceID: testResource2ID, RelationType: model.RelationTypeDependsOn},
 	}}
 	svc := NewRelationService(repo)
 
-	if err := svc.Delete(context.Background(), "rel-1"); err != nil {
+	if err := svc.Delete(context.Background(), testRelationCreatedID); err != nil {
 		t.Fatalf("expected no error, got %v", err)
 	}
-	if _, ok := repo.relations["rel-1"]; ok {
+	if _, ok := repo.relations[testRelationCreatedID]; ok {
 		t.Fatal("expected relation to be removed")
 	}
 }
 
 func TestRelationServiceDeleteRejectsNotFound(t *testing.T) {
-	svc := NewRelationService(&fakeRelationWriteRepo{relations: map[string]model.ResourceRelation{}})
+	svc := NewRelationService(&fakeRelationWriteRepo{relations: map[uint64]model.ResourceRelation{}})
 
-	err := svc.Delete(context.Background(), "missing")
+	err := svc.Delete(context.Background(), testMissingID)
 	if !errors.Is(err, ErrRelationNotFound) {
 		t.Fatalf("expected ErrRelationNotFound, got %v", err)
 	}
@@ -423,13 +436,13 @@ func cloneLabels(labels map[string]string) map[string]string {
 
 func TestResourceServiceArchive(t *testing.T) {
 	now := time.Now().UTC()
-	repo := &fakeResourceWriteRepo{resources: map[string]model.Resource{"res-1": {
-		ID:            "res-1",
+	repo := &fakeResourceWriteRepo{resources: map[uint64]model.Resource{testResource1ID: {
+		ID:            testResource1ID,
 		ResourceType:  model.ResourceTypeDatabaseInstance,
 		Name:          "order-mysql-prod",
 		DisplayName:   "Order MySQL Prod",
-		EnvironmentID: "10000000-0000-0000-0000-000000000001",
-		OwnerID:       "20000000-0000-0000-0000-000000000002",
+		EnvironmentID: testEnvID,
+		OwnerID:       testOwnerID,
 		Source:        "manual",
 		Labels:        map[string]string{},
 		CreatedAt:     now,
@@ -437,7 +450,7 @@ func TestResourceServiceArchive(t *testing.T) {
 	}}}
 	svc := NewResourceService(repo)
 
-	archived, err := svc.Archive(context.Background(), "res-1", model.ArchiveRequest{})
+	archived, err := svc.Archive(context.Background(), testResource1ID, model.ArchiveRequest{})
 	if err != nil {
 		t.Fatalf("expected no error, got %v", err)
 	}
@@ -447,10 +460,10 @@ func TestResourceServiceArchive(t *testing.T) {
 }
 
 func TestResourceServiceArchiveNotFound(t *testing.T) {
-	repo := &fakeResourceWriteRepo{resources: map[string]model.Resource{}}
+	repo := &fakeResourceWriteRepo{resources: map[uint64]model.Resource{}}
 	svc := NewResourceService(repo)
 
-	_, err := svc.Archive(context.Background(), "missing", model.ArchiveRequest{})
+	_, err := svc.Archive(context.Background(), testMissingID, model.ArchiveRequest{})
 	if !errors.Is(err, ErrResourceNotFound) {
 		t.Fatalf("expected ErrResourceNotFound, got %v", err)
 	}
@@ -459,20 +472,20 @@ func TestResourceServiceArchiveNotFound(t *testing.T) {
 func TestResourceServiceArchiveIdempotent(t *testing.T) {
 	now := time.Now().UTC()
 	archivedAt := now.Add(-1 * time.Hour)
-	repo := &fakeResourceWriteRepo{resources: map[string]model.Resource{"res-1": {
-		ID:            "res-1",
+	repo := &fakeResourceWriteRepo{resources: map[uint64]model.Resource{testResource1ID: {
+		ID:            testResource1ID,
 		ResourceType:  model.ResourceTypeDatabaseInstance,
 		Name:          "order-mysql-prod",
 		DisplayName:   "Order MySQL Prod",
-		EnvironmentID: "10000000-0000-0000-0000-000000000001",
-		OwnerID:       "20000000-0000-0000-0000-000000000002",
+		EnvironmentID: testEnvID,
+		OwnerID:       testOwnerID,
 		Source:        "manual",
 		Labels:        map[string]string{},
 		ArchivedAt:    &archivedAt,
 	}}}
 	svc := NewResourceService(repo)
 
-	result, err := svc.Archive(context.Background(), "res-1", model.ArchiveRequest{})
+	result, err := svc.Archive(context.Background(), testResource1ID, model.ArchiveRequest{})
 	if err != nil {
 		t.Fatalf("expected no error, got %v", err)
 	}
@@ -482,20 +495,20 @@ func TestResourceServiceArchiveIdempotent(t *testing.T) {
 }
 
 func TestResourceServiceArchiveRejectsBlankReason(t *testing.T) {
-	repo := &fakeResourceWriteRepo{resources: map[string]model.Resource{"res-1": {
-		ID:            "res-1",
+	repo := &fakeResourceWriteRepo{resources: map[uint64]model.Resource{testResource1ID: {
+		ID:            testResource1ID,
 		ResourceType:  model.ResourceTypeDatabaseInstance,
 		Name:          "order-mysql-prod",
 		DisplayName:   "Order MySQL Prod",
-		EnvironmentID: "10000000-0000-0000-0000-000000000001",
-		OwnerID:       "20000000-0000-0000-0000-000000000002",
+		EnvironmentID: testEnvID,
+		OwnerID:       testOwnerID,
 		Source:        "manual",
 		Labels:        map[string]string{},
 	}}}
 	svc := NewResourceService(repo)
 	blank := "  "
 
-	_, err := svc.Archive(context.Background(), "res-1", model.ArchiveRequest{Reason: &blank})
+	_, err := svc.Archive(context.Background(), testResource1ID, model.ArchiveRequest{Reason: &blank})
 	if !errors.Is(err, ErrValidationFailed) {
 		t.Fatalf("expected ErrValidationFailed, got %v", err)
 	}
@@ -504,13 +517,13 @@ func TestResourceServiceArchiveRejectsBlankReason(t *testing.T) {
 func TestResourceServiceUpdateRejectsArchived(t *testing.T) {
 	now := time.Now().UTC()
 	archivedAt := now.Add(-1 * time.Hour)
-	repo := &fakeResourceWriteRepo{resources: map[string]model.Resource{"res-1": {
-		ID:            "res-1",
+	repo := &fakeResourceWriteRepo{resources: map[uint64]model.Resource{testResource1ID: {
+		ID:            testResource1ID,
 		ResourceType:  model.ResourceTypeDatabaseInstance,
 		Name:          "order-mysql-prod",
 		DisplayName:   "Order MySQL Prod",
-		EnvironmentID: "10000000-0000-0000-0000-000000000001",
-		OwnerID:       "20000000-0000-0000-0000-000000000002",
+		EnvironmentID: testEnvID,
+		OwnerID:       testOwnerID,
 		Source:        "manual",
 		Labels:        map[string]string{},
 		ArchivedAt:    &archivedAt,
@@ -518,7 +531,7 @@ func TestResourceServiceUpdateRejectsArchived(t *testing.T) {
 	svc := NewResourceService(repo)
 	displayName := "New Name"
 
-	_, err := svc.Update(context.Background(), "res-1", model.ResourcePatchRequest{DisplayName: &displayName})
+	_, err := svc.Update(context.Background(), testResource1ID, model.ResourcePatchRequest{DisplayName: &displayName})
 	if !errors.Is(err, ErrResourceArchived) {
 		t.Fatalf("expected ErrResourceArchived, got %v", err)
 	}
@@ -528,23 +541,23 @@ func TestResourceServiceUnarchive(t *testing.T) {
 	now := time.Now().UTC()
 	archivedAt := now.Add(-1 * time.Hour)
 	reason := "decommissioned"
-	repo := &fakeResourceWriteRepo{resources: map[string]model.Resource{"res-1": {
-		ID:             "res-1",
-		ResourceType:   model.ResourceTypeDatabaseInstance,
-		Name:           "order-mysql-prod",
-		DisplayName:    "Order MySQL Prod",
-		EnvironmentID:  "10000000-0000-0000-0000-000000000001",
-		OwnerID:        "20000000-0000-0000-0000-000000000002",
-		Source:         "manual",
-		Labels:         map[string]string{},
-		ArchivedAt:     &archivedAt,
-		ArchiveReason:  &reason,
-		CreatedAt:      now,
-		UpdatedAt:      now,
+	repo := &fakeResourceWriteRepo{resources: map[uint64]model.Resource{testResource1ID: {
+		ID:            testResource1ID,
+		ResourceType:  model.ResourceTypeDatabaseInstance,
+		Name:          "order-mysql-prod",
+		DisplayName:   "Order MySQL Prod",
+		EnvironmentID: testEnvID,
+		OwnerID:       testOwnerID,
+		Source:        "manual",
+		Labels:        map[string]string{},
+		ArchivedAt:    &archivedAt,
+		ArchiveReason: &reason,
+		CreatedAt:     now,
+		UpdatedAt:     now,
 	}}}
 	svc := NewResourceService(repo)
 
-	unarchived, err := svc.Unarchive(context.Background(), "res-1")
+	unarchived, err := svc.Unarchive(context.Background(), testResource1ID)
 	if err != nil {
 		t.Fatalf("expected no error, got %v", err)
 	}
@@ -557,10 +570,10 @@ func TestResourceServiceUnarchive(t *testing.T) {
 }
 
 func TestResourceServiceUnarchiveNotFound(t *testing.T) {
-	repo := &fakeResourceWriteRepo{resources: map[string]model.Resource{}}
+	repo := &fakeResourceWriteRepo{resources: map[uint64]model.Resource{}}
 	svc := NewResourceService(repo)
 
-	_, err := svc.Unarchive(context.Background(), "missing")
+	_, err := svc.Unarchive(context.Background(), testMissingID)
 	if !errors.Is(err, ErrResourceNotFound) {
 		t.Fatalf("expected ErrResourceNotFound, got %v", err)
 	}
@@ -568,13 +581,13 @@ func TestResourceServiceUnarchiveNotFound(t *testing.T) {
 
 func TestResourceServiceUnarchiveIdempotentForActive(t *testing.T) {
 	now := time.Now().UTC()
-	repo := &fakeResourceWriteRepo{resources: map[string]model.Resource{"res-1": {
-		ID:            "res-1",
+	repo := &fakeResourceWriteRepo{resources: map[uint64]model.Resource{testResource1ID: {
+		ID:            testResource1ID,
 		ResourceType:  model.ResourceTypeDatabaseInstance,
 		Name:          "order-mysql-prod",
 		DisplayName:   "Order MySQL Prod",
-		EnvironmentID: "10000000-0000-0000-0000-000000000001",
-		OwnerID:       "20000000-0000-0000-0000-000000000002",
+		EnvironmentID: testEnvID,
+		OwnerID:       testOwnerID,
 		Source:        "manual",
 		Labels:        map[string]string{},
 		CreatedAt:     now,
@@ -582,7 +595,7 @@ func TestResourceServiceUnarchiveIdempotentForActive(t *testing.T) {
 	}}}
 	svc := NewResourceService(repo)
 
-	result, err := svc.Unarchive(context.Background(), "res-1")
+	result, err := svc.Unarchive(context.Background(), testResource1ID)
 	if err != nil {
 		t.Fatalf("expected no error, got %v", err)
 	}
@@ -595,15 +608,15 @@ func TestRelationServiceCreateRejectsArchivedSource(t *testing.T) {
 	now := time.Now().UTC()
 	archivedAt := now.Add(-1 * time.Hour)
 	repo := &fakeRelationWriteRepo{
-		resources: map[string]model.Resource{
-			"res-1": {ID: "res-1", Name: "source", ArchivedAt: &archivedAt},
-			"res-2": {ID: "res-2", Name: "target"},
+		resources: map[uint64]model.Resource{
+			testResource1ID: {ID: testResource1ID, Name: "source", ArchivedAt: &archivedAt},
+			testResource2ID: {ID: testResource2ID, Name: "target"},
 		},
 	}
 	svc := NewRelationService(repo)
 
-	_, err := svc.Create(context.Background(), "res-1", model.RelationCreateInput{
-		ToResourceID: "res-2",
+	_, err := svc.Create(context.Background(), testResource1ID, model.RelationCreateInput{
+		ToResourceID: testResource2ID,
 		RelationType: model.RelationTypeDependsOn,
 	})
 	if !errors.Is(err, ErrResourceArchived) {
@@ -615,15 +628,15 @@ func TestRelationServiceCreateRejectsArchivedTarget(t *testing.T) {
 	now := time.Now().UTC()
 	archivedAt := now.Add(-1 * time.Hour)
 	repo := &fakeRelationWriteRepo{
-		resources: map[string]model.Resource{
-			"res-1": {ID: "res-1", Name: "source"},
-			"res-2": {ID: "res-2", Name: "target", ArchivedAt: &archivedAt},
+		resources: map[uint64]model.Resource{
+			testResource1ID: {ID: testResource1ID, Name: "source"},
+			testResource2ID: {ID: testResource2ID, Name: "target", ArchivedAt: &archivedAt},
 		},
 	}
 	svc := NewRelationService(repo)
 
-	_, err := svc.Create(context.Background(), "res-1", model.RelationCreateInput{
-		ToResourceID: "res-2",
+	_, err := svc.Create(context.Background(), testResource1ID, model.RelationCreateInput{
+		ToResourceID: testResource2ID,
 		RelationType: model.RelationTypeDependsOn,
 	})
 	if !errors.Is(err, ErrResourceArchived) {

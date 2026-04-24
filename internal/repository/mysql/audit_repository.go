@@ -9,6 +9,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"strconv"
 	"strings"
 
 	"github.com/fan/controlhub/internal/model"
@@ -26,9 +27,9 @@ func (r *AuditRepository) ListAuditEvents(ctx context.Context, q model.AuditList
 	var conds []string
 	var args []any
 
-	if q.TargetResourceID != "" {
+	if q.TargetResourceID != nil {
 		conds = append(conds, "target_resource_id = ?")
-		args = append(args, q.TargetResourceID)
+		args = append(args, *q.TargetResourceID)
 	}
 	if len(q.EventTypes) > 0 {
 		ph := buildInClause(len(q.EventTypes))
@@ -57,7 +58,7 @@ func (r *AuditRepository) ListAuditEvents(ctx context.Context, q model.AuditList
 	}
 
 	offset := (q.Page - 1) * q.PageSize
-	dataQuery := `select id, actor_user_id, coalesce(target_resource_id, ''), event_type, result, created_at
+	dataQuery := `select id, actor_user_id, target_resource_id, event_type, result, created_at
 	from audit_events ` + where + ` order by created_at desc limit ? offset ?`
 
 	dataArgs := append(args, q.PageSize, offset)
@@ -70,9 +71,9 @@ func (r *AuditRepository) ListAuditEvents(ctx context.Context, q model.AuditList
 	return scanAuditEventsRows(rows, total)
 }
 
-func (r *AuditRepository) ListByResourceID(resourceID string) ([]model.AuditEvent, error) {
+func (r *AuditRepository) ListByResourceID(resourceID uint64) ([]model.AuditEvent, error) {
 	query := `
-	select id, actor_user_id, coalesce(target_resource_id, ''), event_type, result, created_at
+	select id, actor_user_id, target_resource_id, event_type, result, created_at
 	from audit_events
 	where target_resource_id = ?
 	order by created_at desc`
@@ -87,19 +88,64 @@ func (r *AuditRepository) ListByResourceID(resourceID string) ([]model.AuditEven
 	return items, err
 }
 
+type nullableUint64 struct {
+	Uint64 uint64
+	Valid  bool
+}
+
+func (n *nullableUint64) Scan(value any) error {
+	if value == nil {
+		n.Uint64 = 0
+		n.Valid = false
+		return nil
+	}
+
+	switch v := value.(type) {
+	case uint64:
+		n.Uint64 = v
+	case int64:
+		if v < 0 {
+			return fmt.Errorf("scan nullable uint64: negative value %d", v)
+		}
+		n.Uint64 = uint64(v)
+		case []byte:
+			parsed, err := strconv.ParseUint(string(v), 10, 64)
+			if err != nil {
+				return fmt.Errorf("scan nullable uint64 from bytes: %w", err)
+			}
+			n.Uint64 = parsed
+	case string:
+		parsed, err := strconv.ParseUint(v, 10, 64)
+		if err != nil {
+			return fmt.Errorf("scan nullable uint64 from string: %w", err)
+		}
+		n.Uint64 = parsed
+	default:
+		return fmt.Errorf("scan nullable uint64: unsupported type %T", value)
+	}
+
+	n.Valid = true
+	return nil
+}
+
 func scanAuditEventsRows(rows *sql.Rows, total int) ([]model.AuditEvent, int, error) {
 	items := make([]model.AuditEvent, 0)
 	for rows.Next() {
 		var item model.AuditEvent
+		var targetResourceID nullableUint64
 		if err := rows.Scan(
 			&item.ID,
 			&item.ActorUserID,
-			&item.TargetResourceID,
+			&targetResourceID,
 			&item.EventType,
 			&item.Result,
 			&item.CreatedAt,
 		); err != nil {
 			return nil, 0, err
+		}
+		if targetResourceID.Valid {
+			targetID := targetResourceID.Uint64
+			item.TargetResourceID = &targetID
 		}
 		items = append(items, item)
 	}

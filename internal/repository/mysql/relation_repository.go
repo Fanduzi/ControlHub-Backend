@@ -27,7 +27,7 @@ func NewRelationRepository(db *sql.DB) *RelationRepository {
 	return &RelationRepository{db: db}
 }
 
-func (r *RelationRepository) ListByResourceID(resourceID string) ([]model.ResourceRelation, error) {
+func (r *RelationRepository) ListByResourceID(resourceID uint64) ([]model.ResourceRelation, error) {
 	query := `
 	select id, from_resource_id, to_resource_id, relation_type, created_at
 	from resource_relations
@@ -58,7 +58,7 @@ func (r *RelationRepository) ListByResourceID(resourceID string) ([]model.Resour
 	return items, rows.Err()
 }
 
-func (r *RelationRepository) GetResource(id string) (*model.Resource, error) {
+func (r *RelationRepository) GetResource(id uint64) (*model.Resource, error) {
 	query := "select " + resourceColumns + " from resources where id = ?"
 
 	row := r.db.QueryRowContext(context.Background(), query, id)
@@ -74,15 +74,10 @@ func (r *RelationRepository) GetResource(id string) (*model.Resource, error) {
 }
 
 func (r *RelationRepository) CreateRelation(ctx context.Context, input model.RelationCreateInput) (*model.ResourceRelation, error) {
-	var id string
-	if err := r.db.QueryRowContext(ctx, "SELECT UUID()").Scan(&id); err != nil {
-		return nil, fmt.Errorf("generate id: %w", err)
-	}
+	query := `insert into resource_relations (from_resource_id, to_resource_id, relation_type, created_at)
+	values (?, ?, ?, NOW())`
 
-	query := `insert into resource_relations (id, from_resource_id, to_resource_id, relation_type, created_at)
-	values (?, ?, ?, ?, NOW())`
-
-	_, err := r.db.ExecContext(ctx, query, id, input.FromResourceID, input.ToResourceID, input.RelationType)
+	result, err := r.db.ExecContext(ctx, query, input.FromResourceID, input.ToResourceID, input.RelationType)
 	if err != nil {
 		var mysqlErr *mysql.MySQLError
 		if errors.As(err, &mysqlErr) && mysqlErr.Number == 1062 {
@@ -91,8 +86,13 @@ func (r *RelationRepository) CreateRelation(ctx context.Context, input model.Rel
 		return nil, fmt.Errorf("insert relation: %w", err)
 	}
 
+	insertID, err := result.LastInsertId()
+	if err != nil {
+		return nil, fmt.Errorf("relation last insert id: %w", err)
+	}
+
 	return &model.ResourceRelation{
-		ID:             id,
+		ID:             uint64(insertID),
 		FromResourceID: input.FromResourceID,
 		ToResourceID:   input.ToResourceID,
 		RelationType:   input.RelationType,
@@ -100,7 +100,7 @@ func (r *RelationRepository) CreateRelation(ctx context.Context, input model.Rel
 	}, nil
 }
 
-func (r *RelationRepository) DeleteRelation(ctx context.Context, relationID string) error {
+func (r *RelationRepository) DeleteRelation(ctx context.Context, relationID uint64) error {
 	result, err := r.db.ExecContext(ctx, `delete from resource_relations where id = ?`, relationID)
 	if err != nil {
 		return fmt.Errorf("delete relation: %w", err)
@@ -112,7 +112,7 @@ func (r *RelationRepository) DeleteRelation(ctx context.Context, relationID stri
 	return nil
 }
 
-func (r *RelationRepository) ListRelationsByResourceIDs(ids []string) ([]model.ResourceRelation, error) {
+func (r *RelationRepository) ListRelationsByResourceIDs(ids []uint64) ([]model.ResourceRelation, error) {
 	if len(ids) == 0 {
 		return []model.ResourceRelation{}, nil
 	}

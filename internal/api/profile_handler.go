@@ -14,9 +14,9 @@ import (
 
 func handlePutResourceProfile(profileService *service.ProfileService) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		id := r.PathValue("id")
-		if id == "" {
-			http.Error(w, "missing resource id", http.StatusBadRequest)
+		id, err := parseUint64IDParam(r.PathValue("id"), "resource id")
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
 
@@ -37,9 +37,9 @@ func handlePutResourceProfile(profileService *service.ProfileService) http.Handl
 
 func handlePatchResourceProfile(profileService *service.ProfileService) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		id := r.PathValue("id")
-		if id == "" {
-			http.Error(w, "missing resource id", http.StatusBadRequest)
+		id, err := parseUint64IDParam(r.PathValue("id"), "resource id")
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
 
@@ -60,9 +60,9 @@ func handlePatchResourceProfile(profileService *service.ProfileService) http.Han
 
 func handleDeleteResourceProfile(profileService *service.ProfileService) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		id := r.PathValue("id")
-		if id == "" {
-			http.Error(w, "missing resource id", http.StatusBadRequest)
+		id, err := parseUint64IDParam(r.PathValue("id"), "resource id")
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
 

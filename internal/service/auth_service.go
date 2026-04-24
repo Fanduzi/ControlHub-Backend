@@ -54,7 +54,7 @@ func (s *AuthService) Login(email string, password string) (*model.LoginResponse
 }
 
 func (s *AuthService) issueToken(user *model.UserCredential) string {
-	payload := fmt.Sprintf("%s:%s:%d", user.ID, user.RoleName, s.nowProvider().Unix())
+	payload := fmt.Sprintf("%d:%s:%d", user.ID, user.RoleName, s.nowProvider().Unix())
 	mac := hmac.New(sha256.New, s.signingKey)
 	mac.Write([]byte(payload))
 	signature := hex.EncodeToString(mac.Sum(nil))

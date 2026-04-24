@@ -13,7 +13,7 @@ import (
 
 type AuditRepository interface {
 	ListAuditEvents(ctx context.Context, q model.AuditListQuery) ([]model.AuditEvent, int, error)
-	ListByResourceID(resourceID string) ([]model.AuditEvent, error)
+	ListByResourceID(resourceID uint64) ([]model.AuditEvent, error)
 }
 
 type AuditService struct {
@@ -38,6 +38,6 @@ func (s *AuditService) List(ctx context.Context, q model.AuditListQuery) ([]mode
 	return items, pageInfo, nil
 }
 
-func (s *AuditService) ListByResourceID(resourceID string) ([]model.AuditEvent, error) {
+func (s *AuditService) ListByResourceID(resourceID uint64) ([]model.AuditEvent, error) {
 	return s.repo.ListByResourceID(resourceID)
 }

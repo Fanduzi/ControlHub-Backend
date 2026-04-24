@@ -31,13 +31,22 @@ func main() {
 	}
 	defer db.Close()
 
+	deps := buildDependencies(db, cfg)
+
+	log.Printf("ControlHub starting on %s", cfg.HTTPAddress())
+	if err := http.ListenAndServe(cfg.HTTPAddress(), api.NewRouter(deps)); err != nil {
+		log.Fatal(err)
+	}
+}
+
+func buildDependencies(db *sql.DB, cfg config.Config) api.Dependencies {
 	dictRepo := mysql.NewDictionaryRepository(db)
 	relationRepo := mysql.NewRelationRepository(db)
-
 	resourceRepo := mysql.NewResourceRepository(db)
+	profileSvc := service.NewProfileService(resourceRepo, resourceRepo)
 
-	deps := api.Dependencies{
-		ResourceService:         service.NewResourceService(resourceRepo),
+	return api.Dependencies{
+		ResourceService:         service.NewResourceService(resourceRepo, profileSvc),
 		RelationService:         service.NewRelationService(relationRepo),
 		TopologyService:         service.NewTopologyService(relationRepo),
 		AuditService:            service.NewAuditService(mysql.NewAuditRepository(db)),
@@ -50,11 +59,6 @@ func main() {
 		LifecycleStatusService:  service.NewLifecycleStatusService(dictRepo),
 		HealthStatusService:     service.NewHealthStatusService(dictRepo),
 		ResourceSubtypeService:  service.NewResourceSubtypeService(),
-		ProfileService:          service.NewProfileService(resourceRepo, resourceRepo),
-	}
-
-	log.Printf("ControlHub starting on %s", cfg.HTTPAddress())
-	if err := http.ListenAndServe(cfg.HTTPAddress(), api.NewRouter(deps)); err != nil {
-		log.Fatal(err)
+		ProfileService:          profileSvc,
 	}
 }

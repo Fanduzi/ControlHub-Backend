@@ -62,61 +62,61 @@ const (
 )
 
 type TopologyQuery struct {
-	RootID       string
+	RootID       uint64
 	Depth        int
 	Direction    TopologyDirection
 	RelationType RelationType
 }
 
 type TopologyNode struct {
-	ID                  string        `json:"id"`
-	ResourceType        ResourceType  `json:"resourceType"`
-	ResourceSubtype     string        `json:"resourceSubtype"`
-	Name                string        `json:"name"`
-	DisplayName         string        `json:"displayName"`
-	EnvironmentID       string        `json:"environmentId"`
-	OwnerID             string        `json:"ownerId"`
-	LifecycleStatus     string        `json:"lifecycleStatus"`
-	HealthStatus        string        `json:"healthStatus"`
-	IsRoot              bool          `json:"isRoot"`
-	Distance            int           `json:"distance"`
-	TopologyRole        TopologyRole  `json:"topologyRole"`
-	TopologyLayer       TopologyLayer `json:"topologyLayer"`
-	GroupKey            string        `json:"groupKey,omitempty"`
-	VisualImportance    int           `json:"visualImportance"`
-	IsDatabaseTopology  bool          `json:"isDatabaseTopology"`
-	ReplicationDepth    int              `json:"replicationDepth,omitempty"`
-	ReplicationParentID string           `json:"replicationParentId,omitempty"`
-	Hostname            string           `json:"hostname,omitempty"`
-	IP                  string           `json:"ip,omitempty"`
-	Port                int              `json:"port,omitempty"`
+	ID                  uint64            `json:"id"`
+	ResourceType        ResourceType      `json:"resourceType"`
+	ResourceSubtype     string            `json:"resourceSubtype"`
+	Name                string            `json:"name"`
+	DisplayName         string            `json:"displayName"`
+	EnvironmentID       uint64            `json:"environmentId"`
+	OwnerID             uint64            `json:"ownerId"`
+	LifecycleStatus     string            `json:"lifecycleStatus"`
+	HealthStatus        string            `json:"healthStatus"`
+	IsRoot              bool              `json:"isRoot"`
+	Distance            int               `json:"distance"`
+	TopologyRole        TopologyRole      `json:"topologyRole"`
+	TopologyLayer       TopologyLayer     `json:"topologyLayer"`
+	GroupKey            string            `json:"groupKey,omitempty"`
+	VisualImportance    int               `json:"visualImportance"`
+	IsDatabaseTopology  bool              `json:"isDatabaseTopology"`
+	ReplicationDepth    int               `json:"replicationDepth,omitempty"`
+	ReplicationParentID *uint64           `json:"replicationParentId,omitempty"`
+	Hostname            string            `json:"hostname,omitempty"`
+	IP                  string            `json:"ip,omitempty"`
+	Port                int               `json:"port,omitempty"`
 	Problems            []TopologyProblem `json:"problems,omitempty"`
 	Labels              map[string]string `json:"labels,omitempty"`
 }
 
 type TopologyEdge struct {
-	ID             string           `json:"id"`
-	FromResourceID string           `json:"fromResourceId"`
-	ToResourceID   string           `json:"toResourceId"`
+	ID             uint64           `json:"id"`
+	FromResourceID uint64           `json:"fromResourceId"`
+	ToResourceID   uint64           `json:"toResourceId"`
 	RelationType   RelationType     `json:"relationType"`
 	SemanticType   EdgeSemanticType `json:"semanticType"`
 }
 
 type TopologyGroup struct {
-	ID           string       `json:"id"`
+	ID           uint64       `json:"id"`
 	Label        string       `json:"label"`
 	ResourceType ResourceType `json:"resourceType"`
-	NodeIDs      []string     `json:"nodeIds"`
+	NodeIDs      []uint64     `json:"nodeIds"`
 }
 
 type TopologyResponse struct {
-	RootResourceID     string            `json:"rootResourceId"`
-	Depth              int               `json:"depth"`
-	Direction          TopologyDirection `json:"direction"`
-	Nodes              []TopologyNode    `json:"nodes"`
-	Edges              []TopologyEdge    `json:"edges"`
-	Groups             []TopologyGroup   `json:"groups"`
-	IsDatabaseTopology bool              `json:"isDatabaseTopology"`
+	RootResourceID     uint64                 `json:"rootResourceId"`
+	Depth              int                    `json:"depth"`
+	Direction          TopologyDirection      `json:"direction"`
+	Nodes              []TopologyNode         `json:"nodes"`
+	Edges              []TopologyEdge         `json:"edges"`
+	Groups             []TopologyGroup        `json:"groups"`
+	IsDatabaseTopology bool                   `json:"isDatabaseTopology"`
 	Problems           []TopologyProblemSummary `json:"problems,omitempty"`
 }
 
@@ -127,7 +127,7 @@ type TopologyProblem struct {
 }
 
 type TopologyProblemSummary struct {
-	ResourceID   string            `json:"resourceId"`
+	ResourceID   uint64            `json:"resourceId"`
 	ResourceName string            `json:"resourceName"`
 	ResourceType string            `json:"resourceType"`
 	Severity     string            `json:"severity"`

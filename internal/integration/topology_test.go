@@ -237,15 +237,13 @@ func TestTopology_SeedData_PaymentMySQLProductionChain(t *testing.T) {
 	relRepo := mysql.NewRelationRepository(db)
 
 	// Payment MySQL production resource IDs from seed data.
-	const (
-		clusterID     = "41000000-0000-0000-0000-000000000010"
-		primaryID     = "41000000-0000-0000-0000-000000000022"
-		replicaID     = "41000000-0000-0000-0000-000000000023"
-		activeProxyID = "41000000-0000-0000-0000-000000000041"
-		standbyProxyID = "41000000-0000-0000-0000-000000000044"
-		vipID         = "41000000-0000-0000-0000-000000000051"
-		domainID      = "41000000-0000-0000-0000-000000000061"
-	)
+	clusterID := lookupResourceIDByName(t, db, "payment-mysql-cluster-prod")
+	primaryID := lookupResourceIDByName(t, db, "payment-mysql-primary-prod")
+	replicaID := lookupResourceIDByName(t, db, "payment-mysql-replica-01-prod")
+	activeProxyID := lookupResourceIDByName(t, db, "payment-proxysql-prod")
+	standbyProxyID := lookupResourceIDByName(t, db, "payment-proxysql-02-prod")
+	vipID := lookupResourceIDByName(t, db, "payment-vip-prod")
+	domainID := lookupResourceIDByName(t, db, "api.payment.internal")
 
 	// Build depth=2 topology from the payment cluster.
 	topoSvc := service.NewTopologyService(relRepo)
@@ -320,7 +318,7 @@ func TestTopology_SeedData_PaymentMySQLProductionChain(t *testing.T) {
 	}
 
 	// 6. Standby proxy appears as a topology node.
-	nodeByID := map[string]bool{}
+	nodeByID := map[uint64]bool{}
 	for _, n := range resp.Nodes {
 		nodeByID[n.ID] = true
 	}
@@ -401,13 +399,11 @@ func TestTopology_SeedData_SemanticMetadata(t *testing.T) {
 	relRepo := mysql.NewRelationRepository(db)
 
 	// Payment MySQL production resource IDs from seed data.
-	const (
-		clusterID      = "41000000-0000-0000-0000-000000000010"
-		primaryID      = "41000000-0000-0000-0000-000000000022"
-		replicaID      = "41000000-0000-0000-0000-000000000023"
-		activeProxyID  = "41000000-0000-0000-0000-000000000041"
-		standbyProxyID = "41000000-0000-0000-0000-000000000044"
-	)
+	clusterID := lookupResourceIDByName(t, db, "payment-mysql-cluster-prod")
+	primaryID := lookupResourceIDByName(t, db, "payment-mysql-primary-prod")
+	replicaID := lookupResourceIDByName(t, db, "payment-mysql-replica-01-prod")
+	activeProxyID := lookupResourceIDByName(t, db, "payment-proxysql-prod")
+	standbyProxyID := lookupResourceIDByName(t, db, "payment-proxysql-02-prod")
 
 	topoSvc := service.NewTopologyService(relRepo)
 	resp, err := topoSvc.BuildTopology(model.TopologyQuery{
@@ -424,7 +420,7 @@ func TestTopology_SeedData_SemanticMetadata(t *testing.T) {
 		t.Error("expected isDatabaseTopology=true for payment cluster topology")
 	}
 
-	nodeMap := map[string]model.TopologyNode{}
+	nodeMap := map[uint64]model.TopologyNode{}
 	for _, n := range resp.Nodes {
 		nodeMap[n.ID] = n
 	}
@@ -472,8 +468,8 @@ func TestTopology_SeedData_SemanticMetadata(t *testing.T) {
 		if n.ReplicationDepth != 1 {
 			t.Errorf("replica replicationDepth = %d, want 1", n.ReplicationDepth)
 		}
-		if n.ReplicationParentID != primaryID {
-			t.Errorf("replica replicationParentId = %q, want %q", n.ReplicationParentID, primaryID)
+		if n.ReplicationParentID == nil || *n.ReplicationParentID != primaryID {
+			t.Errorf("replica replicationParentId = %v, want %d", n.ReplicationParentID, primaryID)
 		}
 	}
 
@@ -499,10 +495,6 @@ func TestTopology_SeedData_SemanticMetadata(t *testing.T) {
 	}
 
 	// Edge semantic types
-	edgeMap := map[string]model.TopologyEdge{}
-	for _, e := range resp.Edges {
-		edgeMap[e.ID] = e
-	}
 
 	// replicates_to edge → semantic=replication
 	for _, e := range resp.Edges {
@@ -550,9 +542,9 @@ func TestTopology_SeedData_NeighborhoodQuery(t *testing.T) {
 	//   - 50000000-0000-0000-0000-000000000001: order-api -> instance (depends_on) [instance is to_resource]
 	//   - 50000000-0000-0000-0000-000000000002: instance -> cluster (member_of) [instance is from_resource]
 	//   - 50000000-0000-0000-0000-000000000003: instance -> host (runs_on) [instance is from_resource]
-	instanceID := "40000000-0000-0000-0000-000000000002"
+	instanceID := lookupResourceIDByName(t, db, "order-mysql-01-prod")
 
-	relations, err := relRepo.ListRelationsByResourceIDs([]string{instanceID})
+	relations, err := relRepo.ListRelationsByResourceIDs([]uint64{instanceID})
 	if err != nil {
 		t.Fatalf("list relations for seed instance: %v", err)
 	}

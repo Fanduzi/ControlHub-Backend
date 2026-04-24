@@ -19,8 +19,8 @@ var (
 )
 
 type TopologyRepository interface {
-	GetResource(id string) (*model.Resource, error)
-	ListRelationsByResourceIDs(ids []string) ([]model.ResourceRelation, error)
+	GetResource(id uint64) (*model.Resource, error)
+	ListRelationsByResourceIDs(ids []uint64) ([]model.ResourceRelation, error)
 }
 
 type TopologyService struct {
@@ -41,11 +41,11 @@ func (s *TopologyService) BuildTopology(query model.TopologyQuery) (*model.Topol
 		return nil, err
 	}
 
-	nodeSet := map[string]*model.Resource{root.ID: root}
-	edgeSet := map[string]model.ResourceRelation{}
-	distance := map[string]int{root.ID: 0}
+	nodeSet := map[uint64]*model.Resource{root.ID: root}
+	edgeSet := map[uint64]model.ResourceRelation{}
+	distance := map[uint64]int{root.ID: 0}
 
-	frontier := []string{root.ID}
+	frontier := []uint64{root.ID}
 
 	for hop := 0; hop < query.Depth; hop++ {
 		if len(frontier) == 0 {
@@ -57,7 +57,7 @@ func (s *TopologyService) BuildTopology(query model.TopologyQuery) (*model.Topol
 			return nil, err
 		}
 
-		var nextFrontier []string
+		var nextFrontier []uint64
 		for _, rel := range relations {
 			if query.RelationType != "" && rel.RelationType != query.RelationType {
 				continue
@@ -66,7 +66,7 @@ func (s *TopologyService) BuildTopology(query model.TopologyQuery) (*model.Topol
 			fromInFrontier := contains(frontier, rel.FromResourceID)
 			toInFrontier := contains(frontier, rel.ToResourceID)
 
-			var neighborID string
+			var neighborID uint64
 			switch query.Direction {
 			case model.TopologyDirectionUpstream:
 				if !toInFrontier {
@@ -78,9 +78,8 @@ func (s *TopologyService) BuildTopology(query model.TopologyQuery) (*model.Topol
 					continue
 				}
 				neighborID = rel.ToResourceID
-			default: // both
+			default:
 				if fromInFrontier && toInFrontier {
-					// Both ends in frontier — edge between frontier nodes
 				} else if fromInFrontier {
 					neighborID = rel.ToResourceID
 				} else if toInFrontier {
@@ -94,7 +93,7 @@ func (s *TopologyService) BuildTopology(query model.TopologyQuery) (*model.Topol
 				edgeSet[rel.ID] = rel
 			}
 
-			if neighborID != "" {
+			if neighborID != 0 {
 				if _, exists := nodeSet[neighborID]; !exists {
 					res, err := s.repo.GetResource(neighborID)
 					if err != nil {
@@ -137,14 +136,13 @@ func validateTopologyQuery(q model.TopologyQuery) error {
 	}
 	switch q.Direction {
 	case model.TopologyDirectionBoth, model.TopologyDirectionUpstream, model.TopologyDirectionDownstream:
-		// ok
 	default:
 		return ErrInvalidDirection
 	}
 	return nil
 }
 
-func contains(slice []string, s string) bool {
+func contains(slice []uint64, s uint64) bool {
 	for _, v := range slice {
 		if v == s {
 			return true
@@ -153,31 +151,23 @@ func contains(slice []string, s string) bool {
 	return false
 }
 
-// detectDatabaseTopology returns true if any node is a database_cluster or database_instance.
-func detectDatabaseTopology(nodeSet map[string]*model.Resource) bool {
+func detectDatabaseTopology(nodeSet map[uint64]*model.Resource) bool {
 	for _, res := range nodeSet {
-		if res.ResourceType == model.ResourceTypeDatabaseCluster ||
-			res.ResourceType == model.ResourceTypeDatabaseInstance {
+		if res.ResourceType == model.ResourceTypeDatabaseCluster || res.ResourceType == model.ResourceTypeDatabaseInstance {
 			return true
 		}
 	}
 	return false
 }
 
-// replicationEntry holds computed replication chain info for a database instance.
 type replicationEntry struct {
 	depth    int
-	parentID string
+	parentID *uint64
 }
 
-// computeReplicationChain traces replicates_to edges and returns depth/parent for each instance.
-// Primary (source of replicates_to with no incoming replicates_to) has depth 0.
-// Each hop adds 1 to depth.
-func computeReplicationChain(edgeSet map[string]model.ResourceRelation) map[string]replicationEntry {
-	// Build forward map: source -> targets (replicates_to)
-	forward := map[string][]string{}
-	// Track who replicates TO each node
-	incoming := map[string]bool{}
+func computeReplicationChain(edgeSet map[uint64]model.ResourceRelation) map[uint64]replicationEntry {
+	forward := map[uint64][]uint64{}
+	incoming := map[uint64]bool{}
 	for _, rel := range edgeSet {
 		if rel.RelationType == model.RelationTypeReplicatesTo {
 			forward[rel.FromResourceID] = append(forward[rel.FromResourceID], rel.ToResourceID)
@@ -185,49 +175,41 @@ func computeReplicationChain(edgeSet map[string]model.ResourceRelation) map[stri
 		}
 	}
 
-	result := map[string]replicationEntry{}
-
-	// Find roots: nodes with outgoing replicates_to but no incoming
+	result := map[uint64]replicationEntry{}
 	for source := range forward {
-		if !incoming[source] {
-			// BFS from this root
-			type queueItem struct {
-				id     string
-				depth  int
-				parent string
+		if incoming[source] {
+			continue
+		}
+		type queueItem struct {
+			id     uint64
+			depth  int
+			parent *uint64
+		}
+		queue := []queueItem{{id: source, depth: 0, parent: nil}}
+		for len(queue) > 0 {
+			item := queue[0]
+			queue = queue[1:]
+			if _, exists := result[item.id]; exists {
+				continue
 			}
-			queue := []queueItem{{id: source, depth: 0, parent: ""}}
-			for len(queue) > 0 {
-				item := queue[0]
-				queue = queue[1:]
-				if _, exists := result[item.id]; exists {
-					continue
-				}
-				result[item.id] = replicationEntry{depth: item.depth, parentID: item.parent}
-				for _, target := range forward[item.id] {
-					queue = append(queue, queueItem{id: target, depth: item.depth + 1, parent: item.id})
-				}
+			result[item.id] = replicationEntry{depth: item.depth, parentID: item.parent}
+			for _, target := range forward[item.id] {
+				parentID := item.id
+				queue = append(queue, queueItem{id: target, depth: item.depth + 1, parent: &parentID})
 			}
 		}
 	}
-
 	return result
 }
 
-// computeClusterGroupKeys assigns a groupKey to each database instance based on which
-// cluster it is a member_of. Returns map[instanceID] -> groupKey.
-func computeClusterGroupKeys(nodeSet map[string]*model.Resource, edgeSet map[string]model.ResourceRelation) map[string]string {
-	clusterKeys := map[string]string{}
-	instanceGroups := map[string]string{}
-
-	// Assign stable keys to clusters
+func computeClusterGroupKeys(nodeSet map[uint64]*model.Resource, edgeSet map[uint64]model.ResourceRelation) map[uint64]string {
+	clusterKeys := map[uint64]string{}
+	instanceGroups := map[uint64]string{}
 	for id, res := range nodeSet {
 		if res.ResourceType == model.ResourceTypeDatabaseCluster {
-			clusterKeys[id] = fmt.Sprintf("cluster:%s", id)
+			clusterKeys[id] = fmt.Sprintf("cluster:%d", id)
 		}
 	}
-
-	// Map instances to their cluster group key via member_of edges
 	for _, rel := range edgeSet {
 		if rel.RelationType == model.RelationTypeMemberOf {
 			if clusterKey, ok := clusterKeys[rel.ToResourceID]; ok {
@@ -235,12 +217,10 @@ func computeClusterGroupKeys(nodeSet map[string]*model.Resource, edgeSet map[str
 			}
 		}
 	}
-
 	return instanceGroups
 }
 
-// classifyNodeRole determines the semantic role of a node based on its type, labels, and edges.
-func classifyNodeRole(res *model.Resource, edgeSet map[string]model.ResourceRelation) model.TopologyRole {
+func classifyNodeRole(res *model.Resource, edgeSet map[uint64]model.ResourceRelation) model.TopologyRole {
 	switch res.ResourceType {
 	case model.ResourceTypeService:
 		return model.TopologyRoleService
@@ -254,8 +234,6 @@ func classifyNodeRole(res *model.Resource, edgeSet map[string]model.ResourceRela
 	case model.ResourceTypeDatabaseCluster:
 		return model.TopologyRoleCluster
 	case model.ResourceTypeDatabaseInstance:
-		// Check replication chain: if this instance has outgoing replicates_to, it's a primary
-		// If it only receives replicates_to, it's a replica (or intermediate)
 		hasOutgoing := false
 		hasIncoming := false
 		for _, rel := range edgeSet {
@@ -284,7 +262,6 @@ func classifyNodeRole(res *model.Resource, edgeSet map[string]model.ResourceRela
 	}
 }
 
-// classifyTopologyLayer determines the semantic layer for a node.
 func classifyTopologyLayer(role model.TopologyRole) model.TopologyLayer {
 	switch role {
 	case model.TopologyRoleService:
@@ -304,9 +281,7 @@ func classifyTopologyLayer(role model.TopologyRole) model.TopologyLayer {
 	}
 }
 
-// classifyVisualImportance assigns a relative importance score (1-10).
-// Higher values mean the node should be visually more prominent.
-func classifyVisualImportance(res *model.Resource, role model.TopologyRole, isRoot bool) int {
+func classifyVisualImportance(_ *model.Resource, role model.TopologyRole, isRoot bool) int {
 	if isRoot {
 		return 10
 	}
@@ -317,15 +292,11 @@ func classifyVisualImportance(res *model.Resource, role model.TopologyRole, isRo
 		return 8
 	case model.TopologyRoleProxyActive:
 		return 7
-	case model.TopologyRoleEntry:
-		return 6
-	case model.TopologyRoleService:
+	case model.TopologyRoleEntry, model.TopologyRoleService:
 		return 6
 	case model.TopologyRoleReplicaIntermediate:
 		return 5
-	case model.TopologyRoleReplica:
-		return 4
-	case model.TopologyRoleProxyStandby:
+	case model.TopologyRoleReplica, model.TopologyRoleProxyStandby:
 		return 4
 	case model.TopologyRoleControlPlane:
 		return 3
@@ -336,8 +307,7 @@ func classifyVisualImportance(res *model.Resource, role model.TopologyRole, isRo
 	}
 }
 
-// classifyEdgeSemanticType determines the semantic meaning of an edge.
-func classifyEdgeSemanticType(rel model.ResourceRelation, nodeSet map[string]*model.Resource) model.EdgeSemanticType {
+func classifyEdgeSemanticType(rel model.ResourceRelation, nodeSet map[uint64]*model.Resource) model.EdgeSemanticType {
 	switch rel.RelationType {
 	case model.RelationTypeReplicatesTo:
 		return model.EdgeSemanticReplication
@@ -350,16 +320,13 @@ func classifyEdgeSemanticType(rel model.ResourceRelation, nodeSet map[string]*mo
 	case model.RelationTypeDependsOn:
 		return model.EdgeSemanticDependency
 	case model.RelationTypeFronts:
-		// Distinguish active proxy (traffic) from standby proxy (failover)
 		if from, ok := nodeSet[rel.FromResourceID]; ok {
-			if from.ResourceType == model.ResourceTypeDatabaseProxy &&
-				from.Labels != nil && from.Labels["role"] == "standby" {
+			if from.ResourceType == model.ResourceTypeDatabaseProxy && from.Labels != nil && from.Labels["role"] == "standby" {
 				return model.EdgeSemanticFailover
 			}
 		}
 		return model.EdgeSemanticTraffic
 	case model.RelationTypeManages:
-		// HA manager (subtype=ha) → monitoring; orchestrator → management
 		if from, ok := nodeSet[rel.FromResourceID]; ok {
 			if from.ResourceSubtype == "ha" {
 				return model.EdgeSemanticMonitoring
@@ -372,13 +339,13 @@ func classifyEdgeSemanticType(rel model.ResourceRelation, nodeSet map[string]*mo
 }
 
 func buildTopologyNodes(
-	nodeSet map[string]*model.Resource,
-	distance map[string]int,
-	edgeSet map[string]model.ResourceRelation,
-	rootID string,
+	nodeSet map[uint64]*model.Resource,
+	distance map[uint64]int,
+	edgeSet map[uint64]model.ResourceRelation,
+	rootID uint64,
 	isDatabaseTopology bool,
-	replicationInfo map[string]replicationEntry,
-	clusterGroupKeys map[string]string,
+	replicationInfo map[uint64]replicationEntry,
+	clusterGroupKeys map[uint64]string,
 ) []model.TopologyNode {
 	nodes := make([]model.TopologyNode, 0, len(nodeSet))
 	for id, res := range nodeSet {
@@ -404,21 +371,18 @@ func buildTopologyNodes(
 			IsDatabaseTopology: isDatabaseTopology,
 		}
 
-			if res.ProfileSummary != nil {
-				node.Hostname = res.ProfileSummary.Hostname
-				node.IP = res.ProfileSummary.IP
-				node.Port = res.ProfileSummary.Port
-			}
+		if res.ProfileSummary != nil {
+			node.Hostname = res.ProfileSummary.Hostname
+			node.IP = res.ProfileSummary.IP
+			node.Port = res.ProfileSummary.Port
+		}
 
-			node.Problems = detectNodeProblems(res)
-			node.Labels = res.Labels
+		node.Problems = detectNodeProblems(res)
+		node.Labels = res.Labels
 
-		// Attach group key for database instances
 		if gk, ok := clusterGroupKeys[id]; ok {
 			node.GroupKey = gk
 		}
-
-		// Attach replication metadata for database instances
 		if ri, ok := replicationInfo[id]; ok {
 			node.ReplicationDepth = ri.depth
 			node.ReplicationParentID = ri.parentID
@@ -441,7 +405,7 @@ func buildTopologyNodes(
 	return nodes
 }
 
-func buildTopologyEdges(edgeSet map[string]model.ResourceRelation, nodeSet map[string]*model.Resource) []model.TopologyEdge {
+func buildTopologyEdges(edgeSet map[uint64]model.ResourceRelation, nodeSet map[uint64]*model.Resource) []model.TopologyEdge {
 	edges := make([]model.TopologyEdge, 0, len(edgeSet))
 	for _, rel := range edgeSet {
 		edges = append(edges, model.TopologyEdge{
@@ -467,8 +431,8 @@ func buildTopologyEdges(edgeSet map[string]model.ResourceRelation, nodeSet map[s
 	return edges
 }
 
-func buildTopologyGroups(nodeSet map[string]*model.Resource) []model.TopologyGroup {
-	typeMap := map[model.ResourceType][]string{}
+func buildTopologyGroups(nodeSet map[uint64]*model.Resource) []model.TopologyGroup {
+	typeMap := map[model.ResourceType][]uint64{}
 	for id, res := range nodeSet {
 		typeMap[res.ResourceType] = append(typeMap[res.ResourceType], id)
 	}
@@ -476,12 +440,12 @@ func buildTopologyGroups(nodeSet map[string]*model.Resource) []model.TopologyGro
 	type groupEntry struct {
 		resourceType model.ResourceType
 		label        string
-		nodeIDs      []string
+		nodeIDs      []uint64
 	}
 	entries := make([]groupEntry, 0, len(typeMap))
 	for rt, ids := range typeMap {
 		label := resourceTypeLabel(rt)
-		sort.Strings(ids)
+		sort.Slice(ids, func(i, j int) bool { return ids[i] < ids[j] })
 		entries = append(entries, groupEntry{resourceType: rt, label: label, nodeIDs: ids})
 	}
 	sort.Slice(entries, func(i, j int) bool {
@@ -489,9 +453,9 @@ func buildTopologyGroups(nodeSet map[string]*model.Resource) []model.TopologyGro
 	})
 
 	groups := make([]model.TopologyGroup, 0, len(entries))
-	for _, e := range entries {
+	for index, e := range entries {
 		groups = append(groups, model.TopologyGroup{
-			ID:           fmt.Sprintf("group-%s", e.resourceType),
+			ID:           uint64(index + 1),
 			Label:        e.label,
 			ResourceType: e.resourceType,
 			NodeIDs:      e.nodeIDs,
@@ -514,33 +478,18 @@ func detectNodeProblems(res *model.Resource) []model.TopologyProblem {
 
 	switch model.HealthStatus(res.HealthStatus) {
 	case model.HealthStatusCritical:
-		problems = append(problems, model.TopologyProblem{
-			Severity: "critical", Code: "health_critical",
-			Message: "Resource health is critical",
-		})
+		problems = append(problems, model.TopologyProblem{Severity: "critical", Code: "health_critical", Message: "Resource health is critical"})
 	case model.HealthStatusWarning:
-		problems = append(problems, model.TopologyProblem{
-			Severity: "warning", Code: "health_warning",
-			Message: "Resource health is degraded",
-		})
+		problems = append(problems, model.TopologyProblem{Severity: "warning", Code: "health_warning", Message: "Resource health is degraded"})
 	}
 
 	switch model.LifecycleStatus(res.LifecycleStatus) {
 	case model.LifecycleStatusStopped:
-		problems = append(problems, model.TopologyProblem{
-			Severity: "critical", Code: "lifecycle_stopped",
-			Message: "Resource is stopped",
-		})
+		problems = append(problems, model.TopologyProblem{Severity: "critical", Code: "lifecycle_stopped", Message: "Resource is stopped"})
 	case model.LifecycleStatusProvisioning:
-		problems = append(problems, model.TopologyProblem{
-			Severity: "warning", Code: "lifecycle_provisioning",
-			Message: "Resource is provisioning",
-		})
+		problems = append(problems, model.TopologyProblem{Severity: "warning", Code: "lifecycle_provisioning", Message: "Resource is provisioning"})
 	case model.LifecycleStatusDecommissioning:
-		problems = append(problems, model.TopologyProblem{
-			Severity: "warning", Code: "lifecycle_decommissioning",
-			Message: "Resource is being decommissioned",
-		})
+		problems = append(problems, model.TopologyProblem{Severity: "warning", Code: "lifecycle_decommissioning", Message: "Resource is being decommissioned"})
 	}
 
 	return problems

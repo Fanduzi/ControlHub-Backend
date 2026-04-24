@@ -33,8 +33,8 @@ func TestCreateResource(t *testing.T) {
 		"resourceSubtype":"mysql",
 		"name":"order-mysql-02-prod",
 		"displayName":"Order MySQL 02 Prod",
-		"environmentId":"10000000-0000-0000-0000-000000000001",
-		"ownerId":"20000000-0000-0000-0000-000000000002",
+		"environmentId":1,
+		"ownerId":2,
 		"lifecycleStatus":"running",
 		"healthStatus":"healthy",
 		"source":"manual",
@@ -54,7 +54,7 @@ func TestCreateResource(t *testing.T) {
 	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
 		t.Fatalf("decode response: %v", err)
 	}
-	if resp.ID == "" {
+	if resp.ID == 0 {
 		t.Fatal("expected generated resource id")
 	}
 	if resp.Name != "order-mysql-02-prod" {
@@ -71,8 +71,8 @@ func TestCreateResourceRejectsUnsupportedResourceType(t *testing.T) {
 		"resourceType":"unsupported",
 		"name":"bad-resource",
 		"displayName":"Bad Resource",
-		"environmentId":"10000000-0000-0000-0000-000000000001",
-		"ownerId":"20000000-0000-0000-0000-000000000002",
+		"environmentId":1,
+		"ownerId":2,
 		"lifecycleStatus":"running",
 		"healthStatus":"healthy",
 		"source":"manual",
@@ -92,8 +92,8 @@ func TestCreateResourceRejectsUnsupportedLifecycleStatus(t *testing.T) {
 		"resourceType":"database_instance",
 		"name":"bad-lifecycle",
 		"displayName":"Bad Lifecycle",
-		"environmentId":"10000000-0000-0000-0000-000000000001",
-		"ownerId":"20000000-0000-0000-0000-000000000002",
+		"environmentId":1,
+		"ownerId":2,
 		"lifecycleStatus":"paused",
 		"healthStatus":"healthy",
 		"source":"manual",
@@ -113,8 +113,8 @@ func TestCreateResourceRejectsUnsupportedHealthStatus(t *testing.T) {
 		"resourceType":"database_instance",
 		"name":"bad-health",
 		"displayName":"Bad Health",
-		"environmentId":"10000000-0000-0000-0000-000000000001",
-		"ownerId":"20000000-0000-0000-0000-000000000002",
+		"environmentId":1,
+		"ownerId":2,
 		"lifecycleStatus":"running",
 		"healthStatus":"offline",
 		"source":"manual",
@@ -135,8 +135,8 @@ func TestCreateResourceRejectsMissingEnvironment(t *testing.T) {
 		"resourceSubtype":"mysql",
 		"name":"missing-env",
 		"displayName":"Missing Env",
-		"environmentId":"missing-env",
-		"ownerId":"20000000-0000-0000-0000-000000000002",
+		"environmentId":999,
+		"ownerId":2,
 		"lifecycleStatus":"running",
 		"healthStatus":"healthy",
 		"source":"manual",
@@ -157,8 +157,8 @@ func TestCreateResourceRejectsMissingOwner(t *testing.T) {
 		"resourceSubtype":"mysql",
 		"name":"missing-owner",
 		"displayName":"Missing Owner",
-		"environmentId":"10000000-0000-0000-0000-000000000001",
-		"ownerId":"missing-owner",
+		"environmentId":1,
+		"ownerId":999,
 		"lifecycleStatus":"running",
 		"healthStatus":"healthy",
 		"source":"manual",
@@ -179,8 +179,8 @@ func TestCreateResourceRejectsDuplicateNameWithinEnvironment(t *testing.T) {
 		"resourceSubtype":"mysql",
 		"name":"order-mysql-prod",
 		"displayName":"Order MySQL Duplicate",
-		"environmentId":"env-prod",
-		"ownerId":"owner-dba",
+		"environmentId":1,
+		"ownerId":2,
 		"lifecycleStatus":"running",
 		"healthStatus":"healthy",
 		"source":"manual",
@@ -200,8 +200,8 @@ func TestCreateResourceRejectsScalarLabels(t *testing.T) {
 		"resourceType":"database_instance",
 		"name":"bad-labels",
 		"displayName":"Bad Labels",
-		"environmentId":"10000000-0000-0000-0000-000000000001",
-		"ownerId":"20000000-0000-0000-0000-000000000002",
+		"environmentId":1,
+		"ownerId":2,
 		"lifecycleStatus":"running",
 		"healthStatus":"healthy",
 		"source":"manual",
@@ -231,8 +231,8 @@ func TestCreateResourceRejectsEmptyName(t *testing.T) {
 		"resourceType":"database_instance",
 		"name":"",
 		"displayName":"Empty Name",
-		"environmentId":"10000000-0000-0000-0000-000000000001",
-		"ownerId":"20000000-0000-0000-0000-000000000002",
+		"environmentId":1,
+		"ownerId":2,
 		"lifecycleStatus":"running",
 		"healthStatus":"healthy",
 		"source":"manual",
@@ -252,8 +252,8 @@ func TestCreateResourceRejectsEmptyDisplayName(t *testing.T) {
 		"resourceType":"database_instance",
 		"name":"valid-name",
 		"displayName":"",
-		"environmentId":"10000000-0000-0000-0000-000000000001",
-		"ownerId":"20000000-0000-0000-0000-000000000002",
+		"environmentId":1,
+		"ownerId":2,
 		"lifecycleStatus":"running",
 		"healthStatus":"healthy",
 		"source":"manual",
@@ -273,8 +273,8 @@ func TestCreateResourceRejectsInvalidSource(t *testing.T) {
 		"resourceType":"database_instance",
 		"name":"valid-name",
 		"displayName":"Valid Name",
-		"environmentId":"10000000-0000-0000-0000-000000000001",
-		"ownerId":"20000000-0000-0000-0000-000000000002",
+		"environmentId":1,
+		"ownerId":2,
 		"lifecycleStatus":"running",
 		"healthStatus":"healthy",
 		"source":"auto",
@@ -294,8 +294,8 @@ func TestCreateResourceRejectsInvalidName(t *testing.T) {
 		"resourceType":"database_instance",
 		"name":"INVALID",
 		"displayName":"Invalid Name",
-		"environmentId":"10000000-0000-0000-0000-000000000001",
-		"ownerId":"20000000-0000-0000-0000-000000000002",
+		"environmentId":1,
+		"ownerId":2,
 		"lifecycleStatus":"running",
 		"healthStatus":"healthy",
 		"source":"manual",
@@ -316,7 +316,7 @@ func TestPatchResource(t *testing.T) {
 		"healthStatus":"warning",
 		"labels":{"team":"order","tier":"data","pci":"false"}
 	}`
-	req := httptest.NewRequest(http.MethodPatch, "/resources/res-1", strings.NewReader(body))
+	req := httptest.NewRequest(http.MethodPatch, "/resources/1", strings.NewReader(body))
 	rec := httptest.NewRecorder()
 
 	server.Router.ServeHTTP(rec, req)
@@ -343,7 +343,7 @@ func TestPatchResource(t *testing.T) {
 func TestPatchResourceRejectsImmutableFields(t *testing.T) {
 	server := NewTestServer()
 	body := `{"resourceType":"host"}`
-	req := httptest.NewRequest(http.MethodPatch, "/resources/res-1", strings.NewReader(body))
+	req := httptest.NewRequest(http.MethodPatch, "/resources/1", strings.NewReader(body))
 	rec := httptest.NewRecorder()
 
 	server.Router.ServeHTTP(rec, req)
@@ -353,7 +353,7 @@ func TestPatchResourceRejectsImmutableFields(t *testing.T) {
 
 func TestPatchResourceRejectsEmptyDisplayName(t *testing.T) {
 	server := NewTestServer()
-	req := httptest.NewRequest(http.MethodPatch, "/resources/res-1", strings.NewReader(`{"displayName":""}`))
+	req := httptest.NewRequest(http.MethodPatch, "/resources/1", strings.NewReader(`{"displayName":""}`))
 	rec := httptest.NewRecorder()
 
 	server.Router.ServeHTTP(rec, req)
@@ -363,7 +363,7 @@ func TestPatchResourceRejectsEmptyDisplayName(t *testing.T) {
 
 func TestPatchResourceRejectsInvalidSource(t *testing.T) {
 	server := NewTestServer()
-	req := httptest.NewRequest(http.MethodPatch, "/resources/res-1", strings.NewReader(`{"source":"auto"}`))
+	req := httptest.NewRequest(http.MethodPatch, "/resources/1", strings.NewReader(`{"source":"auto"}`))
 	rec := httptest.NewRecorder()
 
 	server.Router.ServeHTTP(rec, req)
@@ -373,7 +373,7 @@ func TestPatchResourceRejectsInvalidSource(t *testing.T) {
 
 func TestPatchResourceRejectsNoMutableFields(t *testing.T) {
 	server := NewTestServer()
-	req := httptest.NewRequest(http.MethodPatch, "/resources/res-1", strings.NewReader(`{}`))
+	req := httptest.NewRequest(http.MethodPatch, "/resources/1", strings.NewReader(`{}`))
 	rec := httptest.NewRecorder()
 
 	server.Router.ServeHTTP(rec, req)
@@ -383,7 +383,7 @@ func TestPatchResourceRejectsNoMutableFields(t *testing.T) {
 
 func TestPatchResourceRejectsMalformedJSON(t *testing.T) {
 	server := NewTestServer()
-	req := httptest.NewRequest(http.MethodPatch, "/resources/res-1", strings.NewReader(`{"displayName":`))
+	req := httptest.NewRequest(http.MethodPatch, "/resources/1", strings.NewReader(`{"displayName":`))
 	rec := httptest.NewRecorder()
 
 	server.Router.ServeHTTP(rec, req)
@@ -393,7 +393,7 @@ func TestPatchResourceRejectsMalformedJSON(t *testing.T) {
 
 func TestPatchResourceRejectsMissingEnvironment(t *testing.T) {
 	server := NewTestServer()
-	req := httptest.NewRequest(http.MethodPatch, "/resources/res-1", strings.NewReader(`{"environmentId":"missing-env"}`))
+	req := httptest.NewRequest(http.MethodPatch, "/resources/1", strings.NewReader(`{"environmentId":999}`))
 	rec := httptest.NewRecorder()
 
 	server.Router.ServeHTTP(rec, req)
@@ -403,7 +403,7 @@ func TestPatchResourceRejectsMissingEnvironment(t *testing.T) {
 
 func TestPatchResourceRejectsMissingOwner(t *testing.T) {
 	server := NewTestServer()
-	req := httptest.NewRequest(http.MethodPatch, "/resources/res-1", strings.NewReader(`{"ownerId":"missing-owner"}`))
+	req := httptest.NewRequest(http.MethodPatch, "/resources/1", strings.NewReader(`{"ownerId":999}`))
 	rec := httptest.NewRecorder()
 
 	server.Router.ServeHTTP(rec, req)
@@ -413,7 +413,7 @@ func TestPatchResourceRejectsMissingOwner(t *testing.T) {
 
 func TestPatchResourceRejectsUnsupportedHealthStatus(t *testing.T) {
 	server := NewTestServer()
-	req := httptest.NewRequest(http.MethodPatch, "/resources/res-1", strings.NewReader(`{"healthStatus":"offline"}`))
+	req := httptest.NewRequest(http.MethodPatch, "/resources/1", strings.NewReader(`{"healthStatus":"offline"}`))
 	rec := httptest.NewRecorder()
 
 	server.Router.ServeHTTP(rec, req)
@@ -421,14 +421,14 @@ func TestPatchResourceRejectsUnsupportedHealthStatus(t *testing.T) {
 	assertAPIError(t, rec, http.StatusBadRequest, "validation_failed")
 }
 
-func TestPatchResourceRejectsNotFound(t *testing.T) {
+func TestPatchResourceRejectsInvalidID(t *testing.T) {
 	server := NewTestServer()
 	req := httptest.NewRequest(http.MethodPatch, "/resources/missing-resource", strings.NewReader(`{"displayName":"Missing"}`))
 	rec := httptest.NewRecorder()
 
 	server.Router.ServeHTTP(rec, req)
 
-	assertAPIError(t, rec, http.StatusNotFound, "resource_not_found")
+	assertAPIError(t, rec, http.StatusBadRequest, "validation_failed")
 }
 
 func TestListResources(t *testing.T) {
@@ -690,7 +690,7 @@ func TestListResources_ResponseBackwardCompat(t *testing.T) {
 
 func TestGetResourceProfile_DatabaseInstance(t *testing.T) {
 	server := NewTestServer()
-	req := httptest.NewRequest(http.MethodGet, "/resources/res-db-instance/profile", nil)
+	req := httptest.NewRequest(http.MethodGet, "/resources/3/profile", nil)
 	rec := httptest.NewRecorder()
 
 	server.Router.ServeHTTP(rec, req)
@@ -721,7 +721,7 @@ func TestGetResourceProfile_DatabaseInstance(t *testing.T) {
 
 func TestGetResourceProfile_DatabaseCluster(t *testing.T) {
 	server := NewTestServer()
-	req := httptest.NewRequest(http.MethodGet, "/resources/res-db-cluster/profile", nil)
+	req := httptest.NewRequest(http.MethodGet, "/resources/4/profile", nil)
 	rec := httptest.NewRecorder()
 
 	server.Router.ServeHTTP(rec, req)
@@ -746,7 +746,7 @@ func TestGetResourceProfile_DatabaseCluster(t *testing.T) {
 
 func TestGetResourceProfile_Service(t *testing.T) {
 	server := NewTestServer()
-	req := httptest.NewRequest(http.MethodGet, "/resources/res-service/profile", nil)
+	req := httptest.NewRequest(http.MethodGet, "/resources/5/profile", nil)
 	rec := httptest.NewRecorder()
 
 	server.Router.ServeHTTP(rec, req)
@@ -771,7 +771,7 @@ func TestGetResourceProfile_Service(t *testing.T) {
 
 func TestGetResourceProfile_Host(t *testing.T) {
 	server := NewTestServer()
-	req := httptest.NewRequest(http.MethodGet, "/resources/res-host/profile", nil)
+	req := httptest.NewRequest(http.MethodGet, "/resources/6/profile", nil)
 	rec := httptest.NewRecorder()
 
 	server.Router.ServeHTTP(rec, req)
@@ -796,7 +796,7 @@ func TestGetResourceProfile_Host(t *testing.T) {
 
 func TestGetResourceProfile_EmptyProfile(t *testing.T) {
 	server := NewTestServer()
-	req := httptest.NewRequest(http.MethodGet, "/resources/res-no-profile/profile", nil)
+	req := httptest.NewRequest(http.MethodGet, "/resources/7/profile", nil)
 	rec := httptest.NewRecorder()
 
 	server.Router.ServeHTTP(rec, req)
@@ -817,7 +817,7 @@ func TestGetResourceProfile_EmptyProfile(t *testing.T) {
 
 func TestGetResourceProfile_NotFound(t *testing.T) {
 	server := NewTestServer()
-	req := httptest.NewRequest(http.MethodGet, "/resources/nonexistent-id/profile", nil)
+	req := httptest.NewRequest(http.MethodGet, "/resources/999/profile", nil)
 	rec := httptest.NewRecorder()
 
 	server.Router.ServeHTTP(rec, req)
@@ -861,7 +861,7 @@ func assertAPIError(t *testing.T, rec *httptest.ResponseRecorder, expectedStatus
 func TestArchiveResource_ValidResource(t *testing.T) {
 	server := NewTestServer()
 	body := `{"reason":"e2e cleanup"}`
-	req := httptest.NewRequest(http.MethodPost, "/resources/res-1/archive", strings.NewReader(body))
+	req := httptest.NewRequest(http.MethodPost, "/resources/1/archive", strings.NewReader(body))
 	rec := httptest.NewRecorder()
 
 	server.Router.ServeHTTP(rec, req)
@@ -885,7 +885,7 @@ func TestArchiveResource_ValidResource(t *testing.T) {
 func TestArchiveResource_NotFound(t *testing.T) {
 	server := NewTestServer()
 	body := `{}`
-	req := httptest.NewRequest(http.MethodPost, "/resources/nonexistent/archive", strings.NewReader(body))
+	req := httptest.NewRequest(http.MethodPost, "/resources/999/archive", strings.NewReader(body))
 	rec := httptest.NewRecorder()
 
 	server.Router.ServeHTTP(rec, req)
@@ -900,7 +900,7 @@ func TestArchiveResource_Idempotent(t *testing.T) {
 	body := `{"reason":"retired"}`
 
 	// First archive
-	req1 := httptest.NewRequest(http.MethodPost, "/resources/res-1/archive", strings.NewReader(body))
+	req1 := httptest.NewRequest(http.MethodPost, "/resources/1/archive", strings.NewReader(body))
 	rec1 := httptest.NewRecorder()
 	server.Router.ServeHTTP(rec1, req1)
 	if rec1.Code != http.StatusOK {
@@ -911,7 +911,7 @@ func TestArchiveResource_Idempotent(t *testing.T) {
 	json.NewDecoder(rec1.Body).Decode(&first)
 
 	// Second archive — should be idempotent
-	req2 := httptest.NewRequest(http.MethodPost, "/resources/res-1/archive", strings.NewReader(body))
+	req2 := httptest.NewRequest(http.MethodPost, "/resources/1/archive", strings.NewReader(body))
 	rec2 := httptest.NewRecorder()
 	server.Router.ServeHTTP(rec2, req2)
 	if rec2.Code != http.StatusOK {
@@ -928,7 +928,7 @@ func TestArchiveResource_Idempotent(t *testing.T) {
 func TestArchiveResource_BlankReason(t *testing.T) {
 	server := NewTestServer()
 	body := `{"reason":"   "}`
-	req := httptest.NewRequest(http.MethodPost, "/resources/res-1/archive", strings.NewReader(body))
+	req := httptest.NewRequest(http.MethodPost, "/resources/1/archive", strings.NewReader(body))
 	rec := httptest.NewRecorder()
 
 	server.Router.ServeHTTP(rec, req)
@@ -946,7 +946,7 @@ func TestArchiveResource_BlankReason(t *testing.T) {
 func TestArchiveResource_NoReason(t *testing.T) {
 	server := NewTestServer()
 	body := `{}`
-	req := httptest.NewRequest(http.MethodPost, "/resources/res-1/archive", strings.NewReader(body))
+	req := httptest.NewRequest(http.MethodPost, "/resources/1/archive", strings.NewReader(body))
 	rec := httptest.NewRecorder()
 
 	server.Router.ServeHTTP(rec, req)
@@ -972,7 +972,7 @@ func TestListResources_ExcludesArchived(t *testing.T) {
 
 	for _, item := range resp.Items {
 		if item.ArchivedAt != nil {
-			t.Fatalf("default list should not include archived resources, got %s", item.ID)
+			t.Fatalf("default list should not include archived resources, got %d", item.ID)
 		}
 	}
 }
@@ -991,7 +991,7 @@ func TestListResources_IncludeArchived(t *testing.T) {
 
 	hasArchived := false
 	for _, item := range resp.Items {
-		if item.ID == "res-archived" {
+		if item.ID == 8 {
 			hasArchived = true
 			if item.ArchivedAt == nil {
 				t.Fatal("expected archivedAt on res-archived")
@@ -1029,7 +1029,7 @@ func TestListResources_IncludeArchivedPagination(t *testing.T) {
 
 func TestGetResource_ReturnsArchivedResource(t *testing.T) {
 	server := NewTestServer()
-	req := httptest.NewRequest(http.MethodGet, "/resources/res-archived", nil)
+	req := httptest.NewRequest(http.MethodGet, "/resources/8", nil)
 	rec := httptest.NewRecorder()
 
 	server.Router.ServeHTTP(rec, req)
@@ -1039,8 +1039,8 @@ func TestGetResource_ReturnsArchivedResource(t *testing.T) {
 	}
 	var resp model.Resource
 	json.NewDecoder(rec.Body).Decode(&resp)
-	if resp.ID != "res-archived" {
-		t.Fatalf("expected res-archived, got %s", resp.ID)
+	if resp.ID != 8 {
+		t.Fatalf("expected 8, got %d", resp.ID)
 	}
 	if resp.ArchivedAt == nil {
 		t.Fatal("expected archivedAt to be set")
@@ -1052,7 +1052,7 @@ func TestGetResource_ReturnsArchivedResource(t *testing.T) {
 func TestPatchResource_RejectsArchived(t *testing.T) {
 	server := NewTestServer()
 	body := `{"displayName":"New Name"}`
-	req := httptest.NewRequest(http.MethodPatch, "/resources/res-archived", strings.NewReader(body))
+	req := httptest.NewRequest(http.MethodPatch, "/resources/8", strings.NewReader(body))
 	rec := httptest.NewRecorder()
 
 	server.Router.ServeHTTP(rec, req)
@@ -1069,8 +1069,8 @@ func TestPatchResource_RejectsArchived(t *testing.T) {
 
 func TestCreateRelation_RejectsArchivedSource(t *testing.T) {
 	server := NewTestServer()
-	body := `{"toResourceId":"res-2","relationType":"depends_on"}`
-	req := httptest.NewRequest(http.MethodPost, "/resources/res-archived/relations", strings.NewReader(body))
+	body := `{"toResourceId":2,"relationType":"depends_on"}`
+	req := httptest.NewRequest(http.MethodPost, "/resources/8/relations", strings.NewReader(body))
 	rec := httptest.NewRecorder()
 
 	server.Router.ServeHTTP(rec, req)
@@ -1087,8 +1087,8 @@ func TestCreateRelation_RejectsArchivedSource(t *testing.T) {
 
 func TestCreateRelation_RejectsArchivedTarget(t *testing.T) {
 	server := NewTestServer()
-	body := `{"toResourceId":"res-archived","relationType":"depends_on"}`
-	req := httptest.NewRequest(http.MethodPost, "/resources/res-1/relations", strings.NewReader(body))
+	body := `{"toResourceId":8,"relationType":"depends_on"}`
+	req := httptest.NewRequest(http.MethodPost, "/resources/1/relations", strings.NewReader(body))
 	rec := httptest.NewRecorder()
 
 	server.Router.ServeHTTP(rec, req)
@@ -1107,7 +1107,7 @@ func TestCreateRelation_RejectsArchivedTarget(t *testing.T) {
 
 func TestListRelations_ArchivedResourceReadable(t *testing.T) {
 	server := NewTestServer()
-	req := httptest.NewRequest(http.MethodGet, "/resources/res-archived/relations", nil)
+	req := httptest.NewRequest(http.MethodGet, "/resources/8/relations", nil)
 	rec := httptest.NewRecorder()
 
 	server.Router.ServeHTTP(rec, req)
@@ -1119,7 +1119,7 @@ func TestListRelations_ArchivedResourceReadable(t *testing.T) {
 
 func TestTopology_ArchivedResourceReadable(t *testing.T) {
 	server := NewTestServer()
-	req := httptest.NewRequest(http.MethodGet, "/resources/res-archived/topology", nil)
+	req := httptest.NewRequest(http.MethodGet, "/resources/8/topology", nil)
 	rec := httptest.NewRecorder()
 
 	server.Router.ServeHTTP(rec, req)
@@ -1146,8 +1146,8 @@ func TestListResources_ArchivedOnly(t *testing.T) {
 	if len(resp.Items) != 1 {
 		t.Fatalf("expected 1 archived item, got %d", len(resp.Items))
 	}
-	if resp.Items[0].ID != "res-archived" {
-		t.Fatalf("expected res-archived, got %s", resp.Items[0].ID)
+	if resp.Items[0].ID != 8 {
+		t.Fatalf("expected 8, got %d", resp.Items[0].ID)
 	}
 	if resp.Items[0].ArchivedAt == nil {
 		t.Fatal("expected archivedAt to be set")
@@ -1190,8 +1190,8 @@ func TestListResources_ArchivedOnlyTakesPrecedenceOverIncludeArchived(t *testing
 	if len(resp.Items) != 1 {
 		t.Fatalf("archivedOnly should take precedence: expected 1 item, got %d", len(resp.Items))
 	}
-	if resp.Items[0].ID != "res-archived" {
-		t.Fatalf("expected res-archived, got %s", resp.Items[0].ID)
+	if resp.Items[0].ID != 8 {
+		t.Fatalf("expected 8, got %d", resp.Items[0].ID)
 	}
 }
 
@@ -1218,7 +1218,7 @@ func TestUnarchiveResource_ArchivedResource(t *testing.T) {
 
 	// First archive res-1
 	archiveBody := `{"reason":"temp"}`
-	archiveReq := httptest.NewRequest(http.MethodPost, "/resources/res-1/archive", strings.NewReader(archiveBody))
+	archiveReq := httptest.NewRequest(http.MethodPost, "/resources/1/archive", strings.NewReader(archiveBody))
 	archiveRec := httptest.NewRecorder()
 	server.Router.ServeHTTP(archiveRec, archiveReq)
 	if archiveRec.Code != http.StatusOK {
@@ -1226,7 +1226,7 @@ func TestUnarchiveResource_ArchivedResource(t *testing.T) {
 	}
 
 	// Now unarchive it
-	unarchiveReq := httptest.NewRequest(http.MethodPost, "/resources/res-1/unarchive", nil)
+	unarchiveReq := httptest.NewRequest(http.MethodPost, "/resources/1/unarchive", nil)
 	unarchiveRec := httptest.NewRecorder()
 	server.Router.ServeHTTP(unarchiveRec, unarchiveReq)
 
@@ -1251,7 +1251,7 @@ func TestUnarchiveResource_ArchivedResource(t *testing.T) {
 
 func TestUnarchiveResource_NotFound(t *testing.T) {
 	server := NewTestServer()
-	req := httptest.NewRequest(http.MethodPost, "/resources/nonexistent/unarchive", nil)
+	req := httptest.NewRequest(http.MethodPost, "/resources/999/unarchive", nil)
 	rec := httptest.NewRecorder()
 
 	server.Router.ServeHTTP(rec, req)
@@ -1263,7 +1263,7 @@ func TestUnarchiveResource_IdempotentForActive(t *testing.T) {
 	server := NewTestServer()
 
 	// res-1 is active — unarchive should be idempotent
-	req := httptest.NewRequest(http.MethodPost, "/resources/res-1/unarchive", nil)
+	req := httptest.NewRequest(http.MethodPost, "/resources/1/unarchive", nil)
 	rec := httptest.NewRecorder()
 	server.Router.ServeHTTP(rec, req)
 
@@ -1282,7 +1282,7 @@ func TestUnarchivedResource_ReappearsInDefaultList(t *testing.T) {
 	server := NewTestServer()
 
 	// Archive res-1
-	archiveReq := httptest.NewRequest(http.MethodPost, "/resources/res-1/archive", strings.NewReader(`{}`))
+	archiveReq := httptest.NewRequest(http.MethodPost, "/resources/1/archive", strings.NewReader(`{}`))
 	archiveRec := httptest.NewRecorder()
 	server.Router.ServeHTTP(archiveRec, archiveReq)
 
@@ -1296,7 +1296,7 @@ func TestUnarchivedResource_ReappearsInDefaultList(t *testing.T) {
 	}
 
 	// Unarchive
-	unarchiveReq := httptest.NewRequest(http.MethodPost, "/resources/res-1/unarchive", nil)
+	unarchiveReq := httptest.NewRequest(http.MethodPost, "/resources/1/unarchive", nil)
 	unarchiveRec := httptest.NewRecorder()
 	server.Router.ServeHTTP(unarchiveRec, unarchiveReq)
 	if unarchiveRec.Code != http.StatusOK {
@@ -1318,24 +1318,24 @@ func TestPatchOnArchived_ThenSucceedsAfterUnarchive(t *testing.T) {
 	server := NewTestServer()
 
 	// Archive res-1
-	archiveReq := httptest.NewRequest(http.MethodPost, "/resources/res-1/archive", strings.NewReader(`{}`))
+	archiveReq := httptest.NewRequest(http.MethodPost, "/resources/1/archive", strings.NewReader(`{}`))
 	archiveRec := httptest.NewRecorder()
 	server.Router.ServeHTTP(archiveRec, archiveReq)
 
 	// Patch should fail
 	patchBody := `{"displayName":"Should Fail"}`
-	patchReq1 := httptest.NewRequest(http.MethodPatch, "/resources/res-1", strings.NewReader(patchBody))
+	patchReq1 := httptest.NewRequest(http.MethodPatch, "/resources/1", strings.NewReader(patchBody))
 	patchRec1 := httptest.NewRecorder()
 	server.Router.ServeHTTP(patchRec1, patchReq1)
 	assertAPIError(t, patchRec1, http.StatusConflict, "resource_archived")
 
 	// Unarchive
-	unarchiveReq := httptest.NewRequest(http.MethodPost, "/resources/res-1/unarchive", nil)
+	unarchiveReq := httptest.NewRequest(http.MethodPost, "/resources/1/unarchive", nil)
 	unarchiveRec := httptest.NewRecorder()
 	server.Router.ServeHTTP(unarchiveRec, unarchiveReq)
 
 	// Patch should now succeed
-	patchReq2 := httptest.NewRequest(http.MethodPatch, "/resources/res-1", strings.NewReader(patchBody))
+	patchReq2 := httptest.NewRequest(http.MethodPatch, "/resources/1", strings.NewReader(patchBody))
 	patchRec2 := httptest.NewRecorder()
 	server.Router.ServeHTTP(patchRec2, patchReq2)
 	if patchRec2.Code != http.StatusOK {
@@ -1347,24 +1347,24 @@ func TestRelationCreateOnArchived_ThenSucceedsAfterUnarchive(t *testing.T) {
 	server := NewTestServer()
 
 	// Archive res-2
-	archiveReq := httptest.NewRequest(http.MethodPost, "/resources/res-2/archive", strings.NewReader(`{}`))
+	archiveReq := httptest.NewRequest(http.MethodPost, "/resources/2/archive", strings.NewReader(`{}`))
 	archiveRec := httptest.NewRecorder()
 	server.Router.ServeHTTP(archiveRec, archiveReq)
 
 	// Relation creation should fail
-	relBody := `{"toResourceId":"res-1","relationType":"depends_on"}`
-	relReq1 := httptest.NewRequest(http.MethodPost, "/resources/res-2/relations", strings.NewReader(relBody))
+	relBody := `{"toResourceId":1,"relationType":"depends_on"}`
+	relReq1 := httptest.NewRequest(http.MethodPost, "/resources/2/relations", strings.NewReader(relBody))
 	relRec1 := httptest.NewRecorder()
 	server.Router.ServeHTTP(relRec1, relReq1)
 	assertAPIError(t, relRec1, http.StatusConflict, "resource_archived")
 
 	// Unarchive
-	unarchiveReq := httptest.NewRequest(http.MethodPost, "/resources/res-2/unarchive", nil)
+	unarchiveReq := httptest.NewRequest(http.MethodPost, "/resources/2/unarchive", nil)
 	unarchiveRec := httptest.NewRecorder()
 	server.Router.ServeHTTP(unarchiveRec, unarchiveReq)
 
 	// Relation creation should now succeed
-	relReq2 := httptest.NewRequest(http.MethodPost, "/resources/res-2/relations", strings.NewReader(relBody))
+	relReq2 := httptest.NewRequest(http.MethodPost, "/resources/2/relations", strings.NewReader(relBody))
 	relRec2 := httptest.NewRecorder()
 	server.Router.ServeHTTP(relRec2, relReq2)
 	if relRec2.Code != http.StatusCreated {
@@ -1398,7 +1398,7 @@ func TestListResources_MultiSelectResourceType(t *testing.T) {
 func TestListResources_MultiSelectEnvironmentID(t *testing.T) {
 	server := NewTestServer()
 
-	req := httptest.NewRequest(http.MethodGet, "/resources?environmentId=env-prod&environmentId=env-staging", nil)
+	req := httptest.NewRequest(http.MethodGet, "/resources?environmentId=1&environmentId=2", nil)
 	rec := httptest.NewRecorder()
 	server.Router.ServeHTTP(rec, req)
 
@@ -1460,8 +1460,8 @@ func TestListResources_MultiSelectHealthStatus(t *testing.T) {
 func TestListResources_MultiSelectANDCombination(t *testing.T) {
 	server := NewTestServer()
 
-	// type=database_instance AND env=env-prod => only res-1
-	req := httptest.NewRequest(http.MethodGet, "/resources?resourceType=database_instance&resourceType=host&environmentId=env-prod", nil)
+	// type=database_instance AND env=1 => only resource 1
+	req := httptest.NewRequest(http.MethodGet, "/resources?resourceType=database_instance&resourceType=host&environmentId=1", nil)
 	rec := httptest.NewRecorder()
 	server.Router.ServeHTTP(rec, req)
 
@@ -1597,8 +1597,8 @@ func TestListResources_ResourceSubtypeDeduplicates(t *testing.T) {
 func TestListResources_ResourceSubtypeWithEnvironmentID(t *testing.T) {
 	server := NewTestServer()
 
-	// mysql + env-prod — AND combination
-	req := httptest.NewRequest(http.MethodGet, "/resources?resourceSubtype=mysql&environmentId=env-prod", nil)
+	// mysql + environmentId=1 — AND combination
+	req := httptest.NewRequest(http.MethodGet, "/resources?resourceSubtype=mysql&environmentId=1", nil)
 	rec := httptest.NewRecorder()
 
 	server.Router.ServeHTTP(rec, req)
@@ -1612,15 +1612,55 @@ func TestListResources_ResourceSubtypeWithEnvironmentID(t *testing.T) {
 		t.Fatalf("decode: %v", err)
 	}
 	if len(resp.Items) != 1 {
-		t.Errorf("expected 1 item (mysql in env-prod), got %d", len(resp.Items))
+		t.Errorf("expected 1 item (mysql in environmentId=1), got %d", len(resp.Items))
 	}
 	if len(resp.Items) > 0 {
 		if resp.Items[0].ResourceSubtype != "mysql" {
 			t.Errorf("expected mysql, got %s", resp.Items[0].ResourceSubtype)
 		}
-		if resp.Items[0].EnvironmentID != "env-prod" {
-			t.Errorf("expected env-prod, got %s", resp.Items[0].EnvironmentID)
+		if resp.Items[0].EnvironmentID != 1 {
+			t.Errorf("expected 1, got %d", resp.Items[0].EnvironmentID)
 		}
+	}
+}
+
+func TestListResources_RejectsInvalidEnvironmentID(t *testing.T) {
+	server := NewTestServer()
+	req := httptest.NewRequest(http.MethodGet, "/resources?environmentId=abc", nil)
+	rec := httptest.NewRecorder()
+
+	server.Router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+
+	var resp apiErrorResponse
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if resp.Error != "validation_failed" {
+		t.Fatalf("expected validation_failed, got %s", resp.Error)
+	}
+}
+
+func TestListResources_RejectsEmptyEnvironmentID(t *testing.T) {
+	server := NewTestServer()
+	req := httptest.NewRequest(http.MethodGet, "/resources?environmentId=", nil)
+	rec := httptest.NewRecorder()
+
+	server.Router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+
+	var resp apiErrorResponse
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if resp.Error != "validation_failed" {
+		t.Fatalf("expected validation_failed, got %s", resp.Error)
 	}
 }
 

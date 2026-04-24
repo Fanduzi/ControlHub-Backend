@@ -78,7 +78,8 @@ paths:
           schema:
             type: array
             items:
-              type: string
+              type: integer
+              format: int64
           style: form
           explode: true
           description: >-
@@ -165,13 +166,13 @@ paths:
                     $ref: "#/components/schemas/PageInfo"
               example:
                 items:
-                  - id: res-1
+                  - id: 4000000000000000001
                     resourceType: database_instance
                     resourceSubtype: mysql
                     name: order-mysql-prod
                     displayName: Order MySQL Prod
-                    environmentId: env-prod
-                    ownerId: owner-dba
+                    environmentId: 1000000000000000001
+                    ownerId: 2000000000000000001
                     lifecycleStatus: running
                     healthStatus: healthy
                     source: manual
@@ -228,7 +229,8 @@ paths:
           name: id
           required: true
           schema:
-            type: string
+            type: integer
+            format: int64
       responses:
         "200":
           description: Resource detail
@@ -250,7 +252,8 @@ paths:
           name: id
           required: true
           schema:
-            type: string
+            type: integer
+            format: int64
       requestBody:
         required: true
         content:
@@ -297,7 +300,8 @@ paths:
           name: id
           required: true
           schema:
-            type: string
+            type: integer
+            format: int64
       requestBody:
         required: true
         content:
@@ -337,7 +341,8 @@ paths:
           name: id
           required: true
           schema:
-            type: string
+            type: integer
+            format: int64
       responses:
         "200":
           description: Resource unarchived (or already active)
@@ -366,7 +371,8 @@ paths:
           name: id
           required: true
           schema:
-            type: string
+            type: integer
+            format: int64
       responses:
         "200":
           description: Resource profile projection
@@ -483,7 +489,8 @@ paths:
           name: id
           required: true
           schema:
-            type: string
+            type: integer
+            format: int64
       responses:
         "200":
           description: Resource relation list
@@ -505,7 +512,8 @@ paths:
           name: id
           required: true
           schema:
-            type: string
+            type: integer
+            format: int64
       requestBody:
         required: true
         content:
@@ -546,7 +554,8 @@ paths:
           name: id
           required: true
           schema:
-            type: string
+            type: integer
+            format: int64
       responses:
         "204":
           description: Relation deleted
@@ -569,7 +578,8 @@ paths:
           name: id
           required: true
           schema:
-            type: string
+            type: integer
+            format: int64
       responses:
         "200":
           description: Resource audit list
@@ -595,7 +605,8 @@ paths:
         - in: query
           name: targetResourceId
           schema:
-            type: string
+            type: integer
+            format: int64
           description: Filter by target resource ID
         - in: query
           name: eventType
@@ -650,9 +661,9 @@ paths:
                     $ref: "#/components/schemas/PageInfo"
               example:
                 items:
-                  - id: audit-1
-                    actorUserId: user-1
-                    targetResourceId: res-1
+                  - id: 6000000000000000001
+                    actorUserId: 3000000000000000001
+                    targetResourceId: 4000000000000000001
                     eventType: resource.updated
                     result: success
                     createdAt: "2026-04-11T21:00:00Z"
@@ -797,7 +808,8 @@ paths:
           name: id
           required: true
           schema:
-            type: string
+            type: integer
+            format: int64
           description: Root resource ID
         - in: query
           name: depth
@@ -830,18 +842,18 @@ paths:
               schema:
                 $ref: "#/components/schemas/TopologyResponse"
               example:
-                rootResourceId: "40000000-0000-0000-0000-000000000001"
+                rootResourceId: 4000000000000000001
                 depth: 1
                 direction: both
                 isDatabaseTopology: true
                 nodes:
-                  - id: "40000000-0000-0000-0000-000000000001"
+                  - id: 4000000000000000001
                     resourceType: database_cluster
                     resourceSubtype: mysql
                     name: order-mysql-cluster-prod
                     displayName: Order MySQL Cluster Prod
-                    environmentId: "10000000-0000-0000-0000-000000000001"
-                    ownerId: "20000000-0000-0000-0000-000000000002"
+                    environmentId: 1000000000000000001
+                    ownerId: 2000000000000000002
                     lifecycleStatus: running
                     healthStatus: healthy
                     isRoot: true
@@ -850,41 +862,40 @@ paths:
                     topologyLayer: cluster
                     visualImportance: 10
                     isDatabaseTopology: true
-                  - id: "40000000-0000-0000-0000-000000000002"
+                  - id: 4000000000000000002
                     resourceType: database_instance
                     resourceSubtype: mysql
                     name: order-mysql-1-prod
                     displayName: Order MySQL 1 Prod
-                    environmentId: "10000000-0000-0000-0000-000000000001"
-                    ownerId: "20000000-0000-0000-0000-000000000002"
+                    environmentId: 1000000000000000001
+                    ownerId: 2000000000000000002
                     lifecycleStatus: running
                     healthStatus: healthy
                     isRoot: false
                     distance: 1
                     topologyRole: primary
                     topologyLayer: replication
-                    groupKey: "cluster:40000000-0000-0000-0000-000000000001"
+                    groupKey: "cluster:4000000000000000001"
                     visualImportance: 9
                     isDatabaseTopology: true
                     replicationDepth: 0
-                    replicationParentId: ""
                 edges:
-                  - id: "50000000-0000-0000-0000-000000000001"
-                    fromResourceId: "40000000-0000-0000-0000-000000000002"
-                    toResourceId: "40000000-0000-0000-0000-000000000001"
+                  - id: 5000000000000000001
+                    fromResourceId: 4000000000000000002
+                    toResourceId: 4000000000000000001
                     relationType: member_of
                     semanticType: membership
                 groups:
-                  - id: group-database_cluster
+                  - id: 1
                     label: Database Cluster
                     resourceType: database_cluster
                     nodeIds:
-                      - "40000000-0000-0000-0000-000000000001"
-                  - id: group-database_instance
+                      - 4000000000000000001
+                  - id: 2
                     label: Database Instance
                     resourceType: database_instance
                     nodeIds:
-                      - "40000000-0000-0000-0000-000000000002"
+                      - 4000000000000000002
         "400":
           description: Invalid query parameters
           content:
@@ -996,7 +1007,8 @@ components:
         - externalId
       properties:
         id:
-          type: string
+          type: integer
+          format: int64
         resourceType:
           $ref: "#/components/schemas/ResourceType"
         resourceSubtype:
@@ -1006,9 +1018,11 @@ components:
         displayName:
           type: string
         environmentId:
-          type: string
+          type: integer
+          format: int64
         ownerId:
-          type: string
+          type: integer
+          format: int64
         lifecycleStatus:
           $ref: "#/components/schemas/LifecycleStatus"
         healthStatus:
@@ -1045,11 +1059,14 @@ components:
       required: [id, fromResourceId, toResourceId, relationType, createdAt]
       properties:
         id:
-          type: string
+          type: integer
+          format: int64
         fromResourceId:
-          type: string
+          type: integer
+          format: int64
         toResourceId:
-          type: string
+          type: integer
+          format: int64
         relationType:
           $ref: "#/components/schemas/RelationType"
         createdAt:
@@ -1060,11 +1077,14 @@ components:
       required: [id, actorUserId, eventType, result, createdAt]
       properties:
         id:
-          type: string
+          type: integer
+          format: int64
         actorUserId:
-          type: string
+          type: integer
+          format: int64
         targetResourceId:
-          type: string
+          type: integer
+          format: int64
         eventType:
           type: string
         result:
@@ -1077,7 +1097,8 @@ components:
       required: [id, name, slug, description, createdAt]
       properties:
         id:
-          type: string
+          type: integer
+          format: int64
         name:
           type: string
         slug:
@@ -1092,7 +1113,8 @@ components:
       required: [id, name, email, createdAt]
       properties:
         id:
-          type: string
+          type: integer
+          format: int64
         name:
           type: string
         email:
@@ -1106,7 +1128,8 @@ components:
       required: [id, name, description, createdAt]
       properties:
         id:
-          type: string
+          type: integer
+          format: int64
         name:
           type: string
         description:
@@ -1119,7 +1142,8 @@ components:
       required: [resourceId, resourceType, resourceSubtype, profile]
       properties:
         resourceId:
-          type: string
+          type: integer
+          format: int64
         resourceType:
           $ref: "#/components/schemas/ResourceType"
         resourceSubtype:
@@ -1157,11 +1181,11 @@ components:
           type: string
           minLength: 1
         environmentId:
-          type: string
-          minLength: 1
+          type: integer
+          format: int64
         ownerId:
-          type: string
-          minLength: 1
+          type: integer
+          format: int64
         lifecycleStatus:
           $ref: "#/components/schemas/LifecycleStatus"
         healthStatus:
@@ -1194,11 +1218,11 @@ components:
           type: string
           minLength: 1
         environmentId:
-          type: string
-          minLength: 1
+          type: integer
+          format: int64
         ownerId:
-          type: string
-          minLength: 1
+          type: integer
+          format: int64
         lifecycleStatus:
           $ref: "#/components/schemas/LifecycleStatus"
         healthStatus:
@@ -1219,8 +1243,8 @@ components:
         - relationType
       properties:
         toResourceId:
-          type: string
-          minLength: 1
+          type: integer
+          format: int64
         relationType:
           $ref: "#/components/schemas/RelationType"
     ArchiveRequest:
@@ -1250,7 +1274,8 @@ components:
       required: [rootResourceId, depth, direction, nodes, edges, groups, isDatabaseTopology]
       properties:
         rootResourceId:
-          type: string
+          type: integer
+          format: int64
           description: ID of the root resource the topology is centered on
         depth:
           type: integer
@@ -1304,7 +1329,8 @@ components:
         - isDatabaseTopology
       properties:
         id:
-          type: string
+          type: integer
+          format: int64
         resourceType:
           $ref: "#/components/schemas/ResourceType"
         resourceSubtype:
@@ -1314,9 +1340,11 @@ components:
         displayName:
           type: string
         environmentId:
-          type: string
+          type: integer
+          format: int64
         ownerId:
-          type: string
+          type: integer
+          format: int64
         lifecycleStatus:
           $ref: "#/components/schemas/LifecycleStatus"
         healthStatus:
@@ -1358,21 +1386,25 @@ components:
             replicates_to edges. Only set for database_instance nodes
             that participate in a replication chain.
         replicationParentId:
-          type: string
+          type: integer
+          format: int64
           description: >
             ID of the upstream replication source. Only set for
             database_instance nodes that participate in a replication chain.
-            Empty string for the primary (root of the chain).
+            Omitted for the primary (root of the chain).
     TopologyEdge:
       type: object
       required: [id, fromResourceId, toResourceId, relationType, semanticType]
       properties:
         id:
-          type: string
+          type: integer
+          format: int64
         fromResourceId:
-          type: string
+          type: integer
+          format: int64
         toResourceId:
-          type: string
+          type: integer
+          format: int64
         relationType:
           $ref: "#/components/schemas/RelationType"
         semanticType:
@@ -1382,8 +1414,9 @@ components:
       required: [id, label, resourceType, nodeIds]
       properties:
         id:
-          type: string
-          description: Group identifier (e.g., "group-database_cluster")
+          type: integer
+          format: int64
+          description: Numeric group identifier for a logical cluster or resource-type grouping
         label:
           type: string
           description: Human-readable group label
@@ -1392,7 +1425,8 @@ components:
         nodeIds:
           type: array
           items:
-            type: string
+            type: integer
+            format: int64
           description: IDs of nodes belonging to this group
     TopologyRole:
       type: string

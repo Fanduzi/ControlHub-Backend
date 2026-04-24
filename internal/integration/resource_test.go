@@ -17,12 +17,12 @@ import (
 
 // Seed reference IDs from migration 0002.
 const (
-	envProd    = "10000000-0000-0000-0000-000000000001"
-	envStaging = "10000000-0000-0000-0000-000000000002"
-	ownerDBA   = "20000000-0000-0000-0000-000000000002"
+	envProd    uint64 = 1
+	envStaging uint64 = 2
+	ownerDBA   uint64 = 2
 )
 
-func TestResourceRepository_CreateAndGet(t *testing.T) {
+func TestResourceRepositoryCreate_UsesAutoIncrementID(t *testing.T) {
 	db := setupTestDB(t)
 	repo := mysql.NewResourceRepository(db)
 	ctx := context.Background()
@@ -45,8 +45,8 @@ func TestResourceRepository_CreateAndGet(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create resource: %v", err)
 	}
-	if created.ID == "" {
-		t.Fatal("expected non-empty ID after create")
+	if created.ID == 0 {
+		t.Fatal("expected auto-increment ID after create")
 	}
 	if created.Name != "test-host-001" {
 		t.Fatalf("name = %q, want %q", created.Name, "test-host-001")
@@ -213,9 +213,9 @@ func TestResourceRepository_FilterByResourceSubtype(t *testing.T) {
 
 	items, total, err := repo.ListResources(ctx, model.ResourceListQuery{
 		ResourceSubtypes: []string{"mysql"},
-		EnvironmentIDs:  []string{envProd},
-		Page:            1,
-		PageSize:        100,
+		EnvironmentIDs:   []uint64{envProd},
+		Page:             1,
+		PageSize:         100,
 	})
 	if err != nil {
 		t.Fatalf("list resources: %v", err)
@@ -228,7 +228,7 @@ func TestResourceRepository_FilterByResourceSubtype(t *testing.T) {
 			t.Errorf("got subtype %q, want mysql", item.ResourceSubtype)
 		}
 		if item.EnvironmentID != envProd {
-			t.Errorf("got env %q, want %s", item.EnvironmentID, envProd)
+			t.Errorf("got env %d, want %d", item.EnvironmentID, envProd)
 		}
 	}
 }

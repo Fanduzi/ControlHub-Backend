@@ -4,11 +4,86 @@ package integration
 
 import (
 	"database/sql"
+	"fmt"
+	"strings"
 	"testing"
 )
 
 func TestGooseCleanMigration(t *testing.T) {
 	db := setupTestDB(t)
+	assertSchemaChainBaseline(t, db)
+
+	// Verify seed patch truth remains visible after all migrations using business keys.
+	assertResourceDisplayNameByName(t, db,
+		"payment-mysql-replica-01-prod",
+		"Payment MySQL Replica 01",
+	)
+	assertResourceDisplayNameByName(t, db,
+		"notification-service-prod",
+		"Notification Delivery Service",
+	)
+	assertResourceExistsByName(t, db, "payment-proxysql-02-prod")
+	assertRelationExistsByBusinessKeys(t, db, "payment-proxysql-02-prod", "payment-mysql-cluster-prod", "fronts")
+	assertRelationExistsByBusinessKeys(t, db, "payment-mysql-primary-prod", "payment-mysql-replica-01-prod", "replicates_to")
+}
+
+func TestSchemaUsesBigintPrimaryKeysWithoutForeignKeys(t *testing.T) {
+	db := setupTestDB(t)
+	assertSchemaChainBaseline(t, db)
+
+	expectedUnsignedBigintIDs := map[string][]string{
+		"roles":              {"id"},
+		"users":              {"id", "role_id"},
+		"environments":       {"id"},
+		"owners":             {"id"},
+		"resources":          {"id", "environment_id", "owner_id", "archived_by"},
+		"resource_relations": {"id", "from_resource_id", "to_resource_id"},
+		"audit_events":       {"id", "actor_user_id", "target_resource_id"},
+	}
+	for tableName, columns := range expectedUnsignedBigintIDs {
+		for _, columnName := range columns {
+			assertUnsignedBigintColumn(t, db, tableName, columnName)
+		}
+		assertPrimaryKeyColumns(t, db, tableName, "id")
+	}
+
+	for _, tableName := range []string{
+		"roles",
+		"users",
+		"environments",
+		"owners",
+		"resources",
+		"resource_relations",
+		"resource_profiles_host",
+		"resource_profiles_database_instance",
+		"resource_profiles_database_cluster",
+		"resource_profiles_service",
+		"audit_events",
+	} {
+		assertNoForeignKeys(t, db, tableName)
+	}
+}
+
+func TestProfileTablesUseUniqueResourceIDInsteadOfPrimaryKeyResourceID(t *testing.T) {
+	db := setupTestDB(t)
+	assertSchemaChainBaseline(t, db)
+
+	profileTables := []string{
+		"resource_profiles_host",
+		"resource_profiles_database_instance",
+		"resource_profiles_database_cluster",
+		"resource_profiles_service",
+	}
+	for _, tableName := range profileTables {
+		assertUnsignedBigintColumn(t, db, tableName, "id")
+		assertUnsignedBigintColumn(t, db, tableName, "resource_id")
+		assertPrimaryKeyColumns(t, db, tableName, "id")
+		assertUniqueIndexOnSingleColumn(t, db, tableName, "resource_id")
+	}
+}
+
+func assertSchemaChainBaseline(t *testing.T, db *sql.DB) {
+	t.Helper()
 
 	// goose_db_version must exist after migration.
 	var count int
@@ -30,7 +105,6 @@ func TestGooseCleanMigration(t *testing.T) {
 		t.Fatalf("expected at least 8 migrations applied, got version %d", maxVersion)
 	}
 
-	// Verify expected tables exist.
 	expectedTables := []string{
 		"roles", "users", "environments", "owners", "resources",
 		"resource_relations",
@@ -46,50 +120,26 @@ func TestGooseCleanMigration(t *testing.T) {
 		}
 	}
 
-	// Verify resources has idx_resources_lifecycle.
 	if !indexExists(t, db, "resources", "idx_resources_lifecycle") {
 		t.Error("expected index idx_resources_lifecycle on resources")
 	}
-
-	// Verify resources has uq_resource_name_env (name, environment_id).
 	if !indexExists(t, db, "resources", "uq_resource_name_env") {
 		t.Error("expected unique index uq_resource_name_env on resources")
 	}
-
-	// Verify archive columns exist on resources.
 	for _, col := range []string{"archived_at", "archived_by", "archive_reason"} {
 		if !columnExists(t, db, "resources", col) {
 			t.Errorf("expected column %q on resources", col)
 		}
 	}
-
-	// Verify archive index exists.
 	if !indexExists(t, db, "resources", "idx_resources_archived_at") {
 		t.Error("expected index idx_resources_archived_at on resources")
 	}
-
-	// Verify resources does NOT have a global unique index only on name.
 	if uniqueIndexOnColumnOnly(t, db, "resources", "name") {
 		t.Error("resources should not have a global unique index on name alone")
 	}
-
-	// Verify resource_relations has unique (from_resource_id, to_resource_id, relation_type).
 	if !indexExists(t, db, "resource_relations", "uq_relation") {
 		t.Error("expected unique index uq_relation on resource_relations")
 	}
-
-	// Verify seed patch truth remains visible after all migrations.
-	assertResourceDisplayName(t, db,
-		"41000000-0000-0000-0000-000000000023",
-		"Payment MySQL Replica 01",
-	)
-	assertResourceDisplayName(t, db,
-		"41000000-0000-0000-0000-000000000034",
-		"Notification Delivery Service",
-	)
-	assertResourceExists(t, db, "41000000-0000-0000-0000-000000000044")
-	assertRelationExists(t, db, "51000000-0000-0000-0000-000000000090")
-	assertRelationExists(t, db, "51000000-0000-0000-0000-000000000091")
 }
 
 func tableExists(t *testing.T, db *sql.DB, tableName string) bool {
@@ -158,39 +208,138 @@ func uniqueIndexOnColumnOnly(t *testing.T, db *sql.DB, tableName, columnName str
 	return count > 0
 }
 
-func assertResourceDisplayName(t *testing.T, db *sql.DB, resourceID, want string) {
+func assertUnsignedBigintColumn(t *testing.T, db *sql.DB, tableName, columnName string) {
+	t.Helper()
+	var dataType, columnType string
+	err := db.QueryRow(`
+		SELECT data_type, column_type
+		FROM information_schema.columns
+		WHERE table_schema = DATABASE() AND table_name = ? AND column_name = ?`,
+		tableName, columnName,
+	).Scan(&dataType, &columnType)
+	if err != nil {
+		t.Fatalf("query column type for %s.%s: %v", tableName, columnName, err)
+	}
+	if dataType != "bigint" {
+		t.Fatalf("expected %s.%s data_type bigint, got %q", tableName, columnName, dataType)
+	}
+	if !strings.Contains(strings.ToLower(columnType), "unsigned") {
+		t.Fatalf("expected %s.%s column_type to include unsigned, got %q", tableName, columnName, columnType)
+	}
+}
+
+func assertPrimaryKeyColumns(t *testing.T, db *sql.DB, tableName string, wantColumns ...string) {
+	t.Helper()
+	rows, err := db.Query(`
+		SELECT column_name
+		FROM information_schema.key_column_usage
+		WHERE table_schema = DATABASE() AND table_name = ? AND constraint_name = 'PRIMARY'
+		ORDER BY ordinal_position`, tableName)
+	if err != nil {
+		t.Fatalf("query primary key for %s: %v", tableName, err)
+	}
+	defer rows.Close()
+
+	var got []string
+	for rows.Next() {
+		var columnName string
+		if scanErr := rows.Scan(&columnName); scanErr != nil {
+			t.Fatalf("scan primary key for %s: %v", tableName, scanErr)
+		}
+		got = append(got, columnName)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("iterate primary key for %s: %v", tableName, err)
+	}
+	if strings.Join(got, ",") != strings.Join(wantColumns, ",") {
+		t.Fatalf("primary key for %s = %v, want %v", tableName, got, wantColumns)
+	}
+}
+
+func assertNoForeignKeys(t *testing.T, db *sql.DB, tableName string) {
+	t.Helper()
+	var count int
+	err := db.QueryRow(`
+		SELECT count(*)
+		FROM information_schema.table_constraints
+		WHERE table_schema = DATABASE()
+		  AND table_name = ?
+		  AND constraint_type = 'FOREIGN KEY'`, tableName).Scan(&count)
+	if err != nil {
+		t.Fatalf("query foreign keys for %s: %v", tableName, err)
+	}
+	if count != 0 {
+		t.Fatalf("expected no foreign keys on %s, found %d", tableName, count)
+	}
+}
+
+func assertUniqueIndexOnSingleColumn(t *testing.T, db *sql.DB, tableName, columnName string) {
+	t.Helper()
+	var count int
+	err := db.QueryRow(`
+		SELECT count(*)
+		FROM information_schema.statistics s1
+		WHERE s1.table_schema = DATABASE()
+		  AND s1.table_name = ?
+		  AND s1.column_name = ?
+		  AND s1.non_unique = 0
+		  AND s1.index_name != 'PRIMARY'
+		  AND (
+		    SELECT count(*)
+		    FROM information_schema.statistics s2
+		    WHERE s2.table_schema = s1.table_schema
+		      AND s2.table_name = s1.table_name
+		      AND s2.index_name = s1.index_name
+		  ) = 1`,
+		tableName, columnName,
+	).Scan(&count)
+	if err != nil {
+		t.Fatalf("query unique index on %s.%s: %v", tableName, columnName, err)
+	}
+	if count == 0 {
+		t.Fatalf("expected unique index on %s.%s", tableName, columnName)
+	}
+}
+
+func assertResourceDisplayNameByName(t *testing.T, db *sql.DB, resourceName, want string) {
 	t.Helper()
 	var got string
-	err := db.QueryRow("SELECT display_name FROM resources WHERE id = ?", resourceID).Scan(&got)
+	err := db.QueryRow("SELECT display_name FROM resources WHERE name = ?", resourceName).Scan(&got)
 	if err != nil {
-		t.Fatalf("query display_name for %s: %v", resourceID, err)
+		t.Fatalf("query display_name for resource %s: %v", resourceName, err)
 	}
 	if got != want {
-		t.Fatalf("display_name for %s = %q, want %q", resourceID, got, want)
+		t.Fatalf("display_name for resource %s = %q, want %q", resourceName, got, want)
 	}
 }
 
-func assertResourceExists(t *testing.T, db *sql.DB, resourceID string) {
+func assertResourceExistsByName(t *testing.T, db *sql.DB, resourceName string) {
 	t.Helper()
 	var count int
-	err := db.QueryRow("SELECT count(*) FROM resources WHERE id = ?", resourceID).Scan(&count)
+	err := db.QueryRow("SELECT count(*) FROM resources WHERE name = ?", resourceName).Scan(&count)
 	if err != nil {
-		t.Fatalf("query resource %s: %v", resourceID, err)
+		t.Fatalf("query resource %s: %v", resourceName, err)
 	}
 	if count != 1 {
-		t.Fatalf("expected resource %s to exist exactly once, got %d", resourceID, count)
+		t.Fatalf("expected resource %s to exist exactly once, got %d", resourceName, count)
 	}
 }
 
-func assertRelationExists(t *testing.T, db *sql.DB, relationID string) {
+func assertRelationExistsByBusinessKeys(t *testing.T, db *sql.DB, fromResourceName, toResourceName, relationType string) {
 	t.Helper()
+	query := fmt.Sprintf(`
+		SELECT count(*)
+		FROM resource_relations rel
+		JOIN resources src ON src.id = rel.from_resource_id
+		JOIN resources dst ON dst.id = rel.to_resource_id
+		WHERE src.name = ? AND dst.name = ? AND rel.relation_type = ?`)
 	var count int
-	err := db.QueryRow("SELECT count(*) FROM resource_relations WHERE id = ?", relationID).Scan(&count)
+	err := db.QueryRow(query, fromResourceName, toResourceName, relationType).Scan(&count)
 	if err != nil {
-		t.Fatalf("query relation %s: %v", relationID, err)
+		t.Fatalf("query relation %s -> %s (%s): %v", fromResourceName, toResourceName, relationType, err)
 	}
 	if count != 1 {
-		t.Fatalf("expected relation %s to exist exactly once, got %d", relationID, count)
+		t.Fatalf("expected relation %s -> %s (%s) to exist exactly once, got %d", fromResourceName, toResourceName, relationType, count)
 	}
 }
 
