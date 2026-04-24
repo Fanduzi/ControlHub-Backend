@@ -848,6 +848,38 @@ paths:
                     type: array
                     items:
                       $ref: "#/components/schemas/DictionaryItem"
+  /resource-subtypes:
+    get:
+      summary: List resource subtypes for a given resource type
+      operationId: listResourceSubtypes
+      parameters:
+        - in: query
+          name: resourceType
+          required: true
+          schema:
+            $ref: "#/components/schemas/ResourceType"
+          description: The resource type to list subtypes for
+      responses:
+        "200":
+          description: Resource subtypes
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [resourceType, subtypes]
+                properties:
+                  resourceType:
+                    type: string
+                  subtypes:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/DictionaryItem"
+        "400":
+          description: Missing or invalid resourceType parameter
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
   # ──────────────────────────────────────────────────────────────
   # IMPLEMENTED: Topology read model endpoint
   # ──────────────────────────────────────────────────────────────
@@ -1104,13 +1136,30 @@ components:
           nullable: true
           description: Timestamp when the resource was archived (null if active)
         archivedBy:
-          type: string
+          type: integer
+          format: int64
           nullable: true
-          description: User or system that archived the resource
+          description: ID of the user or system that archived the resource
         archiveReason:
           type: string
           nullable: true
           description: Human-readable reason for archiving
+        profileSummary:
+          nullable: true
+          description: Embedded profile summary (present when includeProfile=true query param is set)
+          additionalProperties: true
+          properties:
+            engine:
+              type: string
+            version:
+              type: string
+            host:
+              type: string
+            port:
+              type: integer
+            role:
+              type: string
+          type: object
     ResourceRelation:
       type: object
       required: [id, fromResourceId, toResourceId, relationType, createdAt]
