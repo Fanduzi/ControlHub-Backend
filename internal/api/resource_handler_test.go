@@ -7,6 +7,7 @@ package api
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -14,7 +15,10 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/go-chi/chi/v5"
+
 	"github.com/fan/controlhub/internal/model"
+	"github.com/fan/controlhub/internal/service"
 )
 
 type paginatedResourceResponse struct {
@@ -1832,4 +1836,77 @@ func TestPatchResourceProfileRejectsMalformedJSON(t *testing.T) {
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("expected 400, got %d; body: %s", rec.Code, rec.Body.String())
 	}
+}
+
+// --- Audit handler JSON error tests (Task 1) ---
+
+type failingAuditRepo struct{}
+
+func (failingAuditRepo) ListAuditEvents(_ context.Context, _ model.AuditListQuery) ([]model.AuditEvent, int, error) {
+	return nil, 0, fmt.Errorf("db connection lost")
+}
+
+func (failingAuditRepo) ListByResourceID(_ uint64) ([]model.AuditEvent, error) {
+	return nil, fmt.Errorf("db connection lost")
+}
+
+func TestAuditHandlerJSONErrors(t *testing.T) {
+	t.Run("audit list returns JSON on service failure", func(t *testing.T) {
+		svc := service.NewAuditService(failingAuditRepo{})
+		handler := handleListAuditEvents(svc)
+
+		w := httptest.NewRecorder()
+		r := httptest.NewRequest("GET", "/audit-events?page=1&pageSize=10", nil)
+		handler.ServeHTTP(w, r)
+
+		if w.Code != http.StatusInternalServerError {
+			t.Fatalf("expected 500, got %d; body: %s", w.Code, w.Body.String())
+		}
+		ct := w.Header().Get("Content-Type")
+		if ct != "application/json" {
+			t.Fatalf("expected Content-Type application/json, got %q", ct)
+		}
+
+		var body apiErrorResponse
+		if err := json.NewDecoder(w.Body).Decode(&body); err != nil {
+			t.Fatalf("decode response: %v", err)
+		}
+		if body.Error != "internal_error" {
+			t.Fatalf("expected error code internal_error, got %q", body.Error)
+		}
+		if body.Message == "" {
+			t.Fatal("expected non-empty error message")
+		}
+	})
+
+	t.Run("resource audit list returns JSON on service failure", func(t *testing.T) {
+		svc := service.NewAuditService(failingAuditRepo{})
+		handler := handleListResourceAuditEvents(svc)
+
+		w := httptest.NewRecorder()
+		r := httptest.NewRequest("GET", "/resources/1/audit-events", nil)
+		rctx := chi.NewRouteContext()
+		rctx.URLParams.Add("id", "1")
+		r = r.WithContext(context.WithValue(r.Context(), chi.RouteCtxKey, rctx))
+		handler.ServeHTTP(w, r)
+
+		if w.Code != http.StatusInternalServerError {
+			t.Fatalf("expected 500, got %d; body: %s", w.Code, w.Body.String())
+		}
+		ct := w.Header().Get("Content-Type")
+		if ct != "application/json" {
+			t.Fatalf("expected Content-Type application/json, got %q", ct)
+		}
+
+		var body apiErrorResponse
+		if err := json.NewDecoder(w.Body).Decode(&body); err != nil {
+			t.Fatalf("decode response: %v", err)
+		}
+		if body.Error != "internal_error" {
+			t.Fatalf("expected error code internal_error, got %q", body.Error)
+		}
+		if body.Message == "" {
+			t.Fatal("expected non-empty error message")
+		}
+	})
 }

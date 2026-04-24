@@ -25,7 +25,7 @@ func handleListAuditEvents(auditService *service.AuditService) http.HandlerFunc 
 		}
 		items, pageInfo, err := auditService.List(r.Context(), query)
 		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
+			writeJSONError(w, http.StatusInternalServerError, "internal_error", "unexpected server failure")
 			return
 		}
 
@@ -45,7 +45,7 @@ func handleListResourceAuditEvents(auditService *service.AuditService) http.Hand
 		}
 		items, err := auditService.ListByResourceID(id)
 		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
+			writeJSONError(w, http.StatusInternalServerError, "internal_error", "unexpected server failure")
 			return
 		}
 
