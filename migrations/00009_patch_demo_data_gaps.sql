@@ -8,7 +8,7 @@
 
 -- order-mysql-replica-02-prod: database_instance with no profile
 -- +goose StatementBegin
-insert into resource_profiles_database_instance (resource_id, engine, version, host, port, role, spec)
+insert ignore into resource_profiles_database_instance (resource_id, engine, version, host, port, role, spec)
 select resources.id, seed.engine, seed.version, seed.host, seed.port, seed.role, seed.spec
 from (
   select 'order-mysql-replica-02-prod' as resource_name, 'mysql' as engine, '8.0.36' as version, 'prod-db-host-03.internal' as host, 3308 as port, 'replica' as role, '{}' as spec
@@ -33,7 +33,7 @@ on duplicate key update
 
 -- notification-service-prod: service with no profile
 -- +goose StatementBegin
-insert into resource_profiles_service (resource_id, system_name, repository_url, runtime_env, spec)
+insert ignore into resource_profiles_service (resource_id, system_name, repository_url, runtime_env, spec)
 select resources.id, seed.system_name, seed.repository_url, seed.runtime_env, seed.spec
 from (
   select 'notification-service-prod' as resource_name, 'notification-service' as system_name, 'https://git.internal/order/notification' as repository_url, 'kubernetes' as runtime_env, '{"language":"node","framework":"express","disabled_reason":"kafka-migration"}' as spec
@@ -46,7 +46,7 @@ join resources on resources.name = seed.resource_name;
 -- ============================================================
 
 -- +goose StatementBegin
-insert into resource_relations (from_resource_id, to_resource_id, relation_type)
+insert ignore into resource_relations (from_resource_id, to_resource_id, relation_type)
 select src.id, dst.id, seed.relation_type
 from (
   select 'order-mysql-replica-01-prod' as from_name, 'order-mysql-replica-02-prod' as to_name, 'replicates_to' as relation_type

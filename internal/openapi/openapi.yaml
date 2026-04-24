@@ -1109,6 +1109,10 @@ components:
         environmentId:
           type: integer
           format: int64
+        clusterId:
+          type: integer
+          nullable: true
+          description: "For database instances, the ID of the parent cluster via member_of relation. Null for clusters and other resource types."
         ownerId:
           type: integer
           format: int64

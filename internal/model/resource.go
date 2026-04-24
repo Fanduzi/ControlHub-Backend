@@ -32,6 +32,7 @@ type Resource struct {
 	ExternalID      string            `json:"externalId"`
 	Labels          map[string]string `json:"labels"`
 	ProfileSummary  *ProfileSummary   `json:"profileSummary,omitempty"`
+	ClusterId       *uint64           `json:"clusterId,omitempty"`
 	CreatedAt       time.Time         `json:"createdAt"`
 	UpdatedAt       time.Time         `json:"updatedAt"`
 	ArchivedAt      *time.Time        `json:"archivedAt,omitempty"`
