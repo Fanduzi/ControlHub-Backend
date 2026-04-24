@@ -28,7 +28,7 @@ func handleLogin(authService *service.AuthService) http.HandlerFunc {
 				writeJSONError(w, http.StatusUnauthorized, "invalid_credentials", err.Error())
 				return
 			}
-			writeJSONError(w, http.StatusInternalServerError, "internal_error", err.Error())
+			writeJSONError(w, http.StatusInternalServerError, "internal_error", "unexpected server failure")
 			return
 		}
 
