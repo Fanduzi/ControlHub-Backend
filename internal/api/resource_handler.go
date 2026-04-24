@@ -279,6 +279,8 @@ func writeServiceError(w http.ResponseWriter, err error) {
 		writeJSONError(w, http.StatusConflict, "relation_conflict", err.Error())
 	case errors.Is(err, service.ErrResourceArchived):
 		writeJSONError(w, http.StatusConflict, "resource_archived", "resource is archived")
+	case errors.Is(err, service.ErrProfileNotSupported):
+		writeJSONError(w, http.StatusBadRequest, "profile_not_supported", err.Error())
 	default:
 		writeJSONError(w, http.StatusInternalServerError, "internal_error", "unexpected server failure")
 	}

@@ -20,6 +20,7 @@ var (
 	ErrResourceNotFound    = errors.New("resource not found")
 	ErrResourceConflict    = errors.New("resource conflict")
 	ErrResourceArchived    = errors.New("resource archived")
+	ErrProfileNotSupported = errors.New("resource type does not support profiles")
 	ErrEnvironmentNotFound = errors.New("environment not found")
 	ErrOwnerNotFound       = errors.New("owner not found")
 	ErrValidationFailed    = errors.New("validation failed")

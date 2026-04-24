@@ -104,7 +104,7 @@ func (s *ProfileService) writeProfile(ctx context.Context, resourceID uint64, re
 			getStringField(fields, "runtimeEnv"),
 		)
 	default:
-		return fmt.Errorf("resource type %s has no profile table", resourceType)
+		return ErrProfileNotSupported
 	}
 }
 

@@ -16,14 +16,17 @@ func handlePutResourceProfile(profileService *service.ProfileService) http.Handl
 	return func(w http.ResponseWriter, r *http.Request) {
 		id, err := parseUint64IDParam(r.PathValue("id"), "resource id")
 		if err != nil {
-			http.Error(w, err.Error(), http.StatusBadRequest)
+			writeJSONError(w, http.StatusBadRequest, "validation_failed", err.Error())
 			return
 		}
 
 		var fields map[string]interface{}
 		if err := json.NewDecoder(r.Body).Decode(&fields); err != nil {
-			http.Error(w, "invalid JSON", http.StatusBadRequest)
+			writeJSONError(w, http.StatusBadRequest, "validation_failed", "invalid JSON")
 			return
+		}
+		if fields == nil {
+			fields = map[string]interface{}{}
 		}
 
 		if err := profileService.PutProfile(r.Context(), id, fields); err != nil {
@@ -39,14 +42,17 @@ func handlePatchResourceProfile(profileService *service.ProfileService) http.Han
 	return func(w http.ResponseWriter, r *http.Request) {
 		id, err := parseUint64IDParam(r.PathValue("id"), "resource id")
 		if err != nil {
-			http.Error(w, err.Error(), http.StatusBadRequest)
+			writeJSONError(w, http.StatusBadRequest, "validation_failed", err.Error())
 			return
 		}
 
 		var fields map[string]interface{}
 		if err := json.NewDecoder(r.Body).Decode(&fields); err != nil {
-			http.Error(w, "invalid JSON", http.StatusBadRequest)
+			writeJSONError(w, http.StatusBadRequest, "validation_failed", "invalid JSON")
 			return
+		}
+		if fields == nil {
+			fields = map[string]interface{}{}
 		}
 
 		if err := profileService.PatchProfile(r.Context(), id, fields); err != nil {
@@ -62,7 +68,7 @@ func handleDeleteResourceProfile(profileService *service.ProfileService) http.Ha
 	return func(w http.ResponseWriter, r *http.Request) {
 		id, err := parseUint64IDParam(r.PathValue("id"), "resource id")
 		if err != nil {
-			http.Error(w, err.Error(), http.StatusBadRequest)
+			writeJSONError(w, http.StatusBadRequest, "validation_failed", err.Error())
 			return
 		}
 

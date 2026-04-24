@@ -45,12 +45,16 @@ func TestOpenAPIFuzz(t *testing.T) {
 	dictRepo := mysql.NewDictionaryRepository(db)
 	relationRepo := mysql.NewRelationRepository(db)
 
+	resourceRepo := mysql.NewResourceRepository(db)
+	profileSvc := service.NewProfileService(resourceRepo, resourceRepo)
+
 	deps := api.Dependencies{
-		ResourceService:        service.NewResourceService(mysql.NewResourceRepository(db)),
+		ResourceService:        service.NewResourceService(resourceRepo, profileSvc),
 		RelationService:        service.NewRelationService(relationRepo),
 		TopologyService:        service.NewTopologyService(relationRepo),
 		AuditService:           service.NewAuditService(mysql.NewAuditRepository(db)),
 		AuthService:            service.NewAuthService(mysql.NewUserRepository(db), "fuzz-test-jwt-secret"),
+		ProfileService:         profileSvc,
 		EnvironmentService:     service.NewEnvironmentService(dictRepo),
 		OwnerService:           service.NewOwnerService(dictRepo),
 		RoleService:            service.NewRoleService(dictRepo),

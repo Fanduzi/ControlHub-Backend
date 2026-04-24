@@ -186,6 +186,12 @@ paths:
                   pageSize: 20
                   totalItems: 64
                   totalPages: 4
+        "400":
+          description: Invalid query parameters
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
     post:
       summary: Create a resource
       operationId: createResource
@@ -238,6 +244,12 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/Resource"
+        "400":
+          description: Invalid resource ID
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
         "404":
           description: Resource not found
           content:
@@ -350,6 +362,12 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/Resource"
+        "400":
+          description: Invalid resource ID
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
         "404":
           description: Resource not found
           content:
@@ -380,6 +398,12 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/ResourceProfileResponse"
+        "400":
+          description: Invalid resource ID
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
         "404":
           description: Resource not found
     put:
@@ -390,7 +414,8 @@ paths:
           name: id
           required: true
           schema:
-            type: string
+            type: integer
+            format: int64
       requestBody:
         required: true
         content:
@@ -427,7 +452,8 @@ paths:
           name: id
           required: true
           schema:
-            type: string
+            type: integer
+            format: int64
       requestBody:
         required: true
         content:
@@ -464,10 +490,17 @@ paths:
           name: id
           required: true
           schema:
-            type: string
+            type: integer
+            format: int64
       responses:
         "204":
           description: Profile deleted
+        "400":
+          description: Invalid resource ID
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
         "404":
           description: Resource not found
           content:
@@ -504,6 +537,12 @@ paths:
                     type: array
                     items:
                       $ref: "#/components/schemas/ResourceRelation"
+        "400":
+          description: Invalid resource ID
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
     post:
       summary: Create a relation from this resource to another
       operationId: createResourceRelation
@@ -559,6 +598,12 @@ paths:
       responses:
         "204":
           description: Relation deleted
+        "400":
+          description: Invalid relation ID
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
         "404":
           description: Relation not found
           content:
@@ -593,6 +638,12 @@ paths:
                     type: array
                     items:
                       $ref: "#/components/schemas/AuditEvent"
+        "400":
+          description: Invalid resource ID
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
   /audit-events:
     get:
       summary: List audit events
@@ -672,6 +723,12 @@ paths:
                   pageSize: 20
                   totalItems: 25
                   totalPages: 2
+        "400":
+          description: Invalid query parameters
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
   /environments:
     get:
       summary: List environments
