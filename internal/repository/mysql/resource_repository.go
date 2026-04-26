@@ -186,15 +186,71 @@ func buildInClause(n int) string {
 }
 
 func (r *ResourceRepository) GetResource(id uint64) (*model.Resource, error) {
-	query := "select " + resourceColumns + " from resources where id = ?"
+	query := `select r.id, r.resource_type, r.resource_subtype, r.name, r.display_name,
+	       r.environment_id, r.owner_id, r.lifecycle_status, r.health_status,
+	       r.source, r.external_id, r.labels, r.created_at, r.updated_at,
+	       r.archived_at, r.archived_by, r.archive_reason,
+	       (select rr.to_resource_id from resource_relations rr
+	        where rr.from_resource_id = r.id and rr.relation_type = 'member_of'
+	        limit 1) as cluster_id
+	from resources r where r.id = ?`
 
 	row := r.db.QueryRowContext(context.Background(), query, id)
 
-	item, err := scanResource(row)
+	var (
+		item          model.Resource
+		rawLabels     string
+		archivedAt    sql.NullTime
+		archivedBy    sql.NullInt64
+		archiveReason sql.NullString
+		clusterId     sql.NullInt64
+	)
+
+	err := row.Scan(
+		&item.ID,
+		&item.ResourceType,
+		&item.ResourceSubtype,
+		&item.Name,
+		&item.DisplayName,
+		&item.EnvironmentID,
+		&item.OwnerID,
+		&item.LifecycleStatus,
+		&item.HealthStatus,
+		&item.Source,
+		&item.ExternalID,
+		&rawLabels,
+		&item.CreatedAt,
+		&item.UpdatedAt,
+		&archivedAt,
+		&archivedBy,
+		&archiveReason,
+		&clusterId,
+	)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, service.ErrResourceNotFound
 		}
+		return nil, err
+	}
+
+	if archivedAt.Valid {
+		item.ArchivedAt = &archivedAt.Time
+	}
+	if archivedBy.Valid {
+		v := uint64(archivedBy.Int64)
+		item.ArchivedBy = &v
+	}
+	if archiveReason.Valid {
+		item.ArchiveReason = &archiveReason.String
+	}
+	if clusterId.Valid {
+		v := uint64(clusterId.Int64)
+		item.ClusterId = &v
+	}
+
+	if rawLabels == "" || rawLabels == "null" {
+		item.Labels = map[string]string{}
+	} else if err := json.Unmarshal([]byte(rawLabels), &item.Labels); err != nil {
 		return nil, err
 	}
 

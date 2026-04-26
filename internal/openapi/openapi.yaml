@@ -1157,7 +1157,7 @@ components:
           description: Human-readable reason for archiving
         profileSummary:
           nullable: true
-          description: Embedded profile summary (present when includeProfile=true query param is set)
+          description: Embedded profile summary (not yet populated in list/detail responses; use GET /resources/{id}/profile for full profile data)
           additionalProperties: true
           properties:
             engine:
@@ -1170,6 +1170,12 @@ components:
               type: integer
             role:
               type: string
+            hostname:
+              type: string
+            ip:
+              type: string
+            nodeCount:
+              type: integer
           type: object
     ResourceRelation:
       type: object

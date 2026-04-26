@@ -1054,6 +1054,30 @@ func TestGetResource_ReturnsArchivedResource(t *testing.T) {
 	}
 }
 
+func TestGetResource_IncludesClusterIdForMemberInstance(t *testing.T) {
+	server := NewTestServer()
+	req := httptest.NewRequest(http.MethodGet, "/resources/3", nil)
+	rec := httptest.NewRecorder()
+
+	server.Router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rec.Code)
+	}
+	var wrapper struct {
+		Resource model.Resource `json:"resource"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&wrapper); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if wrapper.Resource.ClusterId == nil {
+		t.Fatal("expected clusterId to be set for database instance that is member_of a cluster")
+	}
+	if *wrapper.Resource.ClusterId != 4 {
+		t.Fatalf("expected clusterId=4, got %d", *wrapper.Resource.ClusterId)
+	}
+}
+
 // --- Archive + mutation rejection ---
 
 func TestPatchResource_RejectsArchived(t *testing.T) {
