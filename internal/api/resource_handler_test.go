@@ -549,8 +549,8 @@ func TestListResources_PageSizeCap(t *testing.T) {
 		t.Fatalf("decode response: %v", err)
 	}
 
-	if resp.PageInfo.PageSize != 100 {
-		t.Fatalf("expected pageSize capped to 100, got %d", resp.PageInfo.PageSize)
+	if resp.PageInfo.PageSize != model.MaxPageSize {
+		t.Fatalf("expected pageSize capped to %d, got %d", model.MaxPageSize, resp.PageInfo.PageSize)
 	}
 }
 
