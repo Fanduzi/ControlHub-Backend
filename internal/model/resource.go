@@ -46,6 +46,37 @@ type ProfileSummary struct {
 	Port      int    `json:"port,omitempty"`
 	NodeCount int    `json:"nodeCount,omitempty"`
 	Engine    string `json:"engine,omitempty"`
+	Version   string `json:"version,omitempty"`
+	Role      string `json:"role,omitempty"`
+}
+
+// ResourceRelationView extends ResourceRelation with resolved related resource metadata.
+type ResourceRelationView struct {
+	ID                           uint64       `json:"id"`
+	FromResourceID               uint64       `json:"fromResourceId"`
+	ToResourceID                 uint64       `json:"toResourceId"`
+	RelationType                 RelationType `json:"relationType"`
+	Direction                    string       `json:"direction"`
+	CreatedAt                    time.Time    `json:"createdAt"`
+	RelatedResourceID            uint64       `json:"relatedResourceId"`
+	RelatedResourceName          string       `json:"relatedResourceName"`
+	RelatedResourceDisplayName   string       `json:"relatedResourceDisplayName"`
+	RelatedResourceType          string       `json:"relatedResourceType"`
+	RelatedResourceSubtype       string       `json:"relatedResourceSubtype"`
+	RelatedResourceHealthStatus  string       `json:"relatedResourceHealthStatus"`
+	RelatedResourceLifecycleStat string       `json:"relatedResourceLifecycleStatus"`
+}
+
+// ClusterMemberView represents a database instance that is a member of a database cluster.
+type ClusterMemberView struct {
+	ResourceID      uint64          `json:"resourceId"`
+	Name            string          `json:"name"`
+	DisplayName     string          `json:"displayName"`
+	ResourceType    string          `json:"resourceType"`
+	ResourceSubtype string          `json:"resourceSubtype"`
+	LifecycleStatus string          `json:"lifecycleStatus"`
+	HealthStatus    string          `json:"healthStatus"`
+	ProfileSummary  *ProfileSummary `json:"profileSummary,omitempty"`
 }
 
 // IsArchived returns true if the resource has been archived.

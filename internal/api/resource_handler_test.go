@@ -2005,3 +2005,258 @@ func TestAuditHandlerJSONErrors(t *testing.T) {
 			}
 		})
 	}
+
+// --- Phase 17A: Readable relation views ---
+
+type relationViewListResponse struct {
+	Items []model.ResourceRelationView `json:"items"`
+}
+
+func TestGetResourceRelations_ResolvedViewIncludesRelatedResourceSummary(t *testing.T) {
+	server := NewTestServer()
+	// Resource 3 has relations: member_of -> 4, runs_on -> 6
+	req := httptest.NewRequest(http.MethodGet, "/resources/3/relations?view=resolved", nil)
+	rec := httptest.NewRecorder()
+
+	server.Router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+
+	var resp relationViewListResponse
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+
+	if len(resp.Items) == 0 {
+		t.Fatal("expected at least one relation view")
+	}
+
+	for _, item := range resp.Items {
+		if item.RelatedResourceID == 0 {
+			t.Fatal("expected relatedResourceId to be set")
+		}
+		if item.RelatedResourceName == "" {
+			t.Fatal("expected relatedResourceName to be set")
+		}
+		if item.RelatedResourceDisplayName == "" {
+			t.Fatal("expected relatedResourceDisplayName to be set")
+		}
+		if item.RelatedResourceType == "" {
+			t.Fatal("expected relatedResourceType to be set")
+		}
+		if item.Direction != "outgoing" && item.Direction != "incoming" {
+			t.Fatalf("expected direction to be outgoing or incoming, got %q", item.Direction)
+		}
+	}
+}
+
+func TestGetResourceRelations_DefaultViewReturnsBareIDs(t *testing.T) {
+	server := NewTestServer()
+	req := httptest.NewRequest(http.MethodGet, "/resources/3/relations", nil)
+	rec := httptest.NewRecorder()
+
+	server.Router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+
+	var resp struct {
+		Items []model.ResourceRelation `json:"items"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(resp.Items) == 0 {
+		t.Fatal("expected at least one relation")
+	}
+}
+
+// --- Phase 17A: Cluster members ---
+
+type memberListResponse struct {
+	Members []model.ClusterMemberView `json:"members"`
+}
+
+func TestGetResourceMembers_ReturnsDatabaseClusterMembers(t *testing.T) {
+	server := NewTestServer()
+	// Resource 4 is a database_cluster; resource 3 is member_of resource 4
+	req := httptest.NewRequest(http.MethodGet, "/resources/4/members", nil)
+	rec := httptest.NewRecorder()
+
+	server.Router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+
+	var resp memberListResponse
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+
+	if len(resp.Members) == 0 {
+		t.Fatal("expected at least one cluster member")
+	}
+
+	member := resp.Members[0]
+	if member.ResourceID == 0 {
+		t.Fatal("expected resourceId")
+	}
+	if member.Name == "" {
+		t.Fatal("expected name")
+	}
+	if member.DisplayName == "" {
+		t.Fatal("expected displayName")
+	}
+	if member.ResourceType != "database_instance" {
+		t.Fatalf("expected resourceType database_instance, got %q", member.ResourceType)
+	}
+	if member.LifecycleStatus == "" {
+		t.Fatal("expected lifecycleStatus")
+	}
+	if member.HealthStatus == "" {
+		t.Fatal("expected healthStatus")
+	}
+}
+
+func TestGetResourceMembers_ClusterMemberHasProfileSummary(t *testing.T) {
+	server := NewTestServer()
+	// Resource 3 is a database_instance with a profile (engine=mysql, host=..., port=3306, role=primary)
+	// Resource 3 is member_of resource 4 (a cluster)
+	req := httptest.NewRequest(http.MethodGet, "/resources/4/members", nil)
+	rec := httptest.NewRecorder()
+
+	server.Router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+
+	var resp memberListResponse
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+
+	found := false
+	for _, member := range resp.Members {
+		if member.ResourceID == 3 {
+			found = true
+			if member.ProfileSummary == nil {
+				t.Fatal("expected profileSummary for resource 3")
+			}
+			if member.ProfileSummary.Hostname != "prod-db-host-01.internal" {
+				t.Fatalf("expected hostname prod-db-host-01.internal, got %q", member.ProfileSummary.Hostname)
+			}
+			if member.ProfileSummary.Port != 3306 {
+				t.Fatalf("expected port 3306, got %d", member.ProfileSummary.Port)
+			}
+			if member.ProfileSummary.Role != "primary" {
+				t.Fatalf("expected role primary, got %q", member.ProfileSummary.Role)
+			}
+		}
+	}
+	if !found {
+		t.Fatal("expected to find resource 3 as a cluster member")
+	}
+}
+
+func TestGetResourceMembers_NonClusterReturnsEmpty(t *testing.T) {
+	server := NewTestServer()
+	// Resource 1 is a database_instance, not a cluster — should return empty members
+	req := httptest.NewRequest(http.MethodGet, "/resources/1/members", nil)
+	rec := httptest.NewRecorder()
+
+	server.Router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+
+	var resp memberListResponse
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+
+	if len(resp.Members) != 0 {
+		t.Fatalf("expected 0 members for non-cluster resource, got %d", len(resp.Members))
+	}
+}
+
+func TestGetResourceMembers_MissingResourceReturnsEmpty(t *testing.T) {
+	server := NewTestServer()
+	req := httptest.NewRequest(http.MethodGet, "/resources/999/members", nil)
+	rec := httptest.NewRecorder()
+
+	server.Router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+
+	var resp memberListResponse
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(resp.Members) != 0 {
+		t.Fatalf("expected 0 members for missing resource, got %d", len(resp.Members))
+	}
+}
+
+// --- Phase 17A: Profile summary on resource detail ---
+
+func TestGetResource_PopulatesProfileSummary(t *testing.T) {
+	server := NewTestServer()
+	// Resource 3 is a database_instance with profile data
+	req := httptest.NewRequest(http.MethodGet, "/resources/3", nil)
+	rec := httptest.NewRecorder()
+
+	server.Router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+
+	var wrapper struct {
+		Resource model.Resource `json:"resource"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&wrapper); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+
+	if wrapper.Resource.ProfileSummary == nil {
+		t.Fatal("expected profileSummary to be populated for resource 3")
+	}
+	if wrapper.Resource.ProfileSummary.Engine != "mysql" {
+		t.Fatalf("expected engine mysql, got %q", wrapper.Resource.ProfileSummary.Engine)
+	}
+	if wrapper.Resource.ProfileSummary.Port != 3306 {
+		t.Fatalf("expected port 3306, got %d", wrapper.Resource.ProfileSummary.Port)
+	}
+}
+
+func TestGetResource_NoProfileSummaryWithoutProfileData(t *testing.T) {
+	server := NewTestServer()
+	// Resource 7 has no profile data
+	req := httptest.NewRequest(http.MethodGet, "/resources/7", nil)
+	rec := httptest.NewRecorder()
+
+	server.Router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+
+	var wrapper struct {
+		Resource model.Resource `json:"resource"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&wrapper); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+
+	if wrapper.Resource.ProfileSummary != nil {
+		t.Fatalf("expected profileSummary to be nil for resource without profile data, got %+v", wrapper.Resource.ProfileSummary)
+	}
+}

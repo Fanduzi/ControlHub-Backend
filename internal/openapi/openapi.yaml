@@ -513,9 +513,50 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/ErrorResponse"
+  /resources/{id}/members:
+    get:
+      summary: List cluster members
+      description: >
+        Returns resources that are members of the specified database cluster
+        via `member_of` relations. Each member includes resolved metadata and
+        an embedded profile summary. Returns an empty array for non-cluster
+        resources or clusters with no members.
+      operationId: getResourceMembers
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: integer
+            format: int64
+          description: Cluster resource ID
+      responses:
+        "200":
+          description: Cluster member list
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [members]
+                properties:
+                  members:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/ClusterMemberView"
+        "400":
+          description: Invalid resource ID
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
   /resources/{id}/relations:
     get:
       summary: List relations for a resource
+      description: >
+        Returns relations involving the specified resource. By default, returns
+        bare relation rows with from/to resource IDs. Use `?view=resolved` to
+        include resolved metadata about the related resource (name, displayName,
+        type, health, lifecycle status).
       operationId: listResourceRelations
       parameters:
         - in: path
@@ -524,6 +565,14 @@ paths:
           schema:
             type: integer
             format: int64
+        - in: query
+          name: view
+          schema:
+            type: string
+            enum: [resolved]
+          description: >-
+            Set to `resolved` to include related resource metadata. Omit for
+            bare relation rows (backward compatible).
       responses:
         "200":
           description: Resource relation list
@@ -536,7 +585,9 @@ paths:
                   items:
                     type: array
                     items:
-                      $ref: "#/components/schemas/ResourceRelation"
+                      anyOf:
+                        - $ref: "#/components/schemas/ResourceRelation"
+                        - $ref: "#/components/schemas/ResourceRelationView"
         "400":
           description: Invalid resource ID
           content:
@@ -1156,27 +1207,7 @@ components:
           nullable: true
           description: Human-readable reason for archiving
         profileSummary:
-          nullable: true
-          description: Embedded profile summary (not yet populated in list/detail responses; use GET /resources/{id}/profile for full profile data)
-          additionalProperties: true
-          properties:
-            engine:
-              type: string
-            version:
-              type: string
-            host:
-              type: string
-            port:
-              type: integer
-            role:
-              type: string
-            hostname:
-              type: string
-            ip:
-              type: string
-            nodeCount:
-              type: integer
-          type: object
+          $ref: "#/components/schemas/ProfileSummary"
     ResourceRelation:
       type: object
       required: [id, fromResourceId, toResourceId, relationType, createdAt]
@@ -1195,6 +1226,115 @@ components:
         createdAt:
           type: string
           format: date-time
+    ResourceRelationView:
+      type: object
+      required:
+        - id
+        - fromResourceId
+        - toResourceId
+        - relationType
+        - direction
+        - relatedResourceId
+        - relatedResourceName
+        - relatedResourceDisplayName
+        - relatedResourceType
+        - relatedResourceSubtype
+        - relatedResourceHealthStatus
+        - relatedResourceLifecycleStatus
+        - createdAt
+      properties:
+        id:
+          type: integer
+          format: int64
+        fromResourceId:
+          type: integer
+          format: int64
+        toResourceId:
+          type: integer
+          format: int64
+        relationType:
+          $ref: "#/components/schemas/RelationType"
+        direction:
+          type: string
+          enum: [outgoing, incoming]
+          description: >-
+            Direction of the relation from the queried resource's perspective.
+            `outgoing` means the queried resource is fromResourceId.
+            `incoming` means the queried resource is toResourceId.
+        relatedResourceId:
+          type: integer
+          format: int64
+        relatedResourceName:
+          type: string
+        relatedResourceDisplayName:
+          type: string
+        relatedResourceType:
+          $ref: "#/components/schemas/ResourceType"
+        relatedResourceSubtype:
+          type: string
+        relatedResourceHealthStatus:
+          $ref: "#/components/schemas/HealthStatus"
+        relatedResourceLifecycleStatus:
+          $ref: "#/components/schemas/LifecycleStatus"
+        createdAt:
+          type: string
+          format: date-time
+    ClusterMemberView:
+      type: object
+      required:
+        - resourceId
+        - name
+        - displayName
+        - resourceType
+        - resourceSubtype
+        - lifecycleStatus
+        - healthStatus
+      properties:
+        resourceId:
+          type: integer
+          format: int64
+        name:
+          type: string
+        displayName:
+          type: string
+        resourceType:
+          $ref: "#/components/schemas/ResourceType"
+        resourceSubtype:
+          type: string
+        lifecycleStatus:
+          $ref: "#/components/schemas/LifecycleStatus"
+        healthStatus:
+          $ref: "#/components/schemas/HealthStatus"
+        profileSummary:
+          $ref: "#/components/schemas/ProfileSummary"
+    ProfileSummary:
+      nullable: true
+      type: object
+      description: >-
+        Embedded profile summary populated from typed profile tables.
+        Fields vary by resource type; only applicable fields are set.
+      properties:
+        engine:
+          type: string
+          description: Database engine (e.g. mysql, postgresql)
+        version:
+          type: string
+          description: Engine version string (e.g. 8.0.36)
+        hostname:
+          type: string
+          description: Host hostname (for host and instance types)
+        ip:
+          type: string
+          description: IP address (for host type)
+        port:
+          type: integer
+          description: Database listen port
+        role:
+          type: string
+          description: Replication role (e.g. primary, replica)
+        nodeCount:
+          type: integer
+          description: Number of member instances (for database_cluster)
     AuditEvent:
       type: object
       required: [id, actorUserId, eventType, result, createdAt]
