@@ -21,6 +21,20 @@ func handleListResourceRelations(relationService *service.RelationService) http.
 			writeJSONError(w, http.StatusBadRequest, "validation_failed", err.Error())
 			return
 		}
+
+		view := r.URL.Query().Get("view")
+		if view == "resolved" {
+			items, err := relationService.ListRelationViewsByResourceID(id)
+			if err != nil {
+				writeServiceError(w, err)
+				return
+			}
+			writeJSON(w, http.StatusOK, struct {
+				Items []model.ResourceRelationView `json:"items"`
+			}{Items: items})
+			return
+		}
+
 		items, err := relationService.ListByResourceID(id)
 		if err != nil {
 			writeServiceError(w, err)
@@ -30,6 +44,24 @@ func handleListResourceRelations(relationService *service.RelationService) http.
 		writeJSON(w, http.StatusOK, struct {
 			Items []model.ResourceRelation `json:"items"`
 		}{Items: items})
+	}
+}
+
+func handleGetResourceMembers(relationService *service.RelationService) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		id, err := parseUint64IDParam(chi.URLParam(r, "id"), "resource id")
+		if err != nil {
+			writeJSONError(w, http.StatusBadRequest, "validation_failed", err.Error())
+			return
+		}
+		members, err := relationService.ListClusterMembers(id)
+		if err != nil {
+			writeServiceError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, struct {
+			Members []model.ClusterMemberView `json:"members"`
+		}{Members: members})
 	}
 }
 

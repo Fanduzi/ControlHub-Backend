@@ -58,6 +58,137 @@ func (r *RelationRepository) ListByResourceID(resourceID uint64) ([]model.Resour
 	return items, rows.Err()
 }
 
+func (r *RelationRepository) ListRelationViewsByResourceID(resourceID uint64) ([]model.ResourceRelationView, error) {
+	query := `
+	select rr.id, rr.from_resource_id, rr.to_resource_id, rr.relation_type, rr.created_at,
+	       rel.id, rel.name, rel.display_name, rel.resource_type, rel.resource_subtype,
+	       rel.health_status, rel.lifecycle_status
+	from resource_relations rr
+	join resources rel on (
+	    case when rr.from_resource_id = ? then rel.id = rr.to_resource_id
+	         else rel.id = rr.from_resource_id end
+	)
+	where rr.from_resource_id = ? or rr.to_resource_id = ?
+	order by rr.created_at desc`
+
+	rows, err := r.db.QueryContext(context.Background(), query, resourceID, resourceID, resourceID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	items := make([]model.ResourceRelationView, 0)
+	for rows.Next() {
+		var item model.ResourceRelationView
+		if err := rows.Scan(
+			&item.ID,
+			&item.FromResourceID,
+			&item.ToResourceID,
+			&item.RelationType,
+			&item.CreatedAt,
+			&item.RelatedResourceID,
+			&item.RelatedResourceName,
+			&item.RelatedResourceDisplayName,
+			&item.RelatedResourceType,
+			&item.RelatedResourceSubtype,
+			&item.RelatedResourceHealthStatus,
+			&item.RelatedResourceLifecycleStat,
+		); err != nil {
+			return nil, err
+		}
+		if item.FromResourceID == resourceID {
+			item.Direction = "outgoing"
+		} else {
+			item.Direction = "incoming"
+		}
+		items = append(items, item)
+	}
+
+	return items, rows.Err()
+}
+
+func (r *RelationRepository) ListClusterMembers(clusterID uint64) ([]model.ClusterMemberView, error) {
+	query := `
+	select m.id, m.name, m.display_name, m.resource_type, m.resource_subtype,
+	       m.lifecycle_status, m.health_status
+	from resource_relations rr
+	join resources m on m.id = rr.from_resource_id
+	where rr.to_resource_id = ? and rr.relation_type = 'member_of'
+	order by m.name`
+
+	rows, err := r.db.QueryContext(context.Background(), query, clusterID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	items := make([]model.ClusterMemberView, 0)
+	for rows.Next() {
+		var item model.ClusterMemberView
+		if err := rows.Scan(
+			&item.ResourceID,
+			&item.Name,
+			&item.DisplayName,
+			&item.ResourceType,
+			&item.ResourceSubtype,
+			&item.LifecycleStatus,
+			&item.HealthStatus,
+		); err != nil {
+			return nil, err
+		}
+		item.ProfileSummary = r.fetchMemberProfileSummary(item.ResourceID, item.ResourceType)
+		items = append(items, item)
+	}
+
+	return items, rows.Err()
+}
+
+func (r *RelationRepository) fetchMemberProfileSummary(resourceID uint64, resourceType string) *model.ProfileSummary {
+	ctx := context.Background()
+	switch resourceType {
+	case "database_instance":
+		return r.fetchInstanceProfileSummary(ctx, resourceID)
+	case "host":
+		return r.fetchHostProfileSummary(ctx, resourceID)
+	default:
+		return nil
+	}
+}
+
+func (r *RelationRepository) fetchInstanceProfileSummary(ctx context.Context, id uint64) *model.ProfileSummary {
+	var engine, version, host, role string
+	var port int
+	err := r.db.QueryRowContext(ctx,
+		`select engine, version, host, port, role from resource_profiles_database_instance where resource_id = ?`,
+		id,
+	).Scan(&engine, &version, &host, &port, &role)
+	if err != nil {
+		return nil
+	}
+	return &model.ProfileSummary{
+		Engine:  engine,
+		Version: version,
+		Hostname: host,
+		Port:    port,
+		Role:    role,
+	}
+}
+
+func (r *RelationRepository) fetchHostProfileSummary(ctx context.Context, id uint64) *model.ProfileSummary {
+	var hostname, ipAddress string
+	err := r.db.QueryRowContext(ctx,
+		`select hostname, ip_address from resource_profiles_host where resource_id = ?`,
+		id,
+	).Scan(&hostname, &ipAddress)
+	if err != nil {
+		return nil
+	}
+	return &model.ProfileSummary{
+		Hostname: hostname,
+		IP:       ipAddress,
+	}
+}
+
 func (r *RelationRepository) GetResource(id uint64) (*model.Resource, error) {
 	query := "select " + resourceColumns + " from resources where id = ?"
 

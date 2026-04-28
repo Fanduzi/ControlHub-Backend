@@ -7,6 +7,7 @@ package api
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"time"
 
@@ -176,6 +177,9 @@ func (f *fakeResourceRepo) GetResource(id uint64) (*model.Resource, error) {
 		return nil, service.ErrResourceNotFound
 	}
 	cloned := cloneResource(res)
+	if profile, ok := f.profiles[id]; ok {
+		cloned.ProfileSummary = profileToSummary(cloned.ResourceType, profile.Profile)
+	}
 	return &cloned, nil
 }
 
@@ -301,6 +305,124 @@ func (f *fakeRelationRepo) ListByResourceID(resourceID uint64) ([]model.Resource
 		}
 	}
 	return items, nil
+}
+
+func (f *fakeRelationRepo) ListRelationViewsByResourceID(resourceID uint64) ([]model.ResourceRelationView, error) {
+	items := make([]model.ResourceRelationView, 0)
+	for _, id := range f.order {
+		relation, ok := f.relations[id]
+		if !ok {
+			continue
+		}
+		if relation.FromResourceID != resourceID && relation.ToResourceID != resourceID {
+			continue
+		}
+		var relatedID uint64
+		if relation.FromResourceID == resourceID {
+			relatedID = relation.ToResourceID
+		} else {
+			relatedID = relation.FromResourceID
+		}
+		related, err := f.resources.GetResource(relatedID)
+		if err != nil {
+			continue
+		}
+		direction := "outgoing"
+		if relation.ToResourceID == resourceID {
+			direction = "incoming"
+		}
+		items = append(items, model.ResourceRelationView{
+			ID:                           relation.ID,
+			FromResourceID:               relation.FromResourceID,
+			ToResourceID:                 relation.ToResourceID,
+			RelationType:                 relation.RelationType,
+			Direction:                    direction,
+			CreatedAt:                    relation.CreatedAt,
+			RelatedResourceID:            related.ID,
+			RelatedResourceName:          related.Name,
+			RelatedResourceDisplayName:   related.DisplayName,
+			RelatedResourceType:          string(related.ResourceType),
+			RelatedResourceSubtype:       related.ResourceSubtype,
+			RelatedResourceHealthStatus:  related.HealthStatus,
+			RelatedResourceLifecycleStat: related.LifecycleStatus,
+		})
+	}
+	return items, nil
+}
+
+func (f *fakeRelationRepo) ListClusterMembers(clusterID uint64) ([]model.ClusterMemberView, error) {
+	items := make([]model.ClusterMemberView, 0)
+	for _, id := range f.order {
+		relation, ok := f.relations[id]
+		if !ok {
+			continue
+		}
+		if relation.ToResourceID != clusterID || relation.RelationType != model.RelationTypeMemberOf {
+			continue
+		}
+		member, err := f.resources.GetResource(relation.FromResourceID)
+		if err != nil {
+			continue
+		}
+		var summary *model.ProfileSummary
+		if profile, ok := f.resources.profiles[member.ID]; ok {
+			summary = profileToSummary(member.ResourceType, profile.Profile)
+		}
+		items = append(items, model.ClusterMemberView{
+			ResourceID:      member.ID,
+			Name:            member.Name,
+			DisplayName:     member.DisplayName,
+			ResourceType:    string(member.ResourceType),
+			ResourceSubtype: member.ResourceSubtype,
+			LifecycleStatus: member.LifecycleStatus,
+			HealthStatus:    member.HealthStatus,
+			ProfileSummary:  summary,
+		})
+	}
+	return items, nil
+}
+
+func profileToSummary(resourceType model.ResourceType, profile map[string]any) *model.ProfileSummary {
+	switch resourceType {
+	case model.ResourceTypeDatabaseInstance:
+		s := &model.ProfileSummary{}
+		if v, ok := profile["hostname"]; !ok {
+			if v, ok := profile["host"]; ok {
+				s.Hostname = fmt.Sprintf("%v", v)
+			}
+		} else {
+			s.Hostname = fmt.Sprintf("%v", v)
+		}
+		if v, ok := profile["port"]; ok {
+			switch p := v.(type) {
+			case float64:
+				s.Port = int(p)
+			case int:
+				s.Port = p
+			}
+		}
+		if v, ok := profile["engine"]; ok {
+			s.Engine = fmt.Sprintf("%v", v)
+		}
+		if v, ok := profile["version"]; ok {
+			s.Version = fmt.Sprintf("%v", v)
+		}
+		if v, ok := profile["role"]; ok {
+			s.Role = fmt.Sprintf("%v", v)
+		}
+		return s
+	case model.ResourceTypeHost:
+		s := &model.ProfileSummary{}
+		if v, ok := profile["hostname"]; ok {
+			s.Hostname = fmt.Sprintf("%v", v)
+		}
+		if v, ok := profile["ipAddress"]; ok {
+			s.IP = fmt.Sprintf("%v", v)
+		}
+		return s
+	default:
+		return nil
+	}
 }
 
 func (f *fakeRelationRepo) GetResource(id uint64) (*model.Resource, error) {

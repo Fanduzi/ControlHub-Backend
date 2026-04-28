@@ -207,6 +207,14 @@ func (f *fakeRelationWriteRepo) DeleteRelation(_ context.Context, relationID uin
 	return nil
 }
 
+func (f *fakeRelationWriteRepo) ListRelationViewsByResourceID(_ uint64) ([]model.ResourceRelationView, error) {
+	return []model.ResourceRelationView{}, nil
+}
+
+func (f *fakeRelationWriteRepo) ListClusterMembers(_ uint64) ([]model.ClusterMemberView, error) {
+	return []model.ClusterMemberView{}, nil
+}
+
 func TestResourceServiceCreate(t *testing.T) {
 	repo := &fakeResourceWriteRepo{resources: map[uint64]model.Resource{}}
 	svc := NewResourceService(repo)

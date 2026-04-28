@@ -20,6 +20,8 @@ var (
 
 type RelationRepository interface {
 	ListByResourceID(resourceID uint64) ([]model.ResourceRelation, error)
+	ListRelationViewsByResourceID(resourceID uint64) ([]model.ResourceRelationView, error)
+	ListClusterMembers(clusterID uint64) ([]model.ClusterMemberView, error)
 	GetResource(id uint64) (*model.Resource, error)
 	CreateRelation(ctx context.Context, input model.RelationCreateInput) (*model.ResourceRelation, error)
 	DeleteRelation(ctx context.Context, relationID uint64) error
@@ -35,6 +37,14 @@ func NewRelationService(repo RelationRepository) *RelationService {
 
 func (s *RelationService) ListByResourceID(resourceID uint64) ([]model.ResourceRelation, error) {
 	return s.repo.ListByResourceID(resourceID)
+}
+
+func (s *RelationService) ListRelationViewsByResourceID(resourceID uint64) ([]model.ResourceRelationView, error) {
+	return s.repo.ListRelationViewsByResourceID(resourceID)
+}
+
+func (s *RelationService) ListClusterMembers(clusterID uint64) ([]model.ClusterMemberView, error) {
+	return s.repo.ListClusterMembers(clusterID)
 }
 
 func (s *RelationService) Create(ctx context.Context, fromResourceID uint64, input model.RelationCreateInput) (*model.ResourceRelation, error) {

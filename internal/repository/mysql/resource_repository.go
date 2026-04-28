@@ -167,6 +167,8 @@ from resources r ` + where + " order by r.name limit ? offset ?"
 			return nil, 0, err
 		}
 
+		item.ProfileSummary = r.buildProfileSummary(ctx, item.ID, item.ResourceType)
+
 		items = append(items, item)
 	}
 
@@ -253,6 +255,8 @@ func (r *ResourceRepository) GetResource(id uint64) (*model.Resource, error) {
 	} else if err := json.Unmarshal([]byte(rawLabels), &item.Labels); err != nil {
 		return nil, err
 	}
+
+	item.ProfileSummary = r.buildProfileSummary(context.Background(), item.ID, item.ResourceType)
 
 	return &item, nil
 }
@@ -607,4 +611,87 @@ func scanResource(scanner resourceScanner) (model.Resource, error) {
 	}
 
 	return item, nil
+}
+
+func (r *ResourceRepository) buildProfileSummary(ctx context.Context, resourceID uint64, resourceType model.ResourceType) *model.ProfileSummary {
+	switch resourceType {
+	case model.ResourceTypeDatabaseInstance:
+		return r.buildInstanceProfileSummary(ctx, resourceID)
+	case model.ResourceTypeDatabaseCluster:
+		return r.buildClusterProfileSummary(ctx, resourceID)
+	case model.ResourceTypeHost:
+		return r.buildHostProfileSummary(ctx, resourceID)
+	case model.ResourceTypeService:
+		return r.buildServiceProfileSummary(ctx, resourceID)
+	default:
+		return nil
+	}
+}
+
+func (r *ResourceRepository) buildInstanceProfileSummary(ctx context.Context, id uint64) *model.ProfileSummary {
+	var engine, version, host, role string
+	var port int
+	err := r.db.QueryRowContext(ctx,
+		`select engine, version, host, port, role from resource_profiles_database_instance where resource_id = ?`,
+		id,
+	).Scan(&engine, &version, &host, &port, &role)
+	if err != nil {
+		return nil
+	}
+	return &model.ProfileSummary{
+		Hostname: host,
+		Port:     port,
+		Engine:   engine,
+		Version:  version,
+		Role:     role,
+	}
+}
+
+func (r *ResourceRepository) buildClusterProfileSummary(ctx context.Context, id uint64) *model.ProfileSummary {
+	var engine string
+	err := r.db.QueryRowContext(ctx,
+		`select engine from resource_profiles_database_cluster where resource_id = ?`,
+		id,
+	).Scan(&engine)
+	if err != nil {
+		return nil
+	}
+	var nodeCount int
+	r.db.QueryRowContext(ctx,
+		`select count(*) from resource_relations where to_resource_id = ? and relation_type = 'member_of'`,
+		id,
+	).Scan(&nodeCount)
+	return &model.ProfileSummary{
+		Engine:    engine,
+		NodeCount: nodeCount,
+	}
+}
+
+func (r *ResourceRepository) buildHostProfileSummary(ctx context.Context, id uint64) *model.ProfileSummary {
+	var hostname, ipAddress string
+	err := r.db.QueryRowContext(ctx,
+		`select hostname, ip_address from resource_profiles_host where resource_id = ?`,
+		id,
+	).Scan(&hostname, &ipAddress)
+	if err != nil {
+		return nil
+	}
+	return &model.ProfileSummary{
+		Hostname: hostname,
+		IP:       ipAddress,
+	}
+}
+
+func (r *ResourceRepository) buildServiceProfileSummary(ctx context.Context, id uint64) *model.ProfileSummary {
+	var systemName string
+	err := r.db.QueryRowContext(ctx,
+		`select system_name from resource_profiles_service where resource_id = ?`,
+		id,
+	).Scan(&systemName)
+	if err != nil {
+		return nil
+	}
+	return &model.ProfileSummary{
+		Hostname: systemName,
+	}
 }
