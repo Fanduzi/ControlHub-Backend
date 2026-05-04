@@ -1208,6 +1208,8 @@ components:
           description: Human-readable reason for archiving
         profileSummary:
           $ref: "#/components/schemas/ProfileSummary"
+        databaseOperationalSummary:
+          $ref: "#/components/schemas/DatabaseOperationalSummary"
     ResourceRelation:
       type: object
       required: [id, fromResourceId, toResourceId, relationType, createdAt]
@@ -1335,6 +1337,57 @@ components:
         nodeCount:
           type: integer
           description: Number of member instances (for database_cluster)
+    DatabaseOperationalSummary:
+      nullable: true
+      type: object
+      description: >-
+        Derived read-only database member rollup for operator list views.
+        Populated for database_cluster resources. Counts are best-effort from
+        the current read model.
+      properties:
+        memberCount:
+          type: integer
+          format: int64
+          description: Total member instances in the cluster
+        criticalMemberCount:
+          type: integer
+          format: int64
+          description: Members with health_status = critical
+        warningMemberCount:
+          type: integer
+          format: int64
+          description: Members with health_status = warning
+        stoppedMemberCount:
+          type: integer
+          format: int64
+          description: Members with lifecycle_status = stopped
+        degradedMemberCount:
+          type: integer
+          format: int64
+          description: Members with lifecycle_status = degraded
+        unknownRoleCount:
+          type: integer
+          format: int64
+          description: Members without a recognized role
+        primaryMemberCount:
+          type: integer
+          format: int64
+          description: Members with primary/master/writer role
+        replicaMemberCount:
+          type: integer
+          format: int64
+          description: Members with replica/secondary/reader role
+        worstMemberId:
+          type: integer
+          format: int64
+          nullable: true
+          description: ID of the worst-status member
+        worstMemberName:
+          type: string
+          description: Display name of the worst-status member
+        worstMemberStatus:
+          type: string
+          description: Health status of the worst-status member
     AuditEvent:
       type: object
       required: [id, actorUserId, eventType, result, createdAt]

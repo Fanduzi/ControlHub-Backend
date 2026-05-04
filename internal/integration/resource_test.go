@@ -12,6 +12,11 @@ import (
 	"github.com/fan/controlhub/internal/service"
 )
 
+// Seed data ClickHouse cluster:
+//   analytics-ch-cluster-prod  (database_cluster, clickhouse, healthy, running)
+//     ├── analytics-ch-node-01-prod (database_instance, clickhouse, healthy, replica)
+//     └── analytics-ch-node-02-prod (database_instance, clickhouse, critical, replica)
+
 // Subtypes present in seed data (migration 0004):
 //   mysql, clickhouse, postgresql, redis, vm, physical, api, nginx, haproxy, envoy
 
@@ -278,4 +283,118 @@ func TestResourceRepository_ResourceSubtypeWithResourceType(t *testing.T) {
 			t.Errorf("got subtype %q, want mysql", item.ResourceSubtype)
 		}
 	}
+}
+
+
+func TestResourceRepository_DatabaseClusterOperationalSummary(t *testing.T) {
+	db := setupTestDB(t)
+	repo := mysql.NewResourceRepository(db)
+	ctx := context.Background()
+
+	t.Run("GetResource returns rollup for database_cluster", func(t *testing.T) {
+		items, _, err := repo.ListResources(ctx, model.ResourceListQuery{
+			ResourceTypes:    []string{string(model.ResourceTypeDatabaseCluster)},
+			ResourceSubtypes: []string{"clickhouse"},
+			EnvironmentIDs:   []uint64{envProd},
+			Page:             1,
+			PageSize:         100,
+		})
+		if err != nil {
+			t.Fatalf("list clusters: %v", err)
+		}
+		if len(items) == 0 {
+			t.Fatal("expected at least one clickhouse cluster in seed data")
+		}
+
+		var clusterID uint64
+		for _, item := range items {
+			if item.Name == "analytics-ch-cluster-prod" {
+				clusterID = item.ID
+				break
+			}
+		}
+		if clusterID == 0 {
+			t.Fatal("analytics-ch-cluster-prod not found")
+		}
+
+		detail, err := repo.GetResource(clusterID)
+		if err != nil {
+			t.Fatalf("get resource: %v", err)
+		}
+
+		summary := detail.DatabaseOperationalSummary
+		if summary == nil {
+			t.Fatal("expected DatabaseOperationalSummary for database_cluster resource, got nil")
+		}
+		if summary.MemberCount != 2 {
+			t.Errorf("MemberCount = %d, want 2", summary.MemberCount)
+		}
+		if summary.CriticalMemberCount != 1 {
+			t.Errorf("CriticalMemberCount = %d, want 1", summary.CriticalMemberCount)
+		}
+		if summary.ReplicaMemberCount != 2 {
+			t.Errorf("ReplicaMemberCount = %d, want 2", summary.ReplicaMemberCount)
+		}
+		if summary.PrimaryMemberCount != 0 {
+			t.Errorf("PrimaryMemberCount = %d, want 0", summary.PrimaryMemberCount)
+		}
+		if summary.WorstMemberStatus != "critical" {
+			t.Errorf("WorstMemberStatus = %q, want %q", summary.WorstMemberStatus, "critical")
+		}
+		if summary.WorstMemberName != "Analytics ClickHouse Node 02" {
+			t.Errorf("WorstMemberName = %q, want %q", summary.WorstMemberName, "Analytics ClickHouse Node 02")
+		}
+	})
+
+	t.Run("ListResources includes rollup for database_clusters", func(t *testing.T) {
+		items, _, err := repo.ListResources(ctx, model.ResourceListQuery{
+			ResourceTypes:    []string{string(model.ResourceTypeDatabaseCluster)},
+			ResourceSubtypes: []string{"clickhouse"},
+			EnvironmentIDs:   []uint64{envProd},
+			Page:             1,
+			PageSize:         100,
+		})
+		if err != nil {
+			t.Fatalf("list clusters: %v", err)
+		}
+
+		var found bool
+		var summary *model.DatabaseOperationalSummary
+		for _, item := range items {
+			if item.Name == "analytics-ch-cluster-prod" {
+				found = true
+				summary = item.DatabaseOperationalSummary
+				break
+			}
+		}
+		if !found {
+			t.Fatal("analytics-ch-cluster-prod not found in list")
+		}
+
+		if summary == nil {
+			t.Fatal("expected DatabaseOperationalSummary in list response, got nil")
+		}
+		if summary.MemberCount != 2 {
+			t.Errorf("MemberCount = %d, want 2", summary.MemberCount)
+		}
+		if summary.CriticalMemberCount != 1 {
+			t.Errorf("CriticalMemberCount = %d, want 1", summary.CriticalMemberCount)
+		}
+	})
+
+	t.Run("non-cluster resources have no rollup", func(t *testing.T) {
+		items, _, err := repo.ListResources(ctx, model.ResourceListQuery{
+			ResourceTypes: []string{string(model.ResourceTypeHost)},
+			Page:          1,
+			PageSize:      5,
+		})
+		if err != nil {
+			t.Fatalf("list hosts: %v", err)
+		}
+		for _, item := range items {
+			if item.DatabaseOperationalSummary != nil {
+				t.Errorf("host %q should not have DatabaseOperationalSummary", item.Name)
+			}
+		}
+	})
 }

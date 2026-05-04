@@ -546,8 +546,9 @@ func NewTestServer() *TestServer {
 			6: {ID: 6, ResourceType: model.ResourceTypeHost, ResourceSubtype: "vm", Name: "prod-db-host-01", DisplayName: "Prod DB Host 01", EnvironmentID: 1, OwnerID: 3, LifecycleStatus: "running", HealthStatus: "healthy", Source: "manual", Labels: map[string]string{"team": "platform"}, CreatedAt: time.Date(2026, 4, 11, 20, 0, 0, 0, time.UTC), UpdatedAt: time.Date(2026, 4, 11, 20, 0, 0, 0, time.UTC)},
 			7: {ID: 7, ResourceType: model.ResourceTypeHost, ResourceSubtype: "vm", Name: "bare-host", DisplayName: "Bare Host", EnvironmentID: 1, OwnerID: 3, LifecycleStatus: "running", HealthStatus: "healthy", Source: "manual", Labels: map[string]string{}, CreatedAt: time.Date(2026, 4, 11, 20, 0, 0, 0, time.UTC), UpdatedAt: time.Date(2026, 4, 11, 20, 0, 0, 0, time.UTC)},
 			8: {ID: 8, ResourceType: model.ResourceTypeHost, ResourceSubtype: "vm", Name: "archived-host", DisplayName: "Archived Host", EnvironmentID: 1, OwnerID: 3, LifecycleStatus: "decommissioned", HealthStatus: "unknown", Source: "manual", Labels: map[string]string{}, CreatedAt: time.Date(2026, 4, 11, 19, 0, 0, 0, time.UTC), UpdatedAt: time.Date(2026, 4, 11, 19, 0, 0, 0, time.UTC), ArchivedAt: &archivedAt, ArchiveReason: &archiveReason},
+			9: {ID: 9, ResourceType: model.ResourceTypeDatabaseCluster, ResourceSubtype: "clickhouse", Name: "analytics-ch-cluster-prod", DisplayName: "Analytics ClickHouse Cluster Production", EnvironmentID: 1, OwnerID: 2, LifecycleStatus: "running", HealthStatus: "healthy", Source: "manual", Labels: map[string]string{"team": "analytics"}, DatabaseOperationalSummary: &model.DatabaseOperationalSummary{MemberCount: 2, CriticalMemberCount: 1, WarningMemberCount: 0, StoppedMemberCount: 0, DegradedMemberCount: 0, UnknownRoleCount: 0, PrimaryMemberCount: 0, ReplicaMemberCount: 2, WorstMemberID: ptrInt64(10), WorstMemberName: "Analytics ClickHouse Node 02", WorstMemberStatus: "critical"}, CreatedAt: time.Date(2026, 4, 11, 20, 0, 0, 0, time.UTC), UpdatedAt: time.Date(2026, 4, 11, 20, 0, 0, 0, time.UTC)},
 		},
-		listOrder: []uint64{1, 2, 8},
+		listOrder: []uint64{1, 2, 8, 9},
 		profiles: map[uint64]*model.ResourceProfileResponse{
 			3: {ResourceID: 3, ResourceType: model.ResourceTypeDatabaseInstance, ResourceSubtype: "mysql", Profile: map[string]any{"engine": "mysql", "version": "8.0.36", "host": "prod-db-host-01.internal", "port": 3306, "role": "primary"}},
 			4: {ResourceID: 4, ResourceType: model.ResourceTypeDatabaseCluster, ResourceSubtype: "mysql", Profile: map[string]any{"engine": "mysql", "topologyMode": "primary-replica", "primaryEndpoint": "order-mysql-cluster-prod.internal:3306"}},
@@ -682,3 +683,5 @@ func cloneProfileResponse(profile *model.ResourceProfileResponse) *model.Resourc
 }
 
 func ptrUint64(v uint64) *uint64 { return &v }
+
+func ptrInt64(v int64) *int64 { return &v }

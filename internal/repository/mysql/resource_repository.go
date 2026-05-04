@@ -172,7 +172,13 @@ from resources r ` + where + " order by r.name limit ? offset ?"
 		items = append(items, item)
 	}
 
-	return items, total, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, 0, err
+	}
+
+	r.attachDatabaseOperationalSummaries(ctx, items)
+
+	return items, total, nil
 }
 
 // buildInClause returns a parameterized placeholder string like "?, ?, ?" for n values.
@@ -257,6 +263,10 @@ func (r *ResourceRepository) GetResource(id uint64) (*model.Resource, error) {
 	}
 
 	item.ProfileSummary = r.buildProfileSummary(context.Background(), item.ID, item.ResourceType)
+
+	if item.ResourceType == model.ResourceTypeDatabaseCluster {
+		item.DatabaseOperationalSummary = r.buildDatabaseOperationalSummary(context.Background(), item.ID)
+	}
 
 	return &item, nil
 }
@@ -694,4 +704,203 @@ func (r *ResourceRepository) buildServiceProfileSummary(ctx context.Context, id 
 	return &model.ProfileSummary{
 		Hostname: systemName,
 	}
+}
+
+// attachDatabaseOperationalSummaries batch-fetches cluster member rollups for
+// database_cluster resources in the given list.
+func (r *ResourceRepository) attachDatabaseOperationalSummaries(ctx context.Context, items []model.Resource) {
+	var clusterIDs []uint64
+	for _, item := range items {
+		if item.ResourceType == model.ResourceTypeDatabaseCluster {
+			clusterIDs = append(clusterIDs, item.ID)
+		}
+	}
+	if len(clusterIDs) == 0 {
+		return
+	}
+
+	summaries := r.fetchDatabaseOperationalSummaries(ctx, clusterIDs)
+	for i := range items {
+		if s, ok := summaries[items[i].ID]; ok {
+			items[i].DatabaseOperationalSummary = s
+		}
+	}
+}
+
+// fetchDatabaseOperationalSummaries computes operational rollups for the given
+// cluster IDs in a single batch query.
+func (r *ResourceRepository) fetchDatabaseOperationalSummaries(ctx context.Context, clusterIDs []uint64) map[uint64]*model.DatabaseOperationalSummary {
+	ph := buildInClause(len(clusterIDs))
+	args := make([]any, len(clusterIDs))
+	for i, id := range clusterIDs {
+		args[i] = id
+	}
+
+	countQuery := `SELECT
+		rr.to_resource_id AS cluster_id,
+		COUNT(*) AS member_count,
+		SUM(CASE WHEN child.health_status = 'critical' THEN 1 ELSE 0 END) AS critical_member_count,
+		SUM(CASE WHEN child.health_status = 'warning' THEN 1 ELSE 0 END) AS warning_member_count,
+		SUM(CASE WHEN child.lifecycle_status = 'stopped' THEN 1 ELSE 0 END) AS stopped_member_count,
+		SUM(CASE WHEN child.lifecycle_status = 'degraded' THEN 1 ELSE 0 END) AS degraded_member_count
+	FROM resource_relations rr
+	JOIN resources child ON child.id = rr.from_resource_id
+	WHERE rr.relation_type = 'member_of'
+	  AND rr.to_resource_id IN (` + ph + `)
+	GROUP BY rr.to_resource_id`
+
+	rows, err := r.db.QueryContext(ctx, countQuery, args...)
+	if err != nil {
+		return nil
+	}
+	defer rows.Close()
+
+	type counts struct {
+		memberCount         int64
+		criticalMemberCount int64
+		warningMemberCount  int64
+		stoppedMemberCount  int64
+		degradedMemberCount int64
+	}
+	countMap := make(map[uint64]*counts)
+	for rows.Next() {
+		var cid uint64
+		var c counts
+		if err := rows.Scan(&cid, &c.memberCount, &c.criticalMemberCount, &c.warningMemberCount, &c.stoppedMemberCount, &c.degradedMemberCount); err != nil {
+			return nil
+		}
+		countMap[cid] = &c
+	}
+	if err := rows.Err(); err != nil {
+		return nil
+	}
+
+	// Fetch role counts from instance profiles.
+	roleQuery := `SELECT
+		rr.to_resource_id AS cluster_id,
+		SUM(CASE WHEN LOWER(pi.role) IN ('primary','master','writer') THEN 1 ELSE 0 END) AS primary_count,
+		SUM(CASE WHEN LOWER(pi.role) IN ('replica','secondary','reader') THEN 1 ELSE 0 END) AS replica_count,
+		SUM(CASE WHEN pi.role IS NULL OR pi.role = '' THEN 1 ELSE 0 END) AS unknown_role_count
+	FROM resource_relations rr
+	JOIN resources child ON child.id = rr.from_resource_id
+	LEFT JOIN resource_profiles_database_instance pi ON pi.resource_id = child.id
+	WHERE rr.relation_type = 'member_of'
+	  AND rr.to_resource_id IN (` + ph + `)
+	GROUP BY rr.to_resource_id`
+
+	roleRows, err := r.db.QueryContext(ctx, roleQuery, args...)
+	if err != nil {
+		// Non-fatal: role data is optional.
+		roleRows = nil
+	}
+	type roleCounts struct {
+		primaryCount    int64
+		replicaCount    int64
+		unknownRoleCount int64
+	}
+	roleMap := make(map[uint64]*roleCounts)
+	if roleRows != nil {
+		for roleRows.Next() {
+			var cid uint64
+			var rc roleCounts
+			if err := roleRows.Scan(&cid, &rc.primaryCount, &rc.replicaCount, &rc.unknownRoleCount); err != nil {
+				break
+			}
+			roleMap[cid] = &rc
+		}
+		roleRows.Close()
+	}
+
+	// Fetch worst member for each cluster.
+	worstQuery := `SELECT
+		rr.to_resource_id AS cluster_id,
+		child.id AS member_id,
+		child.display_name AS member_name,
+		CASE child.health_status
+			WHEN 'critical' THEN 4
+			WHEN 'warning' THEN 3
+			WHEN 'unknown' THEN 2
+			ELSE 1
+		END AS health_rank,
+		CASE child.lifecycle_status
+			WHEN 'stopped' THEN 2
+			WHEN 'degraded' THEN 1
+			ELSE 0
+		END AS lifecycle_rank,
+		child.health_status,
+		child.lifecycle_status
+	FROM resource_relations rr
+	JOIN resources child ON child.id = rr.from_resource_id
+	WHERE rr.relation_type = 'member_of'
+	  AND rr.to_resource_id IN (` + ph + `)
+	ORDER BY cluster_id, health_rank DESC, lifecycle_rank DESC, child.display_name ASC`
+
+	worstRows, err := r.db.QueryContext(ctx, worstQuery, args...)
+	if err != nil {
+		return nil
+	}
+	defer worstRows.Close()
+
+	type worstInfo struct {
+		id       int64
+		name     string
+		status   string
+	}
+	worstMap := make(map[uint64]*worstInfo)
+	for worstRows.Next() {
+		var cid uint64
+		var wi worstInfo
+		var healthRank, lifecycleRank int
+		var healthStatus, lifecycleStatus string
+		if err := worstRows.Scan(&cid, &wi.id, &wi.name, &healthRank, &lifecycleRank, &healthStatus, &lifecycleStatus); err != nil {
+			return nil
+		}
+		if _, exists := worstMap[cid]; !exists {
+			wi.status = healthStatus
+			if healthStatus == "healthy" || healthStatus == "" {
+				if lifecycleStatus == "stopped" {
+					wi.status = "stopped"
+				} else if lifecycleStatus == "degraded" {
+					wi.status = "degraded"
+				}
+			}
+			worstMap[cid] = &wi
+		}
+	}
+	if err := worstRows.Err(); err != nil {
+		return nil
+	}
+
+	result := make(map[uint64]*model.DatabaseOperationalSummary, len(clusterIDs))
+	for _, cid := range clusterIDs {
+		c, ok := countMap[cid]
+		if !ok {
+			continue
+		}
+		s := &model.DatabaseOperationalSummary{
+			MemberCount:         c.memberCount,
+			CriticalMemberCount: c.criticalMemberCount,
+			WarningMemberCount:  c.warningMemberCount,
+			StoppedMemberCount:  c.stoppedMemberCount,
+			DegradedMemberCount: c.degradedMemberCount,
+		}
+		if rc, ok := roleMap[cid]; ok {
+			s.PrimaryMemberCount = rc.primaryCount
+			s.ReplicaMemberCount = rc.replicaCount
+			s.UnknownRoleCount = rc.unknownRoleCount
+		}
+		if w, ok := worstMap[cid]; ok {
+			s.WorstMemberID = &w.id
+			s.WorstMemberName = w.name
+			s.WorstMemberStatus = w.status
+		}
+		result[cid] = s
+	}
+	return result
+}
+
+// buildDatabaseOperationalSummary computes a rollup for a single cluster.
+func (r *ResourceRepository) buildDatabaseOperationalSummary(ctx context.Context, clusterID uint64) *model.DatabaseOperationalSummary {
+	summaries := r.fetchDatabaseOperationalSummaries(ctx, []uint64{clusterID})
+	return summaries[clusterID]
 }

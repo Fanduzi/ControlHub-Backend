@@ -31,8 +31,9 @@ type Resource struct {
 	Source          string            `json:"source"`
 	ExternalID      string            `json:"externalId"`
 	Labels          map[string]string `json:"labels"`
-	ProfileSummary  *ProfileSummary   `json:"profileSummary,omitempty"`
-	ClusterId       *uint64           `json:"clusterId,omitempty"`
+	ProfileSummary              *ProfileSummary              `json:"profileSummary,omitempty"`
+	DatabaseOperationalSummary  *DatabaseOperationalSummary  `json:"databaseOperationalSummary,omitempty"`
+	ClusterId                   *uint64                      `json:"clusterId,omitempty"`
 	CreatedAt       time.Time         `json:"createdAt"`
 	UpdatedAt       time.Time         `json:"updatedAt"`
 	ArchivedAt      *time.Time        `json:"archivedAt,omitempty"`
@@ -48,6 +49,22 @@ type ProfileSummary struct {
 	Engine    string `json:"engine,omitempty"`
 	Version   string `json:"version,omitempty"`
 	Role      string `json:"role,omitempty"`
+}
+
+// DatabaseOperationalSummary is a derived read-only rollup of database cluster
+// member health for operator list views. Populated for database_cluster resources.
+type DatabaseOperationalSummary struct {
+	MemberCount         int64  `json:"memberCount"`
+	CriticalMemberCount int64  `json:"criticalMemberCount"`
+	WarningMemberCount  int64  `json:"warningMemberCount"`
+	StoppedMemberCount  int64  `json:"stoppedMemberCount"`
+	DegradedMemberCount int64  `json:"degradedMemberCount"`
+	UnknownRoleCount    int64  `json:"unknownRoleCount"`
+	PrimaryMemberCount  int64  `json:"primaryMemberCount"`
+	ReplicaMemberCount  int64  `json:"replicaMemberCount"`
+	WorstMemberID       *int64 `json:"worstMemberId,omitempty"`
+	WorstMemberName     string `json:"worstMemberName,omitempty"`
+	WorstMemberStatus   string `json:"worstMemberStatus,omitempty"`
 }
 
 // ResourceRelationView extends ResourceRelation with resolved related resource metadata.
