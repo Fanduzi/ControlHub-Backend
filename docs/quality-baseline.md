@@ -1,0 +1,140 @@
+# ControlHub Quality Baseline
+
+## Purpose
+
+This document defines the current quality baseline for ControlHub. It records
+which commands protect which behavior, where coverage is missing, and which
+checks block future phase completion.
+
+Phase 28 established this baseline after Phases 16–27 added the full database
+operator workflow across backend and frontend. No new product capability was
+added in Phase 28.
+
+## Backend Gates
+
+| Command | What It Protects | Required Before Merge | Notes |
+|---|---|---|---|
+| `go test -count=1 ./...` | Unit and package-level behavior across all layers | Yes | 30 test files across api, model, service, repository, config, cutover, openapi. Runs without Docker. |
+| `go vet ./...` | Static correctness checks | Yes | Runs without Docker |
+| `go build ./...` | Compilation across packages | Yes | Runs without Docker |
+| `make openapi-validate` | OpenAPI 3.1 YAML validity against JSON Schema | Yes | Runs without Docker |
+| `make test-integration` | MySQL/Testcontainers: clean migration, write conflicts, topology SQL, unique constraints | Merge gate when Docker available | Requires Docker. Tests: archive, legacy-import, mysql, relation, resource, topology, testenv |
+| `make test-openapi-fuzz` | Schemathesis fuzzing: 50 examples/operation, no-5xx, status conformance, content-type conformance, response schema conformance | Release/nightly gate or merge gate for API changes | Requires Docker + Schemathesis CLI |
+
+### Backend Test Inventory (30 files)
+
+**API handler tests** (8 files):
+- `audit_handler_test.go`, `auth_handler_test.go`, `dictionary_handler_test.go`
+- `docs_handler_test.go`, `health_handler_test.go`, `relation_handler_test.go`
+- `resource_handler_test.go`, `topology_handler_test.go`
+
+**Model tests** (3 files):
+- `pagination_test.go`, `resource_test.go`, `taxonomy_test.go`
+
+**Service tests** (8 files):
+- `auth_service_test.go`, `dictionary_service_test.go`, `profile_service_test.go`
+- `resource_read_service_test.go`, `resource_write_service_test.go`
+- `topology_semantics_test.go`, `topology_service_test.go`
+
+**Repository tests** (1 file):
+- `audit_repository_test.go`
+
+**Config tests** (1 file):
+- `config_test.go`
+
+**Cutover tests** (1 file):
+- `local_test.go`
+
+**OpenAPI tests** (1 file):
+- `openapi_test.go`
+
+**Integration tests** (7 files, require Docker):
+- `archive_test.go`, `legacy_import_test.go`, `mysql_test.go`
+- `openapi_fuzz_test.go`, `relation_test.go`, `resource_test.go`
+- `topology_test.go`, `testenv_test.go`
+
+## Frontend Gates
+
+| Command | What It Protects | Required Before Merge | Notes |
+|---|---|---|---|
+| `npx tsc --noEmit -p tsconfig.json` | TypeScript contract and type safety | Yes | Runs without backend |
+| `npm run lint` | ESLint rules and unused code | Yes | Runs without backend |
+| `npm run test` | Vitest unit/component behavior (52 test files) | Yes | Runs without backend |
+| `npm run build` | Next.js production build and SSR compatibility | Yes | Runs without backend |
+| `npm run check:e2e-governance` | Browser-test policy: no stderr suppression, no success-path screenshots, console/network guards, UI login for SSR | Yes | Runs without backend |
+| `npm run test:e2e:smoke` | Core console reachability (login, shell, dictionaries) | Yes when backend available | Requires running backend |
+| `npm run test:e2e:interaction` | Sheets/dropdowns/back navigation/accent stability | Yes when frontend interaction code changes | Requires running backend |
+| `npm run test:e2e` | Full 10-spec browser regression | Merge gate before phase close | Requires running backend. 50/50 passed after Phase 27B. |
+
+### Frontend Test Inventory
+
+**E2E specs** (10 files):
+- `console-ux.spec.ts` — Console shell navigation, environment context
+- `databases-sheet.spec.ts` — Database list interactions
+- `list-pagination.spec.ts` — Resource and audit list query params
+- `login.spec.ts` — Login and auth session
+- `operator-console-smoke.spec.ts` — Core smoke reachability
+- `operator-database-workflow.spec.ts` — Full database operator workflow
+- `operator-interaction-stability.spec.ts` — Sheet/dropdown/back-nav stability
+- `resource-archive.spec.ts` — Resource archive action
+- `resources-sheet.spec.ts` — Resource detail sheet
+- `settings.spec.ts` — Settings dictionaries
+- `topology.spec.ts` — Topology load and same-origin API proxy
+
+**Unit/component tests** (52 files across tests/):
+- Component tests: 27 files (accent-switcher, activity-timeline, audit-table, cluster-members-table, create-resource-sheet, database-consistency-panel, database-decision-deck, database-instance-facts-panel, database-operator-workbench, database-supporting-details, database-table, db-type-icon, edit-resource-sheet, environment-provider, language-switcher, multi-select-filter, overview-content, pagination-controls, resource-archive-button, resource-detail-sheet-loader, resource-detail-sheet, resource-link, resource-relation-panel, resource-table, sidebar, theme-toggle, topbar)
+- E2E harness tests: 2 files (console-guards, interaction-stability)
+- Lib tests: 9 files (database-diagnostic-runbook, database-operational-signal, database-operator-workbench, database-read-model-consistency, diagnostic-copy, environment-params, list-page-search-params, resource-copy, resource-summary, view-models)
+- Page integration tests: 2 files (pages.list-pagination, resource-detail-page)
+- Service tests: 5 files (api-client, audits, e2e-api-helpers, resources, settings)
+- Topology tests: 4 files (topology-mapper-semantic, topology-mapper, topology-panel, topology-service)
+- Hook tests: 1 file (use-sidebar-state)
+- E2E API proxy CORS test: 1 file
+
+**Scripts** (1 file):
+- `scripts/check-e2e-governance.mjs` — Policy compliance checker
+
+## Coverage Matrix
+
+| Capability | Backend Unit | Backend Integration | OpenAPI/Fuzz | Frontend Unit/Component | E2E Smoke | E2E Interaction | E2E Workflow | Manual Browser | Gap / Next Action |
+|---|---|---|---|---|---|---|---|---|---|
+| Login and auth session | `auth_service_test`, `auth_handler_test` | No | Schema covers POST /auth/login | No | Yes (`login.spec`) | No | Yes (`operator-database-workflow`) | Yes | E2E covers this end-to-end. Backend token/session mechanics tested at unit level. |
+| Console shell navigation | No | No | No | `sidebar.test`, `topbar.test`, `use-sidebar-state.test` | Yes (`operator-console-smoke`) | Yes (`operator-interaction-stability`) | Yes | Yes | Covered. |
+| Environment context | No | No | No | `environment-provider.test` | Partial (`operator-console-smoke`) | Partial (`operator-interaction-stability`) | Yes (`operator-database-workflow`) | Yes | Add cases only if regressions recur. |
+| Resource list pagination/query params | `pagination_test`, `resource_handler_test` | `resource_test` (integration) | Schema covers GET /resources | `pagination-controls.test`, `resource-table.test`, `list-page-search-params.test`, `pages.list-pagination.test` | No | No | Yes (`list-pagination.spec`) | Yes | Covered by list-pagination E2E after Phase 27B. |
+| Database list search/filter/sort/signal | No | No | Schema covers GET /resources?type=database_* | `database-table.test`, `database-operational-signal.test`, `multi-select-filter.test` | No | Yes (`databases-sheet.spec`) | Yes (`operator-database-workflow`) | Yes | Backend rollup tested at service level. Frontend signal logic tested at unit level. |
+| Database detail cluster abnormal member workflow | `resource_read_service_test` | `resource_test` (integration) | Schema covers GET /resources/:id | `database-decision-deck.test`, `database-consistency-panel.test`, `cluster-members-table.test`, `database-read-model-consistency.test` | No | No | Yes (`operator-database-workflow`) | Yes | Covered by full E2E workflow. |
+| Database detail healthy instance workflow | `resource_read_service_test` | `resource_test` (integration) | Schema covers GET /resources/:id | `database-instance-facts-panel.test`, `database-supporting-details.test`, `database-operator-workbench.test` | No | No | Yes (`operator-database-workflow`) | Yes | Covered by full E2E workflow. |
+| Overview attention queue | No | No | No | `overview-content.test` | Partial (`operator-console-smoke`) | No | Yes (`operator-database-workflow`) | Yes | Covered by database workflow E2E path. |
+| Topology load and same-origin API proxy | `topology_service_test`, `topology_semantics_test` | `topology_test` (integration) | Schema covers GET /topology | `topology-mapper.test`, `topology-mapper-semantic.test`, `topology-panel.test`, `topology-service.test`, `e2e-api-proxy-cors.test` | Yes (`topology.spec`) | Yes (`operator-interaction-stability`) | Yes (`topology.spec`) | Yes | Covered. Same-origin /__api proxy tested at E2E and CORS unit level. |
+| Audit list pagination/filtering | `audit_handler_test`, `audit_repository_test` | No | Schema covers GET /audit-events | `audit-table.test`, `audits.test` | No | No | Yes (`list-pagination.spec`) | Yes | Covered by list-pagination E2E. |
+| Settings dictionaries | `dictionary_handler_test`, `dictionary_service_test` | No | Schema covers GET /dictionaries/* | `settings.test` | Yes (`settings.spec`) | No | No | Yes | Smoke-only is acceptable for this static data page. |
+| Backend resource CRUD/read models | `resource_handler_test`, `resource_read_service_test`, `resource_write_service_test`, `resource_test` (model) | `resource_test` (integration), `relation_test` | Schema covers all resource endpoints | `resource-detail-sheet.test`, `resource-detail-sheet-loader.test`, `create-resource-sheet.test`, `edit-resource-sheet.test` | Partial (`resources-sheet.spec`) | Yes (`resources-sheet.spec`) | Yes | Yes | Covered. |
+| Backend database operational summary | `resource_read_service_test` | Yes (via resource integration) | OpenAPI schema for GET /resources/:id includes operational summary fields | `database-operational-signal.test`, `database-read-model-consistency.test` | No | No | Yes (`operator-database-workflow`) | Yes | Covered. Operational summary absence on instances is by design and tested at unit level. |
+| OpenAPI schema validity | `openapi_test.go` | No | `make openapi-validate` + Schemathesis fuzz | N/A | N/A | N/A | N/A | N/A | Dual validation: JSON Schema validation + runtime fuzzing. |
+| OpenAPI fuzz behavior | N/A | `openapi_fuzz_test.go` | Schemathesis: 50 examples/operation, no-5xx, status conformance, content-type conformance, response schema conformance | N/A | N/A | N/A | N/A | N/A | Requires Docker. Run before merge when API changes or as nightly gate. |
+
+## Known Remaining Gaps
+
+1. **No CI runner**: All gates are local-only. There is no GitHub Actions or equivalent pipeline. Phase 28 does not add one, but documents what a future CI pipeline should run.
+
+2. **Integration test coverage for audit repository**: `audit_repository_test.go` is a unit test with fakes. The MySQL-backed audit query paths are not exercised in integration tests.
+
+3. **No automated contract smoke between OpenAPI schema and frontend TypeScript types**: TypeScript types are derived from backend responses during development, but there is no automated check that they stay in sync. The OpenAPI schema and E2E recorded-request harness provide indirect coverage.
+
+4. **Visual regression**: Not adopted. Current pain is semantic/interactivity, not pixel drift. See research notes for tradeoff analysis.
+
+5. **Cross-browser testing**: Deferred. All E2E runs use Chromium. No Firefox/WebKit matrix until cross-browser issues appear.
+
+6. **Seed data constants**: E2E tests reference seed resources by name (`analytics-ch-cluster-prod`, `Analytics ClickHouse Node 02`) and ID (`14`, `22`). These are stable in the seed migration but not centralized as typed constants.
+
+## Merge Blocking Rules
+
+1. **Do not** complete a phase with failing unit, lint, typecheck, or build gates.
+2. **Do not** call full E2E failures pre-existing without identical main-branch comparison evidence.
+3. **Do not** merge browser-facing changes without at least smoke E2E.
+4. **Do not** merge interaction changes (sheets, dropdowns, navigation) without interaction E2E.
+5. **Do not** merge backend API or read-model changes without OpenAPI validation and targeted backend tests.
+6. **Do not** skip Docker-dependent backend gates without stating why in the phase report.
+7. **Do not** add `stderr: "ignore"`, `stdout: "ignore"`, success-path screenshots, or broad output suppression in E2E specs.
+8. **Do not** merge with dirty worktree or untracked artifacts that are not intentionally ignored.
