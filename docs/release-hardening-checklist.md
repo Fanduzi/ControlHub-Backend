@@ -14,23 +14,27 @@ phase report.
 cd /Users/fan/JsProjects/ControlHub
 git status --short --branch
 git worktree list
+npm run check:e2e-preflight
 ```
 
-Check for stale processes that will conflict with Playwright:
+`npm run check:e2e-preflight` detects stale `:3100` frontend dev server and
+`:8081` E2E API proxy listeners. It prints PID and command diagnostics for any
+occupied port. It **does not kill processes automatically**. Default mode exits
+0 with warnings; strict mode can exit non-zero.
+
+If preflight reports listeners, confirm whether they are the current Playwright
+webServer and proxy. A stale `:3100` started without E2E environment variables
+(e.g., missing `E2E_API_PROXY_PORT`) will cause server-side fetches to bypass
+the `:8081` proxy, producing false E2E failures.
+
+Fallback manual diagnostics if preflight is unavailable or E2E behaves
+unexpectedly despite a clean preflight:
 
 ```bash
 lsof -nP -iTCP:3000 -sTCP:LISTEN || true   # Next.js default dev
 lsof -nP -iTCP:3100 -sTCP:LISTEN || true   # Playwright webServer target
 lsof -nP -iTCP:8081 -sTCP:LISTEN || true   # E2E API proxy
 ```
-
-If `:3100` is occupied before E2E, confirm whether it is the current Playwright
-webServer instance. A stale `:3100` frontend dev server started without E2E
-environment variables (e.g., missing `E2E_API_PROXY_PORT`) will cause tests to
-connect to the wrong backend or fail to record requests.
-
-If `:8081` is occupied before E2E, confirm it is the current E2E API proxy. A
-stale `:8081` proxy will not record requests or will return stale data.
 
 Kill stale processes before running full E2E. Do not auto-kill — verify first.
 
@@ -86,13 +90,15 @@ Docker-dependent gates include:
 ```bash
 cd /Users/fan/JsProjects/ControlHub
 npm run check:e2e-governance
+npm run check:e2e-preflight
 npx tsc --noEmit -p tsconfig.json
 npm run lint
 npm run test
 npm run build
 ```
 
-These five do not require a running backend.
+These six do not require a running backend. `check:e2e-preflight` detects stale
+dev server/proxy listeners but does not kill them.
 
 When backend is running:
 
@@ -194,6 +200,7 @@ Do not merge if any of these conditions hold:
 | Frontend unit tests | `npm run test` | No | Every commit |
 | Frontend build | `npm run build` | No | Every commit |
 | E2E governance | `npm run check:e2e-governance` | No | Every commit |
+| E2E preflight | `npm run check:e2e-preflight` | No | Before E2E runs |
 | E2E smoke | `npm run test:e2e:smoke` | Backend required | Before merge |
 | E2E interaction | `npm run test:e2e:interaction` | Backend required | Before merge for interaction changes |
 | Full E2E | `npm run test:e2e` | Backend required | Before phase close |

@@ -17,7 +17,7 @@
 | **Source** | [Playwright Docs -- Web Server](https://playwright.dev/docs/test-webserver), [Playwright API -- testConfig.webServer](https://playwright.dev/docs/test-configuration) |
 | **Finding** | `reuseExistingServer: true` checks only whether a process is listening on the configured port/URL. It performs **no validation** of the server's configuration, environment variables, or code version. If the server was started with different env vars (e.g., missing `E2E_API_PROXY_PORT`), Playwright will reuse it silently and tests will fail with confusing errors. |
 | **ControlHub risk** | Phase 27 and 27B both experienced failures from a stale `:3100` frontend dev server started without E2E proxy env vars, and a stale `:8081` API proxy not recording requests. |
-| **Decision** | **Adopted** — Preserve the preflight check in the release hardening checklist for `:3100` and `:8081`. The existing `check:e2e-governance` script does not cover port/process state. The release checklist now documents the exact `lsof` commands and the rule to verify before killing. Do not auto-kill. |
+| **Decision** | **Adopted** — Frontend Phase 28 added `npm run check:e2e-preflight` (commit `0342ec9`) which automates stale `:3100`/`:8081` detection. It detects and reports listeners with PID/command diagnostics. It does not kill processes. The release hardening checklist keeps `lsof` commands as fallback diagnostics. |
 
 ### 2. Playwright Traces and Reporters for Flaky Failure Diagnosis
 
@@ -57,7 +57,7 @@
 
 ## Adopted Recommendations
 
-1. **Stale process preflight** — The release hardening checklist includes `lsof` checks for `:3100` and `:8081` with explicit verify-before-kill guidance.
+1. **Stale process preflight** — Frontend Phase 28 added `npm run check:e2e-preflight` (commit `0342ec9`) which automates stale `:3100`/`:8081` detection. The release hardening checklist runs it before E2E and keeps `lsof` as fallback diagnostics.
 2. **Playwright trace on first retry** — Set `trace: "on-first-retry"` to capture failure diagnostics without overhead on passing tests.
 3. **OpenAPI dual-layer gate** — Schema validation per-commit, fuzzing per-merge/nightly.
 4. **Three-tier gate layering** — Per-commit (fast), merge (full), nightly/release (heavy). Documented in the release hardening checklist.
@@ -85,3 +85,10 @@
 | Schemathesis docs | https://schemathesis.readthedocs.io/en/stable/ |
 | ControlHub quality gates design | `docs/superpowers/specs/2026-04-13-engineering-quality-gates-design.md` |
 | ControlHub E2E governance | `docs/superpowers/specs/2026-04-28-frontend-e2e-governance-gate.md` |
+
+## Frontend Handoff
+
+Frontend Phase 28 commit: `0342ec9 test: add e2e preflight diagnostics` (base `72bcb27`)
+Verification: full E2E 50/50, unit/component 547/547, preflight tests 9/9, all standard gates pass.
+New files: `scripts/check-e2e-preflight.mjs`, `tests/scripts/check-e2e-preflight.test.ts`.
+New npm script: `check:e2e-preflight`.

@@ -59,16 +59,17 @@ added in Phase 28.
 |---|---|---|---|
 | `npx tsc --noEmit -p tsconfig.json` | TypeScript contract and type safety | Yes | Runs without backend |
 | `npm run lint` | ESLint rules and unused code | Yes | Runs without backend |
-| `npm run test` | Vitest unit/component behavior (52 test files) | Yes | Runs without backend |
+| `npm run test` | Vitest unit/component behavior (53 test files, 547 tests) | Yes | Runs without backend |
 | `npm run build` | Next.js production build and SSR compatibility | Yes | Runs without backend |
 | `npm run check:e2e-governance` | Browser-test policy: no stderr suppression, no success-path screenshots, console/network guards, UI login for SSR | Yes | Runs without backend |
+| `npm run check:e2e-preflight` | Stale `:3100` dev server and `:8081` E2E proxy detection before Playwright runs | Yes (before E2E) | Detects and reports stale listeners; does not kill processes |
 | `npm run test:e2e:smoke` | Core console reachability (login, shell, dictionaries) | Yes when backend available | Requires running backend |
 | `npm run test:e2e:interaction` | Sheets/dropdowns/back navigation/accent stability | Yes when frontend interaction code changes | Requires running backend |
-| `npm run test:e2e` | Full 10-spec browser regression | Merge gate before phase close | Requires running backend. 50/50 passed after Phase 27B. |
+| `npm run test:e2e` | Full 11-spec browser regression | Merge gate before phase close | Requires running backend. 50/50 passed after Phase 28 frontend. |
 
 ### Frontend Test Inventory
 
-**E2E specs** (10 files):
+**E2E specs** (11 files):
 - `console-ux.spec.ts` — Console shell navigation, environment context
 - `databases-sheet.spec.ts` — Database list interactions
 - `list-pagination.spec.ts` — Resource and audit list query params
@@ -81,18 +82,24 @@ added in Phase 28.
 - `settings.spec.ts` — Settings dictionaries
 - `topology.spec.ts` — Topology load and same-origin API proxy
 
-**Unit/component tests** (52 files across tests/):
+**Unit/component tests** (53 files across tests/, 547 tests):
 - Component tests: 27 files (accent-switcher, activity-timeline, audit-table, cluster-members-table, create-resource-sheet, database-consistency-panel, database-decision-deck, database-instance-facts-panel, database-operator-workbench, database-supporting-details, database-table, db-type-icon, edit-resource-sheet, environment-provider, language-switcher, multi-select-filter, overview-content, pagination-controls, resource-archive-button, resource-detail-sheet-loader, resource-detail-sheet, resource-link, resource-relation-panel, resource-table, sidebar, theme-toggle, topbar)
 - E2E harness tests: 2 files (console-guards, interaction-stability)
 - Lib tests: 9 files (database-diagnostic-runbook, database-operational-signal, database-operator-workbench, database-read-model-consistency, diagnostic-copy, environment-params, list-page-search-params, resource-copy, resource-summary, view-models)
 - Page integration tests: 2 files (pages.list-pagination, resource-detail-page)
 - Service tests: 5 files (api-client, audits, e2e-api-helpers, resources, settings)
+- Preflight script tests: 1 file (check-e2e-preflight)
 - Topology tests: 4 files (topology-mapper-semantic, topology-mapper, topology-panel, topology-service)
 - Hook tests: 1 file (use-sidebar-state)
 - E2E API proxy CORS test: 1 file
 
-**Scripts** (1 file):
+**Scripts** (2 files):
 - `scripts/check-e2e-governance.mjs` — Policy compliance checker
+- `scripts/check-e2e-preflight.mjs` — Stale dev server/proxy port detection (does not kill processes)
+
+**E2E harness** (5 files):
+- `e2e/auth.ts`, `e2e/backend-health.ts`, `e2e/console-guards.ts`
+- `e2e/dev-server-wrapper.sh`, `e2e/interaction-stability.ts`
 
 ## Coverage Matrix
 
@@ -127,6 +134,15 @@ added in Phase 28.
 5. **Cross-browser testing**: Deferred. All E2E runs use Chromium. No Firefox/WebKit matrix until cross-browser issues appear.
 
 6. **Seed data constants**: E2E tests reference seed resources by name (`analytics-ch-cluster-prod`, `Analytics ClickHouse Node 02`) and ID (`14`, `22`). These are stable in the seed migration but not centralized as typed constants.
+
+## Frontend Baseline
+
+Frontend Phase 28 commit `0342ec9` (base `72bcb27`):
+- 10 quality npm scripts
+- 11 E2E specs, 50/50 passed
+- 53 unit/component test files, 547/547 tests passed
+- `check:e2e-preflight` detects stale `:3100`/`:8081` listeners (does not kill processes)
+- `check:e2e-governance` enforces browser-test policy
 
 ## Merge Blocking Rules
 
