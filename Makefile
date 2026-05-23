@@ -1,4 +1,4 @@
-.PHONY: test test-integration test-openapi-fuzz run openapi-validate migrate-up migrate-status migrate-down-one migrate-reset-dev cutover-local
+.PHONY: test test-integration test-openapi-fuzz run openapi-validate migrate-up migrate-status migrate-down-one migrate-reset-dev cutover-local release-local-gates release-docker-gates release-readiness-gates
 
 GOOSE := $(shell go env GOPATH)/bin/goose
 GOOSE_DRIVER := mysql
@@ -43,6 +43,18 @@ migrate-status: ## Show migration status
 migrate-down-one: ## Roll back one migration
 	@if [ -z "$(GOOSE_DBSTRING)" ]; then echo "Error: DATABASE_DSN not set. Export it or add to .env"; exit 1; fi
 	GOOSE_DRIVER=$(GOOSE_DRIVER) GOOSE_DBSTRING="$(GOOSE_DBSTRING)" GOOSE_MIGRATION_DIR=$(GOOSE_MIGRATION_DIR) $(GOOSE) down
+
+release-local-gates: ## Run local backend release-readiness gates (no Docker)
+	go test -count=1 ./...
+	go vet ./...
+	go build ./...
+	$(MAKE) openapi-validate
+
+release-docker-gates: ## Run Docker-backed backend release-readiness gates
+	$(MAKE) test-integration
+	$(MAKE) test-openapi-fuzz
+
+release-readiness-gates: release-local-gates release-docker-gates ## Run all backend release-readiness gates
 
 migrate-reset-dev: ## Drop and recreate DB, then apply all migrations (DESTRUCTIVE — requires CONFIRM=yes)
 	@if [ "$(CONFIRM)" != "yes" ]; then echo "Error: set CONFIRM=yes to run this target. This drops and recreates the database."; exit 1; fi

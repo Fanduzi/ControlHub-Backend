@@ -20,6 +20,9 @@ added in Phase 28.
 | `make openapi-validate` | OpenAPI 3.1 YAML validity against JSON Schema | Yes | Runs without Docker |
 | `make test-integration` | MySQL/Testcontainers: clean migration, write conflicts, topology SQL, unique constraints | Merge gate when Docker available | Requires Docker. Tests: archive, legacy-import, mysql, relation, resource, topology, testenv |
 | `make test-openapi-fuzz` | Schemathesis fuzzing: 50 examples/operation, no-5xx, status conformance, content-type conformance, response schema conformance | Release/nightly gate or merge gate for API changes | Requires Docker + Schemathesis CLI |
+| `make release-local-gates` | Composes `go test`, `go vet`, `go build`, `openapi-validate` into a single no-Docker gate | Every release candidate | Runs without Docker |
+| `make release-docker-gates` | Composes `test-integration` and `test-openapi-fuzz` into a single Docker gate | Every release candidate when Docker available | Requires Docker |
+| `make release-readiness-gates` | Composes `release-local-gates` + `release-docker-gates` into the strongest local backend readiness signal | Every release candidate | Requires Docker for full run |
 
 ### Backend Test Inventory (30 files)
 
@@ -136,6 +139,17 @@ added in Phase 28.
 6. **Seed data constants**: E2E tests reference seed resources by name (`analytics-ch-cluster-prod`, `Analytics ClickHouse Node 02`) and ID (`14`, `22`). These are stable in the seed migration but not centralized as typed constants.
 
 ## Frontend Baseline
+
+Frontend Phase 29 commit `72ec317` (branch `feat/phase-29-release-readiness-mechanism`):
+- release:local PASS
+- release:e2e PASS
+- unit tests 556 PASS
+- E2E smoke 7 PASS
+- E2E interaction 3 PASS
+- full E2E 50 PASS
+- CDP live smoke NOT RUN — no Chrome remote debugging target available on port 9222
+- `check:e2e-preflight` detects stale `:3100`/`:8081` listeners (does not kill processes)
+- `check:e2e-governance` enforces browser-test policy
 
 Frontend Phase 28 commit `0342ec9` (base `72bcb27`):
 - 10 quality npm scripts

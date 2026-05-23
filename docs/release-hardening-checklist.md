@@ -58,6 +58,8 @@ Record the backend PID in the phase report.
 
 ## Backend Gates
 
+### Individual Backend Gates
+
 Run from the backend worktree or main repo:
 
 ```bash
@@ -85,7 +87,21 @@ Docker-dependent gates include:
 - `make test-integration` — starts disposable MySQL 8.0 via Testcontainers
 - `make test-openapi-fuzz` — starts disposable MySQL + runs Schemathesis
 
+### Backend Release Gate Shortcuts
+
+```bash
+make release-local-gates
+make release-docker-gates
+make release-readiness-gates
+```
+
+`release-local-gates` is the no-Docker baseline. `release-docker-gates` requires
+Docker. `release-readiness-gates` composes both and is the strongest local backend
+readiness signal.
+
 ## Frontend Gates
+
+### Individual Frontend Gates
 
 ```bash
 cd /Users/fan/JsProjects/ControlHub
@@ -111,6 +127,20 @@ npm run test:e2e
 All E2E specs use `/__api` same-origin browser calls through the E2E API proxy
 at `:8081`. If the proxy is stale or missing, E2E will fail with network errors
 rather than application errors.
+
+### Frontend Release Gate Shortcuts
+
+```bash
+npm run release:local
+npm run release:e2e
+npm run release:check
+npm run release:smoke:cdp
+```
+
+`release:local` runs preflight, governance, typecheck, lint, test, and build.
+`release:e2e` runs smoke, interaction, and full E2E (requires backend).
+`release:check` composes both. `release:smoke:cdp` requires a manually-started
+Chrome remote debugging session and is not included in `release:check`.
 
 ## Manual Browser Checks
 
@@ -205,3 +235,28 @@ Do not merge if any of these conditions hold:
 | E2E interaction | `npm run test:e2e:interaction` | Backend required | Before merge for interaction changes |
 | Full E2E | `npm run test:e2e` | Backend required | Before phase close |
 | Manual browser | See table above | Backend required | Before phase close |
+| Backend local gates | `make release-local-gates` | No | Every release candidate |
+| Backend Docker gates | `make release-docker-gates` | Yes | Every release candidate when Docker available |
+| Backend readiness gates | `make release-readiness-gates` | Yes | Every release candidate |
+| Frontend local gates | `npm run release:local` | No | Every release candidate |
+| Frontend browser gates | `npm run release:e2e` | Backend required | Every release candidate |
+| Frontend readiness | `npm run release:check` | Backend required | Every release candidate |
+| CDP live smoke | `npm run release:smoke:cdp` | Chrome CDP | Optional, not in release:check |
+
+## Evidence Bundle
+
+Every release-readiness run must create a candidate evidence document from:
+
+```text
+docs/releases/candidates/TEMPLATE.md
+```
+
+Store local dry-run evidence under:
+
+```text
+docs/releases/candidates/YYYY-MM-DD-controlhub-rc-local.md
+```
+
+The evidence file records backend commit, frontend commit, gate results, known
+gaps, and a go/no-go decision. No candidate is "ready" unless its evidence is
+written down.
