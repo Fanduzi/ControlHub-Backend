@@ -6,13 +6,13 @@
 |---|---|
 | Candidate ID | 2026-05-24-controlhub-rc-local |
 | Date | 2026-05-24 |
-| Backend commit | e11575a |
+| Backend commit | fb84e08 |
 | Frontend commit | 19074c9 |
 | Backend worktree | CLEAN |
 | Frontend worktree | CLEAN |
-| Evaluator | Phase 30 RC evidence worker |
+| Evaluator | Phase 31 RC evidence worker |
 | Decision | GO |
-| Decision reason | All required gates passed. Backend release-readiness-gates PASS. Frontend release:check PASS. All warnings classified. No unclassified failures. |
+| Decision reason | All required gates passed. Backend release-readiness-gates PASS. Frontend release:check PASS. Phase 31 resolved missing-test-data warning; remaining schema mismatch accepted. No unclassified failures. |
 
 ## Gate Policy
 
@@ -30,19 +30,19 @@
 | Gate | Command | Required | Result | Notes |
 |---|---|---|---|---|
 | Backend local gates | `make release-local-gates` | Yes | PASS | go test, go vet, go build, openapi-validate |
-| Backend Docker gates | `make release-docker-gates` | Yes | PASS | 34 integration tests, 960 Schemathesis cases |
+| Backend Docker gates | `make release-docker-gates` | Yes | PASS | 42 integration tests, 966 Schemathesis cases |
 
 ### Backend Local Gates Detail
 
-- `go test -count=1 ./...` — 10/10 packages PASS
+- `go test -count=1 ./...` — 9/9 packages PASS
 - `go vet ./...` — PASS
 - `go build ./...` — PASS
 - `make openapi-validate` — PASS
 
 ### Backend Docker Gates Detail
 
-- `make test-integration` — 34/34 tests PASS (archive, legacy-import, mysql, relation, resource, topology, seed data)
-- `make test-openapi-fuzz` — 27/27 operations, 960/960 cases PASS, all 4 Schemathesis checks passed (not_a_server_error, status_code_conformance, content_type_conformance, response_schema_conformance)
+- `make test-integration` — 42/42 tests PASS (archive, legacy-import, mysql, relation, resource, topology, seed data)
+- `make test-openapi-fuzz` — 27/27 operations, 966/966 cases PASS, all 4 Schemathesis checks passed (not_a_server_error, status_code_conformance, content_type_conformance, response_schema_conformance)
 
 ## Frontend Gates
 
@@ -123,4 +123,4 @@ No failures.
 
 Decision: **GO**
 
-Reason: All required gates passed. Backend release-readiness-gates PASS (go test, go vet, go build, openapi-validate, 34 integration tests, 960 Schemathesis cases). Frontend release:check PASS (556 unit tests, 7 smoke E2E, 3 interaction E2E, 50 full E2E). All warnings classified as Accepted or Follow-Up with no blocking warnings. CDP smoke is optional and not run — not a blocker. Both backend and frontend worktrees are clean.
+Reason: All required gates passed. Backend release-readiness-gates PASS (go test, go vet, go build, openapi-validate, 42 integration tests, 966 Schemathesis cases). Frontend release:check PASS (556 unit tests, 7 smoke E2E, 3 interaction E2E, 50 full E2E). Phase 31 resolved missing-test-data warning for PATCH /resources/{id}. Remaining schema mismatch on PATCH /resources/{id} and POST /resources is accepted: runtime referential integrity validation (environmentId, ownerId, resourceSubtype) cannot be fully encoded as static OpenAPI constraints without fragility. CDP smoke is optional and not run — not a blocker. Both backend and frontend worktrees are clean.
