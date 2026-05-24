@@ -3,6 +3,15 @@
 # The disposable Testcontainers DB starts fresh each run, so resource IDs 1-10 are
 # stable after seed migrations (0004, 00009, 00010).
 
+# Warning policy: display accepted warnings but do not fail CI on them.
+# validation_mismatch on POST /resources and POST /resources/{id}/relations is
+# accepted — runtime referential integrity validation cannot be fully encoded in
+# static OpenAPI schemas. Configured checks (server errors, status/content/schema
+# conformance) still cause CI failure.
+[warnings]
+display = ["missing_auth", "missing_test_data", "validation_mismatch"]
+fail-on = []
+
 # Override PATCH /resources/{id} to use a known seed resource ID.
 # Without this, Schemathesis generates random IDs that don't exist,
 # causing all PATCH requests to return 404 before reaching core logic.

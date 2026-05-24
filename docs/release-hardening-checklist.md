@@ -257,7 +257,7 @@ Do not merge if any of these conditions hold:
 | Backend compilation | `go build ./...` | No | Every commit |
 | OpenAPI validation | `make openapi-validate` | No | Every commit |
 | Backend integration | `make test-integration` | Yes | Before merge when Docker available |
-| OpenAPI fuzz | `make test-openapi-fuzz` | Yes | Before merge for API changes, or nightly |
+| OpenAPI fuzz | `make test-openapi-fuzz` | Yes | Before merge for API changes, or nightly. Accepted warnings (validation_mismatch) are displayed but do not fail CI; configured checks still cause failure. See `scripts/schemathesis.toml` `[warnings]` section. |
 | Frontend typecheck | `npx tsc --noEmit` | No | Every commit |
 | Frontend lint | `npm run lint` | No | Every commit |
 | Frontend unit tests | `npm run test` | No | Every commit |
