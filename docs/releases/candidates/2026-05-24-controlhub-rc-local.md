@@ -109,7 +109,7 @@ Changes:
 
 1. **CDP live smoke NOT RUN** — No Chrome remote debugging target available on port 9222. This is an optional gate that requires a manually-started Chrome session. It is not included in `npm run release:check`. All automated E2E gates (smoke, interaction, full) passed via Playwright.
 
-2. **No CI runner** — All gates are local-only. No GitHub Actions or equivalent pipeline.
+2. **GitHub Actions CI configured but not yet active** — `.github/workflows/backend-ci.yml` is configured but has not been pushed to the remote. CI will run after push. Fast CI runs `make release-local-gates` on push/PR to main. Heavy CI runs `make release-docker-gates` via manual `workflow_dispatch`.
 
 ## Failure Classification
 

@@ -99,6 +99,22 @@ make release-readiness-gates
 Docker. `release-readiness-gates` composes both and is the strongest local backend
 readiness signal.
 
+### Backend GitHub Actions CI
+
+Fast CI (push/pull_request to main):
+
+```text
+.github/workflows/backend-ci.yml
+push/pull_request -> make release-local-gates
+```
+
+Manual heavy CI (workflow_dispatch):
+
+```text
+workflow_dispatch with run_docker_gates=true -> make release-docker-gates
+uploads .schemathesis-reports/ for 7 days when present
+```
+
 ## Frontend Gates
 
 ### Individual Frontend Gates
@@ -242,6 +258,8 @@ Do not merge if any of these conditions hold:
 | Frontend browser gates | `npm run release:e2e` | Backend required | Every release candidate |
 | Frontend readiness | `npm run release:check` | Backend required | Every release candidate |
 | CDP live smoke | `npm run release:smoke:cdp` | Chrome CDP | Optional, not in release:check |
+| Backend CI fast | `.github/workflows/backend-ci.yml` (push/PR) | No | Every push/PR to main |
+| Backend CI heavy | `.github/workflows/backend-ci.yml` (workflow_dispatch) | Yes | Manual only, uploads .schemathesis-reports/ for 7 days |
 
 ## RC Evidence Orchestration
 

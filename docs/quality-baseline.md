@@ -23,6 +23,8 @@ added in Phase 28.
 | `make release-local-gates` | Composes `go test`, `go vet`, `go build`, `openapi-validate` into a single no-Docker gate | Every release candidate | Runs without Docker |
 | `make release-docker-gates` | Composes `test-integration` and `test-openapi-fuzz` into a single Docker gate | Every release candidate when Docker available | Requires Docker |
 | `make release-readiness-gates` | Composes `release-local-gates` + `release-docker-gates` into the strongest local backend readiness signal | Every release candidate | Requires Docker for full run |
+| `.github/workflows/backend-ci.yml` (fast) | GitHub Actions CI: runs `make release-local-gates` on push/PR to main | Yes (after push) | Private repo: runner minutes and artifact storage count against allowance. No Docker needed. |
+| `.github/workflows/backend-ci.yml` (heavy) | GitHub Actions CI: runs `make release-docker-gates` via manual `workflow_dispatch` | Manual only | Private repo: costs Docker minutes. Uploads `.schemathesis-reports/` for 7 days. Not required on every push until cost/runtime is observed. |
 
 ### Backend Test Inventory (30 files)
 
@@ -126,7 +128,7 @@ added in Phase 28.
 
 ## Known Remaining Gaps
 
-1. **No CI runner**: All gates are local-only. There is no GitHub Actions or equivalent pipeline. Phase 28 does not add one, but documents what a future CI pipeline should run.
+1. **CI runner configured but not yet active**: Backend GitHub Actions CI is configured in `.github/workflows/backend-ci.yml`. Fast CI runs `make release-local-gates` on push/PR to main. Heavy CI runs `make release-docker-gates` via manual `workflow_dispatch`. CI will not run until the workflow file is pushed to the remote. Private repo minutes and artifact storage count against the repository owner's allowance. Heavy gates are manual-first to control cost.
 
 2. **Integration test coverage for audit repository**: `audit_repository_test.go` is a unit test with fakes. The MySQL-backed audit query paths are not exercised in integration tests.
 
