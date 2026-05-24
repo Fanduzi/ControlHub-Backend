@@ -186,6 +186,9 @@ func (s *ResourceService) Archive(ctx context.Context, id uint64, req model.Arch
 		if trimmed == "" {
 			return nil, wrapValidation("reason must be non-empty")
 		}
+		if len(trimmed) > model.MaxArchiveReasonLength {
+			return nil, wrapValidation(fmt.Sprintf("reason must be at most %d characters", model.MaxArchiveReasonLength))
+		}
 	}
 	existing, err := s.Get(id)
 	if err != nil {

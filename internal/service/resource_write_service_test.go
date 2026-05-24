@@ -8,6 +8,7 @@ package service
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -519,6 +520,46 @@ func TestResourceServiceArchiveRejectsBlankReason(t *testing.T) {
 	_, err := svc.Archive(context.Background(), testResource1ID, model.ArchiveRequest{Reason: &blank})
 	if !errors.Is(err, ErrValidationFailed) {
 		t.Fatalf("expected ErrValidationFailed, got %v", err)
+	}
+}
+
+func TestResourceServiceArchiveRejectsReasonTooLong(t *testing.T) {
+	repo := &fakeResourceWriteRepo{resources: map[uint64]model.Resource{testResource1ID: {
+		ID:            testResource1ID,
+		ResourceType:  model.ResourceTypeDatabaseInstance,
+		Name:          "order-mysql-prod",
+		DisplayName:   "Order MySQL Prod",
+		EnvironmentID: testEnvID,
+		OwnerID:       testOwnerID,
+		Source:        "manual",
+		Labels:        map[string]string{},
+	}}}
+	svc := NewResourceService(repo)
+	long := strings.Repeat("a", model.MaxArchiveReasonLength+1)
+
+	_, err := svc.Archive(context.Background(), testResource1ID, model.ArchiveRequest{Reason: &long})
+	if !errors.Is(err, ErrValidationFailed) {
+		t.Fatalf("expected ErrValidationFailed, got %v", err)
+	}
+}
+
+func TestResourceServiceArchiveAcceptsMaxLengthReason(t *testing.T) {
+	repo := &fakeResourceWriteRepo{resources: map[uint64]model.Resource{testResource1ID: {
+		ID:            testResource1ID,
+		ResourceType:  model.ResourceTypeDatabaseInstance,
+		Name:          "order-mysql-prod",
+		DisplayName:   "Order MySQL Prod",
+		EnvironmentID: testEnvID,
+		OwnerID:       testOwnerID,
+		Source:        "manual",
+		Labels:        map[string]string{},
+	}}}
+	svc := NewResourceService(repo)
+	maxReason := strings.Repeat("a", model.MaxArchiveReasonLength)
+
+	_, err := svc.Archive(context.Background(), testResource1ID, model.ArchiveRequest{Reason: &maxReason})
+	if err != nil {
+		t.Fatalf("expected no error for max-length reason, got %v", err)
 	}
 }
 

@@ -118,11 +118,9 @@ Changes:
 
 ## Failure Classification
 
-No failures.
-
 | Failure | Classification | Evidence | Owner / Next Action |
 |---|---|---|---|
-| | | | |
+| POST /resources/{id}/archive 500 for oversized reason | Product code defect (validation gap) | GitHub Actions run 26356949054, Schemathesis found 500 on archive with reason >512 chars | Fixed in Phase 33: `MaxArchiveReasonLength` constant + service validation. Pending merge + remote rerun. |
 
 ## Go / No-Go Decision
 

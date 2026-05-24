@@ -76,6 +76,8 @@ func (r ResourcePatchRequest) ToUpdateInput() ResourceUpdateInput {
 	}
 }
 
+const MaxArchiveReasonLength = 512
+
 // ArchiveRequest is the request body for POST /resources/{id}/archive.
 type ArchiveRequest struct {
 	Reason *string `json:"reason,omitempty"`
