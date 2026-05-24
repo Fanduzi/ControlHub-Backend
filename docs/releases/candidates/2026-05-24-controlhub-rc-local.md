@@ -78,7 +78,7 @@ Frontend commit `19074c9` (branch `main`):
 | Warning | Classification | Justification |
 |---|---|---|
 | PATCH /resources/{id} repeatedly returned 404 due to missing valid generated ID | Resolved (Phase 31) | Fixed by providing Schemathesis with a known seed resource ID via TOML config parameter override and OpenAPI path parameter example. PATCH now exercises core update logic. |
-| Schema validation mismatch on PATCH /resources/{id}, POST /auth/login, POST /resources | Partially Resolved (Phase 31) | Seed credentials example added for POST /auth/login (examples phase: 4 passed vs 1 before). All three operations remain in Schemathesis schema mismatch warning because fuzzed inputs fail runtime validation (referential integrity for environmentId/ownerId/resourceSubtype on resources, credential mismatch on login). OpenAPI schemas tightened with `additionalProperties: false` and `minProperties: 1` to match backend `DisallowUnknownFields()` and at-least-one-field validation. Remaining mismatch is accepted: reference IDs and credentials are dynamic and cannot be fully constrained in static schema. |
+| Schema validation mismatch on PATCH /resources/{id}, POST /auth/login, POST /resources | Partially Resolved (Phase 31) | POST /auth/login removed from mismatch list (seed credentials example exercises login correctly; no longer flagged by Schemathesis). PATCH /resources/{id} and POST /resources remain due to inherent referential integrity validation (environmentId, ownerId, resourceSubtype). OpenAPI schemas tightened with `additionalProperties: false` and `minProperties: 1` to match backend `DisallowUnknownFields()` and at-least-one-field validation. Remaining mismatch is accepted: reference IDs are dynamic and cannot be fully constrained in static schema. |
 
 ### Phase 31 Fuzz Warning Cleanup Results
 
@@ -88,7 +88,7 @@ Before (Phase 30):
 - Examples phase: 1 passed, 26 skipped
 
 After (Phase 31):
-- 1 warning type: Schema mismatch (3 ops: PATCH /resources/{id}, POST /auth/login, POST /resources)
+- 1 warning type: Schema mismatch (2 ops: PATCH /resources/{id}, POST /resources)
 - 966 generated, 966 passed
 - Examples phase: 4 passed, 23 skipped
 
