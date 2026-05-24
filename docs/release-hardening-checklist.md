@@ -243,6 +243,20 @@ Do not merge if any of these conditions hold:
 | Frontend readiness | `npm run release:check` | Backend required | Every release candidate |
 | CDP live smoke | `npm run release:smoke:cdp` | Chrome CDP | Optional, not in release:check |
 
+## RC Evidence Orchestration
+
+Follow this order when producing a release candidate evidence bundle:
+
+1. **Confirm backend/frontend git status** — both worktrees must be clean before recording gates
+2. **Record backend/frontend commits** — capture `git rev-parse --short HEAD` from each repo
+3. **Run or reference backend release-readiness gates** — `make release-readiness-gates`
+4. **Run or reference frontend release:check** — `npm run release:check`
+5. **Classify warnings and optional gates** — assign Accepted, Follow-Up, or Blocking to every warning; record skipped optional gates with reason
+6. **Write candidate evidence** — fill `docs/releases/candidates/YYYY-MM-DD-controlhub-rc-local.md` from template
+7. **Decide GO / NO-GO** — GO only if backend required gates PASS and frontend required gates PASS; NO-GO if either required gate fails or any failure is unclassified
+
+Re-run gates only if commit SHAs changed, the worktree is dirty, or evidence appears stale.
+
 ## Evidence Bundle
 
 Every release-readiness run must create a candidate evidence document from:
