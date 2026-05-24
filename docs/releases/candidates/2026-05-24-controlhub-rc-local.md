@@ -6,8 +6,8 @@
 |---|---|
 | Candidate ID | 2026-05-24-controlhub-rc-local |
 | Date | 2026-05-24 |
-| Backend commit | fb84e08 |
-| Frontend commit | 19074c9 |
+| Backend commit | 2a275da |
+| Frontend commit | 8881e25 |
 | Backend worktree | CLEAN |
 | Frontend worktree | CLEAN |
 | Evaluator | Phase 31 RC evidence worker |
@@ -109,7 +109,10 @@ Changes:
 
 1. **CDP live smoke NOT RUN** — No Chrome remote debugging target available on port 9222. This is an optional gate that requires a manually-started Chrome session. It is not included in `npm run release:check`. All automated E2E gates (smoke, interaction, full) passed via Playwright.
 
-2. **GitHub Actions CI configured but not yet active** — `.github/workflows/backend-ci.yml` is configured but has not been pushed to the remote. CI will run after push. Fast CI runs `make release-local-gates` on push/PR to main. Heavy CI runs `make release-docker-gates` via manual `workflow_dispatch`.
+2. **GitHub Actions CI configured but not yet active remotely** — Both backend and frontend workflows are configured locally but have not been pushed to GitHub.
+   - Backend: `.github/workflows/backend-ci.yml` at commit `2a275da`. Fast CI runs `make release-local-gates` on push/PR to main. Heavy CI runs `make release-docker-gates` via manual `workflow_dispatch` with `run_docker_gates=true`. Artifact: `.schemathesis-reports/` retained 7 days.
+   - Frontend: `.github/workflows/frontend-ci.yml` at commit `8881e25`. Fast CI runs `npm run release:local` on push/PR to main. Manual E2E job (`npm run release:e2e`) is deferred: the frontend repo does not start a backend, and cross-repo backend bootstrap is not encoded in CI.
+   - Neither workflow has run remotely. Status: configured locally; remote run pending push.
 
 ## Failure Classification
 

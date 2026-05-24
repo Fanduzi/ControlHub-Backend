@@ -158,6 +158,23 @@ npm run release:smoke:cdp
 `release:check` composes both. `release:smoke:cdp` requires a manually-started
 Chrome remote debugging session and is not included in `release:check`.
 
+### Frontend GitHub Actions CI
+
+Fast CI (push/pull_request to main):
+
+```text
+.github/workflows/frontend-ci.yml
+push/pull_request -> npm run release:local
+```
+
+Manual E2E CI (workflow_dispatch):
+
+```text
+workflow_dispatch input run_e2e
+DEFERRED: frontend repo does not start backend :8080;
+cross-repo backend bootstrap not encoded in CI
+```
+
 ## Manual Browser Checks
 
 Minimum pages to visit:
@@ -260,6 +277,8 @@ Do not merge if any of these conditions hold:
 | CDP live smoke | `npm run release:smoke:cdp` | Chrome CDP | Optional, not in release:check |
 | Backend CI fast | `.github/workflows/backend-ci.yml` (push/PR) | No | Every push/PR to main |
 | Backend CI heavy | `.github/workflows/backend-ci.yml` (workflow_dispatch) | Yes | Manual only, uploads .schemathesis-reports/ for 7 days |
+| Frontend CI fast | `.github/workflows/frontend-ci.yml` (push/PR) | No | Every push/PR to main |
+| Frontend CI E2E | `.github/workflows/frontend-ci.yml` (workflow_dispatch) | Backend required | Deferred: no backend bootstrap in CI |
 
 ## RC Evidence Orchestration
 

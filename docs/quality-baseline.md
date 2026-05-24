@@ -71,6 +71,8 @@ added in Phase 28.
 | `npm run test:e2e:smoke` | Core console reachability (login, shell, dictionaries) | Yes when backend available | Requires running backend |
 | `npm run test:e2e:interaction` | Sheets/dropdowns/back navigation/accent stability | Yes when frontend interaction code changes | Requires running backend |
 | `npm run test:e2e` | Full 11-spec browser regression | Merge gate before phase close | Requires running backend. 50/50 passed after Phase 28 frontend. |
+| `.github/workflows/frontend-ci.yml` (fast) | GitHub Actions CI: runs `npm run release:local` on push/PR to main | Yes (after push) | Private repo: runner minutes count against allowance. No backend needed. |
+| `.github/workflows/frontend-ci.yml` (E2E) | GitHub Actions CI: runs `npm run release:e2e` via manual `workflow_dispatch` | Deferred | Requires backend which is not started by frontend CI. Cross-repo backend bootstrap not encoded. |
 
 ### Frontend Test Inventory
 
@@ -128,7 +130,7 @@ added in Phase 28.
 
 ## Known Remaining Gaps
 
-1. **CI runner configured but not yet active**: Backend GitHub Actions CI is configured in `.github/workflows/backend-ci.yml`. Fast CI runs `make release-local-gates` on push/PR to main. Heavy CI runs `make release-docker-gates` via manual `workflow_dispatch`. CI will not run until the workflow file is pushed to the remote. Private repo minutes and artifact storage count against the repository owner's allowance. Heavy gates are manual-first to control cost.
+1. **CI runners configured but not yet active remotely**: Backend GitHub Actions CI is configured in `.github/workflows/backend-ci.yml`. Fast CI runs `make release-local-gates` on push/PR to main. Heavy CI runs `make release-docker-gates` via manual `workflow_dispatch`. Frontend GitHub Actions CI is configured in `.github/workflows/frontend-ci.yml`. Fast CI runs `npm run release:local` on push/PR to main. Manual E2E (`npm run release:e2e`) is deferred because the frontend repo does not start a backend. Neither workflow has run remotely — both repos are ahead of origin but not pushed. Private repo minutes and artifact storage count against the repository owner's allowance.
 
 2. **Integration test coverage for audit repository**: `audit_repository_test.go` is a unit test with fakes. The MySQL-backed audit query paths are not exercised in integration tests.
 
