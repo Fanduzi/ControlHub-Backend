@@ -21,6 +21,9 @@ paths:
           application/json:
             schema:
               $ref: "#/components/schemas/LoginRequest"
+            example:
+              email: "admin@example.com"
+              password: "secret123"
       responses:
         "200":
           description: Login response
@@ -201,6 +204,16 @@ paths:
           application/json:
             schema:
               $ref: "#/components/schemas/ResourceCreateInput"
+            example:
+              resourceType: "host"
+              resourceSubtype: "vm"
+              name: "fuzz-example-host"
+              displayName: "Fuzz Example Host"
+              environmentId: 1
+              ownerId: 1
+              lifecycleStatus: "running"
+              healthStatus: "healthy"
+              source: "manual"
       responses:
         "201":
           description: Resource created
@@ -266,12 +279,15 @@ paths:
           schema:
             type: integer
             format: int64
+          example: 1
       requestBody:
         required: true
         content:
           application/json:
             schema:
               $ref: "#/components/schemas/ResourcePatchRequest"
+            example:
+              displayName: "Updated Resource"
       responses:
         "200":
           description: Resource updated
@@ -1475,6 +1491,7 @@ components:
             - host: hostname, ipAddress, osName
     ResourceCreateInput:
       type: object
+      additionalProperties: false
       required:
         - resourceType
         - name
@@ -1523,6 +1540,8 @@ components:
             Supported keys depend on resourceType/resourceSubtype.
     ResourcePatchRequest:
       type: object
+      minProperties: 1
+      additionalProperties: false
       properties:
         name:
           type: string

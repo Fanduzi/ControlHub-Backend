@@ -17,6 +17,7 @@ BASE_URL="${1:?Usage: $0 <base_url>}"
 OPENAPI_URL="${BASE_URL}/openapi.yaml"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPORT_DIR="${SCRIPT_DIR}/../.schemathesis-reports"
+CONFIG_FILE="${SCRIPT_DIR}/schemathesis.toml"
 
 # Bounded run configuration suitable for AI agents and local development.
 MAX_EXAMPLES=50
@@ -63,7 +64,7 @@ echo "Starting fuzz run..."
 echo ""
 
 set +e
-"$STH_BIN" run "${OPENAPI_URL}" \
+"$STH_BIN" --config-file "${CONFIG_FILE}" run "${OPENAPI_URL}" \
     --url "${BASE_URL}" \
     --max-examples "${MAX_EXAMPLES}" \
     --seed "${SEED}" \
