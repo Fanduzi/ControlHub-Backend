@@ -6,13 +6,13 @@
 |---|---|
 | Candidate ID | 2026-05-24-controlhub-rc-local |
 | Date | 2026-05-24 |
-| Backend commit | 2a275da |
+| Backend commit | 88dd202 |
 | Frontend commit | 8881e25 |
 | Backend worktree | CLEAN |
 | Frontend worktree | CLEAN |
-| Evaluator | Phase 31 RC evidence worker |
+| Evaluator | Phase 32 CI dry-run worker |
 | Decision | GO |
-| Decision reason | All required gates passed. Backend release-readiness-gates PASS. Frontend release:check PASS. Phase 31 resolved missing-test-data warning; remaining schema mismatch accepted. No unclassified failures. |
+| Decision reason | All required gates passed locally and on GitHub Actions. Backend release-readiness-gates PASS (local + remote). Frontend release:check PASS (local + remote). Phase 31 resolved missing-test-data warning; remaining schema mismatch accepted. No unclassified failures. |
 
 ## Gate Policy
 
@@ -109,10 +109,12 @@ Changes:
 
 1. **CDP live smoke NOT RUN** — No Chrome remote debugging target available on port 9222. This is an optional gate that requires a manually-started Chrome session. It is not included in `npm run release:check`. All automated E2E gates (smoke, interaction, full) passed via Playwright.
 
-2. **GitHub Actions CI configured but not yet active remotely** — Both backend and frontend workflows are configured locally but have not been pushed to GitHub.
-   - Backend: `.github/workflows/backend-ci.yml` at commit `2a275da`. Fast CI runs `make release-local-gates` on push/PR to main. Heavy CI runs `make release-docker-gates` via manual `workflow_dispatch` with `run_docker_gates=true`. Artifact: `.schemathesis-reports/` retained 7 days.
-   - Frontend: `.github/workflows/frontend-ci.yml` at commit `8881e25`. Fast CI runs `npm run release:local` on push/PR to main. Manual E2E job (`npm run release:e2e`) is deferred: the frontend repo does not start a backend, and cross-repo backend bootstrap is not encoded in CI.
-   - Neither workflow has run remotely. Status: configured locally; remote run pending push.
+2. **GitHub Actions CI — remote dry-run completed** — Both backend and frontend workflows ran successfully on GitHub Actions.
+   - Backend: `Backend CI` workflow at commit `88dd202`. Fast CI (release-local-gates: go test, go vet, go build, openapi-validate) PASS in 1m2s. Run URL: https://github.com/Fanduzi/ControlHub-Backend/actions/runs/26356703000
+   - Frontend: `Frontend CI` workflow at commit `8881e25`. Fast CI (release-local: preflight, governance, typecheck, lint, unit, build) PASS in 3m19s. Run URL: https://github.com/Fanduzi/ControlHub-Frontend/actions/runs/26356705010
+   - Heavy backend Docker gates (`make release-docker-gates`) NOT RUN remotely — requires manual `workflow_dispatch` with `run_docker_gates=true`.
+   - Frontend E2E (`npm run release:e2e`) NOT RUN remotely — requires manual `workflow_dispatch` with `run_e2e=true`.
+   - No tag, no release, no deploy performed.
 
 ## Failure Classification
 
