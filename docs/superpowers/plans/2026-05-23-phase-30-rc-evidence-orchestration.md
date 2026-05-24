@@ -22,6 +22,7 @@ not need frontend product changes.
 
 ```text
 docs/superpowers/specs/2026-05-23-phase-30-rc-evidence-orchestration.md
+docs/superpowers/prompts/backend-phase-30-rc-evidence-orchestration-worker.md
 docs/releases/candidates/TEMPLATE.md
 docs/releases/candidates/2026-05-23-controlhub-rc-local.md
 docs/release-hardening-checklist.md
@@ -325,4 +326,3 @@ No skipped/deleted tests
 No broad output suppression
 No AI co-author
 ```
-
