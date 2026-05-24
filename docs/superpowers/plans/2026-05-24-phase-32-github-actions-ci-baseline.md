@@ -14,6 +14,9 @@
 
 ```text
 docs/superpowers/specs/2026-05-24-phase-32-github-actions-ci-baseline.md
+docs/superpowers/prompts/phase-32-github-actions-ci-coordination.md
+docs/superpowers/prompts/backend-phase-32-github-actions-ci-baseline-worker.md
+docs/superpowers/prompts/frontend-phase-32-github-actions-ci-baseline-worker.md
 docs/release-hardening-checklist.md
 docs/quality-baseline.md
 docs/releases/candidates/2026-05-24-controlhub-rc-local.md
@@ -382,4 +385,3 @@ No broad retries/output suppression
 No skipped/deleted tests
 No AI co-author
 ```
-
