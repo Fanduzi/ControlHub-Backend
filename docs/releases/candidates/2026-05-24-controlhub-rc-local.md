@@ -77,8 +77,27 @@ Frontend commit `19074c9` (branch `main`):
 
 | Warning | Classification | Justification |
 |---|---|---|
-| PATCH /resources/{id} repeatedly returned 404 due to missing valid generated ID | Accepted | Schemathesis generates random IDs that rarely match existing resources. All configured checks passed (not_a_server_error, status_code_conformance, content_type_conformance, response_schema_conformance). No user-facing or contract risk. |
-| Schema validation mismatch on PATCH /resources/{id}, POST /auth/login, POST /resources | Follow-Up | API validation is stricter than the OpenAPI schema for generated invalid data. All configured Schemathesis checks passed. Should tighten OpenAPI schema constraints in future hardening. |
+| PATCH /resources/{id} repeatedly returned 404 due to missing valid generated ID | Resolved (Phase 31) | Fixed by providing Schemathesis with a known seed resource ID via TOML config parameter override and OpenAPI path parameter example. PATCH now exercises core update logic. |
+| Schema validation mismatch on PATCH /resources/{id}, POST /auth/login, POST /resources | Partially Resolved (Phase 31) | POST /auth/login removed from mismatch list (seed credentials example exercises login correctly). PATCH /resources/{id} and POST /resources remain due to inherent referential integrity validation (environmentId, ownerId, resourceSubtype). OpenAPI schemas tightened with `additionalProperties: false` and `minProperties: 1` to match backend `DisallowUnknownFields()` and at-least-one-field validation. Remaining mismatch is accepted: reference IDs are dynamic and cannot be fully constrained in static schema. |
+
+### Phase 31 Fuzz Warning Cleanup Results
+
+Before (Phase 30):
+- 2 warning types: Missing test data (1 op) + Schema mismatch (3 ops)
+- 960 generated, 960 passed
+- Examples phase: 1 passed, 26 skipped
+
+After (Phase 31):
+- 1 warning type: Schema mismatch (2 ops: PATCH /resources/{id}, POST /resources)
+- 966 generated, 966 passed
+- Examples phase: 4 passed, 23 skipped
+
+Changes:
+- Added `schemathesis.toml` config with path.id override for patchResource operation
+- Added request body examples for POST /auth/login, POST /resources, PATCH /resources/{id}
+- Added `additionalProperties: false` to ResourceCreateInput and ResourcePatchRequest (matches `DisallowUnknownFields()`)
+- Added `minProperties: 1` to ResourcePatchRequest (matches "at least one mutable field" validation)
+- Updated `openapi-fuzz.sh` to pass `--config-file`
 
 ## Skipped Optional Gates
 
