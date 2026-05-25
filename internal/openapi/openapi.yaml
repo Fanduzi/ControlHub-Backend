@@ -626,6 +626,9 @@ paths:
           application/json:
             schema:
               $ref: "#/components/schemas/RelationCreateInput"
+            example:
+              toResourceId: 2
+              relationType: "depends_on"
       responses:
         "201":
           description: Relation created
@@ -1183,6 +1186,7 @@ components:
         environmentId:
           type: integer
           format: int64
+          minimum: 1
         clusterId:
           type: integer
           nullable: true
@@ -1190,6 +1194,7 @@ components:
         ownerId:
           type: integer
           format: int64
+          minimum: 1
         lifecycleStatus:
           $ref: "#/components/schemas/LifecycleStatus"
         healthStatus:
@@ -1516,9 +1521,11 @@ components:
         environmentId:
           type: integer
           format: int64
+          minimum: 1
         ownerId:
           type: integer
           format: int64
+          minimum: 1
         lifecycleStatus:
           $ref: "#/components/schemas/LifecycleStatus"
         healthStatus:
@@ -1555,9 +1562,11 @@ components:
         environmentId:
           type: integer
           format: int64
+          minimum: 1
         ownerId:
           type: integer
           format: int64
+          minimum: 1
         lifecycleStatus:
           $ref: "#/components/schemas/LifecycleStatus"
         healthStatus:

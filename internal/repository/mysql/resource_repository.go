@@ -538,6 +538,10 @@ func (r *ResourceRepository) UpdateResource(ctx context.Context, id uint64, inpu
 	query := "update resources set " + strings.Join(setClauses, ", ") + " where id = ?"
 
 	if _, err := r.db.ExecContext(ctx, query, args...); err != nil {
+		var mysqlErr *mysql.MySQLError
+		if errors.As(err, &mysqlErr) && mysqlErr.Number == 1062 {
+			return nil, service.ErrResourceConflict
+		}
 		return nil, fmt.Errorf("update resource %d: %w", id, err)
 	}
 

@@ -12,6 +12,7 @@ import (
 	"regexp"
 	"slices"
 	"strings"
+	"unicode"
 
 	"github.com/fan/controlhub/internal/model"
 )
@@ -153,6 +154,11 @@ func (s *ResourceService) Update(ctx context.Context, id uint64, patch model.Res
 			return nil, wrapValidation("healthStatus is not supported")
 		}
 	}
+	if patch.Labels != nil {
+		if err := validateResourceLabels(*patch.Labels); err != nil {
+			return nil, wrapValidation(err.Error())
+		}
+	}
 	if patch.EnvironmentID != nil || patch.OwnerID != nil {
 		existing, err := s.Get(id)
 		if err != nil {
@@ -260,6 +266,10 @@ func validateResourceCreateInput(input model.ResourceCreateInput) error {
 		if ve == nil { ve = newValidationError("validation failed") }
 		ve.WithField("resourceSubtype", err.Error())
 	}
+	if err := validateResourceLabels(input.Labels); err != nil {
+		if ve == nil { ve = newValidationError("validation failed") }
+		ve.WithField("labels", err.Error())
+	}
 
 	if ve != nil {
 		return ve
@@ -311,4 +321,25 @@ func (e *ValidationError) WithField(field, msg string) *ValidationError {
 
 func wrapValidation(message string) error {
 	return fmt.Errorf("%w: %s", ErrValidationFailed, message)
+}
+
+func validateResourceLabels(labels map[string]string) error {
+	for key, value := range labels {
+		if containsControlChars(key) {
+			return fmt.Errorf("label key %q contains control characters", key)
+		}
+		if containsControlChars(value) {
+			return fmt.Errorf("label value for key %q contains control characters", key)
+		}
+	}
+	return nil
+}
+
+func containsControlChars(s string) bool {
+	for _, r := range s {
+		if unicode.IsControl(r) {
+			return true
+		}
+	}
+	return false
 }

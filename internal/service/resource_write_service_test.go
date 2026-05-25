@@ -653,6 +653,133 @@ func TestResourceServiceUnarchiveIdempotentForActive(t *testing.T) {
 	}
 }
 
+func TestResourceServiceCreateRejectsLabelControlCharacters(t *testing.T) {
+	svc := NewResourceService(&fakeResourceWriteRepo{})
+
+	_, err := svc.Create(context.Background(), model.ResourceCreateInput{
+		ResourceType:    model.ResourceTypeDatabaseInstance,
+		ResourceSubtype: "mysql",
+		Name:            "order-mysql-02-prod",
+		DisplayName:     "Order MySQL 02 Prod",
+		EnvironmentID:   testEnvID,
+		OwnerID:         testOwnerID,
+		LifecycleStatus: model.LifecycleStatusRunning,
+		HealthStatus:    model.HealthStatusHealthy,
+		Source:          "manual",
+		Labels:          map[string]string{"team": "or\x00der"},
+	})
+	if !errors.Is(err, ErrValidationFailed) {
+		t.Fatalf("expected ErrValidationFailed for control char in label value, got %v", err)
+	}
+}
+
+func TestResourceServiceCreateRejectsLabelKeyControlCharacters(t *testing.T) {
+	svc := NewResourceService(&fakeResourceWriteRepo{})
+
+	_, err := svc.Create(context.Background(), model.ResourceCreateInput{
+		ResourceType:    model.ResourceTypeDatabaseInstance,
+		ResourceSubtype: "mysql",
+		Name:            "order-mysql-02-prod",
+		DisplayName:     "Order MySQL 02 Prod",
+		EnvironmentID:   testEnvID,
+		OwnerID:         testOwnerID,
+		LifecycleStatus: model.LifecycleStatusRunning,
+		HealthStatus:    model.HealthStatusHealthy,
+		Source:          "manual",
+		Labels:          map[string]string{"tea\x03m": "order"},
+	})
+	if !errors.Is(err, ErrValidationFailed) {
+		t.Fatalf("expected ErrValidationFailed for control char in label key, got %v", err)
+	}
+}
+
+func TestResourceServiceCreateAcceptsValidLabels(t *testing.T) {
+	repo := &fakeResourceWriteRepo{resources: map[uint64]model.Resource{}}
+	svc := NewResourceService(repo)
+
+	created, err := svc.Create(context.Background(), model.ResourceCreateInput{
+		ResourceType:    model.ResourceTypeDatabaseInstance,
+		ResourceSubtype: "mysql",
+		Name:            "order-mysql-02-prod",
+		DisplayName:     "Order MySQL 02 Prod",
+		EnvironmentID:   testEnvID,
+		OwnerID:         testOwnerID,
+		LifecycleStatus: model.LifecycleStatusRunning,
+		HealthStatus:    model.HealthStatusHealthy,
+		Source:          "manual",
+		Labels:          map[string]string{"team": "order", "tier": "data", "env": "prod"},
+	})
+	if err != nil {
+		t.Fatalf("expected no error for valid labels, got %v", err)
+	}
+	if created.Labels["team"] != "order" {
+		t.Fatalf("expected label team=order, got %s", created.Labels["team"])
+	}
+}
+
+func TestResourceServicePatchRejectsLabelControlCharacters(t *testing.T) {
+	repo := &fakeResourceWriteRepo{resources: map[uint64]model.Resource{testResource1ID: {
+		ID:            testResource1ID,
+		ResourceType:  model.ResourceTypeDatabaseInstance,
+		Name:          "order-mysql-prod",
+		DisplayName:   "Order MySQL Prod",
+		EnvironmentID: testEnvID,
+		OwnerID:       testOwnerID,
+		Source:        "manual",
+		Labels:        map[string]string{},
+	}}}
+	svc := NewResourceService(repo)
+	labels := map[string]string{"team": "or\x00der"}
+
+	_, err := svc.Update(context.Background(), testResource1ID, model.ResourcePatchRequest{Labels: &labels})
+	if !errors.Is(err, ErrValidationFailed) {
+		t.Fatalf("expected ErrValidationFailed for control char in patch label value, got %v", err)
+	}
+}
+
+func TestResourceServicePatchRejectsLabelKeyControlCharacters(t *testing.T) {
+	repo := &fakeResourceWriteRepo{resources: map[uint64]model.Resource{testResource1ID: {
+		ID:            testResource1ID,
+		ResourceType:  model.ResourceTypeDatabaseInstance,
+		Name:          "order-mysql-prod",
+		DisplayName:   "Order MySQL Prod",
+		EnvironmentID: testEnvID,
+		OwnerID:       testOwnerID,
+		Source:        "manual",
+		Labels:        map[string]string{},
+	}}}
+	svc := NewResourceService(repo)
+	labels := map[string]string{"tea\x03m": "order"}
+
+	_, err := svc.Update(context.Background(), testResource1ID, model.ResourcePatchRequest{Labels: &labels})
+	if !errors.Is(err, ErrValidationFailed) {
+		t.Fatalf("expected ErrValidationFailed for control char in patch label key, got %v", err)
+	}
+}
+
+func TestResourceServicePatchAcceptsValidLabels(t *testing.T) {
+	repo := &fakeResourceWriteRepo{resources: map[uint64]model.Resource{testResource1ID: {
+		ID:            testResource1ID,
+		ResourceType:  model.ResourceTypeDatabaseInstance,
+		Name:          "order-mysql-prod",
+		DisplayName:   "Order MySQL Prod",
+		EnvironmentID: testEnvID,
+		OwnerID:       testOwnerID,
+		Source:        "manual",
+		Labels:        map[string]string{},
+	}}}
+	svc := NewResourceService(repo)
+	labels := map[string]string{"team": "order", "pci": "true"}
+
+	updated, err := svc.Update(context.Background(), testResource1ID, model.ResourcePatchRequest{Labels: &labels})
+	if err != nil {
+		t.Fatalf("expected no error for valid patch labels, got %v", err)
+	}
+	if updated.Labels["team"] != "order" {
+		t.Fatalf("expected label team=order, got %s", updated.Labels["team"])
+	}
+}
+
 func TestRelationServiceCreateRejectsArchivedSource(t *testing.T) {
 	now := time.Now().UTC()
 	archivedAt := now.Add(-1 * time.Hour)

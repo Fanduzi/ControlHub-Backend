@@ -144,6 +144,26 @@ Changes:
   - Configured checks (not_a_server_error, status_code_conformance, content_type_conformance, response_schema_conformance) still cause CI failure
   - No version pin, no warning suppression, no skipped operations, no reduced checks/examples
 
+### Phase 33D Resource Label Control Character Validation Hardening
+
+- **Bug:** PATCH/POST /resources with labels containing unicode control characters (e.g. `\x00`) caused MySQL error 3854 / 1366 → unhandled 500 response
+- **Bug:** UpdateResource (PATCH) MySQL 1062 duplicate key on name+environmentId was not mapped to service error → unhandled 500 response
+- **Fix 1:** `validateResourceLabels()` + `containsControlChars()` in `internal/service/resource_service.go` — rejects label keys/values containing any `unicode.IsControl` rune, returns 400 `validation_failed`
+- **Fix 2:** MySQL 1062 mapping in `internal/repository/mysql/resource_repository.go` `UpdateResource()` — maps duplicate key to `service.ErrResourceConflict` → 409
+- **Tests:** 6 new TDD tests in `internal/service/resource_write_service_test.go`:
+  - Create: rejects label value with null byte, rejects label key with control char, accepts valid labels
+  - Patch: rejects label value with null byte, rejects label key with control char, accepts valid labels
+- **OpenAPI:** Added `minimum: 1` to `environmentId` and `ownerId` in ResourceCreateInput, ResourcePatchRequest, ResourceDetailResponse (matches `parseUint64IDParam` validation). Added body example for POST /resources/{id}/relations.
+- **Schemathesis config:** `scripts/schemathesis.toml` — path parameter overrides for `createResourceRelation` and `patchResource` using known seed resource IDs
+- **Deferred to Phase 33E:** Schemathesis v4.19.0 `validation_mismatch` exit 1 on POST /resources and POST /resources/{id}/relations — caused by v4.19.0 fuzzing phase ignoring TOML body overrides for integer FK fields (environmentId, ownerId). Not a product defect; does not justify polluting OpenAPI contract with enum constraints on runtime referential integrity fields.
+
+Verification:
+- `go test ./...` — 9/9 packages PASS
+- `go vet ./...` — PASS
+- `go build ./...` — PASS
+- `make openapi-validate` — PASS
+- `make test-integration` — 49/49 tests PASS
+
 ## Go / No-Go Decision
 
 Decision: **GO**
