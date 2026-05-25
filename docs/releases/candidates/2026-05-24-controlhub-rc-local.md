@@ -121,7 +121,7 @@ Changes:
 | Failure | Classification | Evidence | Owner / Next Action |
 |---|---|---|---|
 | POST /resources/{id}/archive 500 for oversized reason | Product code defect (validation gap) | GitHub Actions run 26356949054, Schemathesis found 500 on archive with reason >512 chars | Fixed in Phase 33: `MaxArchiveReasonLength` constant + service validation. Confirmed fixed remotely in run 26357536583. |
-| Schemathesis v4.19.0 warning-as-failure | CI compatibility (config gap) | GitHub Actions run 26357536583, remote Schemathesis v4.19.0 treats `validation_mismatch` warning as exit 1; all 934 cases passed, zero server errors | Fixed in Phase 33B: explicit `[warnings]` policy in `schemathesis.toml` with `fail-on = []`. Pending remote rerun. |
+| Schemathesis v4.19.0 warning-as-failure | CI compatibility (version policy) | GitHub Actions run 26357536583, remote Schemathesis v4.19.0 treats `validation_mismatch` warning as exit 1; all 934 cases passed, zero server errors | Resolved in Phase 33E: backend heavy CI pins Schemathesis to `4.15.2`. Confirmed PASS in run 26409102650. |
 
 ### Phase 33 Archive Reason Validation Hardening
 
@@ -169,15 +169,24 @@ Changes:
   - No reduced checks/examples — still 4 checks, 50 examples, all operations.
   - No wrapper exit-code swallowing — `openapi-fuzz.sh` still exits with Schemathesis exit code.
   - No product behavior change, no SQL, no migrations.
-- **Remote heavy CI status:** Pending rerun. Not recorded as PASS until rerun succeeds.
+- **Remote heavy CI status:** PASS
+  - Run ID: `26409102650`
+  - Run URL: https://github.com/Fanduzi/ControlHub-Backend/actions/runs/26409102650
+  - Commit: `a151278`
+  - `release-local-gates`: PASS (33s)
+  - `release-docker-gates`: PASS (1m57s) — Schemathesis `4.15.2`, all operations exercised, exit 0
+  - Schemathesis reports artifact: empty (report path differs in CI; exit code 0 confirmed)
 - **Phase 34 deferred:** Investigate FK-aware Schemathesis data generation for v4.19+. Possible approaches: Python runner for case mutation, Schemathesis hooks API, dedicated seed-aware data generation step.
 
-Verification:
+Local verification (commit `a151278`, worktree `phase-33e-schemathesis-ci-version-policy`):
 - `go test ./...` — 9/9 packages PASS
 - `go vet ./...` — PASS
 - `go build ./...` — PASS
 - `make openapi-validate` — PASS
 - `make test-integration` — 49/49 tests PASS
+- `make test-openapi-fuzz` — PASS, 27/27 operations, 969/969 cases, Schemathesis v4.15.2 exit 0
+  - 1 warning: validation_mismatch on 4 operations (expected, accepted)
+  - 4 checks: not_a_server_error, status_code_conformance, content_type_conformance, response_schema_conformance — all passed
 
 ## Go / No-Go Decision
 
