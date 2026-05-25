@@ -155,7 +155,22 @@ Changes:
   - Patch: rejects label value with null byte, rejects label key with control char, accepts valid labels
 - **OpenAPI:** Added `minimum: 1` to `environmentId` and `ownerId` in ResourceCreateInput, ResourcePatchRequest, ResourceDetailResponse (matches `parseUint64IDParam` validation). Added body example for POST /resources/{id}/relations.
 - **Schemathesis config:** `scripts/schemathesis.toml` — path parameter overrides for `createResourceRelation` and `patchResource` using known seed resource IDs
-- **Deferred to Phase 33E:** Schemathesis v4.19.0 `validation_mismatch` exit 1 on POST /resources and POST /resources/{id}/relations — caused by v4.19.0 fuzzing phase ignoring TOML body overrides for integer FK fields (environmentId, ownerId). Not a product defect; does not justify polluting OpenAPI contract with enum constraints on runtime referential integrity fields.
+- **Deferred to Phase 34:** Schemathesis FK-aware data generation for newer versions (see Phase 33E decision below).
+
+### Phase 33E Schemathesis CI Version Policy
+
+- **Decision:** Backend heavy CI (`release-docker-gates` job) pins Schemathesis to `4.15.2`.
+- **Reason:** v4.19.0 treats DB-backed `validation_mismatch` as operation-level failure (exit 1). The remaining mismatch is runtime referential integrity — Schemathesis fuzzes FK-like integer fields (environmentId, ownerId, toResourceId) to values that do not exist in seed data. The backend correctly rejects those values. This is not a 5xx, status code, content type, or schema contract bug.
+- **What changed:** `.github/workflows/backend-ci.yml` install step: `pip install --upgrade "schemathesis==4.15.2"`.
+- **What did NOT change:**
+  - No OpenAPI FK enum for environmentId, ownerId, or toResourceId.
+  - No warning suppression — warnings remain visible in CI output.
+  - No skipped/deleted fuzz operations.
+  - No reduced checks/examples — still 4 checks, 50 examples, all operations.
+  - No wrapper exit-code swallowing — `openapi-fuzz.sh` still exits with Schemathesis exit code.
+  - No product behavior change, no SQL, no migrations.
+- **Remote heavy CI status:** Pending rerun. Not recorded as PASS until rerun succeeds.
+- **Phase 34 deferred:** Investigate FK-aware Schemathesis data generation for v4.19+. Possible approaches: Python runner for case mutation, Schemathesis hooks API, dedicated seed-aware data generation step.
 
 Verification:
 - `go test ./...` — 9/9 packages PASS

@@ -43,7 +43,7 @@ jobs:
           go-version-file: go.mod
           cache: true
       - name: Install Schemathesis
-        run: python -m pip install --upgrade schemathesis
+        run: python -m pip install --upgrade "schemathesis==4.15.2"
       - name: Run backend Docker release gates
         run: make release-docker-gates
       - name: Upload Schemathesis reports
