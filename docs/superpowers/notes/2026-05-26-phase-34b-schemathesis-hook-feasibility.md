@@ -11,18 +11,16 @@
 | Date | 2026-05-26 |
 | Base commit | `41ab180` (contains Phase 33D fix `7adb5df`) |
 
-## Phase 33D Inclusion Verification
+## Base Verification
 
-Phase 34B was originally run on `41ab180`, which **does contain** `7adb5df fix: harden resource label validation and duplicate key error mapping`.
+| Field | Value |
+|---|---|
+| main HEAD | `41ab180` |
+| Phase 34B base | `41ab180` (same as main) |
+| `7adb5df` (Phase 33D fix) included | **Yes** — `git merge-base --is-ancestor 7adb5df HEAD` passed |
+| Rebase needed | **No** |
 
-Verified:
-
-```bash
-git merge-base --is-ancestor 7adb5df HEAD && echo "contains-33d"
-# output: contains-33d
-```
-
-The original Phase 34B note incorrectly stated the remaining 1 failure was "PATCH /resources/{id} returning 500 on unicode control chars in labels — the same Phase 33C bug." This was wrong. Phase 33D DID fix the PATCH 500 bug. The remaining failure was actually a validation_mismatch classification issue (see below).
+Phase 33D (`7adb5df fix: harden resource label validation and duplicate key error mapping`) is included. The original Phase 34B note incorrectly claimed "PATCH /resources/{id} returns 500 on unicode control chars." This was wrong — Phase 33D fixed that bug. PATCH is NOT in any failure list. The remaining failures are validation_mismatch classification (see below).
 
 ## Commands
 
@@ -171,14 +169,6 @@ These were corrected to `environmentId: 1, ownerId: 1` by the hook. The hooks su
 5. The TOML `fail-on = []` does not prevent this operation-level classification
 
 The hooks correctly fix FK fields (proven by debug log), but the validation_mismatch is about overall rejection rates across ALL fields, not just FK.
-
-## Correction: PATCH 500 Status
-
-The original Phase 34B note claimed "PATCH /resources/{id} returns 500 on unicode control chars." This was wrong:
-
-- Phase 33D (`7adb5df`) fixed this — labels with control chars now get 400
-- The PATCH operation is NOT in the failure list in any run (baseline or hooks)
-- No PATCH-related 500 errors occurred in any Phase 34B run
 
 ## Hook Behavior by Phase
 
