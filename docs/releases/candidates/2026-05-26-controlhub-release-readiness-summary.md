@@ -71,6 +71,7 @@
 | Labels with unicode control characters caused 500 | Phase 33D | `validateResourceLabels()` + `containsControlChars()` |
 | UpdateResource duplicate key 500 | Phase 33D | MySQL 1062 mapping to `ErrResourceConflict` → 409 |
 | Schemathesis v4.19.0 `validation_mismatch` exit 1 | Phase 33E | Pin backend CI to Schemathesis `4.15.2` |
+| v4.19 pin confirmed intentional after full investigation | Phase 34C | Option A: keep pin, no CLI/TOML override exists for engine-level `validation_mismatch` |
 
 ## Known Accepted Warnings / Boundaries
 
@@ -78,7 +79,7 @@
 
 2. **Backend heavy CI pins Schemathesis `4.15.2`** — v4.19.0 treats DB-backed `validation_mismatch` as operation-level failure (exit 1). Pinning avoids CI failure from runtime referential integrity, not from product defects. Warnings remain visible. Configured checks still cause CI failure.
 
-3. **Phase 34 deferred** — Investigate FK-aware Schemathesis data generation for v4.19+ to allow unpinning without CI failure from referential integrity validation.
+3. **Phase 34C resolved — Schemathesis pin confirmed intentional** — Phase 34C investigated all options for unpinning Schemathesis from 4.15.2. Decision: Option A (keep the pin). v4.19 `validation_mismatch` is an engine-level aggregate classification with no CLI/TOML override. Hooks (Phase 34B) can mutate FK fields but cannot change operation-level pass/fail. Option B (custom runner) and Option C (contract reshaping) rejected. Pin can be reconsidered when Schemathesis adds an engine-level toggle. See `docs/superpowers/notes/2026-05-26-phase-34c-schemathesis-validation-mismatch-policy.md`.
 
 4. **CDP live smoke not run** — Optional gate. Requires manually-started Chrome remote debugging session. Not included in `npm run release:check`. All automated E2E gates passed via Playwright.
 
@@ -100,6 +101,10 @@
 | Phase 33C investigation report | `docs/releases/candidates/phase-33c-investigation-report.md` |
 | Phase 33E spec | `docs/superpowers/specs/2026-05-25-phase-33e-schemathesis-ci-version-policy.md` |
 | Phase 33E plan | `docs/superpowers/plans/2026-05-25-phase-33e-schemathesis-ci-version-policy.md` |
+| Phase 34B hook feasibility note | `docs/superpowers/notes/2026-05-26-phase-34b-schemathesis-hook-feasibility.md` |
+| Phase 34C spec | `docs/superpowers/specs/2026-05-26-phase-34c-schemathesis-validation-mismatch-policy.md` |
+| Phase 34C plan | `docs/superpowers/plans/2026-05-26-phase-34c-schemathesis-validation-mismatch-policy.md` |
+| Phase 34C evidence note | `docs/superpowers/notes/2026-05-26-phase-34c-schemathesis-validation-mismatch-policy.md` |
 | This summary | `docs/releases/candidates/2026-05-26-controlhub-release-readiness-summary.md` |
 
 ## Final Decision

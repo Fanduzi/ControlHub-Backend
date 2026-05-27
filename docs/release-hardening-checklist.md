@@ -113,7 +113,7 @@ Manual heavy CI (workflow_dispatch):
 ```text
 workflow_dispatch with run_docker_gates=true -> make release-docker-gates
 uploads .schemathesis-reports/ for 7 days when present
-Schemathesis pinned to 4.15.2 (do not upgrade without FK-aware generation investigation)
+Schemathesis pinned to 4.15.2 (Phase 34C confirmed intentional: v4.19 `validation_mismatch` is engine-level with no config override)
 ```
 
 ## Frontend Gates
@@ -277,7 +277,7 @@ Do not merge if any of these conditions hold:
 | Frontend readiness | `npm run release:check` | Backend required | Every release candidate |
 | CDP live smoke | `npm run release:smoke:cdp` | Chrome CDP | Optional, not in release:check |
 | Backend CI fast | `.github/workflows/backend-ci.yml` (push/PR) | No | Every push/PR to main |
-| Backend CI heavy | `.github/workflows/backend-ci.yml` (workflow_dispatch) | Yes | Manual only, uploads .schemathesis-reports/ for 7 days. Schemathesis pinned to `4.15.2` — do not upgrade without running Phase 34-style FK-aware generation investigation (see Phase 33E decision in RC evidence). |
+| Backend CI heavy | `.github/workflows/backend-ci.yml` (workflow_dispatch) | Yes | Manual only, uploads .schemathesis-reports/ for 7 days. Schemathesis pinned to `4.15.2` — Phase 34C confirmed the pin is intentional (v4.19 `validation_mismatch` is engine-level with no CLI/TOML override, hooks cannot change operation-level pass/fail). See Phase 34C evidence note. |
 | Frontend CI fast | `.github/workflows/frontend-ci.yml` (push/PR) | No | Every push/PR to main |
 | Frontend CI E2E | `.github/workflows/frontend-ci.yml` (workflow_dispatch) | Backend required | Deferred: no backend bootstrap in CI |
 

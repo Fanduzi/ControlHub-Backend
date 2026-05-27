@@ -155,7 +155,7 @@ Changes:
   - Patch: rejects label value with null byte, rejects label key with control char, accepts valid labels
 - **OpenAPI:** Added `minimum: 1` to `environmentId` and `ownerId` in ResourceCreateInput, ResourcePatchRequest, ResourceDetailResponse (matches `parseUint64IDParam` validation). Added body example for POST /resources/{id}/relations.
 - **Schemathesis config:** `scripts/schemathesis.toml` — path parameter overrides for `createResourceRelation` and `patchResource` using known seed resource IDs
-- **Deferred to Phase 34:** Schemathesis FK-aware data generation for newer versions (see Phase 33E decision below).
+- **Deferred to Phase 34C:** Phase 34C confirmed the pin remains intentional. Hooks (Phase 34B) can load and mutate FK fields, but v4.19 `validation_mismatch` is an operation-level aggregate classification independent of the TOML `fail-on` config. No CLI/TOML option makes it non-blocking. See Phase 34C evidence note for full source-code analysis.
 
 ### Phase 33E Schemathesis CI Version Policy
 
@@ -176,7 +176,15 @@ Changes:
   - `release-local-gates`: PASS (33s)
   - `release-docker-gates`: PASS (1m57s) — Schemathesis `4.15.2`, all operations exercised, exit 0
   - Schemathesis reports artifact: empty (report path differs in CI; exit code 0 confirmed)
-- **Phase 34 deferred:** Investigate FK-aware Schemathesis data generation for v4.19+. Possible approaches: Python runner for case mutation, Schemathesis hooks API, dedicated seed-aware data generation step.
+- **Phase 34C conclusion:** Phase 34C investigated all options for unpinning Schemathesis from 4.15.2. Decision: **Option A — keep the pin**.
+  - v4.19.0 reproduction: 27/27 operations exercised, 883/883 cases passed all configured checks, but 2 operations (`POST /resources`, `POST /resources/{id}/relations`) failed at `validation_mismatch` classification, causing exit 1.
+  - Phase 34B proved hooks load and mutate FK fields, but cannot change operation-level pass/fail — `validation_mismatch` measures aggregate rejection rate, not specific FK failures.
+  - Phase 34C source-code analysis confirmed: v4.19 exit code 1 comes from `PhaseFinished` with `Status.FAILURE`, which flows from `ScenarioFinished` events. The TOML `fail-on = []` only controls a secondary warning-based path. No CLI flag or TOML option can prevent the engine-level classification.
+  - Option B (custom Python runner) rejected: high complexity, maintenance burden.
+  - Option C (contract reshaping) rejected: would distort the public OpenAPI contract with seed-specific FK enums.
+  - CI pin remains intentional, not accidental. Can be reconsidered when Schemathesis adds an engine-level toggle for `validation_mismatch`.
+  - Evidence note: `docs/superpowers/notes/2026-05-26-phase-34c-schemathesis-validation-mismatch-policy.md`
+  - Backend fast CI after merge: run `26497534197` — PASS (38s)
 
 Local verification (commit `a151278`, worktree `phase-33e-schemathesis-ci-version-policy`):
 - `go test ./...` — 9/9 packages PASS
