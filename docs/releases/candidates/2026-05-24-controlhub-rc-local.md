@@ -113,7 +113,7 @@ Changes:
    - Backend: `Backend CI` workflow at commit `88dd202`. Fast CI (release-local-gates: go test, go vet, go build, openapi-validate) PASS in 1m2s. Run URL: https://github.com/Fanduzi/ControlHub-Backend/actions/runs/26356703000
    - Frontend: `Frontend CI` workflow at commit `8881e25`. Fast CI (release-local: preflight, governance, typecheck, lint, unit, build) PASS in 3m19s. Run URL: https://github.com/Fanduzi/ControlHub-Frontend/actions/runs/26356705010
    - Heavy backend Docker gates (`make release-docker-gates`) NOT RUN remotely — requires manual `workflow_dispatch` with `run_docker_gates=true`.
-   - Frontend E2E (`npm run release:e2e`) NOT RUN remotely — requires manual `workflow_dispatch` with `run_e2e=true`.
+   - Frontend E2E (`npm run release:e2e`) implemented in Phase 35 cross-repo CI. Manual `workflow_dispatch run_e2e=true` starts MySQL, runs backend migrations, starts backend server, then runs frontend `release:e2e`. Evidence: run `26519616558` PASS (smoke 7/7, interaction 3/3, full E2E 50/50, local release 54 files 556 tests).
    - No tag, no release, no deploy performed.
 
 ## Failure Classification

@@ -28,7 +28,8 @@
 | Backend manual heavy CI (commit `a151278`) | workflow_dispatch | PASS (1m57s) | https://github.com/Fanduzi/ControlHub-Backend/actions/runs/26409102650 |
 | Backend evidence update fast CI (commit `2276d63`) | push | PASS (32s) | https://github.com/Fanduzi/ControlHub-Backend/actions/runs/26409232813 |
 | Frontend fast CI (commit `8881e25`) | push | PASS (3m19s) | https://github.com/Fanduzi/ControlHub-Frontend/actions/runs/26356705010 |
-| Frontend manual E2E CI | workflow_dispatch | NOT RUN | Deferred: cross-repo backend bootstrap not encoded in CI |
+| Frontend manual E2E CI (Phase 35) | workflow_dispatch `run_e2e=true` | PASS | https://github.com/Fanduzi/ControlHub-Frontend/actions/runs/26519616558 |
+| Frontend fast CI (Phase 35 commit `04256a7`) | push | PASS | https://github.com/Fanduzi/ControlHub-Frontend/actions/runs/26519432025 |
 
 ### Backend Heavy CI Detail (Run 26409102650)
 
@@ -54,7 +55,7 @@
 | Gate | Local | Remote |
 |---|---|---|
 | `npm run release:local` | PASS (preflight, governance, typecheck, lint, unit, build) | PASS (556/556 unit tests) |
-| `npm run release:e2e` | PASS (smoke 7/7, interaction 3/3, full 50/50) | NOT RUN (deferred) |
+| `npm run release:e2e` | PASS (smoke 7/7, interaction 3/3, full 50/50) | PASS (smoke 7/7, interaction 3/3, full 50/50, local release 54 files 556 tests) |
 | `npm run release:smoke:cdp` | NOT RUN (no Chrome CDP) | NOT RUN |
 
 ### OpenAPI Fuzz Detail
@@ -83,7 +84,7 @@
 
 4. **CDP live smoke not run** — Optional gate. Requires manually-started Chrome remote debugging session. Not included in `npm run release:check`. All automated E2E gates passed via Playwright.
 
-5. **Frontend remote E2E deferred** — Cross-repo backend bootstrap is not encoded in CI. Local E2E passed (smoke 7/7, interaction 3/3, full 50/50).
+5. **Frontend cross-repo E2E CI implemented (Phase 35)** — Manual `workflow_dispatch run_e2e=true` starts MySQL, runs backend migrations, starts backend server, then runs frontend `release:e2e`. Backend checkout uses `CONTROLHUB_BACKEND_CHECKOUT_TOKEN` (PAT, read-only access to Fanduzi/ControlHub-Backend). Artifacts uploaded: playwright-report, test-results, backend.log. Full E2E is manual only; push/PR still run fast frontend CI only. Evidence: run `26519616558` PASS.
 
 ## Non-actions
 

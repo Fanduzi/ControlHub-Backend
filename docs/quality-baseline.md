@@ -72,7 +72,7 @@ added in Phase 28.
 | `npm run test:e2e:interaction` | Sheets/dropdowns/back navigation/accent stability | Yes when frontend interaction code changes | Requires running backend |
 | `npm run test:e2e` | Full 11-spec browser regression | Merge gate before phase close | Requires running backend. 50/50 passed after Phase 28 frontend. |
 | `.github/workflows/frontend-ci.yml` (fast) | GitHub Actions CI: runs `npm run release:local` on push/PR to main | Yes (after push) | Private repo: runner minutes count against allowance. No backend needed. |
-| `.github/workflows/frontend-ci.yml` (E2E) | GitHub Actions CI: runs `npm run release:e2e` via manual `workflow_dispatch` | Deferred | Requires backend which is not started by frontend CI. Cross-repo backend bootstrap not encoded. |
+| `.github/workflows/frontend-ci.yml` (E2E) | GitHub Actions CI: runs `npm run release:e2e` via manual `workflow_dispatch run_e2e=true` | Manual only (Phase 35) | Cross-repo E2E implemented. Starts MySQL, runs backend migrations, starts backend server, then runs frontend `release:e2e`. Backend checkout via `CONTROLHUB_BACKEND_CHECKOUT_TOKEN` (PAT, read-only). Artifacts: playwright-report, test-results, backend.log. Evidence: run `26519616558` PASS (smoke 7/7, interaction 3/3, full 50/50). Push/PR still run fast frontend CI only. |
 
 ### Frontend Test Inventory
 
@@ -130,7 +130,7 @@ added in Phase 28.
 
 ## Known Remaining Gaps
 
-1. **CI runners configured but not yet active remotely**: Backend GitHub Actions CI is configured in `.github/workflows/backend-ci.yml`. Fast CI runs `make release-local-gates` on push/PR to main. Heavy CI runs `make release-docker-gates` via manual `workflow_dispatch`. Frontend GitHub Actions CI is configured in `.github/workflows/frontend-ci.yml`. Fast CI runs `npm run release:local` on push/PR to main. Manual E2E (`npm run release:e2e`) is deferred because the frontend repo does not start a backend. Neither workflow has run remotely — both repos are ahead of origin but not pushed. Private repo minutes and artifact storage count against the repository owner's allowance.
+1. **CI runners active remotely**: Backend GitHub Actions CI runs `make release-local-gates` on push/PR to main; heavy CI runs `make release-docker-gates` via manual `workflow_dispatch`. Frontend GitHub Actions CI runs `npm run release:local` on push/PR to main. Phase 35 implemented cross-repo E2E: manual `workflow_dispatch run_e2e=true` starts MySQL, runs backend migrations, starts backend server, then runs frontend `release:e2e` (evidence: run `26519616558` PASS). Backend checkout via `CONTROLHUB_BACKEND_CHECKOUT_TOKEN` (PAT, read-only). Artifacts: playwright-report, test-results, backend.log. Private repo minutes and artifact storage count against the repository owner's allowance.
 
 2. **Integration test coverage for audit repository**: `audit_repository_test.go` is a unit test with fakes. The MySQL-backed audit query paths are not exercised in integration tests.
 

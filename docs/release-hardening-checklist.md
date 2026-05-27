@@ -171,9 +171,13 @@ push/pull_request -> npm run release:local
 Manual E2E CI (workflow_dispatch):
 
 ```text
-workflow_dispatch input run_e2e
-DEFERRED: frontend repo does not start backend :8080;
-cross-repo backend bootstrap not encoded in CI
+workflow_dispatch input run_e2e=true
+Phase 35: cross-repo E2E implemented and passing.
+Starts MySQL, runs backend migrations, starts backend server,
+then runs frontend release:e2e.
+Backend checkout via CONTROLHUB_BACKEND_CHECKOUT_TOKEN (PAT, read-only).
+Artifacts: playwright-report, test-results, backend.log.
+Evidence: run 26519616558 PASS (smoke 7/7, interaction 3/3, full 50/50).
 ```
 
 ## Manual Browser Checks
@@ -279,7 +283,7 @@ Do not merge if any of these conditions hold:
 | Backend CI fast | `.github/workflows/backend-ci.yml` (push/PR) | No | Every push/PR to main |
 | Backend CI heavy | `.github/workflows/backend-ci.yml` (workflow_dispatch) | Yes | Manual only, uploads .schemathesis-reports/ for 7 days. Schemathesis pinned to `4.15.2` — Phase 34C confirmed the pin is intentional (v4.19 `validation_mismatch` is engine-level with no CLI/TOML override, hooks cannot change operation-level pass/fail). See Phase 34C evidence note. |
 | Frontend CI fast | `.github/workflows/frontend-ci.yml` (push/PR) | No | Every push/PR to main |
-| Frontend CI E2E | `.github/workflows/frontend-ci.yml` (workflow_dispatch) | Backend required | Deferred: no backend bootstrap in CI |
+| Frontend CI E2E | `.github/workflows/frontend-ci.yml` (workflow_dispatch `run_e2e=true`) | Backend required | Manual only: cross-repo E2E starts MySQL, backend migrations, backend server, then runs frontend release:e2e. Phase 35 implemented and passing (run 26519616558). Push/PR still run fast frontend CI only. |
 
 ## RC Evidence Orchestration
 
