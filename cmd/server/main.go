@@ -60,5 +60,6 @@ func buildDependencies(db *sql.DB, cfg config.Config) api.Dependencies {
 		HealthStatusService:     service.NewHealthStatusService(dictRepo),
 		ResourceSubtypeService:  service.NewResourceSubtypeService(),
 		ProfileService:          profileSvc,
+		QueryTargetService:      service.NewQueryTargetService(mysql.NewQueryTargetRepository(db)),
 	}
 }

@@ -60,6 +60,85 @@ paths:
                     type: string
                     enum:
                       - ok
+  /query-targets:
+    get:
+      summary: List query targets for the Query Workbench
+      operationId: listQueryTargets
+      description: >-
+        Read-only query target context derived from existing database instance
+        resources. Returns the structured context a locked Query Workbench shell
+        needs: connection context, query capability, readiness, governance, and
+        locked available actions. Query execution is never enabled in Phase 36:
+        every target reports executionEnabled=false and every available action is
+        false. Readiness and query kind are derived and returned for the client to
+        filter; only engine and environmentId are filtered server-side. Does not
+        execute queries, store credentials, or introspect live databases.
+      parameters:
+        - in: query
+          name: engine
+          schema:
+            type: string
+          description: >-
+            Filter by database engine (e.g. mysql, postgresql, clickhouse, redis,
+            mongodb). Case-insensitive. Unknown engines still appear as
+            unsupported targets when no filter is set.
+        - in: query
+          name: environmentId
+          schema:
+            type: integer
+            format: int64
+            minimum: 1
+          description: Filter by environment ID
+      responses:
+        "200":
+          description: Query target list
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/QueryTargetListResponse"
+              example:
+                items:
+                  - resourceId: 22
+                    resourceName: analytics-ch-node-01-prod
+                    displayName: Analytics ClickHouse Node 01 Production
+                    resourceType: database_instance
+                    connectionContext:
+                      environment: Production
+                      owner: DBA Team
+                      engine: clickhouse
+                      host: prod-ch-host-01.internal
+                      port: 8123
+                      clusterId: 14
+                      clusterName: Analytics ClickHouse Cluster Production
+                    capability:
+                      queryKind: sql
+                      editorMode: sql
+                      languageLabel: SQL
+                    readiness: credential_required
+                    missingFields:
+                      - readonlyCredential
+                    governance:
+                      executionEnabled: false
+                      credentialState: missing_readonly_credential
+                      auditRequired: true
+                      safetyState: credential_missing
+                      safetyNote: Query execution is not enabled in this phase.
+                      policyNotes:
+                        - Read-only credentials are required before execution.
+                        - Production queries require stricter defaults.
+                    availableActions:
+                      run: false
+                      explain: false
+                      export: false
+                      saveSheet: false
+                      requestAccess: false
+                    schemaPreview: []
+        "400":
+          description: Invalid query parameters
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
   /resources:
     get:
       summary: List resources
@@ -1069,6 +1148,156 @@ paths:
                 $ref: "#/components/schemas/ErrorResponse"
 components:
   schemas:
+    QueryTargetListResponse:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/QueryTarget"
+    QueryTarget:
+      type: object
+      description: >-
+        Read-only query capability context for one database resource, ready to
+        drive a locked Query Workbench shell. No credentials or execution state.
+      required: [resourceId, resourceName, displayName, resourceType, connectionContext, capability, readiness, missingFields, governance, availableActions, schemaPreview]
+      properties:
+        resourceId:
+          type: integer
+          format: int64
+        resourceName:
+          type: string
+        displayName:
+          type: string
+        resourceType:
+          $ref: "#/components/schemas/ResourceType"
+        connectionContext:
+          $ref: "#/components/schemas/QueryTargetConnectionContext"
+        capability:
+          $ref: "#/components/schemas/QueryTargetCapability"
+        readiness:
+          $ref: "#/components/schemas/QueryTargetReadiness"
+        missingFields:
+          type: array
+          items:
+            type: string
+          description: Configuration gaps (e.g. host, port, engine, readonlyCredential).
+        governance:
+          $ref: "#/components/schemas/QueryTargetGovernance"
+        availableActions:
+          $ref: "#/components/schemas/QueryTargetAvailableActions"
+        schemaPreview:
+          type: array
+          description: >-
+            Lightweight schema placeholder derived only from existing metadata.
+            Empty in Phase 36 — never the result of live database introspection.
+          items:
+            $ref: "#/components/schemas/QueryTargetSchemaPreviewNode"
+    QueryTargetConnectionContext:
+      type: object
+      required: [environment, owner, engine, host, port]
+      properties:
+        environment:
+          type: string
+          description: Resolved environment name.
+        owner:
+          type: string
+          description: Resolved owner name.
+        engine:
+          type: string
+        host:
+          type: string
+        port:
+          type: integer
+        clusterId:
+          type: integer
+          format: int64
+        clusterName:
+          type: string
+    QueryTargetCapability:
+      type: object
+      required: [queryKind, editorMode, languageLabel]
+      properties:
+        queryKind:
+          $ref: "#/components/schemas/QueryKind"
+        editorMode:
+          type: string
+          enum: [sql, redis, mongo, text]
+        languageLabel:
+          type: string
+    QueryKind:
+      type: string
+      enum:
+        - sql
+        - redis
+        - mongo
+        - unsupported
+    QueryTargetReadiness:
+      type: string
+      description: >-
+        Explicit readiness. Phase 36 normally returns credential_required or
+        missing_connection; ready only when concrete read-only credential
+        metadata exists.
+      enum:
+        - ready
+        - missing_connection
+        - credential_required
+        - unsupported_engine
+        - disabled
+    QueryTargetSafetyState:
+      type: string
+      enum:
+        - credential_missing
+        - execution_disabled
+        - unsupported_engine
+        - connection_incomplete
+    QueryTargetGovernance:
+      type: object
+      required: [executionEnabled, credentialState, auditRequired, safetyState, safetyNote, policyNotes]
+      properties:
+        executionEnabled:
+          type: boolean
+          description: Always false in Phase 36.
+        credentialState:
+          type: string
+        auditRequired:
+          type: boolean
+        safetyState:
+          $ref: "#/components/schemas/QueryTargetSafetyState"
+        safetyNote:
+          type: string
+        policyNotes:
+          type: array
+          items:
+            type: string
+    QueryTargetAvailableActions:
+      type: object
+      description: Locked/unlocked action flags. All false in Phase 36.
+      required: [run, explain, export, saveSheet, requestAccess]
+      properties:
+        run:
+          type: boolean
+        explain:
+          type: boolean
+        export:
+          type: boolean
+        saveSheet:
+          type: boolean
+        requestAccess:
+          type: boolean
+    QueryTargetSchemaPreviewNode:
+      type: object
+      required: [kind, name]
+      properties:
+        kind:
+          type: string
+        name:
+          type: string
+        children:
+          type: array
+          items:
+            $ref: "#/components/schemas/QueryTargetSchemaPreviewNode"
     PageInfo:
       type: object
       required: [page, pageSize, totalItems, totalPages]

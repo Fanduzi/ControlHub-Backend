@@ -28,6 +28,7 @@ type Dependencies struct {
 	HealthStatusService    *service.HealthStatusService
 	ResourceSubtypeService *service.ResourceSubtypeService
 	ProfileService         *service.ProfileService
+	QueryTargetService     *service.QueryTargetService
 }
 
 func corsLocalDev(next http.Handler) http.Handler {
@@ -75,6 +76,7 @@ func NewRouter(deps Dependencies) *chi.Mux {
 	router.Get("/lifecycle-statuses", handleListLifecycleStatuses(deps.LifecycleStatusService))
 	router.Get("/health-statuses", handleListHealthStatuses(deps.HealthStatusService))
 	router.Get("/resource-subtypes", handleListResourceSubtypes(deps.ResourceSubtypeService))
+	router.Get("/query-targets", handleListQueryTargets(deps.QueryTargetService))
 	router.Get("/openapi.yaml", handleOpenAPIYAML)
 	router.Get("/docs", handleDocs)
 	return router

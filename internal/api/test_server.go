@@ -533,6 +533,81 @@ func (fakeAuditRepo) ListByResourceID(resourceID uint64) ([]model.AuditEvent, er
 	return []model.AuditEvent{{ID: 1, ActorUserID: 1, TargetResourceID: &resourceID, EventType: "resource.updated", Result: "success", CreatedAt: time.Date(2026, 4, 11, 21, 0, 0, 0, time.UTC)}}, nil
 }
 
+// fakeQueryTargetRow pairs a raw query target with the environment id used for
+// server-side filtering in the fake.
+type fakeQueryTargetRow struct {
+	target        model.QueryTarget
+	environmentID uint64
+}
+
+// fakeQueryTargetRepo returns curated raw query targets (identity + connection
+// context only). The service derives capability/readiness/governance from
+// these, so the fake exercises the full derivation path through the handler.
+type fakeQueryTargetRepo struct {
+	targets []fakeQueryTargetRow
+}
+
+func (f fakeQueryTargetRepo) ListQueryTargets(_ context.Context, q model.QueryTargetListQuery) ([]model.QueryTarget, error) {
+	out := make([]model.QueryTarget, 0, len(f.targets))
+	for _, row := range f.targets {
+		if q.Engine != "" && !strings.EqualFold(row.target.ConnectionContext.Engine, q.Engine) {
+			continue
+		}
+		if q.EnvironmentID != 0 && row.environmentID != q.EnvironmentID {
+			continue
+		}
+		out = append(out, row.target)
+	}
+	return out, nil
+}
+
+func queryTargetSeed() []fakeQueryTargetRow {
+	return []fakeQueryTargetRow{
+		{
+			environmentID: 1,
+			target: model.QueryTarget{
+				ResourceID: 22, ResourceName: "analytics-ch-node-01-prod", DisplayName: "Analytics ClickHouse Node 01 Production", ResourceType: model.ResourceTypeDatabaseInstance,
+				ConnectionContext: model.QueryTargetConnectionContext{Environment: "Production", Owner: "DBA Team", Engine: "clickhouse", Host: "prod-ch-host-01.internal", Port: 8123, ClusterID: 14, ClusterName: "Analytics ClickHouse Cluster Production"},
+			},
+		},
+		{
+			environmentID: 1,
+			target: model.QueryTarget{
+				ResourceID: 23, ResourceName: "order-mysql-node-01-prod", DisplayName: "Order MySQL Node 01 Production", ResourceType: model.ResourceTypeDatabaseInstance,
+				ConnectionContext: model.QueryTargetConnectionContext{Environment: "Production", Owner: "DBA Team", Engine: "mysql", Host: "prod-mysql-host-01.internal", Port: 3306, ClusterID: 4, ClusterName: "Order MySQL Cluster Production"},
+			},
+		},
+		{
+			environmentID: 2,
+			target: model.QueryTarget{
+				ResourceID: 24, ResourceName: "session-redis-staging", DisplayName: "Session Redis Staging", ResourceType: model.ResourceTypeDatabaseInstance,
+				ConnectionContext: model.QueryTargetConnectionContext{Environment: "Staging", Owner: "Platform Team", Engine: "redis", Host: "staging-redis.internal", Port: 6379},
+			},
+		},
+		{
+			environmentID: 2,
+			target: model.QueryTarget{
+				ResourceID: 25, ResourceName: "profile-mongodb-staging", DisplayName: "Profile MongoDB Staging", ResourceType: model.ResourceTypeDatabaseInstance,
+				ConnectionContext: model.QueryTargetConnectionContext{Environment: "Staging", Owner: "Platform Team", Engine: "mongodb", Host: "staging-mongo.internal", Port: 27017},
+			},
+		},
+		{
+			environmentID: 1,
+			target: model.QueryTarget{
+				ResourceID: 26, ResourceName: "legacy-oracle-node-prod", DisplayName: "Legacy Oracle Node Production", ResourceType: model.ResourceTypeDatabaseInstance,
+				ConnectionContext: model.QueryTargetConnectionContext{Environment: "Production", Owner: "DBA Team", Engine: "oracle", Host: "prod-oracle.internal", Port: 1521},
+			},
+		},
+		{
+			environmentID: 1,
+			target: model.QueryTarget{
+				ResourceID: 27, ResourceName: "order-mysql-node-02-prod", DisplayName: "Order MySQL Node 02 Production", ResourceType: model.ResourceTypeDatabaseInstance,
+				ConnectionContext: model.QueryTargetConnectionContext{Environment: "Production", Owner: "DBA Team", Engine: "mysql", Host: "", Port: 3306, ClusterID: 4, ClusterName: "Order MySQL Cluster Production"},
+			},
+		},
+	}
+}
+
 func NewTestServer() *TestServer {
 	archivedAt := time.Date(2026, 4, 11, 22, 0, 0, 0, time.UTC)
 	archiveReason := "retired"
@@ -587,6 +662,7 @@ func NewTestServer() *TestServer {
 		HealthStatusService:     service.NewHealthStatusService(fakeHealthStatusRepo{}),
 		ResourceSubtypeService:  service.NewResourceSubtypeService(),
 		ProfileService:          profileSvc,
+		QueryTargetService:      service.NewQueryTargetService(fakeQueryTargetRepo{targets: queryTargetSeed()}),
 	}
 
 	return &TestServer{Router: NewRouter(deps)}

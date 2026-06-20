@@ -62,6 +62,7 @@ func TestOpenAPIFuzz(t *testing.T) {
 		RelationTypeService:    service.NewRelationTypeService(dictRepo),
 		LifecycleStatusService: service.NewLifecycleStatusService(dictRepo),
 		HealthStatusService:    service.NewHealthStatusService(dictRepo),
+		QueryTargetService:     service.NewQueryTargetService(mysql.NewQueryTargetRepository(db)),
 	}
 
 	router := api.NewRouter(deps)
