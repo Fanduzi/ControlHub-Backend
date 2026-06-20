@@ -25,16 +25,22 @@ func NewQueryTargetRepository(db *sql.DB) *QueryTargetRepository {
 }
 
 // ListQueryTargets returns database_instance resources as raw query targets
-// (identity + connection context only). Engine/host/port come from the
-// database_instance profile via LEFT JOIN, so instances without a profile
-// surface as missing_connection targets rather than disappearing. Cluster
-// membership is resolved through the member_of relation the same way the
-// resource list resolves cluster_id.
+// (identity + connection context only). Engine comes from the profile when
+// present and falls back to resource_subtype otherwise, so an instance with a
+// missing profile still reports an identifiable engine and surfaces as
+// missing_connection (host/port gap) instead of disappearing. Host/port still
+// come only from the profile. Cluster membership is resolved through the
+// member_of relation the same way the resource list resolves cluster_id.
 func (r *QueryTargetRepository) ListQueryTargets(ctx context.Context, q model.QueryTargetListQuery) ([]model.QueryTarget, error) {
+	// resolvedEngine = profile engine, falling back to resource_subtype when the
+	// profile row is missing. Used for both the returned engine and the engine
+	// filter so a no-profile mysql instance stays visible under ?engine=mysql.
+	const resolvedEngine = "coalesce(nullif(p.engine, ''), r.resource_subtype)"
+
 	where := "where r.resource_type = 'database_instance' and r.archived_at is null"
 	args := []any{}
 	if q.Engine != "" {
-		where += " and p.engine = ?"
+		where += " and lower(" + resolvedEngine + ") = ?"
 		args = append(args, q.Engine)
 	}
 	if q.EnvironmentID != 0 {
@@ -45,7 +51,7 @@ func (r *QueryTargetRepository) ListQueryTargets(ctx context.Context, q model.Qu
 	query := `select
 		r.id, r.name, r.display_name,
 		e.name, o.name,
-		p.engine, p.host, p.port,
+		` + resolvedEngine + `, p.host, p.port,
 		(select rr.to_resource_id from resource_relations rr
 		 where rr.from_resource_id = r.id and rr.relation_type = 'member_of' limit 1) as cluster_id,
 		(select c.display_name from resource_relations rr

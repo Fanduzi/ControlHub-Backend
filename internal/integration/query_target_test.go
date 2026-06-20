@@ -4,6 +4,7 @@ package integration
 
 import (
 	"context"
+	"slices"
 	"testing"
 
 	"github.com/fan/controlhub/internal/model"
@@ -118,13 +119,75 @@ func TestQueryTargetRepository_InstanceWithoutProfileIsMissingConnection(t *test
 	if target == nil {
 		t.Fatalf("expected target for newly created instance %d", created.ID)
 	}
-	// WHY: no profile means engine/host/port are all absent — the target must
-	// report missing_connection (a config gap), not unsupported_engine.
+	// WHY: no profile means host/port are absent — the target must report
+	// missing_connection (a config gap), not unsupported_engine.
 	if target.Readiness != model.ReadinessMissingConnection {
 		t.Fatalf("readiness = %q, want missing_connection", target.Readiness)
 	}
 	if target.Governance.SafetyState != model.SafetyStateConnectionIncomplete {
 		t.Fatalf("safetyState = %q, want connection_incomplete", target.Governance.SafetyState)
+	}
+	// WHY: the engine is still identifiable from resource_subtype, so the
+	// target reports mysql capability and only the connection gaps (host/port)
+	// — never an "engine" gap, and it must remain visible under ?engine=mysql.
+	if target.ConnectionContext.Engine != "mysql" {
+		t.Fatalf("engine = %q, want mysql (subtype fallback)", target.ConnectionContext.Engine)
+	}
+	if target.Capability.QueryKind != model.QueryKindSQL {
+		t.Fatalf("queryKind = %q, want sql", target.Capability.QueryKind)
+	}
+	if slices.Contains(target.MissingFields, "engine") {
+		t.Fatalf("missingFields must not contain engine when subtype identifies it, got %v", target.MissingFields)
+	}
+	if !slices.Contains(target.MissingFields, "host") || !slices.Contains(target.MissingFields, "port") {
+		t.Fatalf("missingFields = %v, want host and port", target.MissingFields)
+	}
+}
+
+// TestQueryTargetRepository_EngineFilterIncludesInstanceWithoutProfile
+// verifies the engine filter matches a database_instance whose engine is
+// identifiable only via resource_subtype (no profile row). Such targets must
+// not disappear from the catalog when filtered by their engine.
+func TestQueryTargetRepository_EngineFilterIncludesInstanceWithoutProfile(t *testing.T) {
+	db := setupTestDB(t)
+	resourceRepo := mysql.NewResourceRepository(db)
+	repo := mysql.NewQueryTargetRepository(db)
+	ctx := context.Background()
+
+	created, err := resourceRepo.CreateResource(ctx, model.ResourceCreateInput{
+		ResourceType:    model.ResourceTypeDatabaseInstance,
+		ResourceSubtype: "mysql",
+		Name:            "qt-no-profile-filter-prod",
+		DisplayName:     "Query Target No Profile Filter",
+		EnvironmentID:   envProd,
+		OwnerID:         ownerDBA,
+		LifecycleStatus: model.LifecycleStatusRunning,
+		HealthStatus:    model.HealthStatusHealthy,
+		Source:          "manual",
+		ExternalID:      "",
+		Labels:          map[string]string{},
+	})
+	if err != nil {
+		t.Fatalf("create resource: %v", err)
+	}
+
+	targets, err := repo.ListQueryTargets(ctx, model.QueryTargetListQuery{Engine: "mysql"})
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+
+	var found bool
+	for _, target := range targets {
+		if target.ResourceID == created.ID {
+			found = true
+			if target.ConnectionContext.Engine != "mysql" {
+				t.Errorf("engine = %q, want mysql", target.ConnectionContext.Engine)
+			}
+			break
+		}
+	}
+	if !found {
+		t.Fatal("expected no-profile mysql instance to be returned by engine=mysql filter")
 	}
 }
 
