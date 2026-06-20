@@ -12,10 +12,19 @@ import (
 	"github.com/fan/controlhub/internal/service"
 )
 
+// NOTE on isolation: TestOpenAPIFuzz (in this same package) exercises write
+// endpoints freely against the shared disposable database and mutates seed
+// data — including deleting/updating profiles and relations. Therefore
+// query-target integration tests must NOT assert on fuzz-mutable seed state
+// (a specific instance's profile host/port, cluster relation, etc.). They
+// either assert only robust join invariants (environment/owner name
+// resolution, which the fuzz cannot break), or create their own fixtures.
+
 // TestQueryTargetRepository_DerivesConnectionContextFromSeed verifies the
-// read-model JOIN against real seed data: every target is a database_instance
-// with resolved environment and owner names, and a known seed anchor resolves
-// engine/port/cluster.
+// read-model JOIN against real migrated data using only robust invariants:
+// every target is a database_instance with a resolved environment and owner
+// name. Profile host/port and cluster relations are intentionally not asserted
+// here because the co-running fuzz mutates them.
 func TestQueryTargetRepository_DerivesConnectionContextFromSeed(t *testing.T) {
 	db := setupTestDB(t)
 	repo := mysql.NewQueryTargetRepository(db)
@@ -26,11 +35,12 @@ func TestQueryTargetRepository_DerivesConnectionContextFromSeed(t *testing.T) {
 		t.Fatalf("list query targets: %v", err)
 	}
 	if len(targets) == 0 {
-		t.Fatal("expected seed query targets, got none")
+		t.Fatal("expected query targets, got none")
 	}
 
-	// WHY: a blank environment or owner name would mean the JOIN is broken and
-	// the workbench would render an empty connection card.
+	// WHY: a blank environment or owner name would mean the environments/owners
+	// JOIN is broken. This holds even after the fuzz mutates resources because
+	// resource writes always reference valid environment/owner ids.
 	for _, target := range targets {
 		if target.ResourceType != model.ResourceTypeDatabaseInstance {
 			t.Errorf("target %d resourceType = %s, want database_instance", target.ResourceID, target.ResourceType)
@@ -42,22 +52,12 @@ func TestQueryTargetRepository_DerivesConnectionContextFromSeed(t *testing.T) {
 			t.Errorf("target %d has empty owner name (join broken)", target.ResourceID)
 		}
 	}
-
-	// Known seed anchor: user-redis-primary-prod -> engine redis, port 6379,
-	// member_of user-redis-cluster-prod.
-	redis := findSeedTargetByName(t, targets, "user-redis-primary-prod")
-	if redis.ConnectionContext.Engine != "redis" {
-		t.Fatalf("engine = %q, want redis", redis.ConnectionContext.Engine)
-	}
-	if redis.ConnectionContext.Port != 6379 {
-		t.Fatalf("port = %d, want 6379", redis.ConnectionContext.Port)
-	}
-	if redis.ConnectionContext.ClusterName == "" {
-		t.Fatal("expected resolved cluster name for member instance")
-	}
 }
 
-// TestQueryTargetRepository_EngineFilter verifies the server-side engine filter.
+// TestQueryTargetRepository_EngineFilter verifies the server-side engine filter
+// returns only matching engines. Robust: the filter matches the resolved
+// engine expression, so every returned target is engine=redis by construction,
+// and the redis subtype is stable for seeded instances.
 func TestQueryTargetRepository_EngineFilter(t *testing.T) {
 	db := setupTestDB(t)
 	repo := mysql.NewQueryTargetRepository(db)
@@ -77,13 +77,74 @@ func TestQueryTargetRepository_EngineFilter(t *testing.T) {
 	}
 }
 
+// TestQueryTargetService_CompleteConnectionIsCredentialRequired creates a
+// database_instance WITH a complete profile (host/port) and asserts it derives
+// to credential_required with execution disabled. Self-contained so it does not
+// depend on fuzz-mutable seed profiles.
+func TestQueryTargetService_CompleteConnectionIsCredentialRequired(t *testing.T) {
+	db := setupTestDB(t)
+	resourceRepo := mysql.NewResourceRepository(db)
+	qtRepo := mysql.NewQueryTargetRepository(db)
+	svc := service.NewQueryTargetService(qtRepo)
+	ctx := context.Background()
+
+	created, err := resourceRepo.CreateResource(ctx, model.ResourceCreateInput{
+		ResourceType:    model.ResourceTypeDatabaseInstance,
+		ResourceSubtype: "mysql",
+		Name:            "qt-complete-profile-prod",
+		DisplayName:     "Query Target Complete Profile",
+		EnvironmentID:   envProd,
+		OwnerID:         ownerDBA,
+		LifecycleStatus: model.LifecycleStatusRunning,
+		HealthStatus:    model.HealthStatusHealthy,
+		Source:          "manual",
+		ExternalID:      "",
+		Labels:          map[string]string{},
+	})
+	if err != nil {
+		t.Fatalf("create resource: %v", err)
+	}
+	if err := resourceRepo.UpsertDatabaseInstanceProfile(ctx, created.ID, "mysql", "8.0.36", "qt-complete-host.internal", 3306, "primary"); err != nil {
+		t.Fatalf("upsert profile: %v", err)
+	}
+
+	targets, err := svc.List(ctx, model.QueryTargetListQuery{})
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	target := findTargetByID(t, targets, created.ID)
+
+	// WHY: complete connection metadata still has no read-only credential in
+	// Phase 36, so the target must be credential_required — never ready.
+	if target.Readiness != model.ReadinessCredentialRequired {
+		t.Fatalf("readiness = %q, want credential_required", target.Readiness)
+	}
+	if target.Capability.QueryKind != model.QueryKindSQL {
+		t.Fatalf("queryKind = %q, want sql", target.Capability.QueryKind)
+	}
+	if target.Governance.ExecutionEnabled {
+		t.Fatal("executionEnabled must be false — Phase 36 never enables execution")
+	}
+	if target.AvailableActions.Run || target.AvailableActions.Explain {
+		t.Fatalf("availableActions must all be false, got %+v", target.AvailableActions)
+	}
+	if !slices.Contains(target.MissingFields, "readonlyCredential") {
+		t.Fatalf("missingFields = %v, want readonlyCredential", target.MissingFields)
+	}
+	if target.ConnectionContext.Engine != "mysql" || target.ConnectionContext.Host == "" || target.ConnectionContext.Port != 3306 {
+		t.Fatalf("connection context not resolved from profile: %+v", target.ConnectionContext)
+	}
+}
+
 // TestQueryTargetRepository_InstanceWithoutProfileIsMissingConnection
-// exercises the LEFT JOIN: a database_instance with no profile row must still
-// surface as a missing_connection target rather than disappearing.
+// exercises the engine subtype fallback + LEFT JOIN: a database_instance with
+// no profile row must still report its subtype engine and surface as
+// missing_connection (host/port gap) rather than disappearing.
 func TestQueryTargetRepository_InstanceWithoutProfileIsMissingConnection(t *testing.T) {
 	db := setupTestDB(t)
 	resourceRepo := mysql.NewResourceRepository(db)
 	qtRepo := mysql.NewQueryTargetRepository(db)
+	svc := service.NewQueryTargetService(qtRepo)
 	ctx := context.Background()
 
 	created, err := resourceRepo.CreateResource(ctx, model.ResourceCreateInput{
@@ -103,22 +164,12 @@ func TestQueryTargetRepository_InstanceWithoutProfileIsMissingConnection(t *test
 		t.Fatalf("create resource: %v", err)
 	}
 
-	svc := service.NewQueryTargetService(qtRepo)
 	targets, err := svc.List(ctx, model.QueryTargetListQuery{})
 	if err != nil {
 		t.Fatalf("list: %v", err)
 	}
+	target := findTargetByID(t, targets, created.ID)
 
-	var target *model.QueryTarget
-	for i := range targets {
-		if targets[i].ResourceID == created.ID {
-			target = &targets[i]
-			break
-		}
-	}
-	if target == nil {
-		t.Fatalf("expected target for newly created instance %d", created.ID)
-	}
 	// WHY: no profile means host/port are absent — the target must report
 	// missing_connection (a config gap), not unsupported_engine.
 	if target.Readiness != model.ReadinessMissingConnection {
@@ -129,7 +180,7 @@ func TestQueryTargetRepository_InstanceWithoutProfileIsMissingConnection(t *test
 	}
 	// WHY: the engine is still identifiable from resource_subtype, so the
 	// target reports mysql capability and only the connection gaps (host/port)
-	// — never an "engine" gap, and it must remain visible under ?engine=mysql.
+	// — never an "engine" gap.
 	if target.ConnectionContext.Engine != "mysql" {
 		t.Fatalf("engine = %q, want mysql (subtype fallback)", target.ConnectionContext.Engine)
 	}
@@ -176,56 +227,19 @@ func TestQueryTargetRepository_EngineFilterIncludesInstanceWithoutProfile(t *tes
 		t.Fatalf("list: %v", err)
 	}
 
-	var found bool
-	for _, target := range targets {
-		if target.ResourceID == created.ID {
-			found = true
-			if target.ConnectionContext.Engine != "mysql" {
-				t.Errorf("engine = %q, want mysql", target.ConnectionContext.Engine)
-			}
-			break
-		}
-	}
-	if !found {
-		t.Fatal("expected no-profile mysql instance to be returned by engine=mysql filter")
+	target := findTargetByID(t, targets, created.ID)
+	if target.ConnectionContext.Engine != "mysql" {
+		t.Fatalf("engine = %q, want mysql", target.ConnectionContext.Engine)
 	}
 }
 
-// TestQueryTargetService_CompleteSeedTargetIsCredentialRequired verifies that
-// a fully-connected seed target derives to credential_required (no read-only
-// credential metadata exists in Phase 36) with execution disabled.
-func TestQueryTargetService_CompleteSeedTargetIsCredentialRequired(t *testing.T) {
-	db := setupTestDB(t)
-	svc := service.NewQueryTargetService(mysql.NewQueryTargetRepository(db))
-	ctx := context.Background()
-
-	targets, err := svc.List(ctx, model.QueryTargetListQuery{Engine: "redis"})
-	if err != nil {
-		t.Fatalf("list: %v", err)
-	}
-	redis := findSeedTargetByName(t, targets, "user-redis-primary-prod")
-
-	if redis.Readiness != model.ReadinessCredentialRequired {
-		t.Fatalf("readiness = %q, want credential_required", redis.Readiness)
-	}
-	if redis.Capability.QueryKind != model.QueryKindRedis {
-		t.Fatalf("queryKind = %q, want redis", redis.Capability.QueryKind)
-	}
-	if redis.Governance.ExecutionEnabled {
-		t.Fatal("executionEnabled must be false — Phase 36 never enables execution")
-	}
-	if redis.AvailableActions.Run || redis.AvailableActions.Explain {
-		t.Fatalf("availableActions must all be false, got %+v", redis.AvailableActions)
-	}
-}
-
-func findSeedTargetByName(t *testing.T, targets []model.QueryTarget, name string) *model.QueryTarget {
+func findTargetByID(t *testing.T, targets []model.QueryTarget, id uint64) *model.QueryTarget {
 	t.Helper()
 	for i := range targets {
-		if targets[i].ResourceName == name {
+		if targets[i].ResourceID == id {
 			return &targets[i]
 		}
 	}
-	t.Fatalf("expected seed target %q in %d targets", name, len(targets))
+	t.Fatalf("expected query target id %d in %d targets", id, len(targets))
 	return nil
 }
