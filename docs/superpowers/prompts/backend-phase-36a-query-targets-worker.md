@@ -17,10 +17,11 @@ Frontend repository is separate and must not be edited by this worker:
 ## Objective
 
 Add the backend read model and API contract that turn existing database
-resources into query-capable targets for a future Query Workbench.
+resources into query-capable target contexts for a future Query Workbench.
 
 This phase does **not** execute queries. It only exposes target capability,
-connection completeness, missing configuration, and safety state.
+connection context, missing configuration, safety state, and explicitly locked
+actions for the frontend workbench shell.
 
 ## Required Reading
 
@@ -107,18 +108,50 @@ Initial response shape:
       "resourceName": "analytics-ch-node-01-prod",
       "displayName": "Analytics ClickHouse Node 01 Production",
       "resourceType": "database_instance",
-      "environment": "Production",
-      "owner": "DBA Team",
-      "engine": "clickhouse",
-      "queryKind": "sql",
-      "host": "prod-ch-host-01.internal",
-      "port": 8123,
-      "clusterId": 14,
-      "clusterName": "Analytics ClickHouse Cluster Production",
+      "connectionContext": {
+        "environment": "Production",
+        "owner": "DBA Team",
+        "engine": "clickhouse",
+        "host": "prod-ch-host-01.internal",
+        "port": 8123,
+        "clusterId": 14,
+        "clusterName": "Analytics ClickHouse Cluster Production"
+      },
+      "capability": {
+        "queryKind": "sql",
+        "editorMode": "sql",
+        "languageLabel": "SQL"
+      },
       "readiness": "credential_required",
       "missingFields": ["readonlyCredential"],
-      "safetyState": "credential_missing",
-      "safetyNote": "Query execution is not enabled in this phase."
+      "governance": {
+        "executionEnabled": false,
+        "credentialState": "missing_readonly_credential",
+        "auditRequired": true,
+        "safetyState": "credential_missing",
+        "safetyNote": "Query execution is not enabled in this phase.",
+        "policyNotes": [
+          "Read-only credentials are required before execution.",
+          "Production queries require stricter defaults."
+        ]
+      },
+      "availableActions": {
+        "run": false,
+        "explain": false,
+        "export": false,
+        "saveSheet": false,
+        "requestAccess": false
+      },
+      "schemaPreview": [
+        {
+          "kind": "database",
+          "name": "analytics",
+          "children": [
+            { "kind": "table", "name": "events_daily" },
+            { "kind": "table", "name": "user_sessions" }
+          ]
+        }
+      ]
     }
   ]
 }
@@ -126,6 +159,11 @@ Initial response shape:
 
 If existing project conventions use a different envelope, follow the local API
 style and document the exact shape in OpenAPI and final report.
+
+The key frontend-driven requirement is that this is not just a target list. It
+is the backend context needed by a locked Query Workbench shell. The backend
+should return enough structured information for the frontend to avoid hardcoded
+workbench state.
 
 ## Derivation Rules
 
@@ -142,6 +180,17 @@ unknown    -> unsupported
 ```
 
 Unknown engines must remain visible as unsupported targets.
+
+### Capability
+
+Return a `capability` object so the frontend can select editor language and
+labels without guessing:
+
+```text
+queryKind: sql | redis | mongo | unsupported
+editorMode: sql | redis | mongo | text
+languageLabel: SQL | Redis command | Mongo query | Unsupported
+```
 
 ### Readiness
 
@@ -187,12 +236,65 @@ The safety note must make the boundary clear:
 Query execution is not enabled in this phase.
 ```
 
+### Governance
+
+Return explicit governance data:
+
+```text
+executionEnabled = false
+credentialState = missing_readonly_credential
+auditRequired = true
+safetyState = credential_missing | execution_disabled | unsupported_engine | connection_incomplete
+safetyNote = human-readable boundary
+policyNotes = short list of reasons or future constraints
+```
+
+Do not let the frontend infer whether execution is enabled. Phase 36 must always
+return `executionEnabled = false`.
+
+### Available actions
+
+Return explicit locked action flags:
+
+```text
+run = false
+explain = false
+export = false
+saveSheet = false
+requestAccess = false
+```
+
+The frontend should render locked controls from these flags. Do not expose any
+action as available unless the backend has a real endpoint and policy model,
+which is out of scope for Phase 36.
+
+### Schema preview
+
+Return a lightweight `schemaPreview` array if existing metadata can derive it
+without live database introspection.
+
+Allowed examples:
+
+```text
+SQL: database/schema/table placeholders from existing metadata or seed profile
+Redis: key pattern placeholders
+MongoDB: collection placeholders
+```
+
+If no metadata exists, return an empty array. Do not connect to databases to
+introspect schemas in Phase 36.
+
 ## Implementation Requirements
 
 1. Add model types:
 
 ```text
 QueryTarget
+QueryTargetConnectionContext
+QueryTargetCapability
+QueryTargetGovernance
+QueryTargetAvailableActions
+QueryTargetSchemaPreviewNode
 QueryKind
 QueryTargetReadiness
 QueryTargetSafetyState
@@ -202,7 +304,7 @@ QueryTargetListResponse
 2. Add a pure derivation helper:
 
 ```text
-engine + host + port + credential evidence -> query kind + readiness + safety
+engine + host + port + credential evidence -> capability + readiness + governance + locked actions
 ```
 
 3. Source targets from existing database instance resources and database
@@ -215,6 +317,9 @@ relations.
 5. Add handler route and OpenAPI schema.
 
 6. Keep the endpoint read-only. It must not mutate resources or topology.
+
+7. Do not implement live schema introspection. `schemaPreview` must be derived
+from existing ControlHub metadata or be empty.
 
 ## GitNexus Requirements
 
@@ -244,6 +349,10 @@ missing host
 missing port
 unknown engine
 complete connection but no readonly credential -> credential_required
+governance.executionEnabled is always false
+availableActions run/explain/export/saveSheet/requestAccess are false
+capability.editorMode matches queryKind
+schemaPreview empty when no metadata exists
 GET /query-targets handler response
 OpenAPI validation
 integration coverage if repository joins MySQL data

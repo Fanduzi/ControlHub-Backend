@@ -58,7 +58,9 @@ flat inventory-only page.
 
 ## Backend Read Model
 
-Add a query target read model derived from existing resources and profiles.
+Add a query target context read model derived from existing resources and
+profiles. This is not only a list API. It should provide the frontend with the
+structured context needed by the locked Query Workbench shell.
 
 Proposed endpoint:
 
@@ -76,18 +78,49 @@ Initial response shape:
       "resourceName": "analytics-ch-node-01-prod",
       "displayName": "Analytics ClickHouse Node 01 Production",
       "resourceType": "database_instance",
-      "environment": "Production",
-      "owner": "DBA Team",
-      "engine": "clickhouse",
-      "queryKind": "sql",
-      "host": "prod-ch-host-01.internal",
-      "port": 8123,
-      "clusterId": 14,
-      "clusterName": "Analytics ClickHouse Cluster Production",
+      "connectionContext": {
+        "environment": "Production",
+        "owner": "DBA Team",
+        "engine": "clickhouse",
+        "host": "prod-ch-host-01.internal",
+        "port": 8123,
+        "clusterId": 14,
+        "clusterName": "Analytics ClickHouse Cluster Production"
+      },
+      "capability": {
+        "queryKind": "sql",
+        "editorMode": "sql",
+        "languageLabel": "SQL"
+      },
       "readiness": "credential_required",
       "missingFields": ["readonlyCredential"],
-      "safetyState": "credential_missing",
-      "safetyNote": "Query execution is not enabled. Configure read-only credentials in a later phase."
+      "governance": {
+        "executionEnabled": false,
+        "credentialState": "missing_readonly_credential",
+        "auditRequired": true,
+        "safetyState": "credential_missing",
+        "safetyNote": "Query execution is not enabled in this phase.",
+        "policyNotes": [
+          "Read-only credentials are required before execution.",
+          "Production queries require stricter defaults."
+        ]
+      },
+      "availableActions": {
+        "run": false,
+        "explain": false,
+        "export": false,
+        "saveSheet": false,
+        "requestAccess": false
+      },
+      "schemaPreview": [
+        {
+          "kind": "database",
+          "name": "analytics",
+          "children": [
+            { "kind": "table", "name": "events_daily" }
+          ]
+        }
+      ]
     }
   ]
 }
@@ -156,6 +189,31 @@ The safety note must make the boundary clear:
 ```text
 Query execution is not enabled in this phase.
 ```
+
+### Workbench Action Contract
+
+Do not let the frontend guess which actions are available. Phase 36 should
+return explicit action flags:
+
+```text
+run = false
+explain = false
+export = false
+saveSheet = false
+requestAccess = false
+```
+
+All of these must remain false in Phase 36 because there is no execution API,
+credential model, saved sheet API, export API, or access workflow.
+
+### Schema Preview
+
+`schemaPreview` is optional and lightweight. It may contain objects already
+known to ControlHub, but Phase 36 must not connect to databases for live schema
+introspection.
+
+If no metadata exists, return an empty array. The frontend will still render a
+locked schema placeholder.
 
 ## Frontend Workbench Shell
 

@@ -143,11 +143,13 @@ Query execution is not enabled in this phase.
 2. Target switcher / connection context:
 
 ```text
-engine
-environment
-host / port
-owner
-parent cluster
+connectionContext.engine
+connectionContext.environment
+connectionContext.host / connectionContext.port
+connectionContext.owner
+connectionContext.clusterName
+capability.queryKind
+capability.editorMode
 readiness
 ```
 
@@ -159,9 +161,9 @@ Redis: key pattern / read command placeholder
 MongoDB: database / collection / field placeholder
 ```
 
-It is acceptable for Phase 36 to use query target metadata and static
-placeholder nodes if backend schema metadata does not exist yet. Do not imply
-live schema sync if no backend exists.
+Use `schemaPreview` from the backend when present. If it is empty, render an
+honest locked placeholder. Do not imply live schema sync if the backend does not
+provide schema metadata.
 
 4. Worksheet/editor shell:
 
@@ -198,13 +200,20 @@ Masking
 7. Governance/access panel:
 
 ```text
-execution disabled
-readonly credential missing / required
-audit required
+governance.executionEnabled = false
+governance.credentialState
+governance.auditRequired
+governance.safetyState
+governance.safetyNote
+governance.policyNotes
+availableActions.run = false
+availableActions.explain = false
+availableActions.export = false
+availableActions.saveSheet = false
+availableActions.requestAccess = false
 JIT/access planned
 production policy notes
 missing fields
-safety note from backend
 ```
 
 ## Copy Requirements
@@ -240,11 +249,29 @@ Add frontend types matching backend OpenAPI:
 
 ```text
 QueryTarget
+QueryTargetConnectionContext
+QueryTargetCapability
+QueryTargetGovernance
+QueryTargetAvailableActions
+QueryTargetSchemaPreviewNode
 QueryKind
 QueryTargetReadiness
 QueryTargetSafetyState
 QueryTargetListResponse
 ```
+
+The frontend must consume the nested backend contract:
+
+```text
+connectionContext -> target switcher and facts
+capability -> editor mode and language label
+governance -> safety/access panel
+availableActions -> locked action bar
+schemaPreview -> schema/object browser placeholder
+```
+
+Do not reconstruct these fields from hardcoded frontend assumptions if the
+backend returns them.
 
 Add service:
 

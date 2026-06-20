@@ -2,9 +2,9 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Build a governed Query Workbench shell across backend and frontend without executing queries. The backend exposes query target capability data; the frontend renders a locked IDE-style workspace around that data.
+**Goal:** Build a governed Query Workbench shell across backend and frontend without executing queries. The backend exposes query target context data; the frontend renders a locked IDE-style workspace around that data.
 
-**Architecture:** Implement the backend query target read model first, then build a frontend `/query` workbench shell against the contract. Keep query execution disabled and explicit in both API and UI. The target inventory is support data inside the workbench, not the entire product surface.
+**Architecture:** Implement the backend query target context read model first, then build a frontend `/query` workbench shell against the contract. Keep query execution disabled and explicit in both API and UI. The target inventory is support data inside the workbench, not the entire product surface.
 
 **Tech Stack:** Go, OpenAPI 3.1, MySQL read models, Next.js, React, TypeScript, Vitest, Playwright.
 
@@ -76,6 +76,11 @@ Create or modify backend model files to add:
 
 ```text
 QueryTarget
+QueryTargetConnectionContext
+QueryTargetCapability
+QueryTargetGovernance
+QueryTargetAvailableActions
+QueryTargetSchemaPreviewNode
 QueryKind
 QueryTargetReadiness
 QueryTargetSafetyState
@@ -94,6 +99,11 @@ Rules:
 - No credentials are stored or returned.
 - No query execution fields are added.
 - Unknown engines remain visible as unsupported targets.
+- `governance.executionEnabled` is always false in Phase 36.
+- `availableActions.run`, `explain`, `export`, `saveSheet`, and
+  `requestAccess` are all false in Phase 36.
+- `schemaPreview` is derived only from existing ControlHub metadata or empty.
+  No live database introspection.
 
 Before editing any Go symbol, run GitNexus impact analysis for the target symbol.
 
@@ -102,10 +112,12 @@ Before editing any Go symbol, run GitNexus impact analysis for the target symbol
 Add a pure helper that derives query capability from existing resource data:
 
 ```text
-engine -> queryKind
+engine -> queryKind/editorMode/languageLabel
 host/port presence -> connection completeness
 credential absence -> credential_required
 unsupported engine -> unsupported_engine
+executionEnabled -> false
+availableActions -> all false
 ```
 
 Test cases:
@@ -120,6 +132,11 @@ Test cases:
 - missing host -> missing_connection
 - missing port -> missing_connection
 - complete connection but no credential -> credential_required
+- capability.editorMode matches queryKind
+- governance.auditRequired is true
+- governance.executionEnabled is false
+- all availableActions are false
+- schemaPreview empty when no metadata exists
 
 ### Task B3: Add Repository/Service Read Path
 
@@ -169,6 +186,11 @@ Update OpenAPI:
 ```text
 GET /query-targets
 QueryTarget schema
+QueryTargetConnectionContext schema
+QueryTargetCapability schema
+QueryTargetGovernance schema
+QueryTargetAvailableActions schema
+QueryTargetSchemaPreviewNode schema
 QueryTargetListResponse schema
 enum values for queryKind/readiness/safetyState
 ```
