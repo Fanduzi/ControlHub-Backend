@@ -17,10 +17,15 @@ accidentally become a production write console or a data exfiltration path.
 
 The roadmap below records the intended sequence and safety boundaries.
 
-## Phase 36 — Query Capability Inventory
+## Phase 36 — Query Workbench Shell + Capability Inventory
 
-First, do not execute queries. Convert the database resources already tracked by
-ControlHub into a query target directory.
+First, do not execute queries. Build the visible shell of a governed query
+workspace, backed by the database resources already tracked by ControlHub.
+
+The important product correction after Bytebase research: Phase 36 must not be a
+standalone inventory table. The inventory should live inside a workbench shell so
+users can understand the future query platform shape without getting an enabled
+execution path.
 
 Questions to answer:
 
@@ -37,7 +42,15 @@ Expected outputs:
 
 - Backend read model: `queryTargets`
 - Frontend page: `/query` or `/databases/query`
-- Each target displays:
+- Workbench shell:
+  - target switcher / connection context
+  - schema/object browser placeholder
+  - worksheet tabs placeholder
+  - editor placeholder with Run / Explain / Export locked
+  - result grid / JSON / Explain / Logs placeholder
+  - history placeholder
+  - access / governance panel
+- Each query target displays:
   - engine
   - environment
   - host / port
@@ -52,6 +65,12 @@ Value:
 ```text
 Turns "query platform" from an idea into an inspectable product model without
 introducing execution risk.
+```
+
+Reference learning:
+
+```text
+docs/superpowers/notes/2026-06-20-phase-36-bytebase-ui-research.md
 ```
 
 ## Phase 37 — Read-Only Query Sandbox

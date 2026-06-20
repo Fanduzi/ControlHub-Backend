@@ -1,0 +1,1005 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Phase 36 Governed Query Workbench Preview</title>
+  <style>
+    :root {
+      --bg: #0d1117;
+      --bg2: #111827;
+      --panel: #151c27;
+      --panel2: #192233;
+      --panel3: #0f1722;
+      --line: #273244;
+      --line2: #354258;
+      --text: #eef3ff;
+      --muted: #94a3b8;
+      --faint: #64748b;
+      --amber: #f5b84b;
+      --amber-bg: rgba(245, 184, 75, .14);
+      --red: #ff6b6b;
+      --red-bg: rgba(255, 107, 107, .12);
+      --green: #62d29f;
+      --green-bg: rgba(98, 210, 159, .12);
+      --blue: #67b7ff;
+      --blue-bg: rgba(103, 183, 255, .13);
+      --violet: #b69cff;
+      --violet-bg: rgba(182, 156, 255, .13);
+      --shadow: 0 24px 80px rgba(0, 0, 0, .45);
+      --mono: "SF Mono", Menlo, Monaco, Consolas, monospace;
+      --sans: "Avenir Next", "PingFang SC", "Hiragino Sans GB", sans-serif;
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      color: var(--text);
+      font-family: var(--sans);
+      background:
+        radial-gradient(circle at 20% 0%, rgba(103, 183, 255, .18), transparent 30%),
+        radial-gradient(circle at 86% 4%, rgba(245, 184, 75, .16), transparent 28%),
+        linear-gradient(135deg, #0a0e14, #111827 50%, #0a1116);
+      overflow: hidden;
+    }
+
+    button, input, select { font: inherit; }
+
+    .app {
+      width: 100vw;
+      height: 100vh;
+      display: grid;
+      grid-template-rows: 58px minmax(0, 1fr);
+    }
+
+    .topbar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 0 18px;
+      border-bottom: 1px solid var(--line);
+      background: rgba(13, 17, 23, .86);
+      backdrop-filter: blur(18px);
+    }
+
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      min-width: 260px;
+    }
+
+    .mark {
+      width: 34px;
+      height: 34px;
+      border-radius: 11px;
+      display: grid;
+      place-items: center;
+      background: linear-gradient(135deg, var(--blue), var(--green));
+      color: #071014;
+      font-weight: 900;
+      box-shadow: 0 0 0 5px rgba(103, 183, 255, .08);
+    }
+
+    .brand-title {
+      display: grid;
+      gap: 1px;
+    }
+
+    .brand-title strong { font-size: 14px; letter-spacing: .02em; }
+    .brand-title span { color: var(--muted); font-size: 12px; }
+
+    .target-switcher {
+      flex: 1;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 10px;
+      color: var(--muted);
+      font-size: 13px;
+    }
+
+    .select-like {
+      min-width: 380px;
+      max-width: 50vw;
+      height: 36px;
+      border-radius: 12px;
+      border: 1px solid var(--line2);
+      background: #111827;
+      color: var(--text);
+      padding: 0 12px;
+    }
+
+    .top-actions {
+      display: flex;
+      align-items: center;
+      justify-content: flex-end;
+      gap: 10px;
+      min-width: 260px;
+    }
+
+    .ghost, .locked-run {
+      height: 36px;
+      border-radius: 12px;
+      border: 1px solid var(--line2);
+      padding: 0 13px;
+      color: var(--muted);
+      background: #101721;
+    }
+
+    .locked-run {
+      cursor: not-allowed;
+      color: var(--amber);
+      border-color: rgba(245, 184, 75, .35);
+      background: var(--amber-bg);
+    }
+
+    .layout {
+      min-height: 0;
+      display: grid;
+      grid-template-columns: 292px minmax(560px, 1fr) 340px;
+    }
+
+    .sidebar,
+    .governance {
+      min-height: 0;
+      background: rgba(15, 23, 34, .92);
+      border-right: 1px solid var(--line);
+      overflow: auto;
+    }
+
+    .governance {
+      border-right: 0;
+      border-left: 1px solid var(--line);
+    }
+
+    .side-head {
+      padding: 18px;
+      border-bottom: 1px solid var(--line);
+    }
+
+    .section-label {
+      color: var(--faint);
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: .14em;
+      font-weight: 800;
+      margin-bottom: 10px;
+    }
+
+    .search {
+      width: 100%;
+      height: 36px;
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      color: var(--text);
+      outline: none;
+      background: #0d131d;
+      padding: 0 11px;
+    }
+
+    .search::placeholder { color: var(--faint); }
+
+    .tree {
+      padding: 12px;
+      display: grid;
+      gap: 10px;
+    }
+
+    .source {
+      border: 1px solid var(--line);
+      border-radius: 16px;
+      overflow: hidden;
+      background: rgba(255, 255, 255, .025);
+    }
+
+    .context-card {
+      margin-top: 13px;
+      border: 1px solid var(--line);
+      border-radius: 16px;
+      padding: 12px;
+      background: rgba(255, 255, 255, .026);
+    }
+
+    .context-row {
+      display: flex;
+      justify-content: space-between;
+      gap: 12px;
+      padding: 7px 0;
+      color: var(--muted);
+      font-size: 12px;
+      border-bottom: 1px solid rgba(39, 50, 68, .54);
+    }
+
+    .context-row:last-child { border-bottom: 0; }
+    .context-row b { color: var(--text); font-weight: 760; text-align: right; }
+
+    .source-title {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      padding: 12px;
+      font-weight: 800;
+      font-size: 13px;
+      border-bottom: 1px solid var(--line);
+    }
+
+    .engine {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      min-width: 28px;
+      height: 22px;
+      border-radius: 8px;
+      font-size: 11px;
+      font-weight: 900;
+      color: var(--blue);
+      background: var(--blue-bg);
+    }
+
+    .db-node, .table-node {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 8px 12px;
+      color: var(--muted);
+      font-size: 13px;
+    }
+
+    .table-node {
+      padding-left: 28px;
+      color: #c9d4e5;
+      cursor: pointer;
+    }
+
+    .table-node.active {
+      color: var(--text);
+      background: rgba(103, 183, 255, .1);
+      border-left: 2px solid var(--blue);
+    }
+
+    .column-node {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      gap: 8px;
+      padding: 6px 12px 6px 44px;
+      color: var(--muted);
+      font-family: var(--mono);
+      font-size: 11px;
+    }
+
+    .sensitive {
+      color: var(--amber);
+      border: 1px solid rgba(245, 184, 75, .28);
+      background: rgba(245, 184, 75, .08);
+      border-radius: 999px;
+      padding: 1px 6px;
+      font-family: var(--sans);
+      font-size: 10px;
+    }
+
+    .main {
+      min-width: 0;
+      min-height: 0;
+      display: grid;
+      grid-template-rows: 86px minmax(320px, .95fr) minmax(230px, .75fr);
+      background: rgba(13, 17, 23, .6);
+    }
+
+    .notice {
+      display: grid;
+      grid-template-columns: 1fr auto;
+      align-items: center;
+      gap: 20px;
+      margin: 14px;
+      padding: 14px 16px;
+      border: 1px solid rgba(245, 184, 75, .35);
+      border-radius: 18px;
+      background:
+        linear-gradient(90deg, rgba(245, 184, 75, .15), rgba(103, 183, 255, .05)),
+        #121923;
+    }
+
+    .notice strong {
+      display: block;
+      color: var(--amber);
+      margin-bottom: 4px;
+    }
+
+    .notice span {
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 1.5;
+    }
+
+    .meta-strip {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      justify-content: flex-end;
+    }
+
+    .pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 7px;
+      height: 28px;
+      border: 1px solid var(--line2);
+      border-radius: 999px;
+      padding: 0 10px;
+      color: var(--muted);
+      background: rgba(255, 255, 255, .035);
+      font-size: 12px;
+      white-space: nowrap;
+    }
+
+    .mode-strip {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 8px;
+      margin-top: 13px;
+    }
+
+    .notice .mode-strip {
+      grid-column: 1 / -1;
+    }
+
+    .mode-card {
+      min-height: 58px;
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      padding: 9px;
+      background: rgba(255, 255, 255, .028);
+    }
+
+    .mode-card b {
+      display: block;
+      color: var(--text);
+      font-size: 12px;
+      margin-bottom: 3px;
+    }
+
+    .mode-card span {
+      color: var(--faint);
+      font-size: 11px;
+      line-height: 1.35;
+    }
+
+    .editor {
+      min-height: 0;
+      display: grid;
+      grid-template-rows: 42px minmax(0, 1fr);
+      border-top: 1px solid var(--line);
+      border-bottom: 1px solid var(--line);
+      background: #0b1018;
+    }
+
+    .tabs {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      border-bottom: 1px solid var(--line);
+      background: #111827;
+    }
+
+    .tab-list {
+      display: flex;
+      height: 100%;
+    }
+
+    .tab {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 0 15px;
+      border-right: 1px solid var(--line);
+      color: var(--muted);
+      font-size: 13px;
+    }
+
+    .tab.active {
+      color: var(--text);
+      background: #0b1018;
+      box-shadow: inset 0 2px 0 var(--blue);
+    }
+
+    .editor-tools {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding-right: 10px;
+      color: var(--faint);
+      font-size: 12px;
+    }
+
+    .datasource-toggle {
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+      border: 1px solid rgba(98, 210, 159, .24);
+      color: var(--green);
+      background: rgba(98, 210, 159, .08);
+      border-radius: 999px;
+      padding: 3px 8px;
+    }
+
+    .code-wrap {
+      position: relative;
+      min-height: 0;
+      overflow: hidden;
+      display: grid;
+      grid-template-columns: 58px 1fr;
+      font-family: var(--mono);
+      font-size: 14px;
+      line-height: 1.8;
+    }
+
+    .lines {
+      padding: 18px 14px;
+      color: #536176;
+      text-align: right;
+      border-right: 1px solid var(--line);
+      user-select: none;
+    }
+
+    .code {
+      padding: 18px 18px 92px;
+      color: #d6e1f2;
+      white-space: pre;
+    }
+
+    .kw { color: #8ccfff; font-weight: 800; }
+    .fn { color: #b69cff; }
+    .str { color: #f5d18a; }
+    .cm { color: #69778e; }
+
+    .editor-lock {
+      position: absolute;
+      left: 76px;
+      right: 18px;
+      bottom: 18px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 18px;
+      border: 1px solid rgba(245, 184, 75, .38);
+      border-radius: 18px;
+      padding: 14px 16px;
+      background: rgba(16, 23, 33, .92);
+      box-shadow: var(--shadow);
+      backdrop-filter: blur(18px);
+    }
+
+    .editor-lock strong {
+      color: var(--amber);
+      display: block;
+      margin-bottom: 3px;
+    }
+
+    .editor-lock span {
+      color: var(--muted);
+      font-size: 13px;
+    }
+
+    .results {
+      min-height: 0;
+      display: grid;
+      grid-template-rows: 42px 1fr;
+      background: #101720;
+    }
+
+    .result-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 0 14px;
+      border-bottom: 1px solid var(--line);
+      color: var(--muted);
+      font-size: 13px;
+    }
+
+    .result-tabs {
+      display: flex;
+      gap: 16px;
+    }
+
+    .result-tabs strong {
+      color: var(--text);
+    }
+
+    .grid-preview {
+      position: relative;
+      padding: 14px;
+      overflow: hidden;
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      color: rgba(238, 243, 255, .45);
+      font-family: var(--mono);
+      font-size: 12px;
+    }
+
+    th, td {
+      border: 1px solid rgba(53, 66, 88, .75);
+      padding: 10px;
+      text-align: left;
+    }
+
+    th {
+      color: rgba(148, 163, 184, .65);
+      background: rgba(255, 255, 255, .03);
+    }
+
+    .result-lock {
+      position: absolute;
+      inset: 32px;
+      display: grid;
+      place-items: center;
+      text-align: center;
+      border: 1px dashed rgba(245, 184, 75, .42);
+      border-radius: 22px;
+      background: rgba(13, 17, 23, .84);
+      backdrop-filter: blur(10px);
+    }
+
+    .result-lock h3 {
+      margin: 0 0 9px;
+      color: var(--amber);
+      font-size: 20px;
+    }
+
+    .result-lock p {
+      margin: 0;
+      color: var(--muted);
+      max-width: 520px;
+      line-height: 1.65;
+    }
+
+    .activity-strip {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 10px;
+      margin-top: 12px;
+    }
+
+    .activity-card {
+      border: 1px solid rgba(53, 66, 88, .72);
+      border-radius: 16px;
+      padding: 12px;
+      background: rgba(255, 255, 255, .028);
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.45;
+    }
+
+    .activity-card b {
+      display: block;
+      color: var(--text);
+      margin-bottom: 5px;
+    }
+
+    .gov-section {
+      padding: 18px;
+      border-bottom: 1px solid var(--line);
+    }
+
+    .gov-section h3 {
+      margin: 0 0 14px;
+      font-size: 14px;
+      letter-spacing: .02em;
+    }
+
+    .status-card {
+      border: 1px solid var(--line);
+      border-radius: 16px;
+      padding: 14px;
+      background: rgba(255, 255, 255, .03);
+      margin-bottom: 10px;
+    }
+
+    .status-card strong {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin-bottom: 6px;
+    }
+
+    .status-card p {
+      margin: 0;
+      color: var(--muted);
+      line-height: 1.55;
+      font-size: 13px;
+    }
+
+    .dot {
+      width: 9px;
+      height: 9px;
+      border-radius: 50%;
+      background: var(--amber);
+      box-shadow: 0 0 16px currentColor;
+    }
+
+    .dot.red { background: var(--red); }
+    .dot.green { background: var(--green); }
+    .dot.blue { background: var(--blue); }
+
+    .policy-list {
+      display: grid;
+      gap: 9px;
+    }
+
+    .policy {
+      display: flex;
+      justify-content: space-between;
+      gap: 12px;
+      padding: 10px 0;
+      border-bottom: 1px solid rgba(39, 50, 68, .65);
+      color: var(--muted);
+      font-size: 13px;
+    }
+
+    .policy:last-child { border-bottom: 0; }
+    .policy b { color: var(--text); font-weight: 750; text-align: right; }
+
+    .timeline {
+      display: grid;
+      gap: 12px;
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 1.55;
+    }
+
+    .timeline-item {
+      display: grid;
+      grid-template-columns: 22px 1fr;
+      gap: 10px;
+    }
+
+    .timeline-item::before {
+      content: "";
+      width: 10px;
+      height: 10px;
+      border-radius: 50%;
+      margin-top: 5px;
+      background: var(--line2);
+      box-shadow: 0 0 0 5px rgba(255, 255, 255, .025);
+    }
+
+    .research-list {
+      display: grid;
+      gap: 9px;
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 1.55;
+    }
+
+    .research-list b { color: var(--text); }
+
+    @media (max-width: 1180px) {
+      body { overflow: auto; }
+      .app { height: auto; min-height: 100vh; }
+      .layout { grid-template-columns: 260px minmax(0, 1fr); }
+      .governance { grid-column: 1 / -1; border-left: 0; border-top: 1px solid var(--line); }
+    }
+
+    @media (max-width: 820px) {
+      .topbar { height: auto; padding: 12px; flex-direction: column; align-items: stretch; }
+      .brand, .top-actions { min-width: 0; }
+      .target-switcher { justify-content: flex-start; }
+      .select-like { min-width: 0; max-width: none; width: 100%; }
+      .layout { grid-template-columns: 1fr; }
+      .sidebar { border-right: 0; border-bottom: 1px solid var(--line); max-height: 420px; }
+      .main { grid-template-rows: auto 420px 360px; }
+      .notice { grid-template-columns: 1fr; }
+      .mode-strip, .activity-strip { grid-template-columns: 1fr; }
+      .editor-lock { left: 18px; flex-direction: column; align-items: flex-start; }
+    }
+  </style>
+</head>
+<body>
+  <div class="app">
+    <header class="topbar">
+      <div class="brand">
+        <div class="mark">Q</div>
+        <div class="brand-title">
+          <strong>ControlHub Query Workbench</strong>
+          <span>Phase 36 preview · governed IDE shell</span>
+        </div>
+      </div>
+
+      <div class="target-switcher">
+        <span>Target</span>
+        <select class="select-like" id="target-select">
+          <option value="clickhouse">Analytics ClickHouse Node 01 · Production</option>
+          <option value="mysql">Payment MySQL Replica 01 · Production</option>
+          <option value="redis">Payment Redis Cache · Production</option>
+          <option value="mongo">User Data MongoDB Secondary · Production</option>
+        </select>
+      </div>
+
+      <div class="top-actions">
+        <button class="ghost">Schema sync</button>
+        <button class="ghost">Explain</button>
+        <button class="ghost">Save sheet</button>
+        <button class="locked-run" disabled>Run locked</button>
+      </div>
+    </header>
+
+    <div class="layout">
+      <aside class="sidebar">
+        <div class="side-head">
+          <div class="section-label">Data sources</div>
+          <input class="search" placeholder="搜索库、表、集合、字段..." />
+          <div class="context-card">
+            <div class="context-row"><span>Project</span><b>Production Ops</b></div>
+            <div class="context-row"><span>Mode</span><b>Read-only planned</b></div>
+            <div class="context-row"><span>Batch query</span><b>Not enabled</b></div>
+            <div class="context-row"><span>Access</span><b>Request required</b></div>
+          </div>
+        </div>
+
+        <div class="tree">
+          <section class="source">
+            <div class="source-title"><span>Analytics ClickHouse</span><span class="engine">CH</span></div>
+            <div class="db-node">▾ analytics</div>
+            <div class="table-node active">events_daily</div>
+            <div class="column-node"><span>event_date Date</span><span></span></div>
+            <div class="column-node"><span>user_id UInt64</span><span class="sensitive">masked</span></div>
+            <div class="column-node"><span>pv UInt64</span><span></span></div>
+            <div class="table-node">user_sessions</div>
+            <div class="table-node">query_latency_1m</div>
+          </section>
+
+          <section class="source">
+            <div class="source-title"><span>Payment MySQL</span><span class="engine">MY</span></div>
+            <div class="db-node">▾ payment_core</div>
+            <div class="table-node">orders</div>
+            <div class="column-node"><span>order_id bigint</span><span></span></div>
+            <div class="column-node"><span>user_phone varchar</span><span class="sensitive">masked</span></div>
+            <div class="table-node">refunds</div>
+            <div class="table-node">settlements</div>
+          </section>
+
+          <section class="source">
+            <div class="source-title"><span>Payment Redis</span><span class="engine">RD</span></div>
+            <div class="db-node">▾ db0</div>
+            <div class="table-node">payment:lock:*</div>
+            <div class="column-node"><span>TTL / GET only</span><span class="sensitive">readonly</span></div>
+            <div class="table-node">risk:cache:*</div>
+          </section>
+
+          <section class="source">
+            <div class="source-title"><span>User MongoDB</span><span class="engine">MG</span></div>
+            <div class="db-node">▾ user_profile</div>
+            <div class="table-node">profiles</div>
+            <div class="column-node"><span>email</span><span class="sensitive">masked</span></div>
+            <div class="table-node">device_bindings</div>
+          </section>
+        </div>
+      </aside>
+
+      <main class="main">
+        <section class="notice">
+          <div>
+            <strong>查询执行尚未启用</strong>
+            <span>这是真正 Query IDE 的外壳预览：连接选择、Schema 浏览、Worksheet、历史、结果区、权限入口和治理面板都会出现，但 Phase 36 不连接数据库、不执行查询。</span>
+          </div>
+          <div class="meta-strip">
+            <span class="pill">Production</span>
+            <span class="pill">readonly credential: missing</span>
+            <span class="pill">audit: required</span>
+          </div>
+          <div class="mode-strip">
+            <div class="mode-card"><b>Worksheet</b><span>草稿 / 保存 / 分享占位</span></div>
+            <div class="mode-card"><b>Schema</b><span>库表字段与敏感标记</span></div>
+            <div class="mode-card"><b>History</b><span>查询历史先空置</span></div>
+            <div class="mode-card"><b>Access</b><span>只读授权请求入口</span></div>
+          </div>
+        </section>
+
+        <section class="editor">
+          <div class="tabs">
+            <div class="tab-list">
+              <div class="tab active">worksheet · scratch.sql</div>
+              <div class="tab">saved sheets</div>
+              <div class="tab">query history</div>
+              <div class="tab">access grants</div>
+            </div>
+            <div class="editor-tools">
+              <span class="datasource-toggle">READ_ONLY</span>
+              <span>Timeout 30s</span>
+              <span>Max rows 100</span>
+            </div>
+          </div>
+
+          <div class="code-wrap">
+            <div class="lines">1<br>2<br>3<br>4<br>5<br>6</div>
+            <pre class="code" id="code"><span class="cm">-- Phase 37 才会启用只读 SELECT</span>
+<span class="kw">SELECT</span> event_date, count() <span class="fn">AS</span> pv
+<span class="kw">FROM</span> analytics.events_daily
+<span class="kw">WHERE</span> event_date &gt;= today() - 7
+<span class="kw">GROUP BY</span> event_date
+<span class="kw">LIMIT</span> 100;</pre>
+            <div class="editor-lock">
+              <div>
+                <strong>Editor locked by policy</strong>
+                <span>需要只读凭据、语句 guard、审计记录、超时和行数限制全部就绪后才能执行。</span>
+              </div>
+              <button class="locked-run" disabled>Request read-only access later</button>
+            </div>
+          </div>
+        </section>
+
+        <section class="results">
+            <div class="result-head">
+            <div class="result-tabs"><strong>Result grid</strong><span>JSON</span><span>Explain</span><span>Logs</span><span>Masking</span></div>
+            <span>0 rows · not executed</span>
+          </div>
+          <div class="grid-preview">
+            <table>
+              <thead>
+                <tr><th>event_date</th><th>pv</th><th>sampled</th><th>masked_policy</th></tr>
+              </thead>
+              <tbody>
+                <tr><td>2026-06-13</td><td>██████</td><td>true</td><td>pending</td></tr>
+                <tr><td>2026-06-14</td><td>██████</td><td>true</td><td>pending</td></tr>
+                <tr><td>2026-06-15</td><td>██████</td><td>true</td><td>pending</td></tr>
+              </tbody>
+            </table>
+            <div class="result-lock">
+              <div>
+                <h3>结果区已锁定</h3>
+                <p>Phase 36 只确认目标、权限缺口和治理策略。真实结果表格、JSON viewer、Explain plan 会在只读沙箱阶段启用。</p>
+                <div class="activity-strip">
+                  <div class="activity-card"><b>Last query</b>暂无查询历史</div>
+                  <div class="activity-card"><b>Copy/export</b>默认不可用，后续走审批</div>
+                  <div class="activity-card"><b>Sensitive cells</b>字段已标记，结果需脱敏</div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </section>
+      </main>
+
+      <aside class="governance">
+        <div class="gov-section">
+          <div class="section-label">Governance</div>
+          <div class="status-card">
+            <strong><span class="dot red"></span>Execution disabled</strong>
+            <p>没有任何查询会从这个页面发往数据库。前端禁用只是提示，最终必须由后端强制。</p>
+          </div>
+          <div class="status-card">
+            <strong><span class="dot"></span>Read-only credential missing</strong>
+            <p>目标连接元数据存在，但尚未配置只读身份。Phase 36 不新增凭据模型。</p>
+          </div>
+          <div class="status-card">
+            <strong><span class="dot blue"></span>Audit required</strong>
+            <p>Phase 37 开始，每次执行都必须记录用户、目标、语句摘要、耗时、结果规模和风险策略。</p>
+          </div>
+          <div class="status-card">
+            <strong><span class="dot green"></span>JIT access planned</strong>
+            <p>首期只显示“需要授权”的事实和入口，不在 Phase 36 做审批流。</p>
+          </div>
+        </div>
+
+        <div class="gov-section">
+          <h3>Bytebase research guardrails</h3>
+          <div class="research-list">
+            <span><b>保留工作台骨架：</b>连接树、schema、worksheet、result、history、access 不能拆成孤立清单。</span>
+            <span><b>不照搬执行能力：</b>Phase 36 所有 Run / Explain / Export 都必须后端不可用。</span>
+            <span><b>ControlHub 差异：</b>优先把已有资源健康、负责人、集群关系和治理状态放进查询上下文。</span>
+          </div>
+        </div>
+
+        <div class="gov-section">
+          <h3>Target facts</h3>
+          <div class="policy-list" id="facts">
+            <div class="policy"><span>Engine</span><b>ClickHouse</b></div>
+            <div class="policy"><span>Host</span><b>prod-ch-host-01.internal:8123</b></div>
+            <div class="policy"><span>Cluster</span><b>Analytics ClickHouse Cluster</b></div>
+            <div class="policy"><span>Owner</span><b>DBA Team</b></div>
+          </div>
+        </div>
+
+        <div class="gov-section">
+          <h3>Policy checklist</h3>
+          <div class="policy-list">
+            <div class="policy"><span>Multi-statement</span><b>blocked</b></div>
+            <div class="policy"><span>DDL / DML</span><b>blocked</b></div>
+            <div class="policy"><span>Max rows</span><b>100</b></div>
+            <div class="policy"><span>Timeout</span><b>30s</b></div>
+            <div class="policy"><span>Export</span><b>not available</b></div>
+            <div class="policy"><span>Admin mode</span><b>not in scope</b></div>
+            <div class="policy"><span>Batch query</span><b>future</b></div>
+          </div>
+        </div>
+
+        <div class="gov-section">
+          <h3>Roadmap</h3>
+          <div class="timeline">
+            <div class="timeline-item"><span>Phase 36：Query IDE shell + target inventory，所有执行入口锁定。</span></div>
+            <div class="timeline-item"><span>Phase 37：单引擎只读 SQL sandbox，带 guard、审计、超时、行数限制。</span></div>
+            <div class="timeline-item"><span>Phase 38：扩展 PostgreSQL / ClickHouse / Redis / MongoDB。</span></div>
+            <div class="timeline-item"><span>Phase 39：JIT 授权、审批、脱敏、导出治理。</span></div>
+          </div>
+        </div>
+      </aside>
+    </div>
+  </div>
+
+  <script>
+    const data = {
+      clickhouse: {
+        code: `<span class="cm">-- Phase 37 才会启用只读 SELECT</span>
+<span class="kw">SELECT</span> event_date, count() <span class="fn">AS</span> pv
+<span class="kw">FROM</span> analytics.events_daily
+<span class="kw">WHERE</span> event_date &gt;= today() - 7
+<span class="kw">GROUP BY</span> event_date
+<span class="kw">LIMIT</span> 100;`,
+        facts: [
+          ["Engine", "ClickHouse"],
+          ["Host", "prod-ch-host-01.internal:8123"],
+          ["Cluster", "Analytics ClickHouse Cluster"],
+          ["Owner", "DBA Team"]
+        ]
+      },
+      mysql: {
+        code: `<span class="cm">-- MySQL / TiDB 只读 sandbox 示例</span>
+<span class="kw">SELECT</span> order_id, status, created_at
+<span class="kw">FROM</span> payment_core.orders
+<span class="kw">WHERE</span> created_at &gt;= NOW() - INTERVAL 1 DAY
+<span class="kw">ORDER BY</span> created_at DESC
+<span class="kw">LIMIT</span> 100;`,
+        facts: [
+          ["Engine", "MySQL"],
+          ["Host", "payment-mysql-replica-01.internal:3306"],
+          ["Cluster", "Payment MySQL Cluster"],
+          ["Owner", "Payment Team"]
+        ]
+      },
+      redis: {
+        code: `<span class="cm"># Redis 后续只允许只读命令白名单</span>
+SCAN 0 MATCH payment:lock:* COUNT 100
+TTL payment:lock:order:123
+GET payment:status:123`,
+        facts: [
+          ["Engine", "Redis"],
+          ["Host", "redis-payment-prod.internal:6379"],
+          ["Cluster", "Payment Redis Cache"],
+          ["Owner", "Payment Team"]
+        ]
+      },
+      mongo: {
+        code: `<span class="cm">// MongoDB 后续只允许 find / aggregate 白名单</span>
+db.profiles.find({
+  status: "active",
+  updatedAt: { $gte: ISODate("2026-06-01") }
+}).limit(100)`,
+        facts: [
+          ["Engine", "MongoDB"],
+          ["Host", "mongo-user-secondary.internal:27017"],
+          ["Cluster", "User Data MongoDB Cluster"],
+          ["Owner", "User Team"]
+        ]
+      }
+    };
+
+    const select = document.querySelector("#target-select");
+    const code = document.querySelector("#code");
+    const facts = document.querySelector("#facts");
+
+    select.addEventListener("change", () => {
+      const item = data[select.value];
+      code.innerHTML = item.code;
+      facts.innerHTML = item.facts
+        .map(([label, value]) => `<div class="policy"><span>${label}</span><b>${value}</b></div>`)
+        .join("");
+    });
+  </script>
+</body>
+</html>

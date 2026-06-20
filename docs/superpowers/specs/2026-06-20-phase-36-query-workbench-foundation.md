@@ -17,10 +17,11 @@ docs/superpowers/specs/2026-06-20-query-workbench-roadmap.md
 
 ## Goal
 
-Create a read-only query capability inventory:
+Create a governed Query Workbench shell backed by a read-only query capability
+inventory:
 
 ```text
-existing database resources -> query target directory
+existing database resources -> queryTargets read model -> locked Query Workbench shell
 ```
 
 Users should be able to answer:
@@ -30,6 +31,13 @@ Users should be able to answer:
 - Which targets have complete connection metadata?
 - Which targets are blocked because credentials or policy are missing?
 - Which targets are unsupported?
+- What the future query workspace will look like once execution is safely
+  enabled?
+
+After local Bytebase research, the product direction is explicit: the target
+inventory must be embedded in a workbench shell with connection context, schema
+browser, worksheet/editor/result/history/access placeholders. Do not implement a
+flat inventory-only page.
 
 ## Non-Goals
 
@@ -40,6 +48,9 @@ Users should be able to answer:
 - Do not add query history.
 - Do not add export.
 - Do not add approval workflows.
+- Do not add Admin mode.
+- Do not add batch query execution.
+- Do not add AI query assistance.
 - Do not change backend resource write behavior.
 - Do not change migrations unless a later implementation proves a new table is
   required and receives explicit approval.
@@ -158,8 +169,10 @@ The page should show:
 
 - page title: Query Workbench
 - safety banner: query execution is not enabled
-- target summary counts
-- searchable target list
+- target switcher / connection context
+- schema/object browser placeholder
+- worksheet tabs placeholder
+- searchable target list or drawer
 - filters:
   - environment
   - engine
@@ -167,6 +180,19 @@ The page should show:
   - readiness
 - target detail panel or sheet
 - disabled editor placeholder explaining why execution is unavailable
+- locked result area:
+  - Result grid
+  - JSON
+  - Explain
+  - Logs
+  - Masking
+- query-history placeholder
+- access/governance panel:
+  - credential state
+  - execution disabled state
+  - audit requirement
+  - JIT/access future state
+  - production safety notes
 
 Do not render an enabled Run button.
 
@@ -199,6 +225,20 @@ Ready
 
 Only use `ready` if backend evidence supports it.
 
+## Preview And Research Notes
+
+Bytebase-informed preview:
+
+```text
+docs/superpowers/previews/phase-36-query-workbench-ide/index.html
+```
+
+Research note:
+
+```text
+docs/superpowers/notes/2026-06-20-phase-36-bytebase-ui-research.md
+```
+
 ## Testing Strategy
 
 Backend:
@@ -211,7 +251,8 @@ Backend:
 
 Frontend:
 
-- component tests for target list, filters, empty states, disabled editor
+- component tests for target data, filters, empty states, disabled editor,
+  locked result area, schema/history/access placeholders
 - service tests for query target fetching
 - page tests for `/query`
 - E2E smoke for `/query` loading and non-execution boundary
@@ -228,7 +269,8 @@ Phase 36 is complete when:
 
 - backend exposes query targets from existing resource data
 - OpenAPI documents the endpoint
-- frontend shows `/query` target inventory
+- frontend shows `/query` as a locked Query Workbench shell backed by query
+  target data
 - query execution is visibly disabled
 - tests cover derivation and UI boundary
 - manual cross-repo E2E can include `/query` smoke after both repos merge

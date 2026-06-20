@@ -2,9 +2,9 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Build a read-only query capability inventory across backend and frontend without executing queries.
+**Goal:** Build a governed Query Workbench shell across backend and frontend without executing queries. The backend exposes query target capability data; the frontend renders a locked IDE-style workspace around that data.
 
-**Architecture:** Implement the backend query target read model first, then build a frontend `/query` workbench shell against the contract. Keep query execution disabled and explicit in both API and UI.
+**Architecture:** Implement the backend query target read model first, then build a frontend `/query` workbench shell against the contract. Keep query execution disabled and explicit in both API and UI. The target inventory is support data inside the workbench, not the entire product surface.
 
 **Tech Stack:** Go, OpenAPI 3.1, MySQL read models, Next.js, React, TypeScript, Vitest, Playwright.
 
@@ -17,6 +17,7 @@ Backend:
 ```text
 docs/superpowers/specs/2026-06-20-query-workbench-roadmap.md
 docs/superpowers/specs/2026-06-20-phase-36-query-workbench-foundation.md
+docs/superpowers/notes/2026-06-20-phase-36-bytebase-ui-research.md
 internal/model/resource.go
 internal/model/resource_write.go
 internal/repository/mysql/resource_repository.go
@@ -206,7 +207,7 @@ getQueryTargets()
 
 Do not include execute query methods.
 
-### Task F2: Add `/query` Route
+### Task F2: Add `/query` Workbench Route
 
 Create a page:
 
@@ -214,20 +215,52 @@ Create a page:
 /query
 ```
 
-Required UI:
+Required UI direction:
 
 - title: Query Workbench
+- use the preview as the UX reference:
+
+```text
+docs/superpowers/previews/phase-36-query-workbench-ide/index.html
+```
+
+Required surfaces:
+
 - safety banner: query execution is not enabled
-- summary counts
-- search input
-- environment filter
-- engine filter
-- readiness filter
-- target list/table
-- target detail panel or sheet
+- target switcher / connection context
+- schema/object browser placeholder
+- worksheet tab placeholder
+- search input and filters:
+  - environment
+  - engine
+  - query kind
+  - readiness
+- target list/table or drawer
 - disabled editor placeholder
+- locked action bar:
+  - Run locked
+  - Explain locked
+  - Save sheet placeholder
+  - Export unavailable
+- locked result area:
+  - Result grid
+  - JSON
+  - Explain
+  - Logs
+  - Masking
+- query-history placeholder
+- access/governance panel:
+  - credential state
+  - execution disabled state
+  - audit requirement
+  - JIT/access future state
+  - production safety notes
 
 Do not render an enabled Run/Execute button.
+
+Do not collapse this into a simple table page. Bytebase research showed that
+connection, schema, worksheet, result, history, and access surfaces need to be
+visible from the beginning so later execution work has the right product shape.
 
 ### Task F3: i18n
 
@@ -244,6 +277,11 @@ Unsupported engine
 SQL target
 Redis command target
 Mongo query target
+Run locked
+Explain locked
+Result grid locked
+Access request planned
+Query history unavailable
 ```
 
 ### Task F4: Tests
@@ -255,6 +293,8 @@ service test for getQueryTargets
 component/page test for /query
 filter tests
 disabled execution boundary test
+locked action bar test
+schema/history/access placeholder tests
 ```
 
 E2E:
