@@ -178,6 +178,9 @@ then runs frontend release:e2e.
 Backend checkout via CONTROLHUB_BACKEND_CHECKOUT_TOKEN (PAT, read-only).
 Artifacts: playwright-report, test-results, backend.log.
 Evidence: run 26519616558 PASS (smoke 7/7, interaction 3/3, full 50/50).
+Phase 36B extends this gate with the locked Query Workbench shell. Evidence:
+run 27896155506 PASS (`release-local` + `release-e2e`, including `/query`
+smoke).
 ```
 
 ## Manual Browser Checks
@@ -192,6 +195,7 @@ Minimum pages to visit:
 | `/resources/22` | Healthy database instance shows operational summary |
 | `/resources?page=1&pageSize=1` | Pagination controls work, query params update |
 | `/audits?page=1&pageSize=1` | Audit list loads, pagination works |
+| `/query` | Query Workbench shell loads from real query targets; execution banner is visible; no enabled Run/Execute action; missing connection state does not render `:0` |
 | `/settings` | All dictionaries render |
 | `/topology` | Topology loads, `/__api` same-origin calls succeed |
 
@@ -214,6 +218,11 @@ Check on each page:
 - **database list search/filter/sort**: Type a search query, apply a filter,
   change sort, then clear each. All controls must remain responsive and the URL
   must reflect current state.
+- **query workbench execution boundary**: `/query` may display targets, schema
+  placeholders, worksheet tabs, result placeholders, and governance state, but it
+  must not expose an enabled Run/Execute/Export path. Raw enum values such as
+  `credential_required`, `missing_connection`, and raw target IDs must not leak
+  into visible selected labels.
 
 ## Failure Classification
 
@@ -283,7 +292,7 @@ Do not merge if any of these conditions hold:
 | Backend CI fast | `.github/workflows/backend-ci.yml` (push/PR) | No | Every push/PR to main |
 | Backend CI heavy | `.github/workflows/backend-ci.yml` (workflow_dispatch) | Yes | Manual only, uploads .schemathesis-reports/ for 7 days. Schemathesis pinned to `4.15.2` — Phase 34C confirmed the pin is intentional (v4.19 `validation_mismatch` is engine-level with no CLI/TOML override, hooks cannot change operation-level pass/fail). See Phase 34C evidence note. |
 | Frontend CI fast | `.github/workflows/frontend-ci.yml` (push/PR) | No | Every push/PR to main |
-| Frontend CI E2E | `.github/workflows/frontend-ci.yml` (workflow_dispatch `run_e2e=true`) | Backend required | Manual only: cross-repo E2E starts MySQL, backend migrations, backend server, then runs frontend release:e2e. Phase 35 implemented and passing (run 26519616558). Push/PR still run fast frontend CI only. |
+| Frontend CI E2E | `.github/workflows/frontend-ci.yml` (workflow_dispatch `run_e2e=true`) | Backend required | Manual only: cross-repo E2E starts MySQL, backend migrations, backend server, then runs frontend release:e2e. Phase 35 implemented and passing (run 26519616558). Phase 36B `/query` workbench smoke passing (run 27896155506). Push/PR still run fast frontend CI only. |
 
 ## RC Evidence Orchestration
 

@@ -30,6 +30,9 @@
 | Frontend fast CI (commit `8881e25`) | push | PASS (3m19s) | https://github.com/Fanduzi/ControlHub-Frontend/actions/runs/26356705010 |
 | Frontend manual E2E CI (Phase 35) | workflow_dispatch `run_e2e=true` | PASS | https://github.com/Fanduzi/ControlHub-Frontend/actions/runs/26519616558 |
 | Frontend fast CI (Phase 35 commit `04256a7`) | push | PASS | https://github.com/Fanduzi/ControlHub-Frontend/actions/runs/26519432025 |
+| Backend fast CI (Phase 36A commit `0579b29`) | push | PASS | https://github.com/Fanduzi/ControlHub-Backend/actions/runs/27875169683 |
+| Frontend fast CI (Phase 36B commit `ff2681a`) | push | PASS | https://github.com/Fanduzi/ControlHub-Frontend/actions/runs/27896150307 |
+| Frontend manual E2E CI (Phase 36B) | workflow_dispatch `run_e2e=true` | PASS | https://github.com/Fanduzi/ControlHub-Frontend/actions/runs/27896155506 |
 
 ### Backend Heavy CI Detail (Run 26409102650)
 
@@ -73,6 +76,8 @@
 | UpdateResource duplicate key 500 | Phase 33D | MySQL 1062 mapping to `ErrResourceConflict` → 409 |
 | Schemathesis v4.19.0 `validation_mismatch` exit 1 | Phase 33E | Pin backend CI to Schemathesis `4.15.2` |
 | v4.19 pin confirmed intentional after full investigation | Phase 34C | Option A: keep pin, no CLI/TOML override exists for engine-level `validation_mismatch` |
+| Query target directory read model added | Phase 36A | `GET /query-targets` exposes derived database query target context; no credentials or execution |
+| Locked Query Workbench shell added | Phase 36B | Frontend `/query` consumes query targets and keeps Run/Explain/Export disabled; cross-repo E2E passed |
 
 ## Known Accepted Warnings / Boundaries
 
@@ -85,6 +90,8 @@
 4. **CDP live smoke not run** — Optional gate. Requires manually-started Chrome remote debugging session. Not included in `npm run release:check`. All automated E2E gates passed via Playwright.
 
 5. **Frontend cross-repo E2E CI implemented (Phase 35)** — Manual `workflow_dispatch run_e2e=true` starts MySQL, runs backend migrations, starts backend server, then runs frontend `release:e2e`. Backend checkout uses `CONTROLHUB_BACKEND_CHECKOUT_TOKEN` (PAT, read-only access to Fanduzi/ControlHub-Backend). Artifacts uploaded: playwright-report, test-results, backend.log. Full E2E is manual only; push/PR still run fast frontend CI only. Evidence: run `26519616558` PASS.
+
+6. **Query Workbench execution remains intentionally disabled (Phase 36)** — Backend Phase 36A exposes query targets from existing database resource metadata through `GET /query-targets`; frontend Phase 36B renders `/query` as a locked workbench shell. This is a capability directory and product shell only. There is no query execution API, no credential model, no SQL/Redis/Mongo execution path, no export path, no saved-query API, and no query-history API. Evidence: backend fast CI run `27875169683` PASS; frontend fast CI run `27896150307` PASS; manual cross-repo E2E run `27896155506` PASS.
 
 ## Non-actions
 
@@ -106,6 +113,10 @@
 | Phase 34C spec | `docs/superpowers/specs/2026-05-26-phase-34c-schemathesis-validation-mismatch-policy.md` |
 | Phase 34C plan | `docs/superpowers/plans/2026-05-26-phase-34c-schemathesis-validation-mismatch-policy.md` |
 | Phase 34C evidence note | `docs/superpowers/notes/2026-05-26-phase-34c-schemathesis-validation-mismatch-policy.md` |
+| Phase 36 Query Workbench roadmap | `docs/superpowers/specs/2026-06-20-query-workbench-roadmap.md` |
+| Phase 36 Query Workbench design | `docs/superpowers/specs/2026-06-20-phase-36-query-workbench-foundation.md` |
+| Phase 36 Query Workbench implementation plan | `docs/superpowers/plans/2026-06-20-phase-36-query-workbench-foundation.md` |
+| Phase 36 Bytebase UI research | `docs/superpowers/notes/2026-06-20-phase-36-bytebase-ui-research.md` |
 | This summary | `docs/releases/candidates/2026-05-26-controlhub-release-readiness-summary.md` |
 
 ## Final Decision

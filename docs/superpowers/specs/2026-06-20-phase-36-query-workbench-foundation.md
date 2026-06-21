@@ -333,6 +333,23 @@ Phase 36 is complete when:
 - tests cover derivation and UI boundary
 - manual cross-repo E2E can include `/query` smoke after both repos merge
 
+## Completion Evidence
+
+Phase 36 is complete as of the backend and frontend mainline commits below:
+
+| Area | Commit / Run | Result |
+|---|---|---|
+| Backend Phase 36A | `0579b29` | `GET /query-targets` read model merged |
+| Backend CI | run `27875169683` | PASS |
+| Frontend Phase 36B | `ff2681a` | `/query` locked Query Workbench shell merged |
+| Frontend fast CI | run `27896150307` | PASS |
+| Frontend manual cross-repo E2E | run `27896155506` | PASS |
+
+Phase 36 remains a non-execution foundation. It provides the target directory,
+workbench shell, disabled actions, and governance states needed for Phase 37,
+but it does not add query credentials, query execution, export, saved queries,
+query history, or live schema introspection.
+
 ## Deferred Work
 
 - Phase 37: read-only query sandbox for one SQL engine

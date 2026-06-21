@@ -114,7 +114,16 @@ Changes:
    - Frontend: `Frontend CI` workflow at commit `8881e25`. Fast CI (release-local: preflight, governance, typecheck, lint, unit, build) PASS in 3m19s. Run URL: https://github.com/Fanduzi/ControlHub-Frontend/actions/runs/26356705010
    - Heavy backend Docker gates (`make release-docker-gates`) NOT RUN remotely — requires manual `workflow_dispatch` with `run_docker_gates=true`.
    - Frontend E2E (`npm run release:e2e`) implemented in Phase 35 cross-repo CI. Manual `workflow_dispatch run_e2e=true` starts MySQL, runs backend migrations, starts backend server, then runs frontend `release:e2e`. Evidence: run `26519616558` PASS (smoke 7/7, interaction 3/3, full E2E 50/50, local release 54 files 556 tests).
+   - Query Workbench `/query` smoke added in Phase 36B and passed through the same manual cross-repo E2E gate. Evidence: frontend run `27896155506` PASS; fast frontend CI run `27896150307` PASS. Backend Phase 36A `GET /query-targets` fast CI run `27875169683` PASS.
    - No tag, no release, no deploy performed.
+
+### Phase 36 Query Workbench Foundation
+
+- **Backend Phase 36A:** `GET /query-targets` exposes a read-only query target directory derived from existing database resources, profiles, owners, environments, and cluster relations.
+- **Frontend Phase 36B:** `/query` renders a locked Query Workbench shell with target switcher, connection context, schema placeholder, worksheet/editor/result placeholders, history/access placeholders, and governance panel.
+- **Execution boundary:** Query execution is still unavailable. There is no execution API, no credentials, no SQL/Redis/Mongo command execution, no export, no saved-query API, and no query-history API.
+- **Evidence:** backend `main` commit `0579b29`, frontend `main` commit `ff2681a`; backend fast CI run `27875169683` PASS; frontend fast CI run `27896150307` PASS; manual cross-repo E2E run `27896155506` PASS.
+- **Next phase:** Phase 37 should design and implement a single-engine read-only query sandbox with backend enforcement, audit, timeout, row limit, statement guard, and production defaults. Phase 36 must not be interpreted as approval to execute queries.
 
 ## Failure Classification
 

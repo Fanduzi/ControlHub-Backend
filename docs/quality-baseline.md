@@ -26,19 +26,19 @@ added in Phase 28.
 | `.github/workflows/backend-ci.yml` (fast) | GitHub Actions CI: runs `make release-local-gates` on push/PR to main | Yes (after push) | Private repo: runner minutes and artifact storage count against allowance. No Docker needed. |
 | `.github/workflows/backend-ci.yml` (heavy) | GitHub Actions CI: runs `make release-docker-gates` via manual `workflow_dispatch` | Manual only | Private repo: costs Docker minutes. Uploads `.schemathesis-reports/` for 7 days. Not required on every push until cost/runtime is observed. |
 
-### Backend Test Inventory (30 files)
+### Backend Test Inventory (33 files)
 
-**API handler tests** (8 files):
+**API handler tests** (9 files):
 - `audit_handler_test.go`, `auth_handler_test.go`, `dictionary_handler_test.go`
-- `docs_handler_test.go`, `health_handler_test.go`, `relation_handler_test.go`
-- `resource_handler_test.go`, `topology_handler_test.go`
+- `docs_handler_test.go`, `health_handler_test.go`, `query_target_handler_test.go`
+- `relation_handler_test.go`, `resource_handler_test.go`, `topology_handler_test.go`
 
 **Model tests** (3 files):
 - `pagination_test.go`, `resource_test.go`, `taxonomy_test.go`
 
-**Service tests** (8 files):
+**Service tests** (9 files):
 - `auth_service_test.go`, `dictionary_service_test.go`, `profile_service_test.go`
-- `resource_read_service_test.go`, `resource_write_service_test.go`
+- `query_target_service_test.go`, `resource_read_service_test.go`, `resource_write_service_test.go`
 - `topology_semantics_test.go`, `topology_service_test.go`
 
 **Repository tests** (1 file):
@@ -53,10 +53,10 @@ added in Phase 28.
 **OpenAPI tests** (1 file):
 - `openapi_test.go`
 
-**Integration tests** (7 files, require Docker):
+**Integration tests** (9 files, require Docker):
 - `archive_test.go`, `legacy_import_test.go`, `mysql_test.go`
-- `openapi_fuzz_test.go`, `relation_test.go`, `resource_test.go`
-- `topology_test.go`, `testenv_test.go`
+- `openapi_fuzz_test.go`, `query_target_test.go`, `relation_test.go`
+- `resource_test.go`, `testenv_test.go`, `topology_test.go`
 
 ## Frontend Gates
 
@@ -125,6 +125,7 @@ added in Phase 28.
 | Settings dictionaries | `dictionary_handler_test`, `dictionary_service_test` | No | Schema covers GET /dictionaries/* | `settings.test` | Yes (`settings.spec`) | No | No | Yes | Smoke-only is acceptable for this static data page. |
 | Backend resource CRUD/read models | `resource_handler_test`, `resource_read_service_test`, `resource_write_service_test`, `resource_test` (model) | `resource_test` (integration), `relation_test` | Schema covers all resource endpoints | `resource-detail-sheet.test`, `resource-detail-sheet-loader.test`, `create-resource-sheet.test`, `edit-resource-sheet.test` | Partial (`resources-sheet.spec`) | Yes (`resources-sheet.spec`) | Yes | Yes | Covered. |
 | Backend database operational summary | `resource_read_service_test` | Yes (via resource integration) | OpenAPI schema for GET /resources/:id includes operational summary fields | `database-operational-signal.test`, `database-read-model-consistency.test` | No | No | Yes (`operator-database-workflow`) | Yes | Covered. Operational summary absence on instances is by design and tested at unit level. |
+| Query Workbench target directory (Phase 36) | `query_target_service_test`, `query_target_handler_test` | `query_target_test` | Schema covers GET /query-targets; fuzz exercised 28/28 ops after Phase 36A | `query-target-display.test`, `query-workbench-search-params.test`, `query-targets.test`, `query-workbench.test`, `pages.query.test` | Yes (`query-workbench.spec`) | No | Yes (manual cross-repo E2E run 27896155506) | Yes | Covered as a locked directory/workbench shell only. No query execution, credentials, SQL/Redis/Mongo execution, export, saved query, or query history API exists in Phase 36. |
 | OpenAPI schema validity | `openapi_test.go` | No | `make openapi-validate` + Schemathesis fuzz | N/A | N/A | N/A | N/A | N/A | Dual validation: JSON Schema validation + runtime fuzzing. |
 | OpenAPI fuzz behavior | N/A | `openapi_fuzz_test.go` | Schemathesis: 50 examples/operation, no-5xx, status conformance, content-type conformance, response schema conformance | N/A | N/A | N/A | N/A | N/A | Requires Docker. Run before merge when API changes or as nightly gate. |
 
@@ -143,6 +144,14 @@ added in Phase 28.
 6. **Seed data constants**: E2E tests reference seed resources by name (`analytics-ch-cluster-prod`, `Analytics ClickHouse Node 02`) and ID (`14`, `22`). These are stable in the seed migration but not centralized as typed constants.
 
 ## Frontend Baseline
+
+Frontend Phase 36B commit `ff2681a` (main, Query Workbench shell):
+- `/query` page added as a locked Query Workbench shell backed by backend Phase 36A `GET /query-targets`.
+- Query execution remains disabled: no execute API, no credentials, no export, no SQL/Redis/Mongo execution.
+- Local frontend gates passed: preflight, E2E governance, typecheck, lint, full unit/component tests, build.
+- Frontend fast CI PASS: run `27896150307`.
+- Manual cross-repo E2E PASS: run `27896155506` (`release-local` + `release-e2e`; query workbench smoke included).
+- Tests after Phase 36B: 12 E2E specs, 59 unit/component/service/page test files, 586 tests.
 
 Frontend Phase 29 commit `72ec317` (branch `feat/phase-29-release-readiness-mechanism`):
 - release:local PASS

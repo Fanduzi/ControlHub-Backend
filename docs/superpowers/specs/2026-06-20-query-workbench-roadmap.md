@@ -19,6 +19,16 @@ The roadmap below records the intended sequence and safety boundaries.
 
 ## Phase 36 — Query Workbench Shell + Capability Inventory
 
+Status: **Complete**.
+
+Evidence:
+
+```text
+Backend Phase 36A: main commit 0579b29, Backend CI run 27875169683 PASS
+Frontend Phase 36B: main commit ff2681a, Frontend CI run 27896150307 PASS
+Cross-repo E2E: frontend workflow run 27896155506 PASS
+```
+
 First, do not execute queries. Build the visible shell of a governed query
 workspace, backed by the database resources already tracked by ControlHub.
 
@@ -41,7 +51,7 @@ Questions to answer:
 Expected outputs:
 
 - Backend read model: `queryTargets`
-- Frontend page: `/query` or `/databases/query`
+- Frontend page: `/query`
 - Workbench shell:
   - target switcher / connection context
   - schema/object browser placeholder
@@ -60,6 +70,17 @@ Expected outputs:
   - safety state: credential missing / read-only credential / production query disabled
 - No query execution.
 
+Implemented boundary:
+
+```text
+No query execution API
+No query credentials
+No SQL / Redis / Mongo execution path
+No export
+No saved-query API
+No query-history API
+```
+
 Value:
 
 ```text
@@ -74,6 +95,8 @@ docs/superpowers/notes/2026-06-20-phase-36-bytebase-ui-research.md
 ```
 
 ## Phase 37 — Read-Only Query Sandbox
+
+Status: **Next milestone**.
 
 Add query execution for one low-risk engine first, likely ClickHouse or
 MySQL/TiDB `SELECT`.
