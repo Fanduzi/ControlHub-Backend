@@ -8,10 +8,14 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
+	"os"
+	"strings"
 	"testing"
 
 	"github.com/fan/controlhub/internal/model"
 	"github.com/fan/controlhub/internal/repository/mysql"
+	"github.com/fan/controlhub/internal/service"
 )
 
 // seedCredentialRow is a test-only fixture that inserts a credential metadata
@@ -232,5 +236,225 @@ func TestQueryExecutionRepository_InsertAuditEvent(t *testing.T) {
 	}
 	if eventType != "query.executed" || result != "success" {
 		t.Fatalf("audit event = (%q,%q), want (query.executed,success)", eventType, result)
+	}
+}
+
+// --- Phase 37 end-to-end execution tests (service + real MySQL executor) ---
+
+const sandboxCredentialRef = "SANDBOX_TARGET"
+
+// setupQuerySandboxTarget provisions a ready mysql/staging query target whose
+// credential_ref resolves back to the disposable test MySQL, plus a fixture
+// table the sandbox can safely SELECT. It returns the wired service and the
+// target resource id.
+func setupQuerySandboxTarget(t *testing.T) (*service.QueryExecutionService, uint64, *sql.DB) {
+	t.Helper()
+	db := setupTestDB(t)
+	ctx := context.Background()
+
+	// Self-contained fixture table owned by the test (never ControlHub seed data).
+	mustExec(t, db, `drop table if exists qe_sandbox_fixtures`)
+	mustExec(t, db, `create table qe_sandbox_fixtures (id bigint unsigned not null primary key, name varchar(64) not null)`)
+	mustExec(t, db, `insert into qe_sandbox_fixtures (id, name) values (1,'alpha'),(2,'beta'),(3,'gamma')`)
+
+	// Target resource (mysql, staging) + its connection profile (host/port).
+	resRepo := mysql.NewResourceRepository(db)
+	res, err := resRepo.CreateResource(ctx, model.ResourceCreateInput{
+		ResourceType:    model.ResourceTypeDatabaseInstance,
+		ResourceSubtype: "mysql",
+		Name:            "qe-sandbox-target-" + strings.ReplaceAll(t.Name(), "/", "-"),
+		DisplayName:     "Query Sandbox Target",
+		EnvironmentID:   envStaging,
+		OwnerID:         ownerDBA,
+		LifecycleStatus: model.LifecycleStatusRunning,
+		HealthStatus:    model.HealthStatusHealthy,
+		Source:          "test",
+		Labels:          map[string]string{},
+	})
+	if err != nil {
+		t.Fatalf("create sandbox target resource: %v", err)
+	}
+	mustExec(t, db, `insert into resource_profiles_database_instance (resource_id, engine, version, host, port, role, spec) values (?, 'mysql', '8.0', 'sandbox', 3306, 'primary', '{}')`, res.ID)
+
+	// Enabled credential allowing non-production execution.
+	seedCredentialRow(t, db, res.ID, "mysql", sandboxCredentialRef, true, string(model.QueryEnvPolicyNonProdOnly))
+
+	// Resolve the credential_ref back to the disposable test MySQL DSN.
+	if err := os.Setenv("CONTROLHUB_QUERY_CREDENTIAL_"+sandboxCredentialRef, globalEnv.dsn); err != nil {
+		t.Fatalf("set credential env: %v", err)
+	}
+	t.Cleanup(func() { _ = os.Unsetenv("CONTROLHUB_QUERY_CREDENTIAL_" + sandboxCredentialRef) })
+
+	svc := service.NewQueryExecutionService(
+		mysql.NewQueryTargetRepository(db),
+		mysql.NewQueryExecutionRepository(db),
+		service.NewEnvCredentialResolver(),
+		service.NewMySQLQueryExecutor(service.QueryExecutorCaps{}),
+		service.NewQueryGuard(service.QueryGuardConfig{DefaultMaxRows: 100, HardMaxRows: 500}),
+		wallClock{},
+	)
+	return svc, res.ID, db
+}
+
+func mustExec(t *testing.T, db *sql.DB, query string, args ...any) {
+	t.Helper()
+	if _, err := db.Exec(query, args...); err != nil {
+		t.Fatalf("exec %q: %v", query, err)
+	}
+}
+
+func fixtureRowCount(t *testing.T, db *sql.DB) int {
+	t.Helper()
+	var n int
+	if err := db.QueryRow(`select count(*) from qe_sandbox_fixtures`).Scan(&n); err != nil {
+		t.Fatalf("count fixtures: %v", err)
+	}
+	return n
+}
+
+func TestQueryExecution_SelectOneReturnsRows(t *testing.T) {
+	svc, targetID, _ := setupQuerySandboxTarget(t)
+
+	resp, err := svc.Execute(context.Background(), ownerDBA, targetID, model.QueryExecuteRequest{
+		Statement: "select id, name from qe_sandbox_fixtures where id = 1",
+		MaxRows:   10,
+	})
+	if err != nil {
+		t.Fatalf("Execute error: %v", err)
+	}
+	if resp.Status != model.QueryExecutionSuccess {
+		t.Fatalf("status = %q, want success", resp.Status)
+	}
+	if resp.RowCount != 1 {
+		t.Fatalf("rowCount = %d, want 1", resp.RowCount)
+	}
+	if len(resp.Rows) != 1 || len(resp.Rows[0]) != 2 {
+		t.Fatalf("rows shape = %v, want 1 row x 2 cols", resp.Rows)
+	}
+	if id := fmt.Sprintf("%v", resp.Rows[0][0]); id != "1" {
+		t.Fatalf("row id = %v (%T), want numeric 1", resp.Rows[0][0], resp.Rows[0][0])
+	}
+	if resp.Engine != "mysql" {
+		t.Fatalf("engine = %q, want mysql", resp.Engine)
+	}
+}
+
+func TestQueryExecution_BlockedWriteDoesNotMutate(t *testing.T) {
+	svc, targetID, db := setupQuerySandboxTarget(t)
+	before := fixtureRowCount(t, db)
+
+	for _, stmt := range []string{
+		"delete from qe_sandbox_fixtures",
+		"update qe_sandbox_fixtures set name = 'x'",
+		"insert into qe_sandbox_fixtures (id, name) values (999, 'x')",
+		"truncate table qe_sandbox_fixtures",
+	} {
+		_, err := svc.Execute(context.Background(), ownerDBA, targetID, model.QueryExecuteRequest{Statement: stmt, MaxRows: 10})
+		if !errors.Is(err, service.ErrQueryValidationFailed) {
+			t.Fatalf("Execute(%q) error = %v, want ErrQueryValidationFailed", stmt, err)
+		}
+	}
+
+	// WHY: the sandbox is read-only — a blocked write must leave the data intact.
+	if after := fixtureRowCount(t, db); after != before {
+		t.Fatalf("fixture row count changed: before=%d after=%d (write must not mutate)", before, after)
+	}
+}
+
+func TestQueryExecution_MultiStatementRejected(t *testing.T) {
+	svc, targetID, db := setupQuerySandboxTarget(t)
+	before := fixtureRowCount(t, db)
+
+	_, err := svc.Execute(context.Background(), ownerDBA, targetID, model.QueryExecuteRequest{
+		Statement: "select 1; delete from qe_sandbox_fixtures",
+		MaxRows:   10,
+	})
+	if !errors.Is(err, service.ErrQueryValidationFailed) {
+		t.Fatalf("multi-statement error = %v, want ErrQueryValidationFailed", err)
+	}
+	if after := fixtureRowCount(t, db); after != before {
+		t.Fatalf("multi-statement mutated data: before=%d after=%d", before, after)
+	}
+}
+
+func TestQueryExecution_LimitCapsRows(t *testing.T) {
+	svc, targetID, _ := setupQuerySandboxTarget(t)
+
+	resp, err := svc.Execute(context.Background(), ownerDBA, targetID, model.QueryExecuteRequest{
+		Statement: "select id from qe_sandbox_fixtures order by id",
+		MaxRows:   2,
+	})
+	if err != nil {
+		t.Fatalf("Execute error: %v", err)
+	}
+	// WHY: 3 fixture rows exist; a maxRows of 2 must return 2 rows and flag
+	// truncation so the client knows the result was bounded.
+	if resp.RowCount != 2 {
+		t.Fatalf("rowCount = %d, want 2 (capped)", resp.RowCount)
+	}
+	if !resp.Truncated {
+		t.Fatal("truncated = false, want true (more rows existed than the cap)")
+	}
+	if resp.LimitApplied != 2 {
+		t.Fatalf("limitApplied = %d, want 2", resp.LimitApplied)
+	}
+}
+
+func TestQueryExecution_HistoryWrittenForSuccessAndRejection(t *testing.T) {
+	svc, targetID, db := setupQuerySandboxTarget(t)
+	repo := mysql.NewQueryExecutionRepository(db)
+
+	if _, err := svc.Execute(context.Background(), ownerDBA, targetID, model.QueryExecuteRequest{Statement: "select 1", MaxRows: 10}); err != nil {
+		t.Fatalf("success Execute: %v", err)
+	}
+	if _, err := svc.Execute(context.Background(), ownerDBA, targetID, model.QueryExecuteRequest{Statement: "delete from qe_sandbox_fixtures", MaxRows: 10}); err == nil {
+		t.Fatal("expected rejection for write statement")
+	}
+
+	items, total, err := repo.ListExecutions(context.Background(), model.QueryExecutionListQuery{TargetResourceID: targetID, Page: 1, PageSize: 20})
+	if err != nil {
+		t.Fatalf("list executions: %v", err)
+	}
+	if total != 2 {
+		t.Fatalf("total history rows = %d, want 2 (success + rejection)", total)
+	}
+	// WHY: every attempt must be recorded — a rejected attempt still leaves a
+	// history trail for audit, not just successes.
+	statuses := map[model.QueryExecutionStatus]bool{}
+	for _, item := range items {
+		statuses[item.Status] = true
+	}
+	if !statuses[model.QueryExecutionSuccess] || !statuses[model.QueryExecutionRejected] {
+		t.Fatalf("history missing success/rejected: items=%+v", items)
+	}
+}
+
+func TestQueryExecution_AuditEventWrittenForSuccessAndRejection(t *testing.T) {
+	svc, targetID, db := setupQuerySandboxTarget(t)
+
+	if _, err := svc.Execute(context.Background(), ownerDBA, targetID, model.QueryExecuteRequest{Statement: "select 1", MaxRows: 10}); err != nil {
+		t.Fatalf("success Execute: %v", err)
+	}
+	if _, err := svc.Execute(context.Background(), ownerDBA, targetID, model.QueryExecuteRequest{Statement: "delete from qe_sandbox_fixtures", MaxRows: 10}); err == nil {
+		t.Fatal("expected rejection for write statement")
+	}
+
+	rows, err := db.Query(`select result from audit_events where target_resource_id = ? and event_type = 'query.executed'`, targetID)
+	if err != nil {
+		t.Fatalf("query audit events: %v", err)
+	}
+	defer rows.Close()
+	results := map[string]bool{}
+	for rows.Next() {
+		var r string
+		if err := rows.Scan(&r); err != nil {
+			t.Fatalf("scan audit result: %v", err)
+		}
+		results[r] = true
+	}
+	// WHY: both outcomes emit a query.executed audit event, distinguished by
+	// result, so the audit stream records every execution attempt.
+	if !results["success"] || !results["validation_failed"] {
+		t.Fatalf("audit events = %v, want both success and validation_failed", results)
 	}
 }
