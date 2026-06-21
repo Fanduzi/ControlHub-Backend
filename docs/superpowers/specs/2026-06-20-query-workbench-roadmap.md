@@ -121,6 +121,16 @@ Required safeguards:
 - query history
 - no export support
 - stricter production-environment defaults
+- reject SELECT side-effect/resource functions (`SLEEP`, `BENCHMARK`, named-lock
+  functions, `LOAD_FILE`), user-variable assignment, `INTO OUTFILE`/`DUMPFILE`,
+  and locking clauses via AST walk, not string matching
+- declared `safetyState` enum (no undeclared strings such as a raw
+  `readonly_sandbox_enabled`)
+- bounded query-execution token TTL (`QueryExecutionTokenMaxAge`)
+- `environment_policy` enum that fails closed (`disabled` / `non_prod_only` /
+  `all_environments`)
+- `credential_ref` constrained to `[A-Z0-9_]+`; resolved DSN never returned or
+  logged
 
 Do not add multi-engine support until the single-engine sandbox proves safe.
 

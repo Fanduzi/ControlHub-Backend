@@ -85,6 +85,44 @@ Rules:
 If authenticated actor extraction is not implemented, the execute endpoint must
 remain unavailable.
 
+#### Auth must be closed across OpenAPI, handler tests, and fuzz
+
+Bearer auth on execute/history must be expressed end-to-end, not only in the
+handler:
+
+- OpenAPI: declare a `401` response on `POST /query-targets/{id}/execute` and
+  `GET /query-targets/{id}/executions`. Declare a Bearer security scheme (or
+  otherwise state explicitly that these paths are protected by Bearer auth) so
+  the published contract matches runtime behavior.
+- handler tests: cover missing `Authorization` header -> `401` and
+  invalid/malformed bearer -> `401`, in addition to the happy path.
+- Schemathesis / OpenAPI fuzz: pick one explicit strategy and document it —
+  either supply a valid test bearer token to the fuzz harness for protected
+  endpoints, or declare the unauthenticated `401` as a documented response so a
+  `401` from fuzz is a conformance pass and never an unclassified failure.
+- Cross-repo E2E: the frontend must use the existing authenticated API
+  client/session. Never place `actorUserId` in the request body or query string.
+
+#### Query execution token freshness
+
+The existing auth token embeds an `issuedAt` Unix timestamp
+(`<userID>:<role>:<issuedAt>:<signature>`), so token age can be checked without
+changing login. Query execution is a higher-risk surface than the existing
+read/list routes, so Phase 37 must bound token freshness specifically for query
+execution routes:
+
+- The query execution middleware must reject tokens older than a bounded TTL.
+- Add a `QueryExecutionTokenMaxAge` configuration value. Suggested default `8h`
+  or shorter.
+- This applies only to query execution/history routes. Existing non-query
+  read/list route authentication behavior must not change.
+
+Required middleware/service tests:
+
+- token issued within TTL is accepted
+- token older than TTL is rejected with `401`
+- malformed token and bad-signature token are rejected with `401`
+
 ### Query target readiness update
 
 Phase 36 returned `credential_required` for complete targets because no
@@ -120,6 +158,41 @@ When executable:
 ```
 
 All other targets must remain visible and non-executable.
+
+#### New `safetyState` value requires a full enum chain
+
+The ready example above returns
+`governance.safetyState = "readonly_sandbox_enabled"`. That value does not exist
+in the current `QueryTargetSafetyState` enum in `internal/model/query_target.go`,
+which today only covers the Phase 36 non-executable states (`credential_missing`,
+`execution_disabled`, `unsupported_engine`, `connection_incomplete`).
+
+Phase 37 must not let the service emit an undeclared string. The new value must
+be added across the whole contract before any ready target is returned:
+
+Backend (required):
+
+- Go enum: add
+  `SafetyStateReadonlySandboxEnabled QueryTargetSafetyState = "readonly_sandbox_enabled"`
+  to `internal/model/query_target.go`, with its dictionary entry and `Validate()`
+  coverage, so the value is a known state rather than a free string.
+- OpenAPI: add `"readonly_sandbox_enabled"` to the `QueryTargetSafetyState`
+  enum/schema in `internal/openapi/openapi.yaml` and keep the `ready` example
+  consistent with it.
+- service tests: assert a ready target reports
+  `safetyState = readonly_sandbox_enabled`, and that every other readiness state
+  still reports its existing non-executable safety state.
+- handler/integration tests: assert `GET /query-targets` serializes the new enum
+  for a ready target and that no unknown safety strings leak.
+
+Frontend (required):
+
+- TypeScript: add `readonly_sandbox_enabled` to the `QueryTargetSafetyState`
+  union in `types/query-target.ts`.
+- i18n: add a human label for `readonly_sandbox_enabled`; components must render
+  the label, never the raw enum.
+- component tests: assert the workbench shows the new label for a ready target
+  and never prints the raw enum string.
 
 ### Execute endpoint
 
@@ -238,6 +311,49 @@ Rules:
 - Fail closed when the credential reference cannot be resolved.
 - Credentials must be documented as read-only database users.
 
+### `environment_policy` semantics
+
+`environment_policy` is not a free string. Phase 37 must define and enforce an
+enum:
+
+- `disabled` — the credential is never usable; the target stays locked.
+- `non_prod_only` — execution allowed only for non-production environments. This
+  is the default.
+- `all_environments` — execution allowed for any environment, including
+  production.
+
+Rules:
+
+- Production environments are not executable by default. A production target is
+  only executable when its credential policy is explicitly `all_environments`.
+- Unknown or empty policy values fail closed: the target is treated as
+  `disabled`/locked, never as `all_environments`.
+
+Required tests:
+
+- non-production target + enabled credential + `non_prod_only` -> ready
+- production target + `non_prod_only` -> not ready / disabled
+- production target + `all_environments` -> ready
+- `disabled` credential/policy -> locked
+- unknown/empty policy -> fail closed (locked)
+
+### `credential_ref` format
+
+`<credential_ref>` in `CONTROLHUB_QUERY_CREDENTIAL_<credential_ref>` is not free
+text. Phase 37 must constrain it:
+
+- `credential_ref` matches `[A-Z0-9_]+` only.
+- length is bounded (for example, max 64 characters), consistent with the
+  `credential_ref VARCHAR(128)` column.
+- an invalid `credential_ref` is rejected at metadata write/seed time; if a bad
+  value is already stored, resolution must fail closed (never perform an env
+  lookup with an unvalidated key).
+- the resolved DSN/password is never returned through any API and never written
+  to logs.
+
+Even when Phase 37 exposes credential metadata only through migration/seed (no
+credential write API), seed data and test fixtures must obey this rule.
+
 ## SQL guard
 
 Use a real parser for MySQL/TiDB syntax. The implementation should add a parser
@@ -262,6 +378,32 @@ Guard rules:
 - reject any parser node that is not an allowed select tree
 - enforce `LIMIT`
 - cap requested max rows at backend default and hard maximum
+
+#### SELECT can still have side effects or consume resources
+
+"Allow only SELECT" is not sufficient. A MySQL/TiDB `SELECT` can invoke
+dangerous functions, hold named locks, write files, assign variables, or burn
+resources. The guard must additionally reject:
+
+- `SLEEP(...)`
+- `BENCHMARK(...)`
+- named lock functions: `GET_LOCK(...)`, `RELEASE_LOCK(...)`, `IS_FREE_LOCK(...)`,
+  `IS_USED_LOCK(...)`
+- `LOAD_FILE(...)`
+- user-variable assignment patterns the parser exposes (for example
+  `@var := ...` or `SELECT ... INTO @var`)
+- `SELECT ... INTO OUTFILE` and `SELECT ... INTO DUMPFILE`
+- locking clauses `FOR UPDATE` and `LOCK IN SHARE MODE`
+
+These rejections must be implemented by walking the parsed statement, not by
+string matching. If the chosen parser cannot reliably enumerate function calls
+and the clauses above, Phase 37 must first run a parser spike/verification that
+proves each rejection is reachable through the AST before claiming the rule is
+done. String blacklists are not an acceptable guard mechanism and must not be
+used to pretend any of these rules are implemented.
+
+Guard tests must cover each rejected function and clause above with a concrete
+statement and assert the rejection reason.
 
 Default limits:
 
@@ -372,6 +514,15 @@ Frontend Phase 37 should stay thin:
 
 Client-side syntax hints are allowed, but all enforcement must remain backend
 owned.
+
+### Frontend auth and session
+
+- Execution and history services must use the existing authenticated API
+  client/session. No query service accepts `actorUserId`.
+- Tests must assert the request body and query string never include
+  `actorUserId`.
+- If the auth token is missing or expired, the UI must show a controlled auth
+  error and must not retry endlessly or silently resubmit.
 
 ## Error handling
 

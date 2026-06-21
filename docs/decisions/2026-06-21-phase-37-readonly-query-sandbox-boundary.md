@@ -51,6 +51,33 @@ Any future decision to store credentials in a database, return credentials to a
 client, enable export, or allow non-SELECT statements requires a separate design
 and explicit approval.
 
+## Hardened Boundaries (Phase 37 Doc Review)
+
+The Phase 37 doc review tightened the sandbox before implementation begins. These
+are binding requirements, recorded here so the spec and plan cannot drift back to
+softer wording:
+
+- **`safetyState` is a declared enum.** `readonly_sandbox_enabled` must be added
+  to the Go enum, OpenAPI schema, and frontend type with tests before any ready
+  target is returned. The service never emits an undeclared string.
+- **Auth is closed across the contract.** Execute/history declare `401` and a
+  Bearer security scheme; handler tests cover missing/invalid bearer; fuzz treats
+  expected unauthenticated `401` as conformance, not failure; E2E reuses the
+  authenticated client and never sends `actorUserId` in the body/query.
+- **SELECT is treated as potentially side-effecting.** The guard rejects
+  `SLEEP`, `BENCHMARK`, named-lock functions, `LOAD_FILE`, user-variable
+  assignment, `INTO OUTFILE`/`DUMPFILE`, and locking clauses via AST walk, not
+  string matching. A parser spike must prove reachability before the rule is
+  considered done.
+- **Query execution has a bounded token TTL.** A `QueryExecutionTokenMaxAge`
+  gate applies to execution routes only; existing read/list auth is unchanged.
+- **`environment_policy` is an enum that fails closed.** Values are `disabled`,
+  `non_prod_only`, `all_environments`. Production is executable only with
+  `all_environments`; unknown/empty is locked.
+- **`credential_ref` is constrained to `[A-Z0-9_]+`** with bounded length,
+  rejected at write/seed or on resolve; the resolved DSN/password is never
+  returned or logged.
+
 ## References
 
 - Spec: `docs/superpowers/specs/2026-06-21-phase-37-read-only-query-sandbox.md`

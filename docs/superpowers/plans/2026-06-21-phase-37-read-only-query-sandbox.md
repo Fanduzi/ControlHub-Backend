@@ -104,6 +104,62 @@ Frontend create or modify:
 /Users/fan/JsProjects/ControlHub/e2e/query-workbench.spec.ts
 ```
 
+## Hardened Requirements (Phase 37 Doc Review)
+
+These cross-cutting requirements come from the Phase 37 doc review and override
+any softer wording in the tasks below (notably the old B0 "keep token TTL out of
+scope" line, which is replaced). Each item lists the task(s) that must deliver
+it. Full rationale lives in
+`docs/superpowers/specs/2026-06-21-phase-37-read-only-query-sandbox.md` and
+`docs/decisions/2026-06-21-phase-37-readonly-query-sandbox-boundary.md`.
+
+1. **`safetyState` enum full chain (Tasks B5, B6, F1, F2).** The ready target
+   returns `governance.safetyState = "readonly_sandbox_enabled"`, a value that
+   does not exist in `internal/model/query_target.go`. Add it everywhere before
+   any ready target is returned: Go enum + dictionary + `Validate()` (B5),
+   OpenAPI enum (B6), service/handler/integration tests asserting the new value
+   and that non-ready targets keep their existing state (B5/B6); frontend TS
+   type, i18n label, and component tests that render the label not the raw enum
+   (F1/F2). The service must never emit an undeclared string.
+
+2. **Close auth + OpenAPI + fuzz (Tasks B0, B6, F4).** Execute/history paths
+   require Bearer auth end-to-end: declare `401` responses and a Bearer security
+   scheme in OpenAPI (B6); handler tests for missing/invalid bearer -> `401`
+   (B0/B6); an explicit Schemathesis/fuzz strategy — supply a test token or
+   document the unauthenticated `401` as a conformance pass, never an
+   unclassified failure (B6, `openapi_fuzz_test.go`); cross-repo E2E uses the
+   existing authenticated API client and never puts `actorUserId` in body/query
+   (F4).
+
+3. **SQL guard SELECT side-effects (Task B2).** Beyond write/DDL rejection, the
+   guard must reject `SLEEP`, `BENCHMARK`, `GET_LOCK`/`RELEASE_LOCK`/
+   `IS_FREE_LOCK`/`IS_USED_LOCK`, `LOAD_FILE`, user-variable assignment
+   (`@var := ...`, `INTO @var`), `INTO OUTFILE`/`INTO DUMPFILE`, and locking
+   clauses (`FOR UPDATE`, `LOCK IN SHARE MODE`). Reject by AST walk, not string
+   matching. If the parser cannot enumerate these reliably, run a parser
+   spike/verification first; never fake completion with a string blacklist. Add
+   a guard test per rejected function/clause.
+
+4. **Query execution token TTL (Tasks B0, B6).** The query execution middleware
+   rejects tokens older than a bounded TTL. Add `QueryExecutionTokenMaxAge`
+   (suggested default `8h`). Tests: within TTL accepted, expired -> `401`,
+   malformed/bad signature -> `401`. Existing read/list routes are unchanged.
+
+5. **`environment_policy` enum, fail closed (Tasks B1, B3, B4, B5).** Define
+   enum `disabled` / `non_prod_only` / `all_environments`. Production is not
+   executable unless policy is `all_environments`. Unknown/empty fails closed
+   (locked). Tests cover the full matrix including unknown/empty -> locked.
+
+6. **`credential_ref` format (Tasks B1, B3, B4, B5).** `credential_ref` matches
+   `[A-Z0-9_]+` with bounded length; reject at metadata write/seed or fail
+   closed on resolve; DSN/password never returned or logged. Seed data and test
+   fixtures obey the rule even without a credential write API.
+
+7. **Frontend auth/session (Tasks F1, F4).** Execution/history services use the
+   existing authenticated API client/session; no service accepts `actorUserId`;
+   tests assert the request body/query exclude `actorUserId`; missing/expired
+   token shows a controlled auth error with no endless retry.
+
 ## Backend Tasks
 
 ### Task B0: Add Authenticated Actor Extraction For Query Routes
@@ -122,6 +178,7 @@ Add service tests:
 VerifyTokenReturnsUserIDAndRoleForIssuedToken
 VerifyTokenRejectsMalformedToken
 VerifyTokenRejectsBadSignature
+VerifyTokenRejectsExpiredToken
 ```
 
 Add API middleware tests:
@@ -149,8 +206,9 @@ Add:
 
 ```go
 type AuthenticatedUser struct {
-	ID   uint64
-	Role string
+	ID       uint64
+	Role     string
+	IssuedAt time.Time
 }
 
 var ErrInvalidToken = errors.New("invalid token")
@@ -165,7 +223,12 @@ Rules:
 - recompute HMAC with the configured signing key
 - reject bad signatures
 - reject non-positive user IDs
-- keep token TTL out of scope unless existing login behavior already defines it
+- surface the embedded `issuedAt` Unix timestamp on the returned
+  `AuthenticatedUser` so callers can enforce freshness; the token payload
+  already carries `issuedAt`, so no login change is required
+- query execution routes enforce a bounded TTL via `QueryExecutionTokenMaxAge`
+  (see "Hardened Requirements" and Task B6); existing read/list routes keep
+  their current authentication behavior and must not gain a TTL gate here
 
 - [ ] **Step 4: Implement route middleware helper**
 
