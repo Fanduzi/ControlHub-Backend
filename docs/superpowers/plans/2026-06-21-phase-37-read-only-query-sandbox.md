@@ -185,9 +185,9 @@ Add service tests:
 
 ```text
 VerifyTokenReturnsUserIDAndRoleForIssuedToken
+VerifyTokenReturnsIssuedAt
 VerifyTokenRejectsMalformedToken
 VerifyTokenRejectsBadSignature
-VerifyTokenRejectsExpiredToken
 ```
 
 Add API middleware tests for the base actor helper:
@@ -215,7 +215,7 @@ Run:
 
 ```bash
 go test -count=1 ./internal/service -run VerifyToken
-go test -count=1 ./internal/api -run AuthenticatedActor
+go test -count=1 ./internal/api -run 'AuthenticatedActor|FreshQueryActor'
 ```
 
 Expected: FAIL because verification and middleware do not exist.
@@ -246,6 +246,11 @@ Rules:
 - surface the embedded `issuedAt` Unix timestamp on the returned
   `AuthenticatedUser` so callers can enforce freshness; the token payload
   already carries `issuedAt`, so no login change is required
+- `VerifyToken` must NOT evaluate token age or TTL — it only verifies structure,
+  signature, and user ID and returns `IssuedAt`. Freshness is enforced solely by
+  `requireFreshQueryActor` (Step 4, mounted in Task B6). Do not add an
+  expired-token assertion to `VerifyToken`; the only expired-token test lives in
+  the fresh-query middleware (`FreshQueryActorRejectsTokenOlderThanTTL`).
 - query execution routes enforce a bounded TTL via `QueryExecutionTokenMaxAge`
   (see "Hardened Requirements" and Task B6); existing read/list routes keep
   their current authentication behavior and must not gain a TTL gate here
@@ -266,14 +271,19 @@ type QueryExecutionAuthConfig struct {
 	Clock       func() time.Time // inject for tests; defaults to time.Now in wiring
 }
 
-// Low-level helper: verifies signature/structure and stores the actor in
-// context. Does NOT enforce TTL. Not mounted directly on query routes.
-func requireAuthenticatedActor(authService *service.AuthService, next http.Handler) http.Handler
+// requireAuthenticatedActor is the chi middleware factory for the base actor
+// check: verify signature/structure and store the actor in context. It does NOT
+// enforce TTL and is not mounted directly on query routes. It returns the
+// func(http.Handler) http.Handler shape chi's r.Use expects (same shape as the
+// existing corsLocalDev middleware in internal/api/router.go).
+func requireAuthenticatedActor(authService *service.AuthService) func(http.Handler) http.Handler
 
-// Query-route middleware: verifies the bearer AND rejects tokens older than
-// cfg.TokenMaxAge (computed against cfg.Clock and the token's embedded issuedAt).
-// This is the only middleware mounted on query execute/history routes.
-func requireFreshQueryActor(authService *service.AuthService, cfg QueryExecutionAuthConfig, next http.Handler) http.Handler
+// requireFreshQueryActor is the chi middleware factory mounted on query
+// execute/history routes. It wraps the base check and additionally rejects
+// tokens older than cfg.TokenMaxAge (computed against cfg.Clock and the token's
+// embedded issuedAt). It returns the func(http.Handler) http.Handler shape, so
+// it is used as r.Use(requireFreshQueryActor(deps.AuthService, cfg)).
+func requireFreshQueryActor(authService *service.AuthService, cfg QueryExecutionAuthConfig) func(http.Handler) http.Handler
 
 func actorUserIDFromContext(ctx context.Context) (uint64, bool)
 ```
@@ -294,7 +304,7 @@ Run:
 
 ```bash
 go test -count=1 ./internal/service -run VerifyToken
-go test -count=1 ./internal/api -run AuthenticatedActor
+go test -count=1 ./internal/api -run 'AuthenticatedActor|FreshQueryActor'
 ```
 
 Expected: PASS.
@@ -412,7 +422,8 @@ func (p QueryEnvironmentPolicy) Validate() error {
 const MaxCredentialRefLength = 64
 
 // ValidateCredentialRef rejects anything outside [A-Z0-9_]+ or over the length
-// cap. It is enforced at metadata write/seed time and on resolve (fail closed).
+// cap. Phase 37 has no credential write API, so this is enforced on read/resolve
+// and by migration/seed (fail closed), never via a product insert path.
 func ValidateCredentialRef(ref string) error {
 	if ref == "" {
 		return fmt.Errorf("credential_ref is empty")
@@ -697,14 +708,19 @@ Add tests for:
 InsertQueryExecutionAndListByTarget
 CredentialMetadataMarksTargetReady
 DisabledCredentialKeepsTargetLocked
-CredentialMetadataRejectsInvalidCredentialRefOnInsert
+CredentialMetadataWithInvalidCredentialRefFailsClosed
 CredentialMetadataRoundTripsTypedEnvironmentPolicy
 ```
 
-The repository must call `model.ValidateCredentialRef` before any insert and
-return a typed `model.QueryEnvironmentPolicy` on read (not a raw string). The
-tests should create resources and credential metadata in the disposable MySQL
-database. Do not rely on fuzz-mutated seed state.
+Phase 37 has no credential metadata write API, so the repository never inserts
+credential rows in product code. The repository must return a typed
+`model.QueryEnvironmentPolicy` on read (not a raw string) and must run the row's
+`credential_ref` through `model.ValidateCredentialRef` when materializing
+metadata: an invalid ref keeps the target locked (fail closed). Because there is
+no insert path, `CredentialMetadataWithInvalidCredentialRefFailsClosed` and the
+round-trip test insert a row via a SQL fixture (test-only, not a product API)
+and then assert the repository read fails closed / returns the typed policy. Do
+not rely on fuzz-mutated seed state.
 
 - [ ] **Step 2: Run tests to verify RED**
 
@@ -775,13 +791,14 @@ ReadyDerivation_ProdWithNonProdOnlyPolicy_IsLocked
 ReadyDerivation_ProdWithAllEnvironmentsPolicy_IsReady
 ReadyDerivation_DisabledPolicy_IsLocked
 ReadyDerivation_UnknownEmptyPolicy_FailsClosed
-CredentialResolver_RejectsInvalidCredentialRefAndNeverLogsOrReturnsDSN
+CredentialResolverRejectsInvalidCredentialRefBeforeEnvLookup
 ```
 
 The ready-derivation tests encode the full environment policy matrix: production
 is executable only under `all_environments`; `disabled` and unknown/empty fail
 closed (locked). The credential resolver test asserts that an invalid
-`credential_ref` fails closed and that the resolved DSN is never placed in an
+`credential_ref` is rejected before any environment lookup (fail closed, no env
+read with an unvalidated key) and that the resolved DSN is never placed in an
 error message, log line, or response.
 
 Use fakes for repository and DB executor. Do not connect to real databases in

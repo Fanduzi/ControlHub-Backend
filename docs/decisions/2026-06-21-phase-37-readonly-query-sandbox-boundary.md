@@ -77,9 +77,10 @@ softer wording:
 - **`environment_policy` is an enum that fails closed.** Values are `disabled`,
   `non_prod_only`, `all_environments`. Production is executable only with
   `all_environments`; unknown/empty is locked.
-- **`credential_ref` is constrained to `[A-Z0-9_]+`** with bounded length,
-  rejected at write/seed or on resolve; the resolved DSN/password is never
-  returned or logged.
+- **`credential_ref` is constrained to `[A-Z0-9_]+`** with bounded length. Phase
+  37 has no credential write API, so it is rejected on resolve and by
+  migration/seed (fail closed); the resolved DSN/password is never returned or
+  logged.
 
 ## References
 

@@ -117,7 +117,8 @@ execution routes:
 - This applies only to query execution/history routes. Existing non-query
   read/list route authentication behavior must not change.
 
-Required middleware/service tests:
+Required middleware tests (TTL is enforced only by `requireFreshQueryActor`,
+not by the base `VerifyToken`, which must not evaluate token age):
 
 - token issued within TTL is accepted
 - token older than TTL is rejected with `401`
@@ -356,9 +357,10 @@ text. Phase 37 must constrain it:
 - `credential_ref` matches `[A-Z0-9_]+` only.
 - length is bounded (for example, max 64 characters), consistent with the
   `credential_ref VARCHAR(128)` column.
-- an invalid `credential_ref` is rejected at metadata write/seed time; if a bad
-  value is already stored, resolution must fail closed (never perform an env
-  lookup with an unvalidated key).
+- an invalid `credential_ref` is rejected. Phase 37 has no credential write API,
+  so values come from migration/seed only; any read or resolution of an invalid
+  ref must fail closed (keep the target locked, never perform an env lookup with
+  an unvalidated key).
 - the resolved DSN/password is never returned through any API and never written
   to logs.
 
