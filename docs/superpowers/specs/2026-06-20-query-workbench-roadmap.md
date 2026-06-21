@@ -96,9 +96,16 @@ docs/superpowers/notes/2026-06-20-phase-36-bytebase-ui-research.md
 
 ## Phase 37 — Read-Only Query Sandbox
 
-Status: **Next milestone**.
+Status: **Designed**.
 
-Add query execution for one low-risk engine first, likely ClickHouse or
+Design and implementation plan:
+
+```text
+docs/superpowers/specs/2026-06-21-phase-37-read-only-query-sandbox.md
+docs/superpowers/plans/2026-06-21-phase-37-read-only-query-sandbox.md
+```
+
+Add query execution for one low-risk engine family first:
 MySQL/TiDB `SELECT`.
 
 Required safeguards:
