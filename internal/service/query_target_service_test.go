@@ -64,7 +64,7 @@ func baseTarget() model.QueryTarget {
 
 func TestCompleteQueryTarget_CompleteConnectionBecomesCredentialRequired(t *testing.T) {
 	t.Parallel()
-	got := completeQueryTarget(baseTarget())
+	got := completeQueryTarget(baseTarget(), nil)
 
 	// WHY: a target with engine+host+port still has no read-only credential
 	// metadata in Phase 36, so it must surface as credential_required — never
@@ -85,7 +85,7 @@ func TestCompleteQueryTarget_MissingHostBecomesMissingConnection(t *testing.T) {
 	in := baseTarget()
 	in.ConnectionContext.Host = ""
 
-	got := completeQueryTarget(in)
+	got := completeQueryTarget(in, nil)
 
 	if got.Readiness != model.ReadinessMissingConnection {
 		t.Fatalf("readiness = %q, want missing_connection", got.Readiness)
@@ -103,7 +103,7 @@ func TestCompleteQueryTarget_MissingPortBecomesMissingConnection(t *testing.T) {
 	in := baseTarget()
 	in.ConnectionContext.Port = 0
 
-	got := completeQueryTarget(in)
+	got := completeQueryTarget(in, nil)
 
 	if got.Readiness != model.ReadinessMissingConnection {
 		t.Fatalf("readiness = %q, want missing_connection", got.Readiness)
@@ -118,7 +118,7 @@ func TestCompleteQueryTarget_MissingEngineBecomesMissingConnection(t *testing.T)
 	in := baseTarget()
 	in.ConnectionContext.Engine = ""
 
-	got := completeQueryTarget(in)
+	got := completeQueryTarget(in, nil)
 
 	// WHY: an empty engine is a connection-config gap (missing_connection),
 	// distinct from a known-but-unsupported engine (unsupported_engine).
@@ -135,7 +135,7 @@ func TestCompleteQueryTarget_UnknownEngineStaysVisibleAsUnsupported(t *testing.T
 	in := baseTarget()
 	in.ConnectionContext.Engine = "oracle"
 
-	got := completeQueryTarget(in)
+	got := completeQueryTarget(in, nil)
 
 	// WHY: unknown engines must remain visible so operators can see them,
 	// never silently dropped.
@@ -169,7 +169,7 @@ func TestCompleteQueryTarget_CapabilityPerEngine(t *testing.T) {
 	for _, tc := range cases {
 		in := baseTarget()
 		in.ConnectionContext.Engine = tc.engine
-		got := completeQueryTarget(in)
+		got := completeQueryTarget(in, nil)
 
 		// editorMode must agree with queryKind so the frontend never has to
 		// guess the editor language from two divergent fields.
@@ -193,7 +193,7 @@ func TestCompleteQueryTarget_GovernanceExecutionAlwaysDisabled(t *testing.T) {
 	for _, engine := range engines {
 		in := baseTarget()
 		in.ConnectionContext.Engine = engine
-		got := completeQueryTarget(in)
+		got := completeQueryTarget(in, nil)
 
 		if got.Governance.ExecutionEnabled {
 			t.Errorf("engine %q: executionEnabled = true, want false", engine)
@@ -212,7 +212,7 @@ func TestCompleteQueryTarget_GovernanceExecutionAlwaysDisabled(t *testing.T) {
 
 func TestCompleteQueryTarget_AvailableActionsAllLocked(t *testing.T) {
 	t.Parallel()
-	got := completeQueryTarget(baseTarget())
+	got := completeQueryTarget(baseTarget(), nil)
 
 	// No action may be available in Phase 36: there is no execution, sheet,
 	// export, or access API. The frontend must render these as locked.
@@ -224,7 +224,7 @@ func TestCompleteQueryTarget_AvailableActionsAllLocked(t *testing.T) {
 
 func TestCompleteQueryTarget_SchemaPreviewEmptyWithoutMetadata(t *testing.T) {
 	t.Parallel()
-	got := completeQueryTarget(baseTarget())
+	got := completeQueryTarget(baseTarget(), nil)
 
 	// WHY: Phase 36 never introspects live databases and ControlHub stores no
 	// database/table/collection names, so schemaPreview must be empty rather
@@ -238,7 +238,7 @@ func TestCompleteQueryTarget_DoesNotMutateInput(t *testing.T) {
 	t.Parallel()
 	in := baseTarget()
 	before := in.ConnectionContext
-	_ = completeQueryTarget(in)
+	_ = completeQueryTarget(in, nil)
 
 	// Immutability: derivation must not mutate the caller's connection context.
 	if in.ConnectionContext != before {
@@ -249,7 +249,7 @@ func TestCompleteQueryTarget_DoesNotMutateInput(t *testing.T) {
 func TestCompleteQueryTarget_PreservesIdentityAndConnection(t *testing.T) {
 	t.Parallel()
 	in := baseTarget()
-	got := completeQueryTarget(in)
+	got := completeQueryTarget(in, nil)
 
 	if got.ResourceID != in.ResourceID || got.ResourceName != in.ResourceName ||
 		got.DisplayName != in.DisplayName || got.ResourceType != in.ResourceType {
@@ -264,7 +264,7 @@ func TestCompleteQueryTarget_ProductionPolicyNote(t *testing.T) {
 	t.Parallel()
 	in := baseTarget()
 	in.ConnectionContext.Environment = "Production"
-	got := completeQueryTarget(in)
+	got := completeQueryTarget(in, nil)
 
 	found := false
 	for _, note := range got.Governance.PolicyNotes {
@@ -281,7 +281,7 @@ func TestCompleteQueryTarget_NonProductionOmitsProductionNote(t *testing.T) {
 	t.Parallel()
 	in := baseTarget()
 	in.ConnectionContext.Environment = "Staging"
-	got := completeQueryTarget(in)
+	got := completeQueryTarget(in, nil)
 
 	for _, note := range got.Governance.PolicyNotes {
 		if note == "Production queries require stricter defaults." {
@@ -300,7 +300,7 @@ func TestCompleteQueryTarget_EmptyArraysSerializeAsEmptyNotNull(t *testing.T) {
 	// Unsupported engine with a complete connection leaves missingFields empty.
 	in := baseTarget()
 	in.ConnectionContext.Engine = "oracle"
-	got := completeQueryTarget(in)
+	got := completeQueryTarget(in, nil)
 
 	raw, err := json.Marshal(got)
 	if err != nil {

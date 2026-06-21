@@ -1,9 +1,11 @@
 // Package model provides domain entities for the resource management system.
-// input: (none)
-// output: QueryTarget read-model types and query capability/readiness/safety enums
-// pos: Read-only query target context for the Query Workbench shell (Phase 36)
+// input: fmt package
+// output: QueryTarget read-model types, query capability/readiness/safety enums, QueryTargetSafetyStateDictionary + Validate
+// pos: Read-only query target context for the Query Workbench (Phase 36 shell + Phase 37 readiness)
 // note: if this file changes, update header and README.md
 package model
+
+import "fmt"
 
 // QueryKind classifies how a target would be queried in a future workbench.
 type QueryKind string
@@ -29,15 +31,44 @@ const (
 )
 
 // QueryTargetSafetyState is the safety boundary that explains why a target
-// cannot execute queries in the current phase.
+// cannot execute queries in the current phase, or "readonly_sandbox_enabled"
+// when a target is executable under the Phase 37 read-only sandbox.
 type QueryTargetSafetyState string
 
 const (
-	SafetyStateCredentialMissing    QueryTargetSafetyState = "credential_missing"
-	SafetyStateExecutionDisabled    QueryTargetSafetyState = "execution_disabled"
-	SafetyStateUnsupportedEngine    QueryTargetSafetyState = "unsupported_engine"
-	SafetyStateConnectionIncomplete QueryTargetSafetyState = "connection_incomplete"
+	SafetyStateCredentialMissing       QueryTargetSafetyState = "credential_missing"
+	SafetyStateExecutionDisabled       QueryTargetSafetyState = "execution_disabled"
+	SafetyStateUnsupportedEngine       QueryTargetSafetyState = "unsupported_engine"
+	SafetyStateConnectionIncomplete    QueryTargetSafetyState = "connection_incomplete"
+	SafetyStateReadonlySandboxEnabled  QueryTargetSafetyState = "readonly_sandbox_enabled"
 )
+
+// queryTargetSafetyStateDictionaryItems is the single source of truth for valid
+// safety states. The dictionary is cloned on read so callers cannot mutate it.
+var queryTargetSafetyStateDictionaryItems = []DictionaryItem{
+	{Key: string(SafetyStateCredentialMissing), Label: "Credential Missing", Description: "A read-only credential must be configured before this target can execute."},
+	{Key: string(SafetyStateExecutionDisabled), Label: "Execution Disabled", Description: "Execution is disabled for this target by credential or environment policy."},
+	{Key: string(SafetyStateUnsupportedEngine), Label: "Unsupported Engine", Description: "The engine is not supported for query execution."},
+	{Key: string(SafetyStateConnectionIncomplete), Label: "Connection Incomplete", Description: "Connection metadata is incomplete before execution can be considered."},
+	{Key: string(SafetyStateReadonlySandboxEnabled), Label: "Read-only Sandbox Enabled", Description: "Target is executable under the backend-enforced read-only SELECT sandbox."},
+}
+
+// QueryTargetSafetyStateDictionary returns a clone of the valid safety states.
+func QueryTargetSafetyStateDictionary() []DictionaryItem {
+	return cloneDictionaryItems(queryTargetSafetyStateDictionaryItems)
+}
+
+// Validate returns nil only for a known safety state. It exists so the service
+// can never emit an undeclared safety string (the ready target must serialize a
+// value present in this dictionary).
+func (s QueryTargetSafetyState) Validate() error {
+	for _, item := range queryTargetSafetyStateDictionaryItems {
+		if item.Key == string(s) {
+			return nil
+		}
+	}
+	return fmt.Errorf("invalid query target safety state: %s", s)
+}
 
 // QueryTargetConnectionContext is the resolved connection context a workbench
 // needs to display beside a target. No credentials live here.
