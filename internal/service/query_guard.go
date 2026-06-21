@@ -106,7 +106,9 @@ func (g *QueryGuard) Guard(statement string, requestedMaxRows int) (GuardedQuery
 
 	// Backend-owned LIMIT: zero/omitted requestedMaxRows -> DefaultMaxRows,
 	// capped at HardMaxRows. Overwrites any LIMIT the user supplied so the cap
-	// is authoritative.
+	// is authoritative. The SQL LIMIT is effective+1 so the executor can scan one
+	// extra row to detect truncation; limitApplied reports the real cap
+	// (effective), not the +1.
 	effective := requestedMaxRows
 	if effective == 0 {
 		effective = g.config.DefaultMaxRows
@@ -115,7 +117,7 @@ func (g *QueryGuard) Guard(statement string, requestedMaxRows int) (GuardedQuery
 		effective = g.config.HardMaxRows
 	}
 	sel.Limit = &sqlparser.Limit{
-		Rowcount: &sqlparser.Literal{Type: sqlparser.IntVal, Val: strconv.Itoa(effective)},
+		Rowcount: &sqlparser.Literal{Type: sqlparser.IntVal, Val: strconv.Itoa(effective + 1)},
 	}
 
 	preview := trimmed

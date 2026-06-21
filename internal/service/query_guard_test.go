@@ -22,8 +22,10 @@ func TestQueryGuardAllowsSimpleSelect(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Guard error: %v", err)
 	}
-	if !strings.Contains(strings.ToLower(got.ExecutableSQL), "limit 100") {
-		t.Fatalf("executable %q must contain the applied limit", got.ExecutableSQL)
+	// The SQL LIMIT is effective+1 (101) so the executor can detect truncation;
+	// limitApplied reports the real cap (100).
+	if !strings.Contains(strings.ToLower(got.ExecutableSQL), "limit 101") {
+		t.Fatalf("executable %q must contain the applied limit 101 (cap+1)", got.ExecutableSQL)
 	}
 	if got.LimitApplied != 100 {
 		t.Fatalf("LimitApplied = %d, want 100", got.LimitApplied)
@@ -112,8 +114,9 @@ func TestQueryGuardAppliesDefaultLimit(t *testing.T) {
 	if got.LimitApplied != 100 {
 		t.Fatalf("LimitApplied = %d, want default 100", got.LimitApplied)
 	}
-	if !strings.Contains(strings.ToLower(got.ExecutableSQL), "limit 100") {
-		t.Fatalf("executable %q must contain default limit 100", got.ExecutableSQL)
+	// SQL LIMIT is cap+1 for truncation detection.
+	if !strings.Contains(strings.ToLower(got.ExecutableSQL), "limit 101") {
+		t.Fatalf("executable %q must contain limit 101 (default cap+1)", got.ExecutableSQL)
 	}
 }
 
@@ -130,8 +133,8 @@ func TestQueryGuardCapsLargeLimit(t *testing.T) {
 		t.Fatalf("LimitApplied = %d, want hard cap 500", got.LimitApplied)
 	}
 	lowered := strings.ToLower(got.ExecutableSQL)
-	if !strings.Contains(lowered, "limit 500") {
-		t.Fatalf("executable %q must contain clamped limit 500", got.ExecutableSQL)
+	if !strings.Contains(lowered, "limit 501") {
+		t.Fatalf("executable %q must contain clamped limit 501 (hard cap+1)", got.ExecutableSQL)
 	}
 	if strings.Contains(lowered, "limit 1000") {
 		t.Fatalf("executable %q must not retain the oversized limit 1000", got.ExecutableSQL)

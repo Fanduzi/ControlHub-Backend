@@ -9,6 +9,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"reflect"
 	"time"
 
 	_ "github.com/go-sql-driver/mysql"
@@ -98,23 +99,37 @@ func (e *MySQLQueryExecutor) Query(ctx context.Context, dsn string, guarded Guar
 	limit := guarded.LimitApplied
 	responseBytes := 0
 
+	// Allocate typed scan buffers from each column's ScanType so values come back
+	// in their native Go type (int64 for BIGINT, float64 for DOUBLE, time.Time for
+	// DATETIME, []byte for text/blob) rather than all-as-[]byte. This preserves
+	// JSON number fidelity. Numeric NULLs land as their zero value — a documented
+	// Phase 37 limitation; text NULLs land as nil []byte -> JSON null.
+	scanTypes := make([]reflect.Type, len(colTypes))
+	for i, ct := range colTypes {
+		if st := ct.ScanType(); st != nil {
+			scanTypes[i] = st
+		} else {
+			scanTypes[i] = reflect.TypeOf([]byte(nil))
+		}
+	}
+
 	for rows.Next() {
 		// Scan one row past the limit so truncation can be detected.
 		if result.RowCount >= limit {
 			result.Truncated = true
 			break
 		}
-		values := make([]any, len(colTypes))
 		ptrs := make([]any, len(colTypes))
-		for i := range values {
-			ptrs[i] = &values[i]
+		for i := range ptrs {
+			ptrs[i] = reflect.New(scanTypes[i]).Interface()
 		}
 		if err := rows.Scan(ptrs...); err != nil {
 			return QueryDatabaseResult{}, err
 		}
-		row := make([]any, len(values))
+		row := make([]any, len(colTypes))
 		rowBytes := 0
-		for i, v := range values {
+		for i, p := range ptrs {
+			v := reflect.ValueOf(p).Elem().Interface()
 			safe, n := e.toJSONSafe(v)
 			row[i] = safe
 			rowBytes += n
