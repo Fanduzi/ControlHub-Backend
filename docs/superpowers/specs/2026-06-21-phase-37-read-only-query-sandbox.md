@@ -172,16 +172,27 @@ be added across the whole contract before any ready target is returned:
 
 Backend (required):
 
-- Go enum: add
+- Go enum: `internal/model/query_target.go` currently has only the
+  `QueryTargetSafetyState` constants — there is **no**
+  `QueryTargetSafetyStateDictionary()` and **no** `Validate()` method (unlike the
+  enums in `internal/model/taxonomy.go`). Phase 37 must add the new constant
   `SafetyStateReadonlySandboxEnabled QueryTargetSafetyState = "readonly_sandbox_enabled"`
-  to `internal/model/query_target.go`, with its dictionary entry and `Validate()`
-  coverage, so the value is a known state rather than a free string.
+  **and** add the missing dictionary + `Validate()`, following the `taxonomy.go`
+  pattern (a `[]DictionaryItem` slice, a `QueryTargetSafetyStateDictionary()`
+  clone func, and a `Validate()` that iterates the slice and rejects unknown
+  values). Keep the change surgical: extend the existing type in place rather
+  than relocating it.
+- README: model files carry the "if this file changes, update header and
+  README.md" note, so update `internal/model/README.md` (it does not currently
+  list `query_target.go`).
 - OpenAPI: add `"readonly_sandbox_enabled"` to the `QueryTargetSafetyState`
   enum/schema in `internal/openapi/openapi.yaml` and keep the `ready` example
   consistent with it.
 - service tests: assert a ready target reports
   `safetyState = readonly_sandbox_enabled`, and that every other readiness state
   still reports its existing non-executable safety state.
+- model tests: all known safety states `Validate()` successfully, unknown safety
+  states are rejected, and `readonly_sandbox_enabled` validates.
 - handler/integration tests: assert `GET /query-targets` serializes the new enum
   for a ready target and that no unknown safety strings leak.
 

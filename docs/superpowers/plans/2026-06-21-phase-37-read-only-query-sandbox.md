@@ -115,12 +115,21 @@ it. Full rationale lives in
 
 1. **`safetyState` enum full chain (Tasks B5, B6, F1, F2).** The ready target
    returns `governance.safetyState = "readonly_sandbox_enabled"`, a value that
-   does not exist in `internal/model/query_target.go`. Add it everywhere before
-   any ready target is returned: Go enum + dictionary + `Validate()` (B5),
-   OpenAPI enum (B6), service/handler/integration tests asserting the new value
-   and that non-ready targets keep their existing state (B5/B6); frontend TS
-   type, i18n label, and component tests that render the label not the raw enum
-   (F1/F2). The service must never emit an undeclared string.
+   does not exist in `internal/model/query_target.go`. Note: today that file has
+   only the `QueryTargetSafetyState` constants — there is **no**
+   `QueryTargetSafetyStateDictionary()` and **no** `Validate()` method, unlike
+   the enums in `internal/model/taxonomy.go`. Phase 37 must add the value AND add
+   the missing dictionary + `Validate()` (following the `taxonomy.go` pattern: a
+   `[]DictionaryItem` slice, a `QueryTargetSafetyStateDictionary()` clone func,
+   and a `Validate()` that iterates the slice). Because model files carry the
+   "if this file changes, update header and README.md" note, also update
+   `internal/model/README.md` (it currently does not even list `query_target.go`).
+   Then add the value to the OpenAPI enum (B6) and add service/handler/integration
+   tests asserting `readonly_sandbox_enabled` validates, all known safety states
+   validate, unknown safety states reject, and non-ready targets keep their
+   existing state (B5/B6). Frontend: TS type, i18n label, and component tests
+   that render the label not the raw enum (F1/F2). The service must never emit an
+   undeclared string.
 
 2. **Close auth + OpenAPI + fuzz (Tasks B0, B6, F4).** Execute/history paths
    require Bearer auth end-to-end: declare `401` responses and a Bearer security
@@ -181,12 +190,23 @@ VerifyTokenRejectsBadSignature
 VerifyTokenRejectsExpiredToken
 ```
 
-Add API middleware tests:
+Add API middleware tests for the base actor helper:
 
 ```text
 AuthenticatedActorRejectsMissingBearerToken
 AuthenticatedActorRejectsInvalidBearerToken
 AuthenticatedActorStoresActorInContext
+```
+
+Add middleware tests for the fresh-query actor middleware (the one query routes
+actually use). All five cases are required:
+
+```text
+FreshQueryActorRejectsMissingBearer -> 401
+FreshQueryActorRejectsMalformedBearer -> 401
+FreshQueryActorRejectsBadSignature -> 401
+FreshQueryActorAcceptsTokenWithinTTL
+FreshQueryActorRejectsTokenOlderThanTTL -> 401
 ```
 
 - [ ] **Step 2: Run tests to verify RED**
@@ -230,17 +250,43 @@ Rules:
   (see "Hardened Requirements" and Task B6); existing read/list routes keep
   their current authentication behavior and must not gain a TTL gate here
 
-- [ ] **Step 4: Implement route middleware helper**
+- [ ] **Step 4: Implement route middleware helpers**
 
-Create:
+Create two layers. `requireAuthenticatedActor` is the low-level verification
+helper only; it must NOT be the final middleware mounted on query routes,
+because it does not enforce token freshness. Query execute/history routes mount
+`requireFreshQueryActor`, which adds the bounded TTL gate.
 
 ```go
+// QueryExecutionAuthConfig carries the freshness policy for query routes.
+// TokenMaxAge is the bounded TTL; zero means "reject everything" (fail closed),
+// never "allow everything".
+type QueryExecutionAuthConfig struct {
+	TokenMaxAge time.Duration
+	Clock       func() time.Time // inject for tests; defaults to time.Now in wiring
+}
+
+// Low-level helper: verifies signature/structure and stores the actor in
+// context. Does NOT enforce TTL. Not mounted directly on query routes.
 func requireAuthenticatedActor(authService *service.AuthService, next http.Handler) http.Handler
+
+// Query-route middleware: verifies the bearer AND rejects tokens older than
+// cfg.TokenMaxAge (computed against cfg.Clock and the token's embedded issuedAt).
+// This is the only middleware mounted on query execute/history routes.
+func requireFreshQueryActor(authService *service.AuthService, cfg QueryExecutionAuthConfig, next http.Handler) http.Handler
+
 func actorUserIDFromContext(ctx context.Context) (uint64, bool)
 ```
 
-Only apply this middleware to query execution/history routes in Task B6. Do not
-change the authentication behavior of existing read/list routes in this task.
+Rules:
+
+- `requireFreshQueryActor` returns `401` for missing bearer, malformed bearer,
+  bad signature, and tokens whose `issuedAt` is older than `TokenMaxAge`.
+- `TokenMaxAge` must be a positive duration; a zero/unset value fails closed
+  (reject), never allows. Wire the default `8h` (or shorter) in `cmd/server/main.go`
+  (Task B6) from a `QueryExecutionTokenMaxAge` config value.
+- Only `requireFreshQueryActor` is applied to query execution/history routes in
+  Task B6. Do not change the authentication behavior of existing read/list routes.
 
 - [ ] **Step 5: Run auth tests**
 
@@ -272,13 +318,16 @@ Add:
 
 ```go
 // Package model provides domain entities for the resource management system.
-// input: time package
-// output: QueryExecution*, QueryResult* types and status/error enums
+// input: fmt, time packages
+// output: QueryExecution*, QueryResult* types, status/error enums, and query credential policy/ref validators
 // pos: Query sandbox execution requests, responses, and history records
 // note: if this file changes, update header and README.md
 package model
 
-import "time"
+import (
+	"fmt"
+	"time"
+)
 
 type QueryExecutionStatus string
 
@@ -340,14 +389,64 @@ type QueryExecutionListResponse struct {
 	PageInfo *PageInfo              `json:"pageInfo"`
 }
 
-type QueryCredentialMetadata struct {
-	ID                uint64 `json:"id"`
-	ResourceID        uint64 `json:"resourceId"`
-	Engine            string `json:"engine"`
-	CredentialRef     string `json:"credentialRef"`
-	Enabled           bool   `json:"enabled"`
-	EnvironmentPolicy string `json:"environmentPolicy"`
+// QueryEnvironmentPolicy controls which environments a credential may execute
+// against. It is a typed enum, not a free string; unknown/empty fails closed.
+type QueryEnvironmentPolicy string
+
+const (
+	QueryEnvPolicyDisabled        QueryEnvironmentPolicy = "disabled"
+	QueryEnvPolicyNonProdOnly     QueryEnvironmentPolicy = "non_prod_only"
+	QueryEnvPolicyAllEnvironments QueryEnvironmentPolicy = "all_environments"
+)
+
+func (p QueryEnvironmentPolicy) Validate() error {
+	switch p {
+	case QueryEnvPolicyDisabled, QueryEnvPolicyNonProdOnly, QueryEnvPolicyAllEnvironments:
+		return nil
+	}
+	return fmt.Errorf("invalid environment policy: %s", p)
 }
+
+// MaxCredentialRefLength bounds credential_ref length (consistent with the
+// VARCHAR(128) column but kept tight at 64 to match env-var key sanity).
+const MaxCredentialRefLength = 64
+
+// ValidateCredentialRef rejects anything outside [A-Z0-9_]+ or over the length
+// cap. It is enforced at metadata write/seed time and on resolve (fail closed).
+func ValidateCredentialRef(ref string) error {
+	if ref == "" {
+		return fmt.Errorf("credential_ref is empty")
+	}
+	if len(ref) > MaxCredentialRefLength {
+		return fmt.Errorf("credential_ref exceeds %d characters", MaxCredentialRefLength)
+	}
+	for _, r := range ref {
+		switch {
+		case r >= 'A' && r <= 'Z', r >= '0' && r <= '9', r == '_':
+		default:
+			return fmt.Errorf("credential_ref %q must match [A-Z0-9_]+", ref)
+		}
+	}
+	return nil
+}
+
+type QueryCredentialMetadata struct {
+	ID                uint64                `json:"id"`
+	ResourceID        uint64                `json:"resourceId"`
+	Engine            string                `json:"engine"`
+	CredentialRef     string                `json:"credentialRef"`
+	Enabled           bool                  `json:"enabled"`
+	EnvironmentPolicy QueryEnvironmentPolicy `json:"environmentPolicy"`
+}
+```
+
+Add model tests for the new validators:
+
+```text
+TestQueryEnvironmentPolicy_ValidValuesPass (disabled, non_prod_only, all_environments)
+TestQueryEnvironmentPolicy_UnknownAndEmptyFailClosed
+TestValidateCredentialRef_ValidPasses (A-Z, 0-9, _)
+TestValidateCredentialRef_RejectsLowercaseDashDotSpaceEmpty
 ```
 
 - [ ] **Step 2: Run compile check**
@@ -396,7 +495,13 @@ TestQueryGuardRejectsMultiStatements
 TestQueryGuardAppliesDefaultLimit
 TestQueryGuardCapsLargeLimit
 TestQueryGuardRejectsSelectIntoOutfile
+TestQueryGuardRejectsSelectIntoDumpfile
 TestQueryGuardRejectsLockingSelect
+TestQueryGuardRejectsSleepFunction
+TestQueryGuardRejectsBenchmarkFunction
+TestQueryGuardRejectsNamedLockFunctions
+TestQueryGuardRejectsLoadFileFunction
+TestQueryGuardRejectsUserVariableAssignment
 ```
 
 Each test should assert the reason, not only the output string. Example:
@@ -470,10 +575,22 @@ Implementation rules:
 - reject semicolon-separated multi-statements
 - parse exactly one statement
 - allow only `*sqlparser.Select`
-- reject `SELECT ... INTO OUTFILE`
-- reject locking clauses
+- reject `SELECT ... INTO OUTFILE` and `SELECT ... INTO DUMPFILE`
+- reject locking clauses (`FOR UPDATE`, `LOCK IN SHARE MODE`)
+- reject SELECT side-effect/resource functions by walking the parsed AST:
+  `SLEEP`, `BENCHMARK`, named-lock functions (`GET_LOCK`, `RELEASE_LOCK`,
+  `IS_FREE_LOCK`, `IS_USED_LOCK`), and `LOAD_FILE`
+- reject user-variable assignment the parser exposes (`@var := ...`,
+  `SELECT ... INTO @var`)
 - apply/cap `LIMIT`
 - produce a digest and 512-character preview
+
+The function/clause rejections must be reached by AST traversal, never by
+substring matching. If the Vitess parser cannot reliably enumerate the relevant
+function-call nodes and clauses, stop and run a parser spike/verification that
+proves each rejection is reachable before claiming the rule is done. A string
+blacklist is not an acceptable implementation and must not be used to fake
+completion.
 
 - [ ] **Step 5: Run guard tests**
 
@@ -580,10 +697,14 @@ Add tests for:
 InsertQueryExecutionAndListByTarget
 CredentialMetadataMarksTargetReady
 DisabledCredentialKeepsTargetLocked
+CredentialMetadataRejectsInvalidCredentialRefOnInsert
+CredentialMetadataRoundTripsTypedEnvironmentPolicy
 ```
 
-The tests should create resources and credential metadata in the disposable
-MySQL database. Do not rely on fuzz-mutated seed state.
+The repository must call `model.ValidateCredentialRef` before any insert and
+return a typed `model.QueryEnvironmentPolicy` on read (not a raw string). The
+tests should create resources and credential metadata in the disposable MySQL
+database. Do not rely on fuzz-mutated seed state.
 
 - [ ] **Step 2: Run tests to verify RED**
 
@@ -649,7 +770,19 @@ ExecutesSelectWithLimit
 RecordsRejectedAttempt
 RecordsSuccessfulAttempt
 MapsTimeoutToQueryTimeout
+ReadyDerivation_NonProdWithNonProdOnlyPolicy_IsReady
+ReadyDerivation_ProdWithNonProdOnlyPolicy_IsLocked
+ReadyDerivation_ProdWithAllEnvironmentsPolicy_IsReady
+ReadyDerivation_DisabledPolicy_IsLocked
+ReadyDerivation_UnknownEmptyPolicy_FailsClosed
+CredentialResolver_RejectsInvalidCredentialRefAndNeverLogsOrReturnsDSN
 ```
+
+The ready-derivation tests encode the full environment policy matrix: production
+is executable only under `all_environments`; `disabled` and unknown/empty fail
+closed (locked). The credential resolver test asserts that an invalid
+`credential_ref` fails closed and that the resolved DSN is never placed in an
+error message, log line, or response.
 
 Use fakes for repository and DB executor. Do not connect to real databases in
 unit tests.
@@ -726,6 +859,16 @@ ErrQueryTimeout
 ErrQueryBackendFailure
 ```
 
+Credential resolver and policy rules (binding):
+
+- `QueryCredentialResolver.Resolve` must call `model.ValidateCredentialRef`
+  first and fail closed (return an error, no env lookup) on an invalid ref.
+- The resolved DSN/password must never appear in a returned error, a log line,
+  or any response field. Errors wrap the sentinel above, not the DSN.
+- Ready-target derivation reads `model.QueryEnvironmentPolicy` from credential
+  metadata and applies the matrix: production only under `all_environments`;
+  `disabled` and unknown/empty are locked.
+
 - [ ] **Step 4: Run service tests**
 
 Run:
@@ -782,13 +925,17 @@ Routes:
 
 ```go
 router.Group(func(r chi.Router) {
-	r.Use(func(next http.Handler) http.Handler {
-		return requireAuthenticatedActor(deps.AuthService, next)
-	})
+	r.Use(requireFreshQueryActor(deps.AuthService, deps.QueryExecutionAuth))
 	r.Post("/query-targets/{id}/execute", handleExecuteQuery(deps.QueryExecutionService))
 	r.Get("/query-targets/{id}/executions", handleListQueryExecutions(deps.QueryExecutionService))
 })
 ```
+
+`requireFreshQueryActor` (not the bare `requireAuthenticatedActor`) is the
+middleware mounted on query routes so the TTL gate from Task B0 is enforced.
+Wire `deps.QueryExecutionAuth` in `cmd/server/main.go` with
+`TokenMaxAge: QueryExecutionTokenMaxAge` (default `8h`, overridable by config)
+and a real clock; existing read/list routes are unchanged.
 
 Handlers must read the actor with `actorUserIDFromContext(r.Context())`; they
 must not accept actor IDs in request JSON or query parameters.
@@ -822,6 +969,16 @@ Add paths:
 POST /query-targets/{id}/execute
 GET /query-targets/{id}/executions
 ```
+
+Auth on the contract (required, not optional):
+
+- Declare a Bearer security scheme in `components.securitySchemes`.
+- Both paths declare `security` referencing it and include a `401` response so
+  the published contract matches the `requireFreshQueryActor` middleware.
+- Schemathesis/fuzz strategy (in `internal/integration/openapi_fuzz_test.go`):
+  either supply a valid test bearer token for these two operations, or treat the
+  documented unauthenticated `401` as a conformance pass. An expected `401` must
+  never surface as an unclassified fuzz failure.
 
 Examples:
 

@@ -59,7 +59,10 @@ softer wording:
 
 - **`safetyState` is a declared enum.** `readonly_sandbox_enabled` must be added
   to the Go enum, OpenAPI schema, and frontend type with tests before any ready
-  target is returned. The service never emits an undeclared string.
+  target is returned. Today `internal/model/query_target.go` has only the
+  constants — `QueryTargetSafetyStateDictionary()` and `Validate()` do not exist
+  and must be added (per the `taxonomy.go` pattern), with `internal/model/README.md`
+  updated. The service never emits an undeclared string.
 - **Auth is closed across the contract.** Execute/history declare `401` and a
   Bearer security scheme; handler tests cover missing/invalid bearer; fuzz treats
   expected unauthenticated `401` as conformance, not failure; E2E reuses the
