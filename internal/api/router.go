@@ -29,6 +29,11 @@ type Dependencies struct {
 	ResourceSubtypeService *service.ResourceSubtypeService
 	ProfileService         *service.ProfileService
 	QueryTargetService     *service.QueryTargetService
+	// Query execution (Phase 37). QueryExecutionService is the thin interface
+	// the handlers depend on; the concrete *service.QueryExecutionService
+	// satisfies it. QueryExecutionAuth carries the bounded token-freshness TTL.
+	QueryExecutionService queryExecutionAPI
+	QueryExecutionAuth    QueryExecutionAuthConfig
 }
 
 func corsLocalDev(next http.Handler) http.Handler {
@@ -79,5 +84,17 @@ func NewRouter(deps Dependencies) *chi.Mux {
 	router.Get("/query-targets", handleListQueryTargets(deps.QueryTargetService))
 	router.Get("/openapi.yaml", handleOpenAPIYAML)
 	router.Get("/docs", handleDocs)
+
+	// Query execution routes (Phase 37) require a fresh bearer token via
+	// requireFreshQueryActor (base signature/structure check + bounded TTL). The
+	// base requireAuthenticatedActor is NOT mounted here because it does not
+	// enforce token freshness. Existing read/list routes are unchanged.
+	if deps.QueryExecutionService != nil {
+		router.Group(func(r chi.Router) {
+			r.Use(requireFreshQueryActor(deps.AuthService, deps.QueryExecutionAuth))
+			r.Post("/query-targets/{id}/execute", handleExecuteQuery(deps.QueryExecutionService))
+			r.Get("/query-targets/{id}/executions", handleListQueryExecutions(deps.QueryExecutionService))
+		})
+	}
 	return router
 }

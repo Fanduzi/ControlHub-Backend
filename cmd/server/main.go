@@ -9,6 +9,7 @@ import (
 	"database/sql"
 	"log"
 	"net/http"
+	"time"
 
 	_ "github.com/go-sql-driver/mysql"
 
@@ -45,6 +46,22 @@ func buildDependencies(db *sql.DB, cfg config.Config) api.Dependencies {
 	resourceRepo := mysql.NewResourceRepository(db)
 	profileSvc := service.NewProfileService(resourceRepo, resourceRepo)
 
+	queryTargetRepo := mysql.NewQueryTargetRepository(db)
+	queryExecutionRepo := mysql.NewQueryExecutionRepository(db)
+
+	// The query target service derives Phase 37 readiness from credential
+	// metadata read through the query execution repository.
+	queryTargetSvc := service.NewQueryTargetService(queryTargetRepo).WithCredentialReader(queryExecutionRepo)
+
+	queryExecutionSvc := service.NewQueryExecutionService(
+		queryTargetRepo,
+		queryExecutionRepo,
+		service.NewEnvCredentialResolver(),
+		service.NewMySQLQueryExecutor(service.QueryExecutorCaps{}),
+		service.NewQueryGuard(service.QueryGuardConfig{DefaultMaxRows: 100, HardMaxRows: 500}),
+		realClock{},
+	)
+
 	return api.Dependencies{
 		ResourceService:         service.NewResourceService(resourceRepo, profileSvc),
 		RelationService:         service.NewRelationService(relationRepo),
@@ -60,6 +77,16 @@ func buildDependencies(db *sql.DB, cfg config.Config) api.Dependencies {
 		HealthStatusService:     service.NewHealthStatusService(dictRepo),
 		ResourceSubtypeService:  service.NewResourceSubtypeService(),
 		ProfileService:          profileSvc,
-		QueryTargetService:      service.NewQueryTargetService(mysql.NewQueryTargetRepository(db)),
+		QueryTargetService:      queryTargetSvc,
+		QueryExecutionService:   queryExecutionSvc,
+		QueryExecutionAuth: api.QueryExecutionAuthConfig{
+			TokenMaxAge: cfg.QueryExecutionTokenMaxAge,
+			Clock:       time.Now,
+		},
 	}
 }
+
+// realClock implements service.Clock with the wall clock.
+type realClock struct{}
+
+func (realClock) Now() time.Time { return time.Now() }

@@ -139,6 +139,168 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/ErrorResponse"
+  /query-targets/{id}/execute:
+    post:
+      summary: Execute a read-only SELECT against a query target
+      operationId: executeQueryTarget
+      description: >
+        Phase 37 read-only sandbox. Runs a single guarded MySQL/TiDB SELECT under
+        a backend-owned credential, bounded timeout, row cap, and payload caps.
+        Requires a fresh Bearer token (bounded TTL). The actor is derived from the
+        verified token and is never accepted in the request body. The resolved DSN
+        is never returned.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+            format: int64
+            minimum: 1
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/QueryExecuteRequest"
+            examples:
+              acceptedSelect:
+                value:
+                  statement: "select 1 as value"
+                  maxRows: 100
+              rejectedUpdate:
+                value:
+                  statement: "update resources set name = 'x'"
+                  maxRows: 100
+      responses:
+        "200":
+          description: Execution result
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/QueryExecuteResponse"
+              examples:
+                success:
+                  value:
+                    executionId: 1001
+                    status: success
+                    targetResourceId: 22
+                    engine: mysql
+                    columns:
+                      - {name: value, databaseType: BIGINT, nullable: false}
+                    rows:
+                      - [1]
+                    rowCount: 1
+                    truncated: false
+                    durationMs: 18
+                    limitApplied: 100
+                    executedAt: "2026-06-22T08:30:00Z"
+        "400":
+          description: Validation failed (bad request, blocked statement, bad maxRows)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              examples:
+                blockedStatement:
+                  value:
+                    error: validation_failed
+                    message: only a single SELECT statement is allowed
+        "401":
+          description: Missing or invalid Bearer token (or token older than the TTL)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "403":
+          description: Target not enabled or environment disallows execution
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "404":
+          description: Query target not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "408":
+          description: Execution exceeded the timeout
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "502":
+          description: Target database rejected or connection failed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+  /query-targets/{id}/executions:
+    get:
+      summary: List execution history for a query target
+      operationId: listQueryExecutions
+      description: >
+        Returns execution metadata (digest, status, row count, duration, errors)
+        only — never full result rows. Requires a fresh Bearer token.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+            format: int64
+            minimum: 1
+        - name: page
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            default: 1
+        - name: pageSize
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            default: 20
+      responses:
+        "200":
+          description: Paginated execution history
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/QueryExecutionListResponse"
+              examples:
+                history:
+                  value:
+                    items:
+                      - id: 1001
+                        targetResourceId: 22
+                        actorUserId: 1
+                        engine: mysql
+                        statementDigest: "select id, name from resources where resource_type = ? limit ?"
+                        statementPreview: "select id, name from resources where resource_type = 'service' limit 20"
+                        status: success
+                        rowCount: 1
+                        durationMs: 18
+                        errorCode: ""
+                        errorMessage: ""
+                        createdAt: "2026-06-22T08:30:00Z"
+                    pageInfo:
+                      page: 1
+                      pageSize: 20
+                      totalItems: 1
+                      totalPages: 1
+        "401":
+          description: Missing or invalid Bearer token (or token older than the TTL)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
   /resources:
     get:
       summary: List resources
@@ -1147,6 +1309,13 @@ paths:
               schema:
                 $ref: "#/components/schemas/ErrorResponse"
 components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      description: >
+        ControlHub HMAC-SHA256 bearer token from POST /auth/login. Query execution
+        routes require a token within a bounded TTL (QueryExecutionTokenMaxAge).
   schemas:
     QueryTargetListResponse:
       type: object
@@ -1252,13 +1421,14 @@ components:
         - execution_disabled
         - unsupported_engine
         - connection_incomplete
+        - readonly_sandbox_enabled
     QueryTargetGovernance:
       type: object
       required: [executionEnabled, credentialState, auditRequired, safetyState, safetyNote, policyNotes]
       properties:
         executionEnabled:
           type: boolean
-          description: Always false in Phase 36.
+          description: True only for ready mysql/tidb targets with an allowed credential (Phase 37).
         credentialState:
           type: string
         auditRequired:
@@ -1842,6 +2012,110 @@ components:
           additionalProperties:
             type: string
           description: Optional field-level validation details
+    QueryExecuteRequest:
+      type: object
+      required: [statement]
+      properties:
+        statement:
+          type: string
+          description: A single MySQL/TiDB SELECT statement.
+        maxRows:
+          type: integer
+          minimum: 0
+          description: >
+            Optional row cap for this execution. Zero/omitted uses the backend
+            default; negative values are rejected. The backend caps this at its
+            hard maximum (tighter for production).
+    QueryResultColumn:
+      type: object
+      required: [name, databaseType, nullable]
+      properties:
+        name:
+          type: string
+        databaseType:
+          type: string
+        nullable:
+          type: boolean
+    QueryExecuteResponse:
+      type: object
+      required: [executionId, status, targetResourceId, engine, columns, rows, rowCount, truncated, durationMs, limitApplied, executedAt]
+      properties:
+        executionId:
+          type: integer
+          format: int64
+        status:
+          type: string
+          enum: [success, rejected, failed, timeout]
+        targetResourceId:
+          type: integer
+          format: int64
+        engine:
+          type: string
+        columns:
+          type: array
+          items:
+            $ref: "#/components/schemas/QueryResultColumn"
+        rows:
+          type: array
+          description: JSON-safe result rows. Never includes credentials or DSNs.
+          items:
+            type: array
+            items: {}
+        rowCount:
+          type: integer
+        truncated:
+          type: boolean
+        durationMs:
+          type: integer
+        limitApplied:
+          type: integer
+        executedAt:
+          type: string
+          format: date-time
+    QueryExecutionRecord:
+      type: object
+      required: [id, targetResourceId, actorUserId, engine, statementDigest, statementPreview, status, rowCount, durationMs, errorCode, errorMessage, createdAt]
+      properties:
+        id:
+          type: integer
+          format: int64
+        targetResourceId:
+          type: integer
+          format: int64
+        actorUserId:
+          type: integer
+          format: int64
+        engine:
+          type: string
+        statementDigest:
+          type: string
+          description: Literal-masked statement shape (never raw parameter values).
+        statementPreview:
+          type: string
+        status:
+          type: string
+          enum: [success, rejected, failed, timeout]
+        rowCount:
+          type: integer
+        durationMs:
+          type: integer
+        errorCode:
+          type: string
+        errorMessage:
+          type: string
+        createdAt:
+          type: string
+          format: date-time
+    QueryExecutionListResponse:
+      type: object
+      required: [items, pageInfo]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/QueryExecutionRecord"
+        pageInfo:
+          $ref: "#/components/schemas/PageInfo"
     TopologyResponse:
       type: object
       required: [rootResourceId, depth, direction, nodes, edges, groups, isDatabaseTopology]

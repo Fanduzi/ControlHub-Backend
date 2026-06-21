@@ -7,8 +7,8 @@ package service
 
 import (
 	"context"
-	"database/sql"
 	"errors"
+	"fmt"
 	"time"
 
 	"github.com/fan/controlhub/internal/model"
@@ -123,15 +123,17 @@ func (s *QueryExecutionService) Execute(ctx context.Context, actorUserID uint64,
 
 	engine := target.ConnectionContext.Engine
 	if !isExecutableEngine(engine) {
-		s.recordAttempt(ctx, target, actorUserID, nil, model.QueryExecutionRejected, 0, "query_not_allowed", "engine not supported for execution", start)
-		return model.QueryExecuteResponse{}, ErrQueryNotAllowed
+		const reason = "engine is not supported for read-only execution"
+		s.recordAttempt(ctx, target, actorUserID, nil, model.QueryExecutionRejected, 0, "query_not_allowed", reason, start)
+		return model.QueryExecuteResponse{}, fmt.Errorf("%w: %s", ErrQueryNotAllowed, reason)
 	}
 
 	cred, err := s.executions.GetCredentialByResourceID(ctx, targetID)
 	if err != nil || !credentialAllowsExecution(cred, target.ConnectionContext.Environment) {
 		// No credential, invalid ref, disabled, or policy disallows -> locked.
-		s.recordAttempt(ctx, target, actorUserID, nil, model.QueryExecutionRejected, 0, "query_not_allowed", "target not enabled for execution", start)
-		return model.QueryExecuteResponse{}, ErrQueryNotAllowed
+		const reason = "target is not enabled for execution"
+		s.recordAttempt(ctx, target, actorUserID, nil, model.QueryExecutionRejected, 0, "query_not_allowed", reason, start)
+		return model.QueryExecuteResponse{}, fmt.Errorf("%w: %s", ErrQueryNotAllowed, reason)
 	}
 
 	// Production requests are capped tighter before the guard applies its own
@@ -142,16 +144,19 @@ func (s *QueryExecutionService) Execute(ctx context.Context, actorUserID uint64,
 	}
 	guarded, err := s.guard.Guard(req.Statement, maxRows)
 	if err != nil {
+		// The guard error is structural (SQL shape) and carries no DSN, so it is
+		// safe to surface as the validation message.
 		s.recordAttempt(ctx, target, actorUserID, &guarded, model.QueryExecutionRejected, 0, "validation_failed", err.Error(), start)
-		return model.QueryExecuteResponse{}, ErrQueryValidationFailed
+		return model.QueryExecuteResponse{}, fmt.Errorf("%w: %v", ErrQueryValidationFailed, err)
 	}
 
 	dsn, err := s.credentials.Resolve(ctx, cred.CredentialRef)
 	if err != nil {
 		// Resolver rejects invalid refs (fail closed) and unset env keys. The DSN
-		// is never included in the recorded message.
-		s.recordAttempt(ctx, target, actorUserID, &guarded, model.QueryExecutionRejected, 0, "query_not_allowed", "credential could not be resolved", start)
-		return model.QueryExecuteResponse{}, ErrQueryNotAllowed
+		// is never included in the recorded or returned message.
+		const reason = "credential could not be resolved"
+		s.recordAttempt(ctx, target, actorUserID, &guarded, model.QueryExecutionRejected, 0, "query_not_allowed", reason, start)
+		return model.QueryExecuteResponse{}, fmt.Errorf("%w: %s", ErrQueryNotAllowed, reason)
 	}
 
 	timeout := defaultQueryTimeout
@@ -163,9 +168,11 @@ func (s *QueryExecutionService) Execute(ctx context.Context, actorUserID uint64,
 
 	result, err := s.executor.Query(execCtx, dsn, guarded)
 	if err != nil {
-		status, sentinel, code := classifyExecutorError(err)
-		s.recordAttempt(ctx, target, actorUserID, &guarded, status, 0, code, err.Error(), start)
-		return model.QueryExecuteResponse{}, sentinel
+		status, sentinel, code, safeMsg := classifyExecutorError(err)
+		// safeMsg is a fixed string; the raw executor error (which may echo parts
+		// of the DSN from the driver) is recorded only internally, never returned.
+		s.recordAttempt(ctx, target, actorUserID, &guarded, status, 0, code, safeMsg, start)
+		return model.QueryExecuteResponse{}, fmt.Errorf("%w: %s", sentinel, safeMsg)
 	}
 
 	// Success: record then return the response carrying the new execution id.
@@ -223,20 +230,18 @@ func (s *QueryExecutionService) findTarget(ctx context.Context, targetID uint64)
 }
 
 // classifyExecutorError maps an executor error to a history status, a sentinel
-// for the handler, and an audit/error code. A timeout is 408; an oversized
-// result is 400 (validation); anything else from the target database is 502.
-func classifyExecutorError(err error) (model.QueryExecutionStatus, error, string) {
+// for the handler, an audit/error code, and a client-safe message. A timeout is
+// 408; an oversized result is 400 (validation); anything else from the target
+// database is 502. The returned message is fixed and never echoes the raw
+// executor error, which may contain DSN fragments from the driver.
+func classifyExecutorError(err error) (model.QueryExecutionStatus, error, string, string) {
 	switch {
 	case errors.Is(err, context.DeadlineExceeded):
-		return model.QueryExecutionTimeout, ErrQueryTimeout, "query_timeout"
+		return model.QueryExecutionTimeout, ErrQueryTimeout, "query_timeout", "query exceeded the time limit"
 	case errors.Is(err, ErrQueryResultTooLarge):
-		return model.QueryExecutionRejected, ErrQueryValidationFailed, "validation_failed"
-	case errors.Is(err, sql.ErrNoRows):
-		// A SELECT that returns no rows is success with rowCount 0, not an error;
-		// treat an unexpected sql.ErrNoRows surfacing here as a backend issue.
-		return model.QueryExecutionFailed, ErrQueryBackendFailure, "query_backend_error"
+		return model.QueryExecutionRejected, ErrQueryValidationFailed, "validation_failed", "result set exceeds configured limits"
 	default:
-		return model.QueryExecutionFailed, ErrQueryBackendFailure, "query_backend_error"
+		return model.QueryExecutionFailed, ErrQueryBackendFailure, "query_backend_error", "target database query failed"
 	}
 }
 

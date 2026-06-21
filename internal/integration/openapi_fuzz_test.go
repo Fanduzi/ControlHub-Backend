@@ -48,6 +48,17 @@ func TestOpenAPIFuzz(t *testing.T) {
 	resourceRepo := mysql.NewResourceRepository(db)
 	profileSvc := service.NewProfileService(resourceRepo, resourceRepo)
 
+	queryTargetRepo := mysql.NewQueryTargetRepository(db)
+	queryExecutionRepo := mysql.NewQueryExecutionRepository(db)
+	queryExecutionSvc := service.NewQueryExecutionService(
+		queryTargetRepo,
+		queryExecutionRepo,
+		service.NewEnvCredentialResolver(),
+		service.NewMySQLQueryExecutor(service.QueryExecutorCaps{}),
+		service.NewQueryGuard(service.QueryGuardConfig{DefaultMaxRows: 100, HardMaxRows: 500}),
+		wallClock{},
+	)
+
 	deps := api.Dependencies{
 		ResourceService:        service.NewResourceService(resourceRepo, profileSvc),
 		RelationService:        service.NewRelationService(relationRepo),
@@ -63,7 +74,12 @@ func TestOpenAPIFuzz(t *testing.T) {
 		LifecycleStatusService: service.NewLifecycleStatusService(dictRepo),
 		HealthStatusService:    service.NewHealthStatusService(dictRepo),
 		ResourceSubtypeService: service.NewResourceSubtypeService(),
-		QueryTargetService:     service.NewQueryTargetService(mysql.NewQueryTargetRepository(db)),
+		QueryTargetService:     service.NewQueryTargetService(queryTargetRepo).WithCredentialReader(queryExecutionRepo),
+		QueryExecutionService:  queryExecutionSvc,
+		QueryExecutionAuth: api.QueryExecutionAuthConfig{
+			TokenMaxAge: 8 * time.Hour,
+			Clock:       time.Now,
+		},
 	}
 
 	router := api.NewRouter(deps)
@@ -137,3 +153,7 @@ func resolveScript(t *testing.T, name string) string {
 	return abs
 }
 
+// wallClock implements service.Clock with the wall clock for integration tests.
+type wallClock struct{}
+
+func (wallClock) Now() time.Time { return time.Now() }
