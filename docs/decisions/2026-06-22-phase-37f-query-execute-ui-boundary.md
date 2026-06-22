@@ -51,4 +51,3 @@ early.
 - Ready state must come from backend `availableActions.run=true`.
 - Frontend must never send actor id or credential material.
 - Backend remains the only enforcement layer.
-

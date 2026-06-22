@@ -232,4 +232,3 @@ Frontend:
 - Query history updates.
 - No credentials or DSNs appear in UI, API responses, logs, or history rows.
 - Cross-repo E2E passes.
-
