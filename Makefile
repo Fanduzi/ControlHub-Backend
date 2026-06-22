@@ -1,4 +1,4 @@
-.PHONY: test test-integration test-openapi-fuzz run openapi-validate migrate-up migrate-status migrate-down-one migrate-reset-dev cutover-local release-local-gates release-docker-gates release-readiness-gates
+.PHONY: test test-integration test-openapi-fuzz run openapi-validate migrate-up migrate-status migrate-down-one migrate-reset-dev cutover-local seed-query-dev-credential release-local-gates release-docker-gates release-readiness-gates
 
 GOOSE := $(shell go env GOPATH)/bin/goose
 GOOSE_DRIVER := mysql
@@ -31,6 +31,9 @@ run:
 cutover-local: ## Preserve current controlhub as controlhub_v1, rebuild bigint controlhub, then import legacy data (DESTRUCTIVE — requires CONFIRM=yes)
 	@if [ "$(CONFIRM)" != "yes" ]; then echo "Error: set CONFIRM=yes to run this target. This renames runtime tables, rebuilds the target database, and imports preserved data."; exit 1; fi
 	go run ./cmd/cutover-local
+
+seed-query-dev-credential: ## Seed local/dev query credential METADATA for one target (dev-only; DSN stays in env, never stored). Requires DATABASE_DSN, QUERY_DEV_TARGET_RESOURCE_ID, QUERY_DEV_CREDENTIAL_REF, and CONTROLHUB_QUERY_CREDENTIAL_<REF>.
+	go run ./cmd/querydev
 
 migrate-up: ## Apply all pending migrations
 	@if [ -z "$(GOOSE_DBSTRING)" ]; then echo "Error: DATABASE_DSN not set. Export it or add to .env"; exit 1; fi

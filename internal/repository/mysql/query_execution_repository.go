@@ -56,6 +56,30 @@ func (r *QueryExecutionRepository) GetCredentialByResourceID(ctx context.Context
 	return meta, nil
 }
 
+// UpsertCredentialMetadata writes or replaces a target's credential metadata.
+// It is the local/dev seed write path (cmd/querydev). It stores
+// resource_id, engine, credential_ref, enabled, and environment_policy ONLY —
+// never a DSN or password. The upsert keys on the existing unique
+// (resource_id) index so repeated local/dev seeding is idempotent: re-running
+// the seed against the same target refreshes its metadata instead of failing
+// on the duplicate. The credential_ref is validated upstream by the seed
+// service; reads re-validate it fail-closed via model.ValidateCredentialRef.
+func (r *QueryExecutionRepository) UpsertCredentialMetadata(ctx context.Context, meta model.QueryCredentialMetadata) error {
+	const q = `insert into query_target_credentials (resource_id, engine, credential_ref, enabled, environment_policy)
+	           values (?, ?, ?, ?, ?)
+	           on duplicate key update
+	             engine = values(engine),
+	             credential_ref = values(credential_ref),
+	             enabled = values(enabled),
+	             environment_policy = values(environment_policy)`
+	if _, err := r.db.ExecContext(ctx, q,
+		meta.ResourceID, meta.Engine, meta.CredentialRef, meta.Enabled, string(meta.EnvironmentPolicy),
+	); err != nil {
+		return fmt.Errorf("upsert query credential metadata: %w", err)
+	}
+	return nil
+}
+
 // InsertExecution persists one execution attempt's metadata and returns its id.
 // It stores a digest and short preview only — never full result rows.
 func (r *QueryExecutionRepository) InsertExecution(ctx context.Context, rec model.QueryExecutionRecord) (uint64, error) {
