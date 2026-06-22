@@ -17,7 +17,9 @@ import (
 	"github.com/fan/controlhub/internal/model"
 )
 
-const testResolverDSN = "secret-dsn-do-not-leak"
+// testResolverDSN is a valid MySQL DSN that binds to the scaffold target
+// (db.internal:3306). Its password doubles as the leak-detection marker.
+const testResolverDSN = "rouser:secret-dsn-do-not-leak@tcp(db.internal:3306)/sandbox"
 
 // --- fakes ---
 
@@ -39,6 +41,9 @@ type fakeExecRepo struct {
 		etype  string
 		result string
 	}
+	// Failure injection for the audit/history guarantee tests.
+	insertExecErr  error
+	insertAuditErr error
 }
 
 func (f *fakeExecRepo) GetCredentialByResourceID(_ context.Context, resourceID uint64) (model.QueryCredentialMetadata, error) {
@@ -53,6 +58,9 @@ func (f *fakeExecRepo) GetCredentialByResourceID(_ context.Context, resourceID u
 }
 
 func (f *fakeExecRepo) InsertExecution(_ context.Context, rec model.QueryExecutionRecord) (uint64, error) {
+	if f.insertExecErr != nil {
+		return 0, f.insertExecErr
+	}
 	rec.ID = uint64(len(f.insertedAttempts)) + 1
 	f.insertedAttempts = append(f.insertedAttempts, rec)
 	return rec.ID, nil
@@ -63,6 +71,9 @@ func (f *fakeExecRepo) ListExecutions(_ context.Context, _ model.QueryExecutionL
 }
 
 func (f *fakeExecRepo) InsertAuditEvent(_ context.Context, actor, target uint64, etype, result string) error {
+	if f.insertAuditErr != nil {
+		return f.insertAuditErr
+	}
 	f.auditEvents = append(f.auditEvents, struct {
 		actor  uint64
 		target uint64
@@ -141,6 +152,7 @@ func enabledCred(policy model.QueryEnvironmentPolicy) model.QueryCredentialMetad
 	return model.QueryCredentialMetadata{
 		ResourceID:        9001,
 		Enabled:           true,
+		Engine:            "mysql",
 		CredentialRef:     "ORDER_MYSQL_RO",
 		EnvironmentPolicy: policy,
 	}
@@ -334,6 +346,170 @@ func TestExecute_RecordsRejectedAttempt(t *testing.T) {
 	}
 	if len(repo.auditEvents) != 1 || repo.auditEvents[0].result != "validation_failed" {
 		t.Fatalf("audit result = %+v, want validation_failed", repo.auditEvents)
+	}
+}
+
+func TestExecute_HistoryWriteFailureOnSuccess_ReturnsBackendError(t *testing.T) {
+	t.Parallel()
+	svc, repo, _, _ := executionTestScaffold(t)
+	repo.insertExecErr = errors.New("history db down")
+
+	// WHY: Phase 37 guarantees every attempt is recorded. If the history row
+	// cannot be written, the service must NOT pretend success (no executionId=0
+	// success response); it returns a controlled backend failure.
+	resp, err := svc.Execute(context.Background(), 7, 9001, model.QueryExecuteRequest{Statement: "select 1", MaxRows: 10})
+	if !errors.Is(err, ErrQueryBackendFailure) {
+		t.Fatalf("error = %v, want ErrQueryBackendFailure", err)
+	}
+	if resp.Status == model.QueryExecutionSuccess {
+		t.Fatal("must not return a success response when the history write failed")
+	}
+	if resp.ExecutionID != 0 {
+		t.Fatalf("ExecutionID = %d, want 0 (no successful record)", resp.ExecutionID)
+	}
+}
+
+func TestExecute_AuditWriteFailureOnSuccess_ReturnsBackendError(t *testing.T) {
+	t.Parallel()
+	svc, repo, _, _ := executionTestScaffold(t)
+	repo.insertAuditErr = errors.New("audit db down")
+
+	// WHY: the audit event is part of the recording guarantee; if it cannot be
+	// written the request fails closed rather than reporting an unaudited run.
+	_, err := svc.Execute(context.Background(), 7, 9001, model.QueryExecuteRequest{Statement: "select 1", MaxRows: 10})
+	if !errors.Is(err, ErrQueryBackendFailure) {
+		t.Fatalf("error = %v, want ErrQueryBackendFailure", err)
+	}
+}
+
+func TestExecute_RejectedAttempt_PersistFailure_ReturnsBackendError(t *testing.T) {
+	t.Parallel()
+	svc, repo, _, executor := executionTestScaffold(t)
+	repo.insertExecErr = errors.New("history db down")
+
+	// WHY: even for a rejected attempt, a recording failure must surface as a
+	// controlled backend failure (never silently swallow + claim "recorded").
+	_, err := svc.Execute(context.Background(), 7, 9001, model.QueryExecuteRequest{Statement: "delete from t", MaxRows: 10})
+	if !errors.Is(err, ErrQueryBackendFailure) {
+		t.Fatalf("error = %v, want ErrQueryBackendFailure (persist failure must not be swallowed)", err)
+	}
+	if executor.called {
+		t.Fatal("rejected attempt must not reach the executor")
+	}
+}
+
+// --- Finding 2: credential must bind to the selected target ---
+
+func TestExecute_CredentialEngineMismatch_Rejected(t *testing.T) {
+	t.Parallel()
+	svc, repo, _, executor := executionTestScaffold(t)
+	// The credential is for postgresql but the target is mysql.
+	cred := repo.credentials[9001]
+	cred.Engine = "postgresql"
+	repo.credentials[9001] = cred
+
+	_, err := svc.Execute(context.Background(), 7, 9001, model.QueryExecuteRequest{Statement: "select 1", MaxRows: 10})
+	if !errors.Is(err, ErrQueryNotAllowed) {
+		t.Fatalf("engine mismatch error = %v, want ErrQueryNotAllowed", err)
+	}
+	if executor.called {
+		t.Fatal("an engine-mismatched credential must never reach the executor")
+	}
+}
+
+func TestExecute_DSNHostMismatch_Rejected(t *testing.T) {
+	t.Parallel()
+	svc, _, resolver, executor := executionTestScaffold(t)
+	// WHY: a credential resolved to a different host would silently query the
+	// wrong database. The DSN host must match the selected target's host.
+	resolver.dsn = "rouser:secret@tcp(other-db.internal:3306)/sandbox"
+
+	_, err := svc.Execute(context.Background(), 7, 9001, model.QueryExecuteRequest{Statement: "select 1", MaxRows: 10})
+	if !errors.Is(err, ErrQueryNotAllowed) {
+		t.Fatalf("DSN host mismatch error = %v, want ErrQueryNotAllowed", err)
+	}
+	if executor.called {
+		t.Fatal("a host-mismatched DSN must never reach the executor")
+	}
+}
+
+func TestExecute_DSNPortMismatch_Rejected(t *testing.T) {
+	t.Parallel()
+	svc, _, resolver, executor := executionTestScaffold(t)
+	resolver.dsn = "rouser:secret@tcp(db.internal:3307)/sandbox"
+
+	_, err := svc.Execute(context.Background(), 7, 9001, model.QueryExecuteRequest{Statement: "select 1", MaxRows: 10})
+	if !errors.Is(err, ErrQueryNotAllowed) {
+		t.Fatalf("DSN port mismatch error = %v, want ErrQueryNotAllowed", err)
+	}
+	if executor.called {
+		t.Fatal("a port-mismatched DSN must never reach the executor")
+	}
+}
+
+func TestExecute_DSNMissingPort_Rejected(t *testing.T) {
+	t.Parallel()
+	svc, _, resolver, executor := executionTestScaffold(t)
+	// No port in the DSN address -> fail closed (Phase 37 targets always have a port).
+	resolver.dsn = "rouser:secret@tcp(db.internal)/sandbox"
+
+	_, err := svc.Execute(context.Background(), 7, 9001, model.QueryExecuteRequest{Statement: "select 1", MaxRows: 10})
+	if !errors.Is(err, ErrQueryNotAllowed) {
+		t.Fatalf("DSN missing port error = %v, want ErrQueryNotAllowed", err)
+	}
+	if executor.called {
+		t.Fatal("a DSN without a port must never reach the executor")
+	}
+}
+
+func TestExecute_DSNNonTCP_Rejected(t *testing.T) {
+	t.Parallel()
+	svc, _, resolver, executor := executionTestScaffold(t)
+	resolver.dsn = "rouser:secret@unix(/tmp/mysql.sock)/sandbox"
+
+	_, err := svc.Execute(context.Background(), 7, 9001, model.QueryExecuteRequest{Statement: "select 1", MaxRows: 10})
+	if !errors.Is(err, ErrQueryNotAllowed) {
+		t.Fatalf("non-tcp DSN error = %v, want ErrQueryNotAllowed", err)
+	}
+	if executor.called {
+		t.Fatal("a non-tcp DSN must never reach the executor")
+	}
+}
+
+func TestExecute_DSNMatching_SucceedsAndDSNNeverLeaks(t *testing.T) {
+	t.Parallel()
+	svc, repo, resolver, executor := executionTestScaffold(t)
+	// The scaffold DSN already binds to db.internal:3306; assert the matching
+	// path still succeeds and the DSN/password never appears in recorded history.
+	resp, err := svc.Execute(context.Background(), 7, 9001, model.QueryExecuteRequest{Statement: "select 1 as value", MaxRows: 10})
+	if err != nil {
+		t.Fatalf("matching DSN Execute error: %v", err)
+	}
+	if resp.Status != model.QueryExecutionSuccess {
+		t.Fatalf("status = %q, want success", resp.Status)
+	}
+	if !executor.called {
+		t.Fatal("a matching DSN must reach the executor")
+	}
+	for _, rec := range repo.insertedAttempts {
+		if strings.Contains(rec.ErrorMessage, testResolverDSN) || strings.Contains(rec.StatementDigest, resolver.dsn) {
+			t.Fatalf("DSN leaked into history: %+v", rec)
+		}
+	}
+}
+
+func TestReadyDerivation_CredentialEngineMismatch_IsLocked(t *testing.T) {
+	t.Parallel()
+	cred := enabledCred(model.QueryEnvPolicyAllEnvironments)
+	cred.Engine = "postgresql"
+	got := completeQueryTarget(mysqlTarget("Staging"), &cred)
+	// WHY: a credential whose engine does not match the target must never mark
+	// the target ready, even under all_environments.
+	if got.Readiness == model.ReadinessReady {
+		t.Fatal("engine-mismatched credential must not make the target ready")
+	}
+	if got.AvailableActions.Run {
+		t.Fatal("Run must stay disabled for an engine-mismatched credential")
 	}
 }
 

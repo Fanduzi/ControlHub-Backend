@@ -1,7 +1,7 @@
 // Package service provides business logic for the Phase 37 read-only query sandbox.
-// input: context, database/sql, errors, time, internal/model
-// output: QueryExecutionService, query execution repository/resolver/executor/clock interfaces, sentinel errors, NewQueryExecutionService, Execute, ListHistory
-// pos: Orchestrates guarded MySQL/TiDB SELECT execution — target/policy/guard gating, credential resolution, timed execution, and per-attempt history + audit
+// input: context, errors, fmt, net, strconv, strings, time, go-sql-driver/mysql, internal/model
+// output: QueryExecutionService, query execution repository/resolver/executor/clock interfaces, sentinel errors, NewQueryExecutionService, Execute, ListHistory, validateDSNBinding
+// pos: Orchestrates guarded MySQL/TiDB SELECT execution — target/policy/guard gating, credential resolution + target binding, timed execution, and guaranteed per-attempt history + audit
 // note: if this file changes, update header and README.md
 package service
 
@@ -9,7 +9,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net"
+	"strconv"
+	"strings"
 	"time"
+
+	"github.com/go-sql-driver/mysql"
 
 	"github.com/fan/controlhub/internal/model"
 )
@@ -28,6 +33,12 @@ var (
 // the configured column/cell/payload caps. The service maps it to a controlled
 // 400 (validation_failed), never a 500.
 var ErrQueryResultTooLarge = errors.New("query result exceeds configured limits")
+
+// errPersistAttempt is returned when an attempt cannot be recorded to history or
+// audit. Phase 37 guarantees every attempt is recorded, so a recording failure
+// is surfaced as a controlled backend failure (502) rather than a silent
+// success. The error carries no database internals.
+var errPersistAttempt = fmt.Errorf("%w: could not record query attempt", ErrQueryBackendFailure)
 
 // Execution limits. Default is 5s/500 rows; production is tighter at 3s/100 rows.
 const (
@@ -108,10 +119,12 @@ func NewQueryExecutionService(
 }
 
 // Execute runs one guarded SELECT for a target and records the attempt. It
-// returns a response on success or a sentinel error otherwise; every reachable
-// outcome (rejected, failed, timeout, success) is persisted to history + audit.
-// The actor is taken from the verified token by the caller, never from the
-// request body.
+// returns a response on success or a sentinel error otherwise. Every reachable
+// outcome (rejected, failed, timeout, success) is persisted to history + audit;
+// if a recording write fails the request is surfaced as a controlled
+// ErrQueryBackendFailure rather than a silent success — Phase 37 never reports
+// an unaudited attempt as complete. The actor is taken from the verified token
+// by the caller, never from the request body.
 func (s *QueryExecutionService) Execute(ctx context.Context, actorUserID uint64, targetID uint64, req model.QueryExecuteRequest) (model.QueryExecuteResponse, error) {
 	start := s.clock.Now()
 
@@ -123,17 +136,15 @@ func (s *QueryExecutionService) Execute(ctx context.Context, actorUserID uint64,
 
 	engine := target.ConnectionContext.Engine
 	if !isExecutableEngine(engine) {
-		const reason = "engine is not supported for read-only execution"
-		s.recordAttempt(ctx, target, actorUserID, nil, model.QueryExecutionRejected, 0, "query_not_allowed", reason, start)
-		return model.QueryExecuteResponse{}, fmt.Errorf("%w: %s", ErrQueryNotAllowed, reason)
+		return s.reject(ctx, target, actorUserID, nil, "query_not_allowed", "engine is not supported for read-only execution",
+			fmt.Errorf("%w: engine is not supported for read-only execution", ErrQueryNotAllowed), start)
 	}
 
 	cred, err := s.executions.GetCredentialByResourceID(ctx, targetID)
-	if err != nil || !credentialAllowsExecution(cred, target.ConnectionContext.Environment) {
-		// No credential, invalid ref, disabled, or policy disallows -> locked.
-		const reason = "target is not enabled for execution"
-		s.recordAttempt(ctx, target, actorUserID, nil, model.QueryExecutionRejected, 0, "query_not_allowed", reason, start)
-		return model.QueryExecuteResponse{}, fmt.Errorf("%w: %s", ErrQueryNotAllowed, reason)
+	if err != nil || !credentialAllowsExecution(cred, engine, target.ConnectionContext.Environment) {
+		// No credential, invalid ref, disabled, engine mismatch, or policy disallows -> locked.
+		return s.reject(ctx, target, actorUserID, nil, "query_not_allowed", "target is not enabled for execution",
+			fmt.Errorf("%w: target is not enabled for execution", ErrQueryNotAllowed), start)
 	}
 
 	// Production requests are capped tighter before the guard applies its own
@@ -146,17 +157,22 @@ func (s *QueryExecutionService) Execute(ctx context.Context, actorUserID uint64,
 	if err != nil {
 		// The guard error is structural (SQL shape) and carries no DSN, so it is
 		// safe to surface as the validation message.
-		s.recordAttempt(ctx, target, actorUserID, &guarded, model.QueryExecutionRejected, 0, "validation_failed", err.Error(), start)
-		return model.QueryExecuteResponse{}, fmt.Errorf("%w: %v", ErrQueryValidationFailed, err)
+		return s.reject(ctx, target, actorUserID, &guarded, "validation_failed", err.Error(),
+			fmt.Errorf("%w: %v", ErrQueryValidationFailed, err), start)
 	}
 
 	dsn, err := s.credentials.Resolve(ctx, cred.CredentialRef)
 	if err != nil {
 		// Resolver rejects invalid refs (fail closed) and unset env keys. The DSN
 		// is never included in the recorded or returned message.
-		const reason = "credential could not be resolved"
-		s.recordAttempt(ctx, target, actorUserID, &guarded, model.QueryExecutionRejected, 0, "query_not_allowed", reason, start)
-		return model.QueryExecuteResponse{}, fmt.Errorf("%w: %s", ErrQueryNotAllowed, reason)
+		return s.reject(ctx, target, actorUserID, &guarded, "query_not_allowed", "credential could not be resolved",
+			fmt.Errorf("%w: credential could not be resolved", ErrQueryNotAllowed), start)
+	}
+	// Defense in depth: the resolved DSN must point at the selected target's
+	// host/port. A credential misconfigured to another database is fail-closed.
+	if err := validateDSNBinding(dsn, target); err != nil {
+		return s.reject(ctx, target, actorUserID, &guarded, "query_not_allowed", "credential is not bound to this target",
+			fmt.Errorf("%w: credential is not bound to this target", ErrQueryNotAllowed), start)
 	}
 
 	timeout := defaultQueryTimeout
@@ -171,13 +187,18 @@ func (s *QueryExecutionService) Execute(ctx context.Context, actorUserID uint64,
 		status, sentinel, code, safeMsg := classifyExecutorError(err)
 		// safeMsg is a fixed string; the raw executor error (which may echo parts
 		// of the DSN from the driver) is recorded only internally, never returned.
-		s.recordAttempt(ctx, target, actorUserID, &guarded, status, 0, code, safeMsg, start)
+		if _, perr := s.persistAttempt(ctx, target, actorUserID, &guarded, status, 0, code, safeMsg, start); perr != nil {
+			return model.QueryExecuteResponse{}, errPersistAttempt
+		}
 		return model.QueryExecuteResponse{}, fmt.Errorf("%w: %s", sentinel, safeMsg)
 	}
 
-	// Success: record then return the response carrying the new execution id.
-	execID, _ := s.executions.InsertExecution(ctx, s.buildRecord(target, actorUserID, &guarded, model.QueryExecutionSuccess, result.RowCount, "", "", start))
-	s.recordAudit(ctx, actorUserID, target.ResourceID, model.QueryExecutionSuccess)
+	// Success: record (history + audit) then return. A recording failure must
+	// not yield a success response, so execID is guaranteed non-zero here.
+	execID, perr := s.persistAttempt(ctx, target, actorUserID, &guarded, model.QueryExecutionSuccess, result.RowCount, "", "", start)
+	if perr != nil {
+		return model.QueryExecuteResponse{}, errPersistAttempt
+	}
 
 	return model.QueryExecuteResponse{
 		ExecutionID:      execID,
@@ -192,6 +213,16 @@ func (s *QueryExecutionService) Execute(ctx context.Context, actorUserID uint64,
 		LimitApplied:     guarded.LimitApplied,
 		ExecutedAt:       s.clock.Now(),
 	}, nil
+}
+
+// reject records a rejected attempt and returns the provided error. If the
+// attempt cannot be recorded, it returns a controlled errPersistAttempt instead
+// — Phase 37 never silently drops an unaudited rejection.
+func (s *QueryExecutionService) reject(ctx context.Context, target model.QueryTarget, actorUserID uint64, guarded *GuardedQuery, code, msg string, retErr error, start time.Time) (model.QueryExecuteResponse, error) {
+	if _, perr := s.persistAttempt(ctx, target, actorUserID, guarded, model.QueryExecutionRejected, 0, code, msg, start); perr != nil {
+		return model.QueryExecuteResponse{}, errPersistAttempt
+	}
+	return model.QueryExecuteResponse{}, retErr
 }
 
 // ListHistory returns execution history (metadata only) for a target with
@@ -266,22 +297,96 @@ func (s *QueryExecutionService) buildRecord(target model.QueryTarget, actorUserI
 	return rec
 }
 
-// recordAttempt persists a non-success attempt's history row and audit event.
-// Best-effort: a persistence failure must not change the returned outcome or
-// leak details.
-func (s *QueryExecutionService) recordAttempt(ctx context.Context, target model.QueryTarget, actorUserID uint64, guarded *GuardedQuery, status model.QueryExecutionStatus, rowCount int, code, msg string, start time.Time) {
+// persistAttempt records one attempt's history row and audit event and returns
+// the new execution id, or an error if either write fails. Unlike best-effort
+// logging, callers treat a non-nil error as a controlled backend failure so the
+// "every attempt is recorded" guarantee holds. The recorded message never
+// contains the DSN.
+func (s *QueryExecutionService) persistAttempt(ctx context.Context, target model.QueryTarget, actorUserID uint64, guarded *GuardedQuery, status model.QueryExecutionStatus, rowCount int, code, msg string, start time.Time) (uint64, error) {
 	rec := s.buildRecord(target, actorUserID, guarded, status, rowCount, code, msg, start)
-	if _, err := s.executions.InsertExecution(ctx, rec); err != nil {
-		// Best-effort; never surface to the client.
-		_ = err
+	id, err := s.executions.InsertExecution(ctx, rec)
+	if err != nil {
+		return 0, err
 	}
-	s.recordAudit(ctx, actorUserID, target.ResourceID, status)
+	if err := s.executions.InsertAuditEvent(ctx, actorUserID, target.ResourceID, "query.executed", auditResultFor(status)); err != nil {
+		return id, err
+	}
+	return id, nil
 }
 
-func (s *QueryExecutionService) recordAudit(ctx context.Context, actorUserID, targetResourceID uint64, status model.QueryExecutionStatus) {
-	if err := s.executions.InsertAuditEvent(ctx, actorUserID, targetResourceID, "query.executed", auditResultFor(status)); err != nil {
-		_ = err
+// validateDSNBinding verifies the resolved DSN points at the selected target's
+// host/port. Phase 37 must never run a query against a database other than the
+// one the user selected; a credential misconfigured to another host/port is a
+// fail-closed condition. The returned error never includes the DSN value.
+func validateDSNBinding(dsn string, target model.QueryTarget) error {
+	cfg, err := mysql.ParseDSN(dsn)
+	if err != nil {
+		return errDSNUnparseable
 	}
+	if !strings.EqualFold(strings.TrimSpace(cfg.Net), "tcp") {
+		return errDSNNotTCP
+	}
+	// The go-sql-driver normalizes a portless tcp address to :3306 during
+	// ParseDSN (ensureHavePort), which would silently bind a `tcp(host)` DSN to
+	// host:3306. Phase 37 requires the credential to name an explicit port, so
+	// inspect the raw address segment and fail closed when it omits one. The
+	// credential DSNs are server-controlled env values, so locating the address
+	// via the net prefix is safe here.
+	rawAddr, ok := rawAddressFor(dsn, cfg.Net)
+	if !ok {
+		return errDSNAddressMalformed
+	}
+	if _, portStr, splitErr := net.SplitHostPort(rawAddr); splitErr != nil || portStr == "" {
+		return errDSNPortMissing
+	}
+	host, portStr, err := net.SplitHostPort(cfg.Addr)
+	if err != nil {
+		return errDSNAddressMalformed
+	}
+	if !engineHostMatches(host, target.ConnectionContext.Host) {
+		return errDSNHostMismatch
+	}
+	port, err := strconv.Atoi(portStr)
+	if err != nil {
+		return errDSNPortInvalid
+	}
+	if port != target.ConnectionContext.Port {
+		return errDSNPortMismatch
+	}
+	return nil
+}
+
+// rawAddressFor extracts the address segment from a MySQL DSN's `net(addr)`
+// authority. It returns ok=false when the DSN carries no explicit address.
+func rawAddressFor(dsn, netName string) (string, bool) {
+	prefix := netName + "("
+	idx := strings.Index(dsn, prefix)
+	if idx < 0 {
+		return "", false
+	}
+	rest := dsn[idx+len(prefix):]
+	end := strings.IndexByte(rest, ')')
+	if end < 0 {
+		return "", false
+	}
+	return rest[:end], true
+}
+
+// DSN-binding errors are fixed strings; they never echo the parsed DSN, which
+// contains the credential password.
+var (
+	errDSNUnparseable     = errors.New("credential dsn is not parseable")
+	errDSNNotTCP          = errors.New("credential dsn is not a tcp connection")
+	errDSNAddressMalformed = errors.New("credential dsn address is not host:port")
+	errDSNHostMismatch    = errors.New("credential dsn host does not match the target")
+	errDSNPortMissing     = errors.New("credential dsn port is missing")
+	errDSNPortInvalid     = errors.New("credential dsn port is not numeric")
+	errDSNPortMismatch    = errors.New("credential dsn port does not match the target")
+)
+
+// engineHostMatches compares two host names case-insensitively after trimming.
+func engineHostMatches(a, b string) bool {
+	return strings.EqualFold(strings.TrimSpace(a), strings.TrimSpace(b))
 }
 
 // auditResultFor maps a history status to the audit_events.result vocabulary.

@@ -9,9 +9,13 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"net"
 	"os"
+	"strconv"
 	"strings"
 	"testing"
+
+	mysqldriver "github.com/go-sql-driver/mysql"
 
 	"github.com/fan/controlhub/internal/model"
 	"github.com/fan/controlhub/internal/repository/mysql"
@@ -274,7 +278,22 @@ func setupQuerySandboxTarget(t *testing.T) (*service.QueryExecutionService, uint
 	if err != nil {
 		t.Fatalf("create sandbox target resource: %v", err)
 	}
-	mustExec(t, db, `insert into resource_profiles_database_instance (resource_id, engine, version, host, port, role, spec) values (?, 'mysql', '8.0', 'sandbox', 3306, 'primary', '{}')`, res.ID)
+	// The target's connection profile host/port must match the DSN the
+	// credential resolves to (the disposable container), otherwise Phase 37's
+	// credential-binding check correctly rejects the execution.
+	dsnCfg, err := mysqldriver.ParseDSN(globalEnv.dsn)
+	if err != nil {
+		t.Fatalf("parse test dsn: %v", err)
+	}
+	dsnHost, dsnPortStr, err := net.SplitHostPort(dsnCfg.Addr)
+	if err != nil {
+		t.Fatalf("split test dsn addr %q: %v", dsnCfg.Addr, err)
+	}
+	dsnPort, err := strconv.Atoi(dsnPortStr)
+	if err != nil {
+		t.Fatalf("parse test dsn port %q: %v", dsnPortStr, err)
+	}
+	mustExec(t, db, `insert into resource_profiles_database_instance (resource_id, engine, version, host, port, role, spec) values (?, 'mysql', '8.0', ?, ?, 'primary', '{}')`, res.ID, dsnHost, dsnPort)
 
 	// Enabled credential allowing non-production execution.
 	seedCredentialRow(t, db, res.ID, "mysql", sandboxCredentialRef, true, string(model.QueryEnvPolicyNonProdOnly))
@@ -456,5 +475,61 @@ func TestQueryExecution_AuditEventWrittenForSuccessAndRejection(t *testing.T) {
 	// result, so the audit stream records every execution attempt.
 	if !results["success"] || !results["validation_failed"] {
 		t.Fatalf("audit events = %v, want both success and validation_failed", results)
+	}
+}
+
+// --- Finding 3: SQL NULL must surface as JSON null (not a forged 0) ---
+
+func TestQueryExecution_NullPreservedAsJSONNull(t *testing.T) {
+	svc, targetID, db := setupQuerySandboxTarget(t)
+	// A fixture table with nullable columns holding both NULL and real values.
+	mustExec(t, db, `drop table if exists qe_null_fixtures`)
+	mustExec(t, db, `create table qe_null_fixtures (id bigint unsigned not null primary key, n bigint null, label varchar(64) null)`)
+	mustExec(t, db, `insert into qe_null_fixtures (id, n, label) values (1, NULL, NULL), (2, 42, 'real')`)
+
+	resp, err := svc.Execute(context.Background(), ownerDBA, targetID, model.QueryExecuteRequest{
+		Statement: "select n, label from qe_null_fixtures order by id",
+		MaxRows:   10,
+	})
+	if err != nil {
+		t.Fatalf("Execute error: %v", err)
+	}
+	if resp.RowCount != 2 {
+		t.Fatalf("rowCount = %d, want 2", resp.RowCount)
+	}
+	// WHY: SQL NULL must serialize as JSON null, never a forged numeric 0 or empty
+	// string — otherwise the sandbox would silently misrepresent data.
+	nullN, nullLabel := resp.Rows[0][0], resp.Rows[0][1]
+	if nullN != nil {
+		t.Fatalf("NULL bigint cell = %v (%T), want nil", nullN, nullN)
+	}
+	if nullLabel != nil {
+		t.Fatalf("NULL varchar cell = %v (%T), want nil", nullLabel, nullLabel)
+	}
+	// Non-null numeric must stay a JSON number, not a string.
+	realN, realLabel := resp.Rows[1][0], resp.Rows[1][1]
+	if n, ok := realN.(int64); !ok || n != 42 {
+		t.Fatalf("non-null bigint cell = %v (%T), want int64(42)", realN, realN)
+	}
+	if realLabel != "real" {
+		t.Fatalf("non-null varchar cell = %v, want \"real\"", realLabel)
+	}
+}
+
+func TestQueryExecution_CastNullAsSignedIsNil(t *testing.T) {
+	svc, targetID, _ := setupQuerySandboxTarget(t)
+
+	resp, err := svc.Execute(context.Background(), ownerDBA, targetID, model.QueryExecuteRequest{
+		Statement: "select cast(NULL as signed) as v",
+		MaxRows:   10,
+	})
+	if err != nil {
+		t.Fatalf("Execute error: %v", err)
+	}
+	if resp.RowCount != 1 || len(resp.Rows[0]) != 1 {
+		t.Fatalf("expected 1 row x 1 col, got rowCount=%d row0=%v", resp.RowCount, resp.Rows)
+	}
+	if got := resp.Rows[0][0]; got != nil {
+		t.Fatalf("cast(NULL as signed) = %v (%T), want nil", got, got)
 	}
 }

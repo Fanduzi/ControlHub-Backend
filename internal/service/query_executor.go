@@ -1,7 +1,7 @@
 // Package service provides the MySQL/TiDB query executor for the read-only sandbox.
-// input: context, database/sql, fmt, time, vitess-free, internal/model
-// output: MySQLQueryExecutor, NewMySQLQueryExecutor, QueryExecutorCaps (implements QueryDatabaseExecutor)
-// pos: Runs a guarded SELECT against a target DB under a read-only transaction with column/cell/payload caps
+// input: context, database/sql, fmt, strings, time, go-sql-driver/mysql, internal/model
+// output: MySQLQueryExecutor, NewMySQLQueryExecutor, QueryExecutorCaps, newScanPointer, normalizeScanned (implements QueryDatabaseExecutor)
+// pos: Runs a guarded SELECT against a target DB under a read-only transaction with column/cell/payload caps; preserves SQL NULL as JSON null
 // note: if this file changes, update header and README.md
 package service
 
@@ -9,7 +9,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
-	"reflect"
+	"strings"
 	"time"
 
 	_ "github.com/go-sql-driver/mysql"
@@ -99,29 +99,18 @@ func (e *MySQLQueryExecutor) Query(ctx context.Context, dsn string, guarded Guar
 	limit := guarded.LimitApplied
 	responseBytes := 0
 
-	// Allocate typed scan buffers from each column's ScanType so values come back
-	// in their native Go type (int64 for BIGINT, float64 for DOUBLE, time.Time for
-	// DATETIME, []byte for text/blob) rather than all-as-[]byte. This preserves
-	// JSON number fidelity. Numeric NULLs land as their zero value — a documented
-	// Phase 37 limitation; text NULLs land as nil []byte -> JSON null.
-	scanTypes := make([]reflect.Type, len(colTypes))
-	for i, ct := range colTypes {
-		if st := ct.ScanType(); st != nil {
-			scanTypes[i] = st
-		} else {
-			scanTypes[i] = reflect.TypeOf([]byte(nil))
-		}
-	}
-
 	for rows.Next() {
 		// Scan one row past the limit so truncation can be detected.
 		if result.RowCount >= limit {
 			result.Truncated = true
 			break
 		}
+		// NULL-safe scan: each column scans into a sql.Null* chosen by its
+		// database type so SQL NULL becomes JSON null (never a forged 0), while
+		// non-null numbers stay numbers.
 		ptrs := make([]any, len(colTypes))
-		for i := range ptrs {
-			ptrs[i] = reflect.New(scanTypes[i]).Interface()
+		for i, ct := range colTypes {
+			ptrs[i] = newScanPointer(ct.DatabaseTypeName())
 		}
 		if err := rows.Scan(ptrs...); err != nil {
 			return QueryDatabaseResult{}, err
@@ -129,8 +118,7 @@ func (e *MySQLQueryExecutor) Query(ctx context.Context, dsn string, guarded Guar
 		row := make([]any, len(colTypes))
 		rowBytes := 0
 		for i, p := range ptrs {
-			v := reflect.ValueOf(p).Elem().Interface()
-			safe, n := e.toJSONSafe(v)
+			safe, n := e.toJSONSafe(normalizeScanned(p))
 			row[i] = safe
 			rowBytes += n
 		}
@@ -146,6 +134,62 @@ func (e *MySQLQueryExecutor) Query(ctx context.Context, dsn string, guarded Guar
 		return QueryDatabaseResult{}, err
 	}
 	return result, nil
+}
+
+// newScanPointer returns a pointer to a NULL-safe scan destination chosen by the
+// column's database type name. SQL NULL lands as a zero-valued sql.Null*
+// (Valid=false); non-null values keep their native type (int64, float64,
+// time.Time, bool, string) so JSON preserves numbers as numbers. Text, blob,
+// JSON, and unknown types scan into NullString (NULL -> nil, non-null -> string).
+func newScanPointer(dbType string) any {
+	switch strings.ToUpper(strings.TrimSpace(dbType)) {
+	case "TINYINT", "SMALLINT", "MEDIUMINT", "INT", "INTEGER", "BIGINT", "YEAR":
+		return new(sql.NullInt64)
+	case "FLOAT", "DOUBLE", "REAL":
+		return new(sql.NullFloat64)
+	case "DATE", "DATETIME", "TIMESTAMP", "TIME":
+		return new(sql.NullTime)
+	case "BOOL", "BOOLEAN":
+		return new(sql.NullBool)
+	default:
+		// DECIMAL/NUMERIC (preserve precision as text), CHAR/VARCHAR/TEXT/BLOB,
+		// JSON/ENUM/SET, and unknown types all scan into NullString.
+		return new(sql.NullString)
+	}
+}
+
+// normalizeScanned unwraps a NULL-safe scan pointer into a plain JSON value or
+// nil. It is the NULL/validity boundary between the driver and the response.
+func normalizeScanned(p any) any {
+	switch v := p.(type) {
+	case *sql.NullInt64:
+		if v.Valid {
+			return v.Int64
+		}
+		return nil
+	case *sql.NullFloat64:
+		if v.Valid {
+			return v.Float64
+		}
+		return nil
+	case *sql.NullString:
+		if v.Valid {
+			return v.String
+		}
+		return nil
+	case *sql.NullTime:
+		if v.Valid {
+			return v.Time
+		}
+		return nil
+	case *sql.NullBool:
+		if v.Valid {
+			return v.Bool
+		}
+		return nil
+	default:
+		return nil
+	}
 }
 
 // toJSONSafe converts a scanned database value into a JSON-safe value and returns

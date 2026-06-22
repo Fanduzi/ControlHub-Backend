@@ -170,7 +170,7 @@ func completeQueryTarget(in model.QueryTarget, cred *model.QueryCredentialMetada
 		readiness = model.ReadinessCredentialRequired
 		safety = model.SafetyStateCredentialMissing
 		missing = append(missing, "readonlyCredential")
-	case cred != nil && credentialAllowsExecution(*cred, in.ConnectionContext.Environment):
+	case cred != nil && credentialAllowsExecution(*cred, in.ConnectionContext.Engine, in.ConnectionContext.Environment):
 		// READY: backend-enforced read-only SELECT sandbox.
 		readiness = model.ReadinessReady
 		safety = model.SafetyStateReadonlySandboxEnabled
@@ -211,13 +211,18 @@ func isExecutableEngine(engine string) bool {
 	return false
 }
 
-// credentialAllowsExecution applies the environment-policy matrix. It is shared
-// by readiness derivation (QueryTargetService) and execute gating
-// (QueryExecutionService) so the two paths agree. Unknown/empty policy and
-// disabled credentials fail closed (locked / rejected). Production is executable
+// credentialAllowsExecution applies the credential binding + environment-policy
+// matrix. It is shared by readiness derivation (QueryTargetService) and execute
+// gating (QueryExecutionService) so the two paths agree. A credential whose
+// engine does not match the target engine, an unknown/empty policy, or a
+// disabled credential fails closed (locked / rejected). Production is executable
 // only under all_environments.
-func credentialAllowsExecution(cred model.QueryCredentialMetadata, environment string) bool {
+func credentialAllowsExecution(cred model.QueryCredentialMetadata, targetEngine, environment string) bool {
 	if !cred.Enabled {
+		return false
+	}
+	if !engineHostMatches(cred.Engine, targetEngine) {
+		// The credential is for a different engine than the selected target.
 		return false
 	}
 	if err := cred.EnvironmentPolicy.Validate(); err != nil {
