@@ -123,3 +123,11 @@ auto-enable (fixture is behind `QUERY_DEV_ALLOW_TARGET_FIXTURE`, default off; no
 release gate) · no migration · no new repository method · no credential-binding change
 (`QueryDevCredentialSeeder`/`validateDSNBinding` untouched) · no frontend product code
 edits · no AI co-author.
+
+Boundary: the fixture refuses to reuse or overwrite a same-name non-fixture resource. It
+only reuses `source='dev-fixture'` resources; a same-name `manual`/other resource fails
+closed with `errFixtureExistingResourceNotFixture` (no profile upsert, no create) — on both
+the initial lookup and the post-conflict re-list. This keeps the fixture inside its dev
+boundary and matches the rollback filter (`source='dev-fixture'`). Covered by unit tests
+`TestEnsureLocalQueryTarget_ExistingNonFixtureSameNameRejectsWithoutProfileUpsert` and
+`TestEnsureLocalQueryTarget_CreateConflictThenRefetchNonFixtureRejects`.

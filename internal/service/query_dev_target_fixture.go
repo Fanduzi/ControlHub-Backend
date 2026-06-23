@@ -35,6 +35,16 @@ var (
 	errFixtureDSNAddressMalformed = errors.New("controlhub dsn address is malformed")
 )
 
+// devFixtureSource is the Source value the fixture stamps on every resource it
+// creates, and the only Source it will reuse. It keeps the fixture from touching
+// real (e.g. manual) same-name resources and matches the rollback filter.
+const devFixtureSource = "dev-fixture"
+
+// errFixtureExistingResourceNotFixture is returned when a same-name resource
+// exists in the target environment but is NOT a dev fixture. The fixture must
+// never reuse or overwrite a real resource's profile. Fixed string — no DSN.
+var errFixtureExistingResourceNotFixture = errors.New("dev fixture found an existing same-name resource that is not a dev fixture")
+
 // DevTargetDictionary resolves dev fixture identity (environment by slug, owner
 // by email). It is satisfied by *mysql.DictionaryRepository.
 type DevTargetDictionary interface {
@@ -156,7 +166,12 @@ func (f *QueryDevTargetFixture) ownerIDByEmail(email string) (uint64, bool) {
 }
 
 func (f *QueryDevTargetFixture) findOrCreate(ctx context.Context, cfg QueryDevTargetFixtureConfig, envID, ownerID uint64) (uint64, error) {
-	if id, ok := f.findExisting(ctx, cfg, envID); ok {
+	id, found, err := f.findExisting(ctx, cfg, envID)
+	if err != nil {
+		// Same-name resource exists but is not a dev fixture: never reuse/overwrite.
+		return 0, err
+	}
+	if found {
 		return id, nil
 	}
 	res, err := f.resources.CreateResource(ctx, model.ResourceCreateInput{
@@ -168,14 +183,19 @@ func (f *QueryDevTargetFixture) findOrCreate(ctx context.Context, cfg QueryDevTa
 		OwnerID:         ownerID,
 		LifecycleStatus: model.LifecycleStatusRunning,
 		HealthStatus:    model.HealthStatusHealthy,
-		Source:          "dev-fixture",
+		Source:          devFixtureSource,
 		Labels:          map[string]string{},
 	})
 	if err != nil {
-		// A concurrent ensure may have won the (name, env) unique race; re-list
-		// and reuse rather than failing. Any other create error fails closed.
+		// A concurrent ensure may have won the (name, env) unique race; re-list. A
+		// same-name non-fixture resource causing the conflict must also fail closed
+		// (never reused/overwritten). Any other create error fails closed too.
 		if errors.Is(err, ErrResourceConflict) {
-			if id, ok := f.findExisting(ctx, cfg, envID); ok {
+			id, found, ferr := f.findExisting(ctx, cfg, envID)
+			if ferr != nil {
+				return 0, ferr
+			}
+			if found {
 				return id, nil
 			}
 		}
@@ -184,11 +204,19 @@ func (f *QueryDevTargetFixture) findOrCreate(ctx context.Context, cfg QueryDevTa
 	return res.ID, nil
 }
 
-// findExisting locates the fixture resource by exact name within the resolved
-// environment. ListResources' Query is a LIKE search over name/display_name/
-// external_id, so the exact match is enforced here. A lookup error is treated as
-// not-found so the fixture fails closed rather than writing a duplicate.
-func (f *QueryDevTargetFixture) findExisting(ctx context.Context, cfg QueryDevTargetFixtureConfig, envID uint64) (uint64, bool) {
+// findExisting locates a same-name database_instance in the resolved environment
+// and reports whether it is safe for the fixture to reuse. Returns:
+//   - (id, true, nil) when an exact match exists AND is a dev fixture (reuse);
+//   - (0, false, nil) when no exact match exists (caller may create);
+//   - (0, false, errFixtureExistingResourceNotFixture) when an exact match exists
+//     but is NOT a dev fixture — the fixture must never reuse/overwrite a real
+//     (e.g. manual) resource's profile.
+//
+// ListResources' Query is a LIKE search over name/display_name/external_id, so the
+// exact match is enforced here. A lookup error is treated as not-found so a
+// transient read failure cannot block a fresh create; the unique (name, env) index
+// still prevents a duplicate, and the post-conflict re-list re-checks the source.
+func (f *QueryDevTargetFixture) findExisting(ctx context.Context, cfg QueryDevTargetFixtureConfig, envID uint64) (uint64, bool, error) {
 	items, _, err := f.resources.ListResources(ctx, model.ResourceListQuery{
 		ResourceTypes:  []string{string(model.ResourceTypeDatabaseInstance)},
 		EnvironmentIDs: []uint64{envID},
@@ -197,14 +225,17 @@ func (f *QueryDevTargetFixture) findExisting(ctx context.Context, cfg QueryDevTa
 		PageSize:       200,
 	})
 	if err != nil {
-		return 0, false
+		return 0, false, nil
 	}
 	for _, r := range items {
 		if r.Name == cfg.ResourceName && r.ResourceType == model.ResourceTypeDatabaseInstance && r.EnvironmentID == envID {
-			return r.ID, true
+			if r.Source != devFixtureSource {
+				return 0, false, errFixtureExistingResourceNotFixture
+			}
+			return r.ID, true, nil
 		}
 	}
-	return 0, false
+	return 0, false, nil
 }
 
 // ParseControlHubDSNHostPort parses a go-sql-driver MySQL DSN and returns only

@@ -147,7 +147,7 @@ func TestEnsureLocalQueryTarget_ReusesExistingTarget(t *testing.T) {
 		owners: []model.Owner{{ID: 9, Email: "dba@example.com"}},
 	}
 	existing := []model.Resource{
-		{ID: 42, Name: "local-mysql-query-dev", ResourceType: model.ResourceTypeDatabaseInstance, EnvironmentID: 7},
+		{ID: 42, Name: "local-mysql-query-dev", ResourceType: model.ResourceTypeDatabaseInstance, EnvironmentID: 7, Source: devFixtureSource},
 		{ID: 99, Name: "unrelated-target", ResourceType: model.ResourceTypeDatabaseInstance, EnvironmentID: 7},
 	}
 	created := false
@@ -217,7 +217,7 @@ func TestEnsureLocalQueryTarget_CreateConflictThenRefetch(t *testing.T) {
 			if calls == 1 {
 				return nil, nil // not present yet
 			}
-			return []model.Resource{{ID: 77, Name: "local-mysql-query-dev", ResourceType: model.ResourceTypeDatabaseInstance, EnvironmentID: 7}}, nil
+			return []model.Resource{{ID: 77, Name: "local-mysql-query-dev", ResourceType: model.ResourceTypeDatabaseInstance, EnvironmentID: 7, Source: devFixtureSource}}, nil
 		},
 		createFn: func(model.ResourceCreateInput) (*model.Resource, error) { return nil, ErrResourceConflict },
 		upsertFn: func(uint64, string, string, string, int, string) error { return nil },
@@ -231,6 +231,53 @@ func TestEnsureLocalQueryTarget_CreateConflictThenRefetch(t *testing.T) {
 	}
 	if len(store.createCalls) != 1 {
 		t.Fatalf("create calls = %d, want 1 (single create attempt)", len(store.createCalls))
+	}
+}
+
+func TestEnsureLocalQueryTarget_ExistingNonFixtureSameNameRejectsWithoutProfileUpsert(t *testing.T) {
+	dict := &fakeFixtureDictionary{
+		envs:   []model.Environment{{ID: 7, Slug: "dev"}},
+		owners: []model.Owner{{ID: 9, Email: "dba@example.com"}},
+	}
+	// A real, non-fixture resource with the same name/env/type already exists.
+	existing := []model.Resource{
+		{ID: 42, Name: "local-mysql-query-dev", ResourceType: model.ResourceTypeDatabaseInstance, EnvironmentID: 7, Source: "manual"},
+	}
+	store := &fakeFixtureResourceStore{
+		listFn:   func() ([]model.Resource, error) { return existing, nil },
+		createFn: func(model.ResourceCreateInput) (*model.Resource, error) { t.Fatal("CreateResource must not be called for a non-fixture same-name resource"); return nil, nil },
+		upsertFn: func(uint64, string, string, string, int, string) error { t.Fatal("UpsertDatabaseInstanceProfile must not be called for a non-fixture resource"); return nil },
+	}
+	_, err := fixtureSvc(dict, store).EnsureLocalQueryTarget(context.Background(), validFixtureCfg())
+	if !errors.Is(err, errFixtureExistingResourceNotFixture) {
+		t.Fatalf("err = %v, want errFixtureExistingResourceNotFixture", err)
+	}
+	if strings.Contains(err.Error(), "tcp(") || strings.Contains(err.Error(), "@") || strings.Contains(err.Error(), "://") {
+		t.Fatalf("error leaks a DSN fragment: %q", err.Error())
+	}
+}
+
+func TestEnsureLocalQueryTarget_CreateConflictThenRefetchNonFixtureRejects(t *testing.T) {
+	dict := &fakeFixtureDictionary{
+		envs:   []model.Environment{{ID: 7, Slug: "dev"}},
+		owners: []model.Owner{{ID: 9, Email: "dba@example.com"}},
+	}
+	calls := 0
+	store := &fakeFixtureResourceStore{
+		listFn: func() ([]model.Resource, error) {
+			calls++
+			if calls == 1 {
+				return nil, nil // not present yet
+			}
+			// The conflict was caused by a real, non-fixture same-name resource.
+			return []model.Resource{{ID: 77, Name: "local-mysql-query-dev", ResourceType: model.ResourceTypeDatabaseInstance, EnvironmentID: 7, Source: "manual"}}, nil
+		},
+		createFn: func(model.ResourceCreateInput) (*model.Resource, error) { return nil, ErrResourceConflict },
+		upsertFn: func(uint64, string, string, string, int, string) error { t.Fatal("UpsertDatabaseInstanceProfile must not be called when the conflict is a non-fixture resource"); return nil },
+	}
+	_, err := fixtureSvc(dict, store).EnsureLocalQueryTarget(context.Background(), validFixtureCfg())
+	if !errors.Is(err, errFixtureExistingResourceNotFixture) {
+		t.Fatalf("err = %v, want errFixtureExistingResourceNotFixture", err)
 	}
 }
 
