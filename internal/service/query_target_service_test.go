@@ -153,10 +153,10 @@ func TestCompleteQueryTarget_UnknownEngineStaysVisibleAsUnsupported(t *testing.T
 func TestCompleteQueryTarget_CapabilityPerEngine(t *testing.T) {
 	t.Parallel()
 	cases := []struct {
-		engine         string
-		queryKind      model.QueryKind
-		editorMode     string
-		languageLabel  string
+		engine        string
+		queryKind     model.QueryKind
+		editorMode    string
+		languageLabel string
 	}{
 		{"mysql", model.QueryKindSQL, "sql", "SQL"},
 		{"tidb", model.QueryKindSQL, "sql", "SQL"},
@@ -319,5 +319,55 @@ func TestCompleteQueryTarget_EmptyArraysSerializeAsEmptyNotNull(t *testing.T) {
 	}
 	if !strings.Contains(body, `"missingFields":[]`) {
 		t.Fatalf("missingFields must serialize as []: %s", body)
+	}
+}
+
+// TestCompleteQueryTargetWithRuntime_ReadyOnlyOnSecretResolved is the Phase 38A
+// readiness correction: a target with credential metadata present is ready ONLY
+// when the runtime status is secret_resolved. secret_missing/binding_mismatch
+// must keep it locked — never ready on metadata alone. WHY: a target whose
+// stored metadata cannot actually resolve+bind to a live secret must not be
+// exposed as runnable; otherwise the frontend would offer a Run that fails.
+func TestCompleteQueryTargetWithRuntime_ReadyOnlyOnSecretResolved(t *testing.T) {
+	t.Parallel()
+	in := model.QueryTarget{ResourceID: 22, ConnectionContext: model.QueryTargetConnectionContext{
+		Environment: "Staging", Engine: "mysql", Host: "db.internal", Port: 3306,
+	}}
+	cred := &model.QueryCredentialMetadata{
+		ResourceID: 22, Engine: "mysql", CredentialRef: "ORDER_MYSQL_RO",
+		Enabled: true, EnvironmentPolicy: model.QueryEnvPolicyNonProdOnly,
+	}
+
+	// secret_resolved -> ready, runnable, execution enabled.
+	got := completeQueryTargetWithRuntime(in, cred, model.QueryCredentialRuntimeSecretResolved)
+	if got.Readiness != model.ReadinessReady {
+		t.Fatalf("secret_resolved readiness = %q, want ready", got.Readiness)
+	}
+	if !got.AvailableActions.Run || !got.Governance.ExecutionEnabled {
+		t.Fatal("secret_resolved must enable run + execution")
+	}
+	if got.Governance.CredentialState != "secret_resolved" {
+		t.Fatalf("credentialState = %q, want secret_resolved", got.Governance.CredentialState)
+	}
+
+	// Metadata present but secret missing -> LOCKED. This is the core bug fix.
+	locked := completeQueryTargetWithRuntime(in, cred, model.QueryCredentialRuntimeSecretMissing)
+	if locked.Readiness == model.ReadinessReady {
+		t.Fatal("secret_missing must NOT be ready (metadata alone is insufficient)")
+	}
+	if locked.AvailableActions.Run || locked.Governance.ExecutionEnabled {
+		t.Fatal("secret_missing must not enable run/execution")
+	}
+	if locked.Governance.CredentialState != "secret_missing" {
+		t.Fatalf("credentialState = %q, want secret_missing", locked.Governance.CredentialState)
+	}
+
+	// binding mismatch -> locked.
+	bm := completeQueryTargetWithRuntime(in, cred, model.QueryCredentialRuntimeBindingMismatch)
+	if bm.Readiness == model.ReadinessReady {
+		t.Fatal("binding_mismatch must NOT be ready")
+	}
+	if bm.Governance.CredentialState != "binding_mismatch" {
+		t.Fatalf("credentialState = %q, want binding_mismatch", bm.Governance.CredentialState)
 	}
 }

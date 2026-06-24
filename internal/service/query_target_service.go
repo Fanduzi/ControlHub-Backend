@@ -1,7 +1,7 @@
 // Package service provides business logic for resource reads and typed profile assembly.
-// input: internal/model (QueryTarget, QueryTargetListQuery, QueryCredentialMetadata, QueryEnvironmentPolicy), context, strings
-// output: QueryTargetRepository + QueryCredentialReader interfaces, NewQueryTargetService, WithCredentialReader, QueryTargetService.List, classifyQueryKind, completeQueryTarget, credentialAllowsExecution, isExecutableEngine
-// pos: Query target read model — sources database_instance targets and derives workbench context + Phase 37 readiness
+// input: internal/model (QueryTarget, QueryTargetListQuery, QueryCredentialMetadata, QueryEnvironmentPolicy, QueryCredentialRuntimeStatus), context, strings
+// output: QueryTargetRepository + QueryCredentialReader interfaces, NewQueryTargetService, WithCredentialReader, WithCredentialResolver, QueryTargetService.List, classifyQueryKind, completeQueryTarget, completeQueryTargetWithRuntime, credentialAllowsExecution, isExecutableEngine
+// pos: Query target read model — sources database_instance targets and derives workbench context + Phase 37 readiness, with the Phase 38A runtime-gated readiness correction
 // note: if this file changes, update header and README.md
 package service
 
@@ -33,6 +33,7 @@ type QueryCredentialReader interface {
 type QueryTargetService struct {
 	repo        QueryTargetRepository
 	credentials QueryCredentialReader
+	resolver    QueryCredentialResolver
 }
 
 // NewQueryTargetService creates a QueryTargetService backed by the given
@@ -48,6 +49,18 @@ func NewQueryTargetService(repo QueryTargetRepository) *QueryTargetService {
 func (s *QueryTargetService) WithCredentialReader(reader QueryCredentialReader) *QueryTargetService {
 	cp := *s
 	cp.credentials = reader
+	return &cp
+}
+
+// WithCredentialResolver returns a copy of the service wired to resolve
+// credential secrets, which applies the Phase 38A readiness correction: a target
+// is ready ONLY when its credential resolves and binds (secret_resolved), never
+// on metadata alone. When no resolver is wired, the Phase 37 metadata-only
+// derivation is preserved (used by the dev seed path, which verifies binding at
+// seed time). The receiver is not mutated.
+func (s *QueryTargetService) WithCredentialResolver(resolver QueryCredentialResolver) *QueryTargetService {
+	cp := *s
+	cp.resolver = resolver
 	return &cp
 }
 
@@ -69,7 +82,13 @@ func (s *QueryTargetService) List(ctx context.Context, q model.QueryTargetListQu
 			}
 			// No row, invalid ref, or read error -> nil credential -> locked.
 		}
-		targets[i] = completeQueryTarget(targets[i], cred)
+		if s.resolver != nil {
+			// Phase 38A readiness correction: ready only on secret_resolved.
+			runtime := InspectCredentialRuntime(ctx, s.resolver, targets[i], cred)
+			targets[i] = completeQueryTargetWithRuntime(targets[i], cred, runtime)
+		} else {
+			targets[i] = completeQueryTarget(targets[i], cred)
+		}
 	}
 	return targets, nil
 }
@@ -197,6 +216,53 @@ func completeQueryTarget(in model.QueryTarget, cred *model.QueryCredentialMetada
 		SafetyNote:       querySafetyNoteFor(readiness),
 		PolicyNotes:      policyNotesFor(readiness, in.ConnectionContext.Environment),
 	}
+	return out
+}
+
+// completeQueryTargetWithRuntime applies a runtime credential status to a target
+// so GET /query-targets marks a target ready ONLY when the runtime status is
+// secret_resolved. It reuses the pure capability/identity derivation from
+// completeQueryTarget, then overrides readiness/governance/actions from the
+// runtime status. This is the Phase 38A readiness correction: metadata alone
+// never makes a target ready. credentialState mirrors the runtime status string
+// so the frontend can render a human reason from a single vocabulary.
+func completeQueryTargetWithRuntime(in model.QueryTarget, cred *model.QueryCredentialMetadata, runtime model.QueryCredentialRuntimeStatus) model.QueryTarget {
+	out := completeQueryTarget(in, cred)
+	out.AvailableActions = model.QueryTargetAvailableActions{}
+
+	var (
+		readiness        model.QueryTargetReadiness
+		safety           model.QueryTargetSafetyState
+		executionEnabled bool
+	)
+	switch runtime {
+	case model.QueryCredentialRuntimeSecretResolved:
+		readiness = model.ReadinessReady
+		safety = model.SafetyStateReadonlySandboxEnabled
+		executionEnabled = true
+		out.AvailableActions.Run = true
+	case model.QueryCredentialRuntimeUnsupportedTarget:
+		readiness = model.ReadinessUnsupportedEngine
+		safety = model.SafetyStateUnsupportedEngine
+	case model.QueryCredentialRuntimeIncompleteConnection:
+		readiness = model.ReadinessMissingConnection
+		safety = model.SafetyStateConnectionIncomplete
+	case model.QueryCredentialRuntimeDisabled,
+		model.QueryCredentialRuntimePolicyBlocked,
+		model.QueryCredentialRuntimeInvalidRef:
+		readiness = model.ReadinessDisabled
+		safety = model.SafetyStateExecutionDisabled
+	default: // missing_metadata, secret_missing, binding_mismatch
+		readiness = model.ReadinessCredentialRequired
+		safety = model.SafetyStateCredentialMissing
+	}
+
+	out.Readiness = readiness
+	out.Governance.ExecutionEnabled = executionEnabled
+	out.Governance.CredentialState = string(runtime)
+	out.Governance.SafetyState = safety
+	out.Governance.SafetyNote = querySafetyNoteFor(readiness)
+	out.Governance.PolicyNotes = policyNotesFor(readiness, in.ConnectionContext.Environment)
 	return out
 }
 
