@@ -48,37 +48,46 @@ func buildDependencies(db *sql.DB, cfg config.Config) api.Dependencies {
 
 	queryTargetRepo := mysql.NewQueryTargetRepository(db)
 	queryExecutionRepo := mysql.NewQueryExecutionRepository(db)
+	credentialResolver := service.NewEnvCredentialResolver()
 
-	// The query target service derives Phase 37 readiness from credential
-	// metadata read through the query execution repository.
-	queryTargetSvc := service.NewQueryTargetService(queryTargetRepo).WithCredentialReader(queryExecutionRepo)
+	// The query target service derives readiness from credential metadata and,
+	// as of Phase 38A, the resolver-gated runtime status: a target is ready only
+	// when its credential resolves and binds — never on metadata alone.
+	queryTargetSvc := service.NewQueryTargetService(queryTargetRepo).
+		WithCredentialReader(queryExecutionRepo).
+		WithCredentialResolver(credentialResolver)
+
+	// Query credential metadata service (Phase 38A) manages credential metadata
+	// for MySQL/TiDB query targets — metadata only, never a DSN.
+	queryCredentialSvc := service.NewQueryCredentialService(queryTargetRepo, queryExecutionRepo, credentialResolver)
 
 	queryExecutionSvc := service.NewQueryExecutionService(
 		queryTargetRepo,
 		queryExecutionRepo,
-		service.NewEnvCredentialResolver(),
+		credentialResolver,
 		service.NewMySQLQueryExecutor(service.QueryExecutorCaps{}),
 		service.NewQueryGuard(service.QueryGuardConfig{DefaultMaxRows: 100, HardMaxRows: 500}),
 		realClock{},
 	)
 
 	return api.Dependencies{
-		ResourceService:         service.NewResourceService(resourceRepo, profileSvc),
-		RelationService:         service.NewRelationService(relationRepo),
-		TopologyService:         service.NewTopologyService(relationRepo),
-		AuditService:            service.NewAuditService(mysql.NewAuditRepository(db)),
-		AuthService:             service.NewAuthService(mysql.NewUserRepository(db), cfg.JWTSecret),
-		EnvironmentService:      service.NewEnvironmentService(dictRepo),
-		OwnerService:            service.NewOwnerService(dictRepo),
-		RoleService:             service.NewRoleService(dictRepo),
-		ResourceTypeService:     service.NewResourceTypeService(dictRepo),
-		RelationTypeService:     service.NewRelationTypeService(dictRepo),
-		LifecycleStatusService:  service.NewLifecycleStatusService(dictRepo),
-		HealthStatusService:     service.NewHealthStatusService(dictRepo),
-		ResourceSubtypeService:  service.NewResourceSubtypeService(),
-		ProfileService:          profileSvc,
-		QueryTargetService:      queryTargetSvc,
-		QueryExecutionService:   queryExecutionSvc,
+		ResourceService:        service.NewResourceService(resourceRepo, profileSvc),
+		RelationService:        service.NewRelationService(relationRepo),
+		TopologyService:        service.NewTopologyService(relationRepo),
+		AuditService:           service.NewAuditService(mysql.NewAuditRepository(db)),
+		AuthService:            service.NewAuthService(mysql.NewUserRepository(db), cfg.JWTSecret),
+		EnvironmentService:     service.NewEnvironmentService(dictRepo),
+		OwnerService:           service.NewOwnerService(dictRepo),
+		RoleService:            service.NewRoleService(dictRepo),
+		ResourceTypeService:    service.NewResourceTypeService(dictRepo),
+		RelationTypeService:    service.NewRelationTypeService(dictRepo),
+		LifecycleStatusService: service.NewLifecycleStatusService(dictRepo),
+		HealthStatusService:    service.NewHealthStatusService(dictRepo),
+		ResourceSubtypeService: service.NewResourceSubtypeService(),
+		ProfileService:         profileSvc,
+		QueryTargetService:     queryTargetSvc,
+		QueryCredentialService: queryCredentialSvc,
+		QueryExecutionService:  queryExecutionSvc,
 		QueryExecutionAuth: api.QueryExecutionAuthConfig{
 			TokenMaxAge: cfg.QueryExecutionTokenMaxAge,
 			Clock:       time.Now,

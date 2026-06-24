@@ -34,6 +34,11 @@ type Dependencies struct {
 	// satisfies it. QueryExecutionAuth carries the bounded token-freshness TTL.
 	QueryExecutionService queryExecutionAPI
 	QueryExecutionAuth    QueryExecutionAuthConfig
+	// Query credential metadata (Phase 38A). queryCredentialAPI is the thin
+	// interface the handlers depend on; the concrete *service.QueryCredentialService
+	// satisfies it. All three routes require a fresh bearer token; PUT/DELETE
+	// additionally require the admin role (enforced in the handler).
+	QueryCredentialService queryCredentialAPI
 }
 
 func corsLocalDev(next http.Handler) http.Handler {
@@ -94,6 +99,18 @@ func NewRouter(deps Dependencies) *chi.Mux {
 			r.Use(requireFreshQueryActor(deps.AuthService, deps.QueryExecutionAuth))
 			r.Post("/query-targets/{id}/execute", handleExecuteQuery(deps.QueryExecutionService))
 			r.Get("/query-targets/{id}/executions", handleListQueryExecutions(deps.QueryExecutionService))
+		})
+	}
+	// Query credential metadata routes (Phase 38A). All three require a fresh
+	// bearer token (same freshness policy as query execution). PUT/DELETE enforce
+	// the admin role inside the handler; GET is available to any authenticated
+	// actor. The response/contract carries metadata only — never a DSN.
+	if deps.QueryCredentialService != nil {
+		router.Group(func(r chi.Router) {
+			r.Use(requireFreshQueryActor(deps.AuthService, deps.QueryExecutionAuth))
+			r.Get("/query-targets/{id}/credential", handleGetQueryCredential(deps.QueryCredentialService))
+			r.Put("/query-targets/{id}/credential", handlePutQueryCredential(deps.QueryCredentialService))
+			r.Delete("/query-targets/{id}/credential", handleDeleteQueryCredential(deps.QueryCredentialService))
 		})
 	}
 	return router

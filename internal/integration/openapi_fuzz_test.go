@@ -50,14 +50,16 @@ func TestOpenAPIFuzz(t *testing.T) {
 
 	queryTargetRepo := mysql.NewQueryTargetRepository(db)
 	queryExecutionRepo := mysql.NewQueryExecutionRepository(db)
+	credentialResolver := service.NewEnvCredentialResolver()
 	queryExecutionSvc := service.NewQueryExecutionService(
 		queryTargetRepo,
 		queryExecutionRepo,
-		service.NewEnvCredentialResolver(),
+		credentialResolver,
 		service.NewMySQLQueryExecutor(service.QueryExecutorCaps{}),
 		service.NewQueryGuard(service.QueryGuardConfig{DefaultMaxRows: 100, HardMaxRows: 500}),
 		wallClock{},
 	)
+	queryCredentialSvc := service.NewQueryCredentialService(queryTargetRepo, queryExecutionRepo, credentialResolver)
 
 	deps := api.Dependencies{
 		ResourceService:        service.NewResourceService(resourceRepo, profileSvc),
@@ -74,7 +76,8 @@ func TestOpenAPIFuzz(t *testing.T) {
 		LifecycleStatusService: service.NewLifecycleStatusService(dictRepo),
 		HealthStatusService:    service.NewHealthStatusService(dictRepo),
 		ResourceSubtypeService: service.NewResourceSubtypeService(),
-		QueryTargetService:     service.NewQueryTargetService(queryTargetRepo).WithCredentialReader(queryExecutionRepo),
+		QueryTargetService:     service.NewQueryTargetService(queryTargetRepo).WithCredentialReader(queryExecutionRepo).WithCredentialResolver(credentialResolver),
+		QueryCredentialService: queryCredentialSvc,
 		QueryExecutionService:  queryExecutionSvc,
 		QueryExecutionAuth: api.QueryExecutionAuthConfig{
 			TokenMaxAge: 8 * time.Hour,

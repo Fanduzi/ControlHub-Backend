@@ -217,3 +217,31 @@ func TestFreshQueryActorRejectsTokenOlderThanTTL(t *testing.T) {
 func fixedClock(now time.Time) func() time.Time {
 	return func() time.Time { return now }
 }
+
+// TestFreshQueryActorStoresActorRole proves the fresh-bearer middleware stores
+// the token's role in context (alongside the id) so credential write handlers can
+// enforce the admin-only boundary. WHY: the role is the authorization signal for
+// Phase 38A credential metadata writes; it must come from the verified token.
+func TestFreshQueryActorStoresActorRole(t *testing.T) {
+	svc := newMiddlewareAuthService("test-secret")
+	now := time.Date(2026, 6, 21, 8, 0, 0, 0, time.UTC)
+	cfg := QueryExecutionAuthConfig{TokenMaxAge: 8 * time.Hour, Clock: fixedClock(now)}
+	token := mintToken(t, "test-secret", 42, "admin", now)
+
+	var capturedRole string
+	var capturedOK bool
+	h := requireFreshQueryActor(svc, cfg)(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+		capturedRole, capturedOK = actorRoleFromContext(r.Context())
+	}))
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPut, "/query-targets/1/credential", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	h.ServeHTTP(rec, req)
+
+	if !capturedOK {
+		t.Fatal("actor role not present in context")
+	}
+	if capturedRole != "admin" {
+		t.Fatalf("actor role = %q, want admin", capturedRole)
+	}
+}

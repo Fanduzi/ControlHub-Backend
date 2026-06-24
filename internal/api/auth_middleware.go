@@ -1,6 +1,6 @@
 // Package api provides HTTP handlers and routing for the ControlHub REST API.
 // input: context, net/http, strings, time, internal/service
-// output: QueryExecutionAuthConfig, requireAuthenticatedActor, requireFreshQueryActor, actorUserIDFromContext
+// output: QueryExecutionAuthConfig, requireAuthenticatedActor, requireFreshQueryActor, actorUserIDFromContext, actorRoleFromContext
 // pos: Bearer auth middleware for query execution routes — structure/signature check plus bounded TTL freshness
 // note: if this file changes, update header and README.md
 package api
@@ -17,6 +17,11 @@ import (
 // actorContextKey is the unexported context key for the authenticated actor's
 // user id. An empty-struct key avoids collisions with other packages.
 type actorContextKey struct{}
+
+// actorRoleContextKey is the unexported context key for the authenticated
+// actor's role. Phase 38A credential write handlers read it to enforce the
+// admin-only boundary; it is stored alongside the user id by the auth middleware.
+type actorRoleContextKey struct{}
 
 // QueryExecutionAuthConfig carries the freshness policy for query execution
 // routes. TokenMaxAge is the bounded TTL; zero means "reject everything"
@@ -41,6 +46,7 @@ func requireAuthenticatedActor(authService *service.AuthService) func(http.Handl
 				return
 			}
 			ctx := context.WithValue(r.Context(), actorContextKey{}, user.ID)
+			ctx = context.WithValue(ctx, actorRoleContextKey{}, user.Role)
 			next.ServeHTTP(w, r.WithContext(ctx))
 		})
 	}
@@ -75,6 +81,7 @@ func requireFreshQueryActor(authService *service.AuthService, cfg QueryExecution
 				return
 			}
 			ctx := context.WithValue(r.Context(), actorContextKey{}, user.ID)
+			ctx = context.WithValue(ctx, actorRoleContextKey{}, user.Role)
 			next.ServeHTTP(w, r.WithContext(ctx))
 		})
 	}
@@ -110,4 +117,13 @@ func verifyBearer(authService *service.AuthService, w http.ResponseWriter, r *ht
 func actorUserIDFromContext(ctx context.Context) (uint64, bool) {
 	id, ok := ctx.Value(actorContextKey{}).(uint64)
 	return id, ok
+}
+
+// actorRoleFromContext returns the authenticated actor's role stored by the auth
+// middleware, if present. Phase 38A credential write handlers use this to
+// enforce the admin-only boundary; the role is taken from the verified token,
+// never from the request body.
+func actorRoleFromContext(ctx context.Context) (string, bool) {
+	role, ok := ctx.Value(actorRoleContextKey{}).(string)
+	return role, ok
 }

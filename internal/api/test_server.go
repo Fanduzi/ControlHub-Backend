@@ -608,6 +608,41 @@ func queryTargetSeed() []fakeQueryTargetRow {
 	}
 }
 
+// fakeCredentialMetadataStore is an in-memory QueryCredentialMetadataStore for
+// the generic test server. It stores metadata only — never a DSN — and records
+// audit calls so the Phase 38A credential routes are exercisable in test
+// contexts. A not-found returns an error; the service treats any read error as
+// "no credential" (locked).
+type fakeCredentialMetadataStore struct {
+	metadata map[uint64]model.QueryCredentialMetadata
+	audits   int
+}
+
+func (f *fakeCredentialMetadataStore) GetCredentialByResourceID(_ context.Context, rid uint64) (model.QueryCredentialMetadata, error) {
+	if m, ok := f.metadata[rid]; ok {
+		return m, nil
+	}
+	return model.QueryCredentialMetadata{}, fmt.Errorf("credential metadata not found")
+}
+
+func (f *fakeCredentialMetadataStore) UpsertCredentialMetadata(_ context.Context, m model.QueryCredentialMetadata) error {
+	if f.metadata == nil {
+		f.metadata = map[uint64]model.QueryCredentialMetadata{}
+	}
+	f.metadata[m.ResourceID] = m
+	return nil
+}
+
+func (f *fakeCredentialMetadataStore) DeleteCredentialByResourceID(_ context.Context, rid uint64) error {
+	delete(f.metadata, rid)
+	return nil
+}
+
+func (f *fakeCredentialMetadataStore) InsertAuditEvent(context.Context, uint64, uint64, string, string) error {
+	f.audits++
+	return nil
+}
+
 func NewTestServer() *TestServer {
 	archivedAt := time.Date(2026, 4, 11, 22, 0, 0, 0, time.UTC)
 	archiveReason := "retired"
@@ -647,22 +682,26 @@ func NewTestServer() *TestServer {
 	topologyRepo := &fakeTopologyRepo{resources: resourceRepo, relations: relationRepo}
 	profileSvc := service.NewProfileService(resourceRepo, resourceRepo)
 
+	queryTargetRepo := fakeQueryTargetRepo{targets: queryTargetSeed()}
+	credentialStore := &fakeCredentialMetadataStore{}
+
 	deps := Dependencies{
-		ResourceService:         service.NewResourceService(resourceRepo, profileSvc),
-		RelationService:         service.NewRelationService(relationRepo),
-		TopologyService:         service.NewTopologyService(topologyRepo),
-		AuditService:            service.NewAuditService(fakeAuditRepo{}),
-		AuthService:             service.NewAuthService(fakeUserCredentialRepo{}, "test-secret"),
-		EnvironmentService:      service.NewEnvironmentService(fakeEnvironmentRepo{}),
-		OwnerService:            service.NewOwnerService(fakeOwnerRepo{}),
-		RoleService:             service.NewRoleService(fakeRoleRepo{}),
-		ResourceTypeService:     service.NewResourceTypeService(fakeResourceTypeRepo{}),
-		RelationTypeService:     service.NewRelationTypeService(fakeRelationTypeRepo{}),
-		LifecycleStatusService:  service.NewLifecycleStatusService(fakeLifecycleStatusRepo{}),
-		HealthStatusService:     service.NewHealthStatusService(fakeHealthStatusRepo{}),
-		ResourceSubtypeService:  service.NewResourceSubtypeService(),
-		ProfileService:          profileSvc,
-		QueryTargetService:      service.NewQueryTargetService(fakeQueryTargetRepo{targets: queryTargetSeed()}),
+		ResourceService:        service.NewResourceService(resourceRepo, profileSvc),
+		RelationService:        service.NewRelationService(relationRepo),
+		TopologyService:        service.NewTopologyService(topologyRepo),
+		AuditService:           service.NewAuditService(fakeAuditRepo{}),
+		AuthService:            service.NewAuthService(fakeUserCredentialRepo{}, "test-secret"),
+		EnvironmentService:     service.NewEnvironmentService(fakeEnvironmentRepo{}),
+		OwnerService:           service.NewOwnerService(fakeOwnerRepo{}),
+		RoleService:            service.NewRoleService(fakeRoleRepo{}),
+		ResourceTypeService:    service.NewResourceTypeService(fakeResourceTypeRepo{}),
+		RelationTypeService:    service.NewRelationTypeService(fakeRelationTypeRepo{}),
+		LifecycleStatusService: service.NewLifecycleStatusService(fakeLifecycleStatusRepo{}),
+		HealthStatusService:    service.NewHealthStatusService(fakeHealthStatusRepo{}),
+		ResourceSubtypeService: service.NewResourceSubtypeService(),
+		ProfileService:         profileSvc,
+		QueryTargetService:     service.NewQueryTargetService(queryTargetRepo),
+		QueryCredentialService: service.NewQueryCredentialService(queryTargetRepo, credentialStore, service.NewEnvCredentialResolver()),
 	}
 
 	return &TestServer{Router: NewRouter(deps)}
@@ -697,11 +736,15 @@ func (fakeRoleRepo) ListRoles() ([]model.Role, error) {
 
 type fakeResourceTypeRepo struct{}
 
-func (fakeResourceTypeRepo) ListResourceTypes() ([]model.DictionaryItem, error) { return model.ResourceTypeDictionary(), nil }
+func (fakeResourceTypeRepo) ListResourceTypes() ([]model.DictionaryItem, error) {
+	return model.ResourceTypeDictionary(), nil
+}
 
 type fakeRelationTypeRepo struct{}
 
-func (fakeRelationTypeRepo) ListRelationTypes() ([]model.DictionaryItem, error) { return model.RelationTypeDictionary(), nil }
+func (fakeRelationTypeRepo) ListRelationTypes() ([]model.DictionaryItem, error) {
+	return model.RelationTypeDictionary(), nil
+}
 
 type fakeLifecycleStatusRepo struct{}
 
@@ -711,7 +754,9 @@ func (fakeLifecycleStatusRepo) ListLifecycleStatuses() ([]model.DictionaryItem, 
 
 type fakeHealthStatusRepo struct{}
 
-func (fakeHealthStatusRepo) ListHealthStatuses() ([]model.DictionaryItem, error) { return model.HealthStatusDictionary(), nil }
+func (fakeHealthStatusRepo) ListHealthStatuses() ([]model.DictionaryItem, error) {
+	return model.HealthStatusDictionary(), nil
+}
 
 func cloneResource(resource model.Resource) model.Resource {
 	resource.Labels = cloneLabels(resource.Labels)
