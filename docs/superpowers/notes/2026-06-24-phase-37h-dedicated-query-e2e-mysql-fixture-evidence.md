@@ -16,8 +16,11 @@ Workbench queried the ControlHub metadata database. Phase 37H corrects that boun
 
 ## Commits (no AI co-author)
 
-- `856bfdb` test: add dedicated query e2e mysql fixture (B1: script + Makefile + .gitignore)
-- `b9bbef0` fix: derive dev query target from credential dsn (B2: querydev uses credential DSN; rename ParseControlHubDSNHostPort → ParseMySQLDSNHostPort)
+> Commit hashes refreshed after rebase onto `86f401f` during the finishing flow;
+> the original pre-rebase hashes were superseded.
+
+- `de39827` test: add dedicated query e2e mysql fixture (B1: script + Makefile + .gitignore)
+- `994738b` fix: derive dev query target from credential dsn (B2: querydev uses credential DSN; rename ParseControlHubDSNHostPort → ParseMySQLDSNHostPort)
 
 ## Changed files
 

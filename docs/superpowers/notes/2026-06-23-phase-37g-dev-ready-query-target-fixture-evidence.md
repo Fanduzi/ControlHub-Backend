@@ -61,11 +61,14 @@ no production code touched. Authoritative evidence = the green test matrix.
 
 ## Commits (backend branch, no AI co-author)
 
+> Commit hashes refreshed after rebase onto `86f401f` during the finishing flow;
+> the original pre-rebase hashes were superseded.
+
 - `ef404e5` docs: add phase 37g dev query target fixture plan (spec + plan; on `main`)
-- `98bae2d` feat: add dev query target fixture service (B1)
-- `4d98f35` feat: add explicit dev target fixture mode to querydev (B2)
-- `0b2cf35` chore: add seed-query-dev-target make wrapper (B3)
-- `f969d93` test: cover dev query target fixture integration (B4)
+- `6eecd8b` feat: add dev query target fixture service (B1)
+- `9feaf54` feat: add explicit dev target fixture mode to querydev (B2)
+- `416d879` chore: add seed-query-dev-target make wrapper (B3)
+- `be58782` test: cover dev query target fixture integration (B4)
 
 Changed files: `internal/service/query_dev_target_fixture.go` (+ test),
 `cmd/querydev/main.go` (+ `main_test.go`), `Makefile`,
