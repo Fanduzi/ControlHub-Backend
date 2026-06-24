@@ -195,3 +195,72 @@ func credentialRowCount(t *testing.T, db *sql.DB, resourceID uint64) int {
 	}
 	return n
 }
+
+// TestQueryCredentialRepository_UpsertWithAudit_AtomicOnSuccess proves the
+// transactional upsert+audit commits BOTH the metadata row and the audit row on
+// success. WHY: it is the happy path of the atomic primitive P1-2 requires — the
+// repository, not the service, owns the metadata+audit transaction.
+func TestQueryCredentialRepository_UpsertWithAudit_AtomicOnSuccess(t *testing.T) {
+	db, repo := newCredentialRepoTestDB(t)
+	ctx := context.Background()
+	const rid uint64 = 7700000005
+	meta := model.QueryCredentialMetadata{
+		ResourceID: rid, Engine: "mysql", CredentialRef: "ORDER_MYSQL_RO",
+		Enabled: true, EnvironmentPolicy: model.QueryEnvPolicyNonProdOnly,
+	}
+	if err := repo.UpsertCredentialMetadataWithAudit(ctx, meta, 42, "query.credential.updated", "success"); err != nil {
+		t.Fatalf("upsert with audit: %v", err)
+	}
+	if credentialRowCount(t, db, rid) != 1 {
+		t.Fatal("metadata row must be committed on success")
+	}
+	if n := qcAuditCount(t, db, rid, "query.credential.updated"); n != 1 {
+		t.Fatalf("audit row must be committed on success, got %d", n)
+	}
+}
+
+// TestQueryCredentialRepository_UpsertWithAudit_RollsBackOnAuditFailure proves a
+// failed audit write rolls back the metadata upsert inside the real MySQL
+// transaction. The audit failure is forced by overflowing the varchar(64)
+// event_type column (the testcontainer uses MySQL's default STRICT_TRANS_TABLES,
+// so this errors with 1406). WHY: "configured but no audit" is forbidden.
+func TestQueryCredentialRepository_UpsertWithAudit_RollsBackOnAuditFailure(t *testing.T) {
+	db, repo := newCredentialRepoTestDB(t)
+	ctx := context.Background()
+	const rid uint64 = 7700000006
+	meta := model.QueryCredentialMetadata{
+		ResourceID: rid, Engine: "mysql", CredentialRef: "ORDER_MYSQL_RO",
+		Enabled: true, EnvironmentPolicy: model.QueryEnvPolicyNonProdOnly,
+	}
+	longEventType := strings.Repeat("x", 65) // exceeds audit_events.event_type varchar(64)
+	if err := repo.UpsertCredentialMetadataWithAudit(ctx, meta, 42, longEventType, "success"); err == nil {
+		t.Fatal("an overflowing event_type must make the audit insert fail")
+	}
+	if credentialRowCount(t, db, rid) != 0 {
+		t.Fatal("metadata must NOT be committed when the audit insert fails (transaction rolled back)")
+	}
+}
+
+// TestQueryCredentialRepository_DeleteWithAudit_RollsBackOnAuditFailure proves a
+// failed audit write rolls back the metadata delete inside the real MySQL
+// transaction. WHY: deleting metadata without an audit row would silently remove
+// an attributed change; delete+audit must be one atomic store operation.
+func TestQueryCredentialRepository_DeleteWithAudit_RollsBackOnAuditFailure(t *testing.T) {
+	db, repo := newCredentialRepoTestDB(t)
+	ctx := context.Background()
+	const rid uint64 = 7700000007
+	meta := model.QueryCredentialMetadata{
+		ResourceID: rid, Engine: "mysql", CredentialRef: "ORDER_MYSQL_RO",
+		Enabled: true, EnvironmentPolicy: model.QueryEnvPolicyNonProdOnly,
+	}
+	if err := repo.UpsertCredentialMetadata(ctx, meta); err != nil {
+		t.Fatalf("seed metadata: %v", err)
+	}
+	longEventType := strings.Repeat("x", 65) // exceeds audit_events.event_type varchar(64)
+	if err := repo.DeleteCredentialMetadataWithAudit(ctx, rid, 42, longEventType, "success"); err == nil {
+		t.Fatal("an overflowing event_type must make the audit insert fail")
+	}
+	if credentialRowCount(t, db, rid) != 1 {
+		t.Fatal("metadata must still be present when the audit insert fails (transaction rolled back)")
+	}
+}

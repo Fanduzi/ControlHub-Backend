@@ -1,12 +1,14 @@
 // Package service provides business logic for the query target read model.
-// input: testing, internal/model
-// output: TestClassifyQueryKind, TestCompleteQueryTarget_*
-// pos: Unit tests for the pure query target derivation (engine -> capability/readiness/governance)
+// input: context, errors, testing, internal/model
+// output: TestClassifyQueryKind, TestCompleteQueryTarget_*, TestQueryTargetService_List_*
+// pos: Unit tests for the pure query target derivation (engine -> capability/readiness/governance) and the Phase 38A runtime-gated List credential-read classification
 // note: if this file changes, update header and README.md
 package service
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"slices"
 	"strings"
 	"testing"
@@ -369,5 +371,57 @@ func TestCompleteQueryTargetWithRuntime_ReadyOnlyOnSecretResolved(t *testing.T) 
 	}
 	if bm.Governance.CredentialState != "binding_mismatch" {
 		t.Fatalf("credentialState = %q, want binding_mismatch", bm.Governance.CredentialState)
+	}
+}
+
+// TestQueryTargetService_List_InvalidStoredCredentialYieldsInvalidRefNotMissing proves
+// GET /query-targets surfaces a target whose stored credential_ref is invalid as
+// credentialState=invalid_ref (locked) — NOT missing_metadata. WHY: the old List
+// swallowed the repository's fail-closed read error into a nil credential,
+// hiding a configured-but-corrupt target behind "no credential". invalid_ref is
+// an already-known frontend credentialState, so no contract change is needed.
+func TestQueryTargetService_List_InvalidStoredCredentialYieldsInvalidRefNotMissing(t *testing.T) {
+	store := newFakeCredentialStore()
+	store.metadata[credentialTargetID] = credentialMeta("bad-ref!", true, model.QueryEnvPolicyNonProdOnly)
+	store.getErr = model.ErrInvalidCredentialMetadata
+	target := credentialTarget("mysql", "db.internal", 3306, "staging")
+	svc := NewQueryTargetService(fakeTargetRepo{targets: []model.QueryTarget{target}}).
+		WithCredentialReader(store).
+		WithCredentialResolver(&fakeResolver{})
+
+	got, err := svc.List(context.Background(), model.QueryTargetListQuery{})
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("got %d targets, want 1", len(got))
+	}
+	if got[0].Governance.CredentialState != "invalid_ref" {
+		t.Fatalf("credentialState = %q, want invalid_ref (must not degrade to missing_metadata)", got[0].Governance.CredentialState)
+	}
+	if got[0].Governance.CredentialState == "missing_metadata" {
+		t.Fatal("an invalid stored credential must NOT be reported as missing_metadata")
+	}
+	if got[0].Readiness == model.ReadinessReady || got[0].AvailableActions.Run {
+		t.Fatal("a target with an invalid credential must stay locked")
+	}
+}
+
+// TestQueryTargetService_List_UnexpectedCredentialReadErrorFailsLoud proves an
+// unexpected credential read error fails the whole List rather than masking the
+// target as missing_metadata. WHY: inventing a new credentialState for a DB error
+// would widen the frontend contract (out of scope); failing loud keeps the list
+// truthful — a transient backend failure is a real failure, never "no row".
+func TestQueryTargetService_List_UnexpectedCredentialReadErrorFailsLoud(t *testing.T) {
+	store := newFakeCredentialStore()
+	store.getErr = errors.New("db connection lost")
+	target := credentialTarget("mysql", "db.internal", 3306, "staging")
+	svc := NewQueryTargetService(fakeTargetRepo{targets: []model.QueryTarget{target}}).
+		WithCredentialReader(store).
+		WithCredentialResolver(&fakeResolver{})
+
+	got, err := svc.List(context.Background(), model.QueryTargetListQuery{})
+	if err == nil {
+		t.Fatalf("unexpected read error must fail List loud, got targets %+v", got)
 	}
 }

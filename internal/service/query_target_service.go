@@ -1,12 +1,14 @@
 // Package service provides business logic for resource reads and typed profile assembly.
-// input: internal/model (QueryTarget, QueryTargetListQuery, QueryCredentialMetadata, QueryEnvironmentPolicy, QueryCredentialRuntimeStatus), context, strings
-// output: QueryTargetRepository + QueryCredentialReader interfaces, NewQueryTargetService, WithCredentialReader, WithCredentialResolver, QueryTargetService.List, classifyQueryKind, completeQueryTarget, completeQueryTargetWithRuntime, credentialAllowsExecution, isExecutableEngine
+// input: internal/model (QueryTarget, QueryTargetListQuery, QueryCredentialMetadata, QueryEnvironmentPolicy, QueryCredentialRuntimeStatus), context, database/sql, errors, strings
+// output: QueryTargetRepository + QueryCredentialReader interfaces, NewQueryTargetService, WithCredentialReader, WithCredentialResolver, QueryTargetService.List, readTargetCredential, classifyQueryKind, completeQueryTarget, completeQueryTargetWithRuntime, credentialAllowsExecution, isExecutableEngine
 // pos: Query target read model — sources database_instance targets and derives workbench context + Phase 37 readiness, with the Phase 38A runtime-gated readiness correction
 // note: if this file changes, update header and README.md
 package service
 
 import (
 	"context"
+	"database/sql"
+	"errors"
 	"strings"
 
 	"github.com/fan/controlhub/internal/model"
@@ -69,18 +71,23 @@ func (s *QueryTargetService) WithCredentialResolver(resolver QueryCredentialReso
 // remaining capability/readiness/governance/action state. When a credential
 // reader is wired, mysql/tidb targets with an allowed credential are derived as
 // ready (Phase 37); otherwise targets remain in their Phase 36 locked state.
+//
+// A credential read is classified so a failure is never masked as "no row": a
+// missing row yields a nil credential (missing_metadata); an invalid-but-present
+// row yields a credential the runtime inspector classifies as invalid_ref (a
+// known locked state); an unexpected DB/read error fails the whole list loud
+// rather than degrade the target to missing_metadata.
 func (s *QueryTargetService) List(ctx context.Context, q model.QueryTargetListQuery) ([]model.QueryTarget, error) {
 	targets, err := s.repo.ListQueryTargets(ctx, q)
 	if err != nil {
 		return nil, err
 	}
 	for i := range targets {
-		var cred *model.QueryCredentialMetadata
-		if s.credentials != nil {
-			if c, cErr := s.credentials.GetCredentialByResourceID(ctx, targets[i].ResourceID); cErr == nil {
-				cred = &c
-			}
-			// No row, invalid ref, or read error -> nil credential -> locked.
+		cred, readErr := s.readTargetCredential(ctx, targets[i].ResourceID)
+		if readErr != nil {
+			// Unexpected credential read error: fail loud (the handler maps it to
+			// 500). Never mask it as missing_metadata or invent a new credentialState.
+			return nil, readErr
 		}
 		if s.resolver != nil {
 			// Phase 38A readiness correction: ready only on secret_resolved.
@@ -91,6 +98,37 @@ func (s *QueryTargetService) List(ctx context.Context, q model.QueryTargetListQu
 		}
 	}
 	return targets, nil
+}
+
+// readTargetCredential reads one target's credential metadata and classifies the
+// outcome for readiness derivation. It never lets a corrupt row become ready and
+// never masks an error as "no row":
+//   - no reader wired -> (nil, nil) (Phase 36 locked derivation);
+//   - valid row -> (&cred, nil);
+//   - no row (sql.ErrNoRows) -> (nil, nil) so the inspector reports missing_metadata;
+//   - a row whose stored ref/policy is invalid (ErrInvalidCredentialMetadata):
+//     in the runtime path return (&cred, nil) so the inspector reports
+//     invalid_ref; in the non-runtime path return (nil, nil) — that path cannot
+//     classify invalid_ref and must not let a corrupt row become ready;
+//   - any other read error -> (nil, err) so List fails loud.
+func (s *QueryTargetService) readTargetCredential(ctx context.Context, resourceID uint64) (*model.QueryCredentialMetadata, error) {
+	if s.credentials == nil {
+		return nil, nil
+	}
+	c, err := s.credentials.GetCredentialByResourceID(ctx, resourceID)
+	switch {
+	case err == nil:
+		return &c, nil
+	case errors.Is(err, sql.ErrNoRows):
+		return nil, nil
+	case errors.Is(err, model.ErrInvalidCredentialMetadata):
+		if s.resolver == nil {
+			return nil, nil
+		}
+		return &c, nil
+	default:
+		return nil, err
+	}
 }
 
 // querySafetyNoteLocked is the boundary message shown when execution is not

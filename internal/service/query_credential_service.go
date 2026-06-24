@@ -1,5 +1,5 @@
 // Package service provides the Phase 38A query credential metadata service.
-// input: context, errors, fmt, internal/model
+// input: context, database/sql, errors, fmt, internal/model
 // output: QueryCredentialMetadataStore interface, InspectCredentialRuntime, QueryCredentialService, NewQueryCredentialService, GetStatus/Upsert/Delete, ErrQueryCredential* sentinels
 // pos: Phase 38A authenticated credential METADATA management — runtime status inspection (resolver + binding, never returning the DSN), admin-gated upsert/delete, and audit recording
 // note: if this file changes, update header and README.md
@@ -7,6 +7,7 @@ package service
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 
@@ -33,11 +34,15 @@ func isAdmin(actor AuthenticatedUser) bool {
 // repository (mysql.QueryExecutionRepository), which stores metadata only —
 // never a DSN. Defining it where it is used follows the service-layer interface
 // convention used across ControlHub.
+//
+// The write/delete methods are ATOMIC "metadata change + audit" operations: the
+// store (not the service) owns the transaction, so a failed audit write rolls
+// back the metadata change. This keeps the "every successful change is audited"
+// guarantee — there is never a configured row without its audit trail.
 type QueryCredentialMetadataStore interface {
 	GetCredentialByResourceID(ctx context.Context, resourceID uint64) (model.QueryCredentialMetadata, error)
-	UpsertCredentialMetadata(ctx context.Context, meta model.QueryCredentialMetadata) error
-	DeleteCredentialByResourceID(ctx context.Context, resourceID uint64) error
-	InsertAuditEvent(ctx context.Context, actorUserID uint64, targetResourceID uint64, eventType string, result string) error
+	UpsertCredentialMetadataWithAudit(ctx context.Context, meta model.QueryCredentialMetadata, actorUserID uint64, eventType, result string) error
+	DeleteCredentialMetadataWithAudit(ctx context.Context, resourceID, actorUserID uint64, eventType, result string) error
 }
 
 // query credential audit event types and the success result vocabulary.
@@ -104,22 +109,51 @@ func NewQueryCredentialService(targets QueryTargetRepository, store QueryCredent
 // GetStatus returns the credential status for a target, stable even when no
 // metadata row exists. It never returns a DSN, host, or port. A missing target
 // maps to ErrQueryTargetNotFound.
+//
+// The credential read is classified so a failure is never masked as "no row":
+//   - no row (sql.ErrNoRows) -> missing_metadata, target locked;
+//   - a row whose stored ref/policy is invalid (ErrInvalidCredentialMetadata) ->
+//     invalid_ref, target locked, resolver NOT consulted, configured=true with
+//     the raw ref suppressed (it failed validation and could be DSN-shaped);
+//   - any other read error -> propagated as a controlled backend error (the
+//     handler maps it to 500), never missing_metadata.
 func (s *QueryCredentialService) GetStatus(ctx context.Context, targetID uint64) (model.QueryCredentialStatusResponse, error) {
 	target, err := s.findTarget(ctx, targetID)
 	if err != nil {
 		return model.QueryCredentialStatusResponse{}, err
 	}
-	cred := s.readCredential(ctx, targetID)
-	runtime := InspectCredentialRuntime(ctx, s.resolver, target, cred)
-	return buildCredentialStatusResponse(target, cred, runtime), nil
+	c, readErr := s.store.GetCredentialByResourceID(ctx, targetID)
+	switch {
+	case readErr == nil:
+		runtime := InspectCredentialRuntime(ctx, s.resolver, target, &c)
+		return buildCredentialStatusResponse(target, &c, runtime), nil
+	case errors.Is(readErr, sql.ErrNoRows):
+		runtime := InspectCredentialRuntime(ctx, s.resolver, target, nil)
+		return buildCredentialStatusResponse(target, nil, runtime), nil
+	case errors.Is(readErr, model.ErrInvalidCredentialMetadata):
+		// A row exists but is corrupt. Fail closed as invalid_ref (no resolver
+		// lookup) and report configured=true. Suppress the raw ref — it failed
+		// validation and, if it bypassed the write path, could be DSN-shaped.
+		// Echo enabled (a safe boolean) and policy only when it still validates.
+		invalid := c
+		invalid.CredentialRef = ""
+		if pErr := invalid.EnvironmentPolicy.Validate(); pErr != nil {
+			invalid.EnvironmentPolicy = model.QueryEnvPolicyDisabled
+		}
+		return buildCredentialStatusResponse(target, &invalid, model.QueryCredentialRuntimeInvalidRef), nil
+	default:
+		// Unexpected DB/read error — propagate; the handler maps it to 500.
+		return model.QueryCredentialStatusResponse{}, readErr
+	}
 }
 
-// Upsert validates the request, derives the engine from the target, persists
-// metadata, records a query.credential.updated audit event, and returns the
-// post-save status. Save succeeds even when the secret is not resolvable yet;
-// the returned runtime status explains it and the target stays locked. Only an
-// admin may upsert; a non-admin receives ErrQueryCredentialForbidden and nothing
-// is written.
+// Upsert validates the request, derives the engine from the target, then
+// atomically persists metadata AND records a query.credential.updated audit
+// event (the store owns the transaction, so a failed audit rolls back the
+// metadata). It returns the post-save status. Save succeeds even when the secret
+// is not resolvable yet; the returned runtime status explains it and the target
+// stays locked. Only an admin may upsert; a non-admin receives
+// ErrQueryCredentialForbidden and nothing is written.
 func (s *QueryCredentialService) Upsert(ctx context.Context, actor AuthenticatedUser, targetID uint64, req model.QueryCredentialUpsertRequest) (model.QueryCredentialStatusResponse, error) {
 	if !isAdmin(actor) {
 		return model.QueryCredentialStatusResponse{}, ErrQueryCredentialForbidden
@@ -141,19 +175,17 @@ func (s *QueryCredentialService) Upsert(ctx context.Context, actor Authenticated
 		Enabled:           req.Enabled,
 		EnvironmentPolicy: req.EnvironmentPolicy,
 	}
-	if err := s.store.UpsertCredentialMetadata(ctx, meta); err != nil {
-		return model.QueryCredentialStatusResponse{}, err
-	}
-	if err := s.store.InsertAuditEvent(ctx, actor.ID, target.ResourceID, queryCredentialUpdatedEvent, auditResultSuccess); err != nil {
+	if err := s.store.UpsertCredentialMetadataWithAudit(ctx, meta, actor.ID, queryCredentialUpdatedEvent, auditResultSuccess); err != nil {
 		return model.QueryCredentialStatusResponse{}, err
 	}
 	runtime := InspectCredentialRuntime(ctx, s.resolver, target, &meta)
 	return buildCredentialStatusResponse(target, &meta, runtime), nil
 }
 
-// Delete removes a target's credential metadata and records a
-// query.credential.deleted audit event. Only an admin may delete; a non-admin
-// receives ErrQueryCredentialForbidden and nothing is removed.
+// Delete atomically removes a target's credential metadata AND records a
+// query.credential.deleted audit event (the store owns the transaction, so a
+// failed audit leaves the original metadata in place). Only an admin may delete;
+// a non-admin receives ErrQueryCredentialForbidden and nothing is removed.
 func (s *QueryCredentialService) Delete(ctx context.Context, actor AuthenticatedUser, targetID uint64) error {
 	if !isAdmin(actor) {
 		return ErrQueryCredentialForbidden
@@ -162,21 +194,7 @@ func (s *QueryCredentialService) Delete(ctx context.Context, actor Authenticated
 	if err != nil {
 		return err
 	}
-	if err := s.store.DeleteCredentialByResourceID(ctx, targetID); err != nil {
-		return err
-	}
-	return s.store.InsertAuditEvent(ctx, actor.ID, target.ResourceID, queryCredentialDeletedEvent, auditResultSuccess)
-}
-
-// readCredential returns the metadata pointer for a target, or nil when no row
-// exists or the read fails closed (e.g. an invalid stored ref). A nil credential
-// keeps the target locked.
-func (s *QueryCredentialService) readCredential(ctx context.Context, targetID uint64) *model.QueryCredentialMetadata {
-	c, err := s.store.GetCredentialByResourceID(ctx, targetID)
-	if err != nil {
-		return nil
-	}
-	return &c
+	return s.store.DeleteCredentialMetadataWithAudit(ctx, target.ResourceID, actor.ID, queryCredentialDeletedEvent, auditResultSuccess)
 }
 
 // findTarget locates a single query target by id, mirroring the execute path.

@@ -1,6 +1,6 @@
 // Package mysql provides MySQL-backed repository implementations.
 // input: database/sql, context, errors, fmt, internal/model
-// output: NewQueryExecutionRepository, QueryExecutionRepository (credential metadata + execution history + audit events)
+// output: NewQueryExecutionRepository, QueryExecutionRepository (credential metadata incl. atomic UpsertCredentialMetadataWithAudit / DeleteCredentialMetadataWithAudit + inTx, execution history, audit events)
 // pos: MySQL data access for the Phase 37 read-only query sandbox (query_target_credentials, query_executions, audit_events)
 // note: if this file changes, update header and README.md
 package mysql
@@ -25,11 +25,32 @@ func NewQueryExecutionRepository(db *sql.DB) *QueryExecutionRepository {
 	return &QueryExecutionRepository{db: db}
 }
 
+// Shared SQL for credential metadata + audit. The standalone and transactional
+// (WithAudit) methods use the SAME statements so their behavior cannot drift;
+// only the transaction boundary differs.
+const (
+	upsertCredentialMetadataSQL = `insert into query_target_credentials (resource_id, engine, credential_ref, enabled, environment_policy)
+		           values (?, ?, ?, ?, ?)
+		           on duplicate key update
+		             engine = values(engine),
+		             credential_ref = values(credential_ref),
+		             enabled = values(enabled),
+		             environment_policy = values(environment_policy)`
+	deleteCredentialMetadataSQL = `delete from query_target_credentials where resource_id = ?`
+	insertAuditEventSQL         = `insert into audit_events (actor_user_id, target_resource_id, event_type, result) values (?, ?, ?, ?)`
+)
+
 // GetCredentialByResourceID returns the credential metadata for a query target.
-// It returns sql.ErrNoRows when no row exists. It runs the row's credential_ref
-// through model.ValidateCredentialRef on read: an invalid ref fails closed
-// (returns an error) so the resolver never performs an env lookup with an
-// unvalidated key. The environment_policy is returned as the typed enum.
+// It distinguishes three outcomes so callers never mask a failure as "no row":
+//   - no row -> sql.ErrNoRows;
+//   - a row whose credential_ref OR environment_policy fails validation ->
+//     model.ErrInvalidCredentialMetadata (fail closed so the resolver never
+//     performs an env lookup with an unvalidated key). The scanned row is
+//     returned ALONGSIDE the sentinel so status callers can report
+//     configured=true; every caller checks the error before trusting the row;
+//   - any other read error -> a wrapped error (propagated as a backend error).
+//
+// The environment_policy is returned as the typed enum.
 func (r *QueryExecutionRepository) GetCredentialByResourceID(ctx context.Context, resourceID uint64) (model.QueryCredentialMetadata, error) {
 	const q = `select id, resource_id, engine, credential_ref, enabled, environment_policy
 	           from query_target_credentials where resource_id = ?`
@@ -47,12 +68,17 @@ func (r *QueryExecutionRepository) GetCredentialByResourceID(ctx context.Context
 		}
 		return model.QueryCredentialMetadata{}, fmt.Errorf("get query credential: %w", err)
 	}
-	if vErr := model.ValidateCredentialRef(meta.CredentialRef); vErr != nil {
-		// Fail closed: never surface an invalid ref to the resolver/env lookup.
-		return model.QueryCredentialMetadata{}, fmt.Errorf("credential_ref for resource %d is invalid: %w", resourceID, vErr)
-	}
 	meta.Enabled = enabled
 	meta.EnvironmentPolicy = model.QueryEnvironmentPolicy(policyStr)
+	// Validate the stored metadata defense-in-depth: a row that bypassed the
+	// write path (legacy/manual data) must fail closed. An invalid ref or policy
+	// is a distinct condition from "no row" — surface the sentinel, not nil.
+	if vErr := model.ValidateCredentialRef(meta.CredentialRef); vErr != nil {
+		return meta, fmt.Errorf("credential_ref for resource %d is invalid: %w", resourceID, model.ErrInvalidCredentialMetadata)
+	}
+	if pErr := meta.EnvironmentPolicy.Validate(); pErr != nil {
+		return meta, fmt.Errorf("environment_policy for resource %d is invalid: %w", resourceID, model.ErrInvalidCredentialMetadata)
+	}
 	return meta, nil
 }
 
@@ -71,17 +97,72 @@ func (r *QueryExecutionRepository) UpsertCredentialMetadata(ctx context.Context,
 	if err := meta.EnvironmentPolicy.Validate(); err != nil {
 		return fmt.Errorf("upsert query credential metadata: %w", err)
 	}
-	const q = `insert into query_target_credentials (resource_id, engine, credential_ref, enabled, environment_policy)
-	           values (?, ?, ?, ?, ?)
-	           on duplicate key update
-	             engine = values(engine),
-	             credential_ref = values(credential_ref),
-	             enabled = values(enabled),
-	             environment_policy = values(environment_policy)`
-	if _, err := r.db.ExecContext(ctx, q,
+	if _, err := r.db.ExecContext(ctx, upsertCredentialMetadataSQL,
 		meta.ResourceID, meta.Engine, meta.CredentialRef, meta.Enabled, string(meta.EnvironmentPolicy),
 	); err != nil {
 		return fmt.Errorf("upsert query credential metadata: %w", err)
+	}
+	return nil
+}
+
+// UpsertCredentialMetadataWithAudit writes a target's credential metadata AND its
+// audit event in a single transaction so the two can never diverge: if the audit
+// insert fails, the metadata upsert is rolled back (no "configured but no audit"
+// state). It validates the same way as UpsertCredentialMetadata (defense in
+// depth) and stores metadata + audit only — never a DSN or password. The audit
+// row records actor, target, event type, and result — never a DSN.
+func (r *QueryExecutionRepository) UpsertCredentialMetadataWithAudit(ctx context.Context, meta model.QueryCredentialMetadata, actorUserID uint64, eventType, result string) error {
+	if err := model.ValidateCredentialRef(meta.CredentialRef); err != nil {
+		return fmt.Errorf("upsert query credential metadata: %w", err)
+	}
+	if err := meta.EnvironmentPolicy.Validate(); err != nil {
+		return fmt.Errorf("upsert query credential metadata: %w", err)
+	}
+	return r.inTx(ctx, func(tx *sql.Tx) error {
+		if _, err := tx.ExecContext(ctx, upsertCredentialMetadataSQL,
+			meta.ResourceID, meta.Engine, meta.CredentialRef, meta.Enabled, string(meta.EnvironmentPolicy),
+		); err != nil {
+			return fmt.Errorf("upsert query credential metadata: %w", err)
+		}
+		if _, err := tx.ExecContext(ctx, insertAuditEventSQL, actorUserID, meta.ResourceID, eventType, result); err != nil {
+			return fmt.Errorf("insert audit event: %w", err)
+		}
+		return nil
+	})
+}
+
+// DeleteCredentialMetadataWithAudit removes a target's credential metadata AND
+// writes its audit event in a single transaction: if the audit insert fails, the
+// delete is rolled back so the original metadata remains (no unattributed
+// removal). The audit row records actor, target, event type, and result only.
+func (r *QueryExecutionRepository) DeleteCredentialMetadataWithAudit(ctx context.Context, resourceID, actorUserID uint64, eventType, result string) error {
+	return r.inTx(ctx, func(tx *sql.Tx) error {
+		if _, err := tx.ExecContext(ctx, deleteCredentialMetadataSQL, resourceID); err != nil {
+			return fmt.Errorf("delete query credential metadata: %w", err)
+		}
+		if _, err := tx.ExecContext(ctx, insertAuditEventSQL, actorUserID, resourceID, eventType, result); err != nil {
+			return fmt.Errorf("insert audit event: %w", err)
+		}
+		return nil
+	})
+}
+
+// inTx runs fn inside a database transaction, rolling back on any error and
+// committing only when fn returns nil. The deferred Rollback is a safe no-op
+// after Commit. This is the atomic primitive for "metadata change + audit": the
+// repository owns the transaction boundary so the service never stitches partial
+// writes into a half-applied state.
+func (r *QueryExecutionRepository) inTx(ctx context.Context, fn func(*sql.Tx) error) error {
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin credential metadata transaction: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }() // no-op after Commit; safe on error
+	if err := fn(tx); err != nil {
+		return err
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit credential metadata transaction: %w", err)
 	}
 	return nil
 }
@@ -90,8 +171,7 @@ func (r *QueryExecutionRepository) UpsertCredentialMetadata(ctx context.Context,
 // idempotent: deleting a target that has no row is not an error. It never touches
 // a DSN (none is stored) and is the Phase 38A product delete path.
 func (r *QueryExecutionRepository) DeleteCredentialByResourceID(ctx context.Context, resourceID uint64) error {
-	const q = `delete from query_target_credentials where resource_id = ?`
-	if _, err := r.db.ExecContext(ctx, q, resourceID); err != nil {
+	if _, err := r.db.ExecContext(ctx, deleteCredentialMetadataSQL, resourceID); err != nil {
 		return fmt.Errorf("delete query credential metadata: %w", err)
 	}
 	return nil
@@ -165,10 +245,7 @@ func (r *QueryExecutionRepository) ListExecutions(ctx context.Context, q model.Q
 // stream. Detailed metadata lives in query_executions; this is the cross-cutting
 // event record.
 func (r *QueryExecutionRepository) InsertAuditEvent(ctx context.Context, actorUserID uint64, targetResourceID uint64, eventType string, result string) error {
-	_, err := r.db.ExecContext(ctx,
-		`insert into audit_events (actor_user_id, target_resource_id, event_type, result) values (?, ?, ?, ?)`,
-		actorUserID, targetResourceID, eventType, result,
-	)
+	_, err := r.db.ExecContext(ctx, insertAuditEventSQL, actorUserID, targetResourceID, eventType, result)
 	if err != nil {
 		return fmt.Errorf("insert audit event: %w", err)
 	}

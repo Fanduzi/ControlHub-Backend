@@ -40,39 +40,46 @@ func newFakeCredentialStore() *fakeCredentialStore {
 }
 
 func (f *fakeCredentialStore) GetCredentialByResourceID(_ context.Context, rid uint64) (model.QueryCredentialMetadata, error) {
-	if f.getErr != nil {
-		return model.QueryCredentialMetadata{}, f.getErr
-	}
 	m, ok := f.metadata[rid]
+	if f.getErr != nil {
+		// Mirror the real repository: return the scanned row alongside the error
+		// (e.g. an invalid-ref sentinel) so callers that classify by errors.Is can
+		// still report configured=true. Callers must check the error first.
+		return m, f.getErr
+	}
 	if !ok {
 		return model.QueryCredentialMetadata{}, sql.ErrNoRows
 	}
 	return m, nil
 }
 
-func (f *fakeCredentialStore) UpsertCredentialMetadata(_ context.Context, m model.QueryCredentialMetadata) error {
+func (f *fakeCredentialStore) UpsertCredentialMetadataWithAudit(_ context.Context, m model.QueryCredentialMetadata, actor uint64, etype, result string) error {
 	if f.upsertErr != nil {
 		return f.upsertErr
 	}
+	if f.auditErr != nil {
+		// Atomic: a failed audit write rolls back the metadata change — no row
+		// committed, no audit recorded (mirrors the repository transaction).
+		return f.auditErr
+	}
 	f.upserts = append(f.upserts, m)
 	f.metadata[m.ResourceID] = m
+	f.audits = append(f.audits, credentialAuditCall{actor, m.ResourceID, etype, result})
 	return nil
 }
 
-func (f *fakeCredentialStore) DeleteCredentialByResourceID(_ context.Context, rid uint64) error {
+func (f *fakeCredentialStore) DeleteCredentialMetadataWithAudit(_ context.Context, rid, actor uint64, etype, result string) error {
 	if f.deleteErr != nil {
 		return f.deleteErr
 	}
-	f.deletes = append(f.deletes, rid)
-	delete(f.metadata, rid)
-	return nil
-}
-
-func (f *fakeCredentialStore) InsertAuditEvent(_ context.Context, actor, target uint64, etype, result string) error {
 	if f.auditErr != nil {
+		// Atomic: a failed audit write rolls back the delete — original metadata
+		// stays, no audit recorded (mirrors the repository transaction).
 		return f.auditErr
 	}
-	f.audits = append(f.audits, credentialAuditCall{actor, target, etype, result})
+	f.deletes = append(f.deletes, rid)
+	delete(f.metadata, rid)
+	f.audits = append(f.audits, credentialAuditCall{actor, rid, etype, result})
 	return nil
 }
 
@@ -399,5 +406,109 @@ func TestQueryCredentialService_TargetNotFound(t *testing.T) {
 		CredentialRef: "ORDER_MYSQL_RO", Enabled: true, EnvironmentPolicy: model.QueryEnvPolicyNonProdOnly,
 	}); !errors.Is(err, ErrQueryTargetNotFound) {
 		t.Fatalf("upsert err = %v, want ErrQueryTargetNotFound", err)
+	}
+}
+
+// TestQueryCredentialService_GetStatus_InvalidStoredRef_ReturnsInvalidRefNotMissingMetadata
+// proves a stored row whose credential_ref is invalid surfaces as runtime
+// invalid_ref — NOT missing_metadata. WHY: swallowing the repository's
+// fail-closed read error (as the old readCredential did) masqueraded corrupt
+// metadata as "not configured", hiding a configured-but-broken target. A row
+// exists, so configured=true; the raw invalid ref is suppressed (it failed
+// validation and could be DSN-shaped if it bypassed the write path). The
+// resolver is never consulted for an invalid row.
+func TestQueryCredentialService_GetStatus_InvalidStoredRef_ReturnsInvalidRefNotMissingMetadata(t *testing.T) {
+	store := newFakeCredentialStore()
+	store.metadata[credentialTargetID] = credentialMeta("bad-ref!", true, model.QueryEnvPolicyNonProdOnly)
+	store.getErr = model.ErrInvalidCredentialMetadata
+	svc := NewQueryCredentialService(
+		fakeTargetRepo{targets: []model.QueryTarget{credentialTarget("mysql", "db.internal", 3306, "staging")}},
+		store,
+		&fakeResolver{},
+	)
+	resp, err := svc.GetStatus(context.Background(), credentialTargetID)
+	if err != nil {
+		t.Fatalf("GetStatus: %v", err)
+	}
+	if resp.RuntimeStatus != model.QueryCredentialRuntimeInvalidRef {
+		t.Fatalf("runtime = %q, want invalid_ref (must not degrade to missing_metadata)", resp.RuntimeStatus)
+	}
+	if resp.RuntimeStatus == model.QueryCredentialRuntimeMissingMetadata {
+		t.Fatal("invalid stored metadata must NOT be reported as missing_metadata")
+	}
+	if !resp.Configured {
+		t.Fatal("a row exists, so configured must be true")
+	}
+	if resp.ExecutionEligible {
+		t.Fatal("an invalid credential must never be execution eligible")
+	}
+	if resp.CredentialRef != "" {
+		t.Fatalf("the raw invalid ref must be suppressed (could be DSN-shaped), got %q", resp.CredentialRef)
+	}
+}
+
+// TestQueryCredentialService_GetStatus_UnexpectedCredentialReadError_ReturnsBackendError
+// proves an unexpected DB/read error is propagated as a backend error and is
+// NEVER masked as a missing_metadata success. WHY: silently degrading a
+// transient/corrupt read to "not configured" hides a real backend failure behind
+// a misleading status; the API must fail loud (the handler maps it to 500).
+func TestQueryCredentialService_GetStatus_UnexpectedCredentialReadError_ReturnsBackendError(t *testing.T) {
+	store := newFakeCredentialStore()
+	store.getErr = errors.New("db connection lost")
+	svc := NewQueryCredentialService(
+		fakeTargetRepo{targets: []model.QueryTarget{credentialTarget("mysql", "db.internal", 3306, "staging")}},
+		store,
+		&fakeResolver{},
+	)
+	resp, err := svc.GetStatus(context.Background(), credentialTargetID)
+	if err == nil {
+		t.Fatalf("unexpected read error must propagate as a backend error, got response %+v", resp)
+	}
+	if resp.RuntimeStatus == model.QueryCredentialRuntimeMissingMetadata {
+		t.Fatal("an unexpected read error must not be represented as missing_metadata")
+	}
+}
+
+// TestQueryCredentialService_Upsert_AuditFailureLeavesNoMetadata proves a failed
+// audit write rolls back the metadata upsert: "configured but no audit" is
+// forbidden. WHY: metadata changing without an audit row breaks the
+// "every successful change is audited" guarantee and leaves an unattributed
+// configuration change; the store must treat metadata+audit as one atomic op.
+func TestQueryCredentialService_Upsert_AuditFailureLeavesNoMetadata(t *testing.T) {
+	store := newFakeCredentialStore()
+	store.auditErr = errors.New("audit insert failed")
+	svc := NewQueryCredentialService(
+		fakeTargetRepo{targets: []model.QueryTarget{credentialTarget("mysql", "db.internal", 3306, "staging")}},
+		store,
+		&fakeResolver{},
+	)
+	if _, err := svc.Upsert(context.Background(), adminActor(), credentialTargetID, model.QueryCredentialUpsertRequest{
+		CredentialRef: "ORDER_MYSQL_RO", Enabled: true, EnvironmentPolicy: model.QueryEnvPolicyNonProdOnly,
+	}); err == nil {
+		t.Fatal("audit failure must surface as an error from Upsert")
+	}
+	if _, ok := store.metadata[credentialTargetID]; ok {
+		t.Fatal("audit failure must not leave committed credential metadata (upsert+audit must be atomic)")
+	}
+}
+
+// TestQueryCredentialService_Delete_AuditFailureKeepsMetadata proves a failed
+// audit write rolls back the metadata delete: the original metadata must remain.
+// WHY: deleting metadata without an audit row would silently remove an
+// attributed configuration change; delete+audit must be one atomic op.
+func TestQueryCredentialService_Delete_AuditFailureKeepsMetadata(t *testing.T) {
+	store := newFakeCredentialStore()
+	store.metadata[credentialTargetID] = credentialMeta("ORDER_MYSQL_RO", true, model.QueryEnvPolicyNonProdOnly)
+	store.auditErr = errors.New("audit insert failed")
+	svc := NewQueryCredentialService(
+		fakeTargetRepo{targets: []model.QueryTarget{credentialTarget("mysql", "db.internal", 3306, "staging")}},
+		store,
+		&fakeResolver{},
+	)
+	if err := svc.Delete(context.Background(), adminActor(), credentialTargetID); err == nil {
+		t.Fatal("audit failure must surface as an error from Delete")
+	}
+	if _, ok := store.metadata[credentialTargetID]; !ok {
+		t.Fatal("audit failure must not remove credential metadata (delete+audit must be atomic)")
 	}
 }

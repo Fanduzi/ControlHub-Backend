@@ -1,11 +1,12 @@
 // Package model provides domain entities for the resource management system.
-// input: fmt, time packages
-// output: QueryExecution*, QueryResult* types, status/error enums, and query credential policy/ref validators
+// input: errors, fmt, time packages
+// output: QueryExecution*, QueryResult* types, status/error enums, query credential policy/ref validators, ErrInvalidCredentialMetadata
 // pos: Query sandbox execution requests, responses, and history records
 // note: if this file changes, update header and README.md
 package model
 
 import (
+	"errors"
 	"fmt"
 	"time"
 )
@@ -137,3 +138,14 @@ type QueryCredentialMetadata struct {
 	Enabled           bool                   `json:"enabled"`
 	EnvironmentPolicy QueryEnvironmentPolicy `json:"environmentPolicy"`
 }
+
+// ErrInvalidCredentialMetadata is the fail-closed signal returned by the
+// credential metadata reader when a stored row EXISTS but its credential_ref or
+// environment_policy fails validation (e.g. legacy/manual data that bypassed the
+// write path). It is distinct from sql.ErrNoRows ("no row"): a row is present,
+// so the target must surface runtime status invalid_ref — never missing_metadata.
+// Services classify it via errors.Is; it never carries a DSN, host, port, or
+// secret. The reader still returns the scanned row alongside this error so the
+// status path can report configured=true; callers MUST check the error before
+// trusting the row (the execute path rejects on any non-nil error).
+var ErrInvalidCredentialMetadata = errors.New("stored credential metadata is invalid")

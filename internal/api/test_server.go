@@ -7,6 +7,7 @@ package api
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"strings"
 	"time"
@@ -611,8 +612,9 @@ func queryTargetSeed() []fakeQueryTargetRow {
 // fakeCredentialMetadataStore is an in-memory QueryCredentialMetadataStore for
 // the generic test server. It stores metadata only — never a DSN — and records
 // audit calls so the Phase 38A credential routes are exercisable in test
-// contexts. A not-found returns an error; the service treats any read error as
-// "no credential" (locked).
+// contexts. A not-found returns sql.ErrNoRows so the service classifies it as
+// missing_metadata (mirroring the real repository); the write/delete methods
+// apply metadata + audit together (atomic from the service's perspective).
 type fakeCredentialMetadataStore struct {
 	metadata map[uint64]model.QueryCredentialMetadata
 	audits   int
@@ -622,23 +624,20 @@ func (f *fakeCredentialMetadataStore) GetCredentialByResourceID(_ context.Contex
 	if m, ok := f.metadata[rid]; ok {
 		return m, nil
 	}
-	return model.QueryCredentialMetadata{}, fmt.Errorf("credential metadata not found")
+	return model.QueryCredentialMetadata{}, sql.ErrNoRows
 }
 
-func (f *fakeCredentialMetadataStore) UpsertCredentialMetadata(_ context.Context, m model.QueryCredentialMetadata) error {
+func (f *fakeCredentialMetadataStore) UpsertCredentialMetadataWithAudit(_ context.Context, m model.QueryCredentialMetadata, _ uint64, _, _ string) error {
 	if f.metadata == nil {
 		f.metadata = map[uint64]model.QueryCredentialMetadata{}
 	}
 	f.metadata[m.ResourceID] = m
+	f.audits++
 	return nil
 }
 
-func (f *fakeCredentialMetadataStore) DeleteCredentialByResourceID(_ context.Context, rid uint64) error {
+func (f *fakeCredentialMetadataStore) DeleteCredentialMetadataWithAudit(_ context.Context, rid uint64, _ uint64, _, _ string) error {
 	delete(f.metadata, rid)
-	return nil
-}
-
-func (f *fakeCredentialMetadataStore) InsertAuditEvent(context.Context, uint64, uint64, string, string) error {
 	f.audits++
 	return nil
 }
