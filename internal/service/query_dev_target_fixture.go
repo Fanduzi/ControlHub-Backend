@@ -29,10 +29,10 @@ var (
 	errFixtureEnvSlugNotFound     = errors.New("dev fixture environment slug not found")
 	errFixtureOwnerEmailNotFound  = errors.New("dev fixture owner email not found")
 	errFixtureEnsureFailed        = errors.New("dev fixture ensure failed")
-	errFixtureDSNUnparseable      = errors.New("controlhub dsn is unparseable")
-	errFixtureDSNNotTCP           = errors.New("controlhub dsn net is not tcp")
-	errFixtureDSNPortMissing      = errors.New("controlhub dsn address is missing an explicit port")
-	errFixtureDSNAddressMalformed = errors.New("controlhub dsn address is malformed")
+	errFixtureDSNUnparseable      = errors.New("credential dsn is unparseable")
+	errFixtureDSNNotTCP           = errors.New("credential dsn net is not tcp")
+	errFixtureDSNPortMissing      = errors.New("credential dsn address is missing an explicit port")
+	errFixtureDSNAddressMalformed = errors.New("credential dsn address is malformed")
 )
 
 // devFixtureSource is the Source value the fixture stamps on every resource it

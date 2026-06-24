@@ -226,7 +226,7 @@ func TestQueryDevTargetFixture_ProfileHostPortMatchesDSN(t *testing.T) {
 		t.Fatalf("read profile host/port: %v", err)
 	}
 	if host != wantHost || port != wantPort {
-		t.Fatalf("profile host:port = %s:%d, want %s:%d (from DATABASE_DSN)", host, port, wantHost, wantPort)
+		t.Fatalf("profile host:port = %s:%d, want %s:%d (from the credential DSN)", host, port, wantHost, wantPort)
 	}
 }
 

@@ -5,20 +5,26 @@ Status: **Implemented and verified locally. Not pushed.** Branch
 `.worktrees/backend-phase-37g-dev-ready-query-target-fixture`), based on `main`
 (`ef404e5` docs commit). No tag/release/deploy.
 
+> **Updated in Phase 37H:** the query target host:port now comes from the
+> credential DSN (`CONTROLHUB_QUERY_CREDENTIAL_<REF>`), not from `DATABASE_DSN`.
+> The DSN-specific lines below have been corrected to that semantics; the command
+> contract and env table describe the current behavior. See the
+> [Phase 37H evidence](2026-06-24-phase-37h-dedicated-query-e2e-mysql-fixture-evidence.md).
+
 ## Command contract
 
 `make seed-query-dev-target` = `QUERY_DEV_ALLOW_TARGET_FIXTURE=true go run ./cmd/querydev`.
-It ensures a local `database_instance` target + profile (host/port from `DATABASE_DSN`),
-then runs the existing credential seed in one idempotent pass.
+It ensures a local `database_instance` target + profile (host/port from the credential DSN
+`CONTROLHUB_QUERY_CREDENTIAL_<REF>`), then runs the existing credential seed in one idempotent pass.
 
 Required env (DSN values never stored/printed):
 
 | Var | Purpose |
 |---|---|
 | `QUERY_DEV_ALLOW_TARGET_FIXTURE=true` | Gate that allows target creation (default off → bind-only behavior unchanged). |
-| `DATABASE_DSN` | ControlHub own DB DSN; parsed for host:port only. |
+| `DATABASE_DSN` | ControlHub metadata DB DSN only; never parsed for the query target host:port. |
 | `QUERY_DEV_CREDENTIAL_REF` | Opaque ref stored as metadata (e.g. `LOCAL_QUERY_RO`). |
-| `CONTROLHUB_QUERY_CREDENTIAL_<REF>` | Read-only DSN resolved by the env resolver; same host:port as `DATABASE_DSN`. |
+| `CONTROLHUB_QUERY_CREDENTIAL_<REF>` | Read-only DSN resolved by the env resolver; its host:port becomes the query target profile. |
 | `QUERY_DEV_ENVIRONMENT_POLICY` | Default `non_prod_only`. |
 | Optional | `QUERY_DEV_TARGET_ENV_SLUG` (default `dev`), `QUERY_DEV_TARGET_OWNER_EMAIL` (default `dba@example.com`), `QUERY_DEV_TARGET_NAME` (default `local-mysql-query-dev`), `QUERY_DEV_TARGET_DISPLAY_NAME`. |
 
@@ -102,7 +108,8 @@ credential env — not a frontend or fixture bug.
 
 ## CI follow-up (deferred)
 
-The fixture command derives host/port from `DATABASE_DSN`, so it is CI-portable by design.
+The fixture command derives host/port from the credential DSN (`CONTROLHUB_QUERY_CREDENTIAL_<REF>`),
+so it is CI-portable by design.
 Cross-repo frontend-CI wiring (CI starts backend → runs the fixture → runs the ready-target
 E2E in CI) is an explicit follow-up, **out of scope for this phase**.
 

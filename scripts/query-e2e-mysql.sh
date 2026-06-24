@@ -10,6 +10,11 @@
 # logs safe facts (container name, host, port, database name, readiness). The
 # password is generated as hex, reused across runs via the env file, passed to
 # mysql via MYSQL_PWD (never on the command line), and the env file is mode 0600.
+# Every external input (database/user/password/port/timeout/container) is
+# whitelisted against a safe charset before any docker call, SQL heredoc, or
+# env-file write, so a stray quote/space/shell-metachar can never reach those
+# contexts. Validation error strings name only the variable and the failing
+# category — they never echo the value, the password, or the DSN.
 #
 # It does NOT touch the ControlHub metadata database.
 set -euo pipefail
@@ -69,6 +74,70 @@ wait_ready() {
   done
   log "error: $CONTAINER did not become ready within ${READY_TIMEOUT}s"
   exit 1
+}
+
+# --- Input validation -------------------------------------------------------
+# Every externally-supplied value is whitelisted before any docker run/exec,
+# SQL heredoc interpolation, or env-file write. This is defense in depth: even
+# though these values flow into SQL, Docker args, and a shell-sourceable env
+# file, they are first restricted to a safe charset so a stray quote, space, or
+# shell/SQL metacharacter can never reach those contexts. Error messages are
+# FIXED strings naming only the variable and the failing category — they NEVER
+# echo the supplied value, the password, or the DSN.
+
+# require_match exits 1 unless value fully matches the regex. The regex is held
+# in a variable and used unquoted so bash treats it as a regex, not a literal.
+require_match() {
+  local name="$1" value="$2" regex="$3" category="$4"
+  if [[ ! "$value" =~ $regex ]]; then
+    log "error: $name must match $category (rejected; value not shown)"
+    exit 1
+  fi
+}
+
+# require_port exits 1 unless value is an integer in the TCP port range 1..65535.
+require_port() {
+  local name="$1" value="$2"
+  if ! [[ "$value" =~ ^[0-9]+$ ]] || [ "$value" -lt 1 ] || [ "$value" -gt 65535 ]; then
+    log "error: $name must be an integer in 1..65535"
+    exit 1
+  fi
+}
+
+# require_positive_int exits 1 unless value is a positive integer.
+require_positive_int() {
+  local name="$1" value="$2"
+  if ! [[ "$value" =~ ^[0-9]+$ ]] || [ "$value" -lt 1 ]; then
+    log "error: $name must be a positive integer"
+    exit 1
+  fi
+}
+
+# validate_explicit_password exits 1 if a user-supplied password fails the
+# whitelist. Only an EXPLICITLY set password is validated; the generated hex
+# password and the stored (previously written) password are always safe and are
+# not validated here.
+validate_explicit_password() {
+  local pw="$1"
+  local len=${#pw}
+  if ! [[ "$pw" =~ ^[A-Za-z0-9_]+$ ]] || [ "$len" -lt 12 ] || [ "$len" -gt 128 ]; then
+    log "error: QUERY_E2E_MYSQL_READONLY_PASSWORD must be alphanumeric/underscore, 12..128 chars (rejected; value not shown)"
+    exit 1
+  fi
+}
+
+# validate_inputs whitelists every external input once, before the command
+# dispatch, so up/down/status all fail closed on bad input regardless of docker
+# availability.
+validate_inputs() {
+  require_match "QUERY_E2E_MYSQL_DATABASE" "$DATABASE" '^[A-Za-z0-9_]+$' "alphanumeric/underscore only"
+  require_match "QUERY_E2E_MYSQL_READONLY_USER" "$RO_USER" '^[A-Za-z0-9_]+$' "alphanumeric/underscore only"
+  require_match "QUERY_E2E_MYSQL_CONTAINER" "$CONTAINER" '^[A-Za-z0-9_.-]+$' "a safe container name (alphanumeric/_/./-)"
+  require_port "QUERY_E2E_MYSQL_PORT" "$PORT"
+  require_positive_int "QUERY_E2E_MYSQL_READY_TIMEOUT" "$READY_TIMEOUT"
+  if [ -n "${QUERY_E2E_MYSQL_READONLY_PASSWORD:-}" ]; then
+    validate_explicit_password "$QUERY_E2E_MYSQL_READONLY_PASSWORD"
+  fi
 }
 
 cmd_up() {
@@ -176,6 +245,10 @@ usage() {
   log "usage: $0 {up|down|status}"
   exit 2
 }
+
+# Fail closed on bad external input before any docker call, heredoc, or env-file
+# write (all subcommands validate).
+validate_inputs
 
 case "${1:-}" in
   up) cmd_up ;;

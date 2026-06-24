@@ -2,8 +2,8 @@
 //
 // input: os, strconv, strings, errors, io, database/sql, context, fmt, log, config, mysql repos, service seeder + target service + dev target fixture
 // output: main() — dev-only binary (go run ./cmd/querydev / make seed-query-dev-credential / make seed-query-dev-target)
-// pos: Explicit, idempotent local/dev seed of one query target's credential metadata so the Query Workbench can reach readiness. With QUERY_DEV_ALLOW_TARGET_FIXTURE=true it also ENSURES a local database_instance target + profile (host:port from DATABASE_DSN) before seeding. NOT auto-enabled in production.
-// note: Writes METADATA only (resource_id, engine, credential_ref, enabled, environment_policy). The DSN is read from CONTROLHUB_QUERY_CREDENTIAL_<REF> by the resolver and validated to bind to the target, but it is never stored, logged, or printed. DATABASE_DSN is parsed for host:port only.
+// pos: Explicit, idempotent local/dev seed of one query target's credential metadata so the Query Workbench can reach readiness. With QUERY_DEV_ALLOW_TARGET_FIXTURE=true it also ENSURES a local database_instance target + profile (host:port from the credential DSN CONTROLHUB_QUERY_CREDENTIAL_<REF>) before seeding. NOT auto-enabled in production.
+// note: Writes METADATA only (resource_id, engine, credential_ref, enabled, environment_policy). The DSN is read from CONTROLHUB_QUERY_CREDENTIAL_<REF> by the resolver and validated to bind to the target, but it is never stored, logged, or printed. DATABASE_DSN opens the ControlHub metadata DB only; the credential DSN is what is parsed for host:port.
 package main
 
 import (
@@ -170,7 +170,7 @@ func loadCredentialRefPolicy() (ref string, policy model.QueryEnvironmentPolicy,
 // loadFixtureConfig reads the fixture-mode flag and the optional target naming
 // overrides. It returns allowFixture=false (no error) when the flag is absent,
 // so the original bind-only behavior is the default. Host/port are NOT read
-// here — they are parsed from DATABASE_DSN by the caller.
+// here — they are parsed from the credential DSN (CONTROLHUB_QUERY_CREDENTIAL_<REF>) by the caller (resolveFixtureHostPort).
 func loadFixtureConfig() (fixture service.QueryDevTargetFixtureConfig, allowFixture bool, err error) {
 	allow, err := parseBoolEnv("QUERY_DEV_ALLOW_TARGET_FIXTURE")
 	if err != nil {

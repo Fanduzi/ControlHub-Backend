@@ -35,7 +35,7 @@ cutover-local: ## Preserve current controlhub as controlhub_v1, rebuild bigint c
 seed-query-dev-credential: ## Seed local/dev query credential METADATA for one target (dev-only; DSN stays in env, never stored). Requires DATABASE_DSN, QUERY_DEV_TARGET_RESOURCE_ID, QUERY_DEV_CREDENTIAL_REF, and CONTROLHUB_QUERY_CREDENTIAL_<REF>.
 	go run ./cmd/querydev
 
-seed-query-dev-target: ## Dev-only: ENSURE a local database_instance query target + profile (host/port from DATABASE_DSN), then seed its credential metadata in one idempotent pass. Requires DATABASE_DSN, QUERY_DEV_CREDENTIAL_REF, CONTROLHUB_QUERY_CREDENTIAL_<REF>. DSN is never stored/printed.
+seed-query-dev-target: ## Dev-only: ENSURE a local database_instance query target + profile (host/port from the credential DSN CONTROLHUB_QUERY_CREDENTIAL_<REF>), then seed its credential metadata in one idempotent pass. Requires DATABASE_DSN (metadata DB), QUERY_DEV_CREDENTIAL_REF, CONTROLHUB_QUERY_CREDENTIAL_<REF>. DSN is never stored/printed.
 	QUERY_DEV_ALLOW_TARGET_FIXTURE=true go run ./cmd/querydev
 
 query-e2e-mysql-up: ## Start the dedicated Query E2E Docker MySQL (dev/test). Writes gitignored .query-e2e-mysql.env with the read-only credential DSN (never printed). Does not touch the ControlHub metadata DB.
