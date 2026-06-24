@@ -1,0 +1,711 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Phase 38A Query Credential Admin Preview</title>
+    <style>
+      :root {
+        --ink: #101820;
+        --muted: #5d6975;
+        --paper: #f3efe4;
+        --panel: #fffaf0;
+        --line: #d8cdb8;
+        --line-strong: #9f927c;
+        --black: #16130f;
+        --green: #146c43;
+        --green-soft: #dcefe5;
+        --amber: #a45d00;
+        --amber-soft: #f8e4bd;
+        --red: #a7332d;
+        --red-soft: #f4d6d0;
+        --blue: #1f5f8b;
+        --blue-soft: #dbeaf8;
+        --shadow: 0 24px 70px rgba(44, 36, 24, 0.16);
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        margin: 0;
+        min-height: 100vh;
+        color: var(--ink);
+        background:
+          radial-gradient(circle at 15% 10%, rgba(20, 108, 67, 0.16), transparent 28%),
+          radial-gradient(circle at 80% 8%, rgba(31, 95, 139, 0.14), transparent 28%),
+          linear-gradient(135deg, #f8f1df 0%, #e9dfcc 50%, #f7f3ea 100%);
+        font-family: ui-serif, "Iowan Old Style", "Palatino Linotype", Palatino, Georgia, serif;
+      }
+
+      body::before {
+        content: "";
+        position: fixed;
+        inset: 0;
+        pointer-events: none;
+        background-image:
+          linear-gradient(rgba(16, 24, 32, 0.035) 1px, transparent 1px),
+          linear-gradient(90deg, rgba(16, 24, 32, 0.035) 1px, transparent 1px);
+        background-size: 30px 30px;
+        mask-image: linear-gradient(to bottom, rgba(0, 0, 0, 0.8), transparent 82%);
+      }
+
+      .shell {
+        width: min(1500px, calc(100vw - 40px));
+        margin: 26px auto;
+      }
+
+      .hero {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) auto;
+        gap: 24px;
+        align-items: end;
+        margin-bottom: 18px;
+      }
+
+      .eyebrow {
+        display: inline-flex;
+        width: fit-content;
+        border: 1px solid var(--line-strong);
+        border-radius: 999px;
+        padding: 8px 12px;
+        background: rgba(255, 250, 240, 0.72);
+        color: var(--muted);
+        font: 800 12px/1 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+      }
+
+      h1 {
+        margin: 14px 0 8px;
+        font-size: clamp(34px, 4vw, 66px);
+        line-height: 0.95;
+        letter-spacing: -0.065em;
+      }
+
+      .subtitle {
+        max-width: 860px;
+        margin: 0;
+        color: #485866;
+        font-size: 18px;
+        line-height: 1.55;
+      }
+
+      .state-switch {
+        display: flex;
+        flex-wrap: wrap;
+        justify-content: flex-end;
+        gap: 8px;
+      }
+
+      .state-button {
+        border: 1px solid var(--line-strong);
+        border-radius: 999px;
+        padding: 10px 13px;
+        color: var(--ink);
+        background: rgba(255, 250, 240, 0.82);
+        cursor: pointer;
+        font: 800 12px/1 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      }
+
+      .state-button.active {
+        border-color: var(--black);
+        color: #fff;
+        background: var(--black);
+      }
+
+      .layout {
+        display: grid;
+        grid-template-columns: 240px minmax(520px, 1fr) 430px;
+        gap: 16px;
+        min-height: 790px;
+      }
+
+      .panel {
+        border: 1px solid rgba(159, 146, 124, 0.72);
+        border-radius: 24px;
+        background: rgba(255, 250, 240, 0.9);
+        box-shadow: var(--shadow);
+        overflow: hidden;
+        backdrop-filter: blur(12px);
+      }
+
+      .panel-header {
+        display: flex;
+        min-height: 68px;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+        border-bottom: 1px solid var(--line);
+        padding: 16px 18px;
+      }
+
+      .panel-title {
+        margin: 0;
+        font-size: 16px;
+        letter-spacing: -0.03em;
+      }
+
+      .panel-subtitle {
+        margin: 4px 0 0;
+        color: var(--muted);
+        font: 700 11px/1.35 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      }
+
+      .nav {
+        padding: 14px;
+      }
+
+      .nav-item {
+        display: block;
+        width: 100%;
+        margin-bottom: 8px;
+        border: 1px solid transparent;
+        border-radius: 15px;
+        padding: 13px;
+        color: var(--muted);
+        background: transparent;
+        text-align: left;
+        font: 800 12px/1 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      }
+
+      .nav-item.active {
+        border-color: var(--black);
+        color: var(--ink);
+        background: #fff8e6;
+      }
+
+      .admin-body {
+        display: grid;
+        grid-template-columns: minmax(280px, 0.85fr) minmax(360px, 1.15fr);
+        gap: 14px;
+        padding: 14px;
+      }
+
+      .toolbar {
+        display: grid;
+        grid-template-columns: 1fr auto;
+        gap: 10px;
+        margin-bottom: 12px;
+      }
+
+      input,
+      select {
+        width: 100%;
+        border: 1px solid var(--line-strong);
+        border-radius: 13px;
+        padding: 12px;
+        color: var(--ink);
+        background: #fffdf7;
+        font: 800 13px/1 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      }
+
+      .target-list,
+      .detail,
+      .workbench-card {
+        border: 1px solid var(--line);
+        border-radius: 20px;
+        padding: 14px;
+        background: rgba(255, 255, 255, 0.45);
+      }
+
+      .target-card {
+        display: grid;
+        gap: 8px;
+        width: 100%;
+        margin-bottom: 10px;
+        border: 1px solid var(--line);
+        border-radius: 17px;
+        padding: 12px;
+        text-align: left;
+        background: rgba(255, 255, 255, 0.52);
+        cursor: pointer;
+      }
+
+      .target-card.active {
+        border-color: var(--black);
+        box-shadow: inset 0 0 0 1px var(--black);
+      }
+
+      .target-name {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 8px;
+        font-weight: 900;
+        letter-spacing: -0.03em;
+      }
+
+      .target-meta {
+        color: var(--muted);
+        font: 700 12px/1.45 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      }
+
+      .pill {
+        display: inline-flex;
+        align-items: center;
+        gap: 7px;
+        border-radius: 999px;
+        padding: 7px 10px;
+        font: 900 11px/1 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+        white-space: nowrap;
+      }
+
+      .pill::before {
+        content: "";
+        width: 7px;
+        height: 7px;
+        border-radius: 50%;
+        background: currentColor;
+      }
+
+      .green {
+        color: var(--green);
+        background: var(--green-soft);
+      }
+
+      .amber {
+        color: var(--amber);
+        background: var(--amber-soft);
+      }
+
+      .red {
+        color: var(--red);
+        background: var(--red-soft);
+      }
+
+      .blue {
+        color: var(--blue);
+        background: var(--blue-soft);
+      }
+
+      .section-title {
+        margin: 0 0 10px;
+        font-size: 15px;
+        letter-spacing: -0.02em;
+      }
+
+      .copy {
+        margin: 0 0 12px;
+        color: #53636e;
+        font-size: 14px;
+        line-height: 1.5;
+      }
+
+      .form {
+        display: grid;
+        gap: 12px;
+      }
+
+      label {
+        display: grid;
+        gap: 6px;
+        color: var(--muted);
+        font: 900 11px/1 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+        letter-spacing: 0.05em;
+        text-transform: uppercase;
+      }
+
+      .radio-grid {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 10px;
+      }
+
+      .choice {
+        border: 1px solid var(--line);
+        border-radius: 15px;
+        padding: 12px;
+        background: #fffdf7;
+      }
+
+      .choice strong {
+        display: block;
+        margin-bottom: 5px;
+      }
+
+      .choice span {
+        color: var(--muted);
+        font-size: 13px;
+        line-height: 1.35;
+      }
+
+      .check {
+        display: flex;
+        align-items: flex-start;
+        gap: 9px;
+        color: #34444f;
+        font-size: 13px;
+        line-height: 1.35;
+        text-transform: none;
+        letter-spacing: 0;
+        font-family: inherit;
+        font-weight: 700;
+      }
+
+      .check input {
+        width: auto;
+        margin-top: 1px;
+      }
+
+      .boundary {
+        border-left: 4px solid var(--blue);
+        border-radius: 13px;
+        padding: 11px;
+        background: var(--blue-soft);
+        color: #24465f;
+        font-size: 13px;
+        line-height: 1.45;
+      }
+
+      .actions {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 9px;
+      }
+
+      .button {
+        border: 1px solid var(--black);
+        border-radius: 13px;
+        padding: 11px 14px;
+        background: var(--black);
+        color: #fff;
+        cursor: pointer;
+        font: 900 12px/1 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      }
+
+      .button.secondary {
+        color: var(--ink);
+        background: transparent;
+      }
+
+      .button:disabled {
+        border-color: var(--line);
+        color: #9a8f7e;
+        background: #e7ddca;
+        cursor: not-allowed;
+      }
+
+      .kv {
+        display: grid;
+        gap: 9px;
+        margin-top: 12px;
+      }
+
+      .kv div {
+        display: flex;
+        justify-content: space-between;
+        gap: 12px;
+        border-bottom: 1px solid rgba(216, 205, 184, 0.75);
+        padding-bottom: 7px;
+        color: var(--muted);
+        font: 800 12px/1.25 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      }
+
+      .kv b {
+        color: var(--ink);
+        text-align: right;
+      }
+
+      .workbench-body {
+        display: grid;
+        gap: 14px;
+        padding: 14px;
+      }
+
+      .mini-editor {
+        border-radius: 18px;
+        padding: 16px;
+        background: #14110d;
+        color: #f4ead7;
+        font: 700 13px/1.7 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      }
+
+      .blocked-list {
+        margin: 10px 0 0;
+        padding-left: 18px;
+        color: var(--muted);
+        font-size: 14px;
+        line-height: 1.5;
+      }
+
+      @media (max-width: 1180px) {
+        .hero,
+        .layout,
+        .admin-body {
+          grid-template-columns: 1fr;
+        }
+
+        .state-switch {
+          justify-content: flex-start;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <main class="shell">
+      <section class="hero">
+        <div>
+          <div class="eyebrow">Phase 38A · Admin Surface</div>
+          <h1>凭据配置进后台，查询工作台只消费状态。</h1>
+          <p class="subtitle">
+            DBA 负责标准只读账号，管理员在 Settings 里把目标绑定到 opaque credential ref。
+            Query Workbench 不出现配置表单，普通查询用户只看到 ready/locked 与原因。
+          </p>
+        </div>
+        <div class="state-switch">
+          <button class="state-button active" data-state="missing">缺少 metadata</button>
+          <button class="state-button" data-state="secret">Server secret 缺失</button>
+          <button class="state-button" data-state="mismatch">绑定不匹配</button>
+          <button class="state-button" data-state="ready">Ready</button>
+        </div>
+      </section>
+
+      <section class="layout">
+        <aside class="panel">
+          <div class="panel-header">
+            <div>
+              <h2 class="panel-title">Settings</h2>
+              <p class="panel-subtitle">admin-only</p>
+            </div>
+          </div>
+          <nav class="nav">
+            <button class="nav-item">General</button>
+            <button class="nav-item">Users & Roles</button>
+            <button class="nav-item active">Query Credentials</button>
+            <button class="nav-item">Audit Policy</button>
+            <button class="nav-item">Integrations</button>
+          </nav>
+        </aside>
+
+        <section class="panel">
+          <div class="panel-header">
+            <div>
+              <h2 class="panel-title">Query Credentials</h2>
+              <p class="panel-subtitle">metadata binding · no secret storage</p>
+            </div>
+            <span class="pill amber" id="admin-pill">metadata missing</span>
+          </div>
+          <div class="admin-body">
+            <div class="target-list">
+              <div class="toolbar">
+                <input value="local mysql" aria-label="search" />
+                <select aria-label="state filter">
+                  <option>All states</option>
+                  <option>Missing</option>
+                  <option>Ready</option>
+                </select>
+              </div>
+
+              <button class="target-card active">
+                <div class="target-name">
+                  local-mysql-query-dev
+                  <span class="pill amber" id="target-pill">missing</span>
+                </div>
+                <div class="target-meta">mysql · dev · 127.0.0.1:13306</div>
+                <div class="target-meta">cluster local · source dev-fixture</div>
+              </button>
+
+              <button class="target-card">
+                <div class="target-name">
+                  orders-mysql-prod
+                  <span class="pill red">policy gated</span>
+                </div>
+                <div class="target-meta">mysql · production · orders.internal:3306</div>
+                <div class="target-meta">cluster orders-prod</div>
+              </button>
+
+              <button class="target-card">
+                <div class="target-name">
+                  analytics-tidb-staging
+                  <span class="pill blue">override</span>
+                </div>
+                <div class="target-meta">tidb · staging · tidb.internal:4000</div>
+                <div class="target-meta">cluster analytics</div>
+              </button>
+            </div>
+
+            <div class="detail">
+              <h3 class="section-title" id="detail-title">Configure credential metadata</h3>
+              <p class="copy" id="detail-copy">
+                绑定 opaque ref。真实 DSN/password 由 DBA 在服务端配置，浏览器不会接触。
+              </p>
+
+              <form class="form">
+                <label>
+                  Credential reference
+                  <input id="credential-ref" value="LOCAL_QUERY_RO" />
+                </label>
+
+                <div class="radio-grid">
+                  <div class="choice">
+                    <strong>Standard account</strong>
+                    <span>使用 DBA 预置的标准只读账号命名规范。</span>
+                  </div>
+                  <div class="choice">
+                    <strong>Cluster override</strong>
+                    <span>这个集群/实例使用单独的 credential ref。</span>
+                  </div>
+                </div>
+
+                <label>
+                  Environment policy
+                  <select id="policy-select">
+                    <option>non_prod_only</option>
+                    <option>disabled</option>
+                    <option>all_environments</option>
+                  </select>
+                </label>
+
+                <label class="check">
+                  <input type="checkbox" checked />
+                  Enabled
+                </label>
+
+                <label class="check" id="prod-confirm">
+                  <input type="checkbox" />
+                  我确认 all_environments 可能让生产目标在后端凭据匹配时可执行只读查询。
+                </label>
+
+                <div class="boundary">
+                  请求体只允许 credentialRef、enabled、environmentPolicy、
+                  confirmAllEnvironments。没有 DSN/password/host/port/actorUserId。
+                </div>
+
+                <div class="actions">
+                  <button type="button" class="button">Save metadata</button>
+                  <button type="button" class="button secondary">Remove metadata</button>
+                </div>
+              </form>
+
+              <div class="kv">
+                <div><span>runtime</span><b id="runtime-value">missing_metadata</b></div>
+                <div><span>stores secret?</span><b>no</b></div>
+                <div><span>audit</span><b>write/delete only</b></div>
+                <div><span>admin required</span><b>yes</b></div>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <aside class="panel">
+          <div class="panel-header">
+            <div>
+              <h2 class="panel-title">Query Workbench</h2>
+              <p class="panel-subtitle">read-only consumer view</p>
+            </div>
+            <span class="pill amber" id="workbench-pill">locked</span>
+          </div>
+          <div class="workbench-body">
+            <div class="workbench-card">
+              <h3 class="section-title">Credential state</h3>
+              <p class="copy" id="workbench-copy">
+                查询工作台只显示 locked 原因。这里不会出现配置表单。
+              </p>
+              <ul class="blocked-list">
+                <li>没有 credential ref 输入框</li>
+                <li>没有 enabled / policy 表单</li>
+                <li>没有 Save / Remove metadata 按钮</li>
+              </ul>
+            </div>
+
+            <div class="mini-editor">select name, category
+from query_e2e_items
+order by id
+limit 100;</div>
+
+            <div class="actions">
+              <button class="button" id="run-button" disabled>Run locked</button>
+              <button class="button secondary" id="admin-link">Open credential settings</button>
+            </div>
+
+            <div class="workbench-card">
+              <h3 class="section-title">Why this split matters</h3>
+              <p class="copy">
+                凭据配置属于 DBA/管理员后台。查询用户不应该在工作台里获得“我可以配置数据库凭据”的暗示。
+              </p>
+            </div>
+          </div>
+        </aside>
+      </section>
+    </main>
+
+    <script>
+      const states = {
+        missing: {
+          pill: ["metadata missing", "amber"],
+          target: ["missing", "amber"],
+          workbench: ["locked", "amber"],
+          title: "Configure credential metadata",
+          copy: "绑定 opaque ref。真实 DSN/password 由 DBA 在服务端配置，浏览器不会接触。",
+          runtime: "missing_metadata",
+          ref: "",
+          workbenchCopy: "缺少 credential metadata。普通查询用户只看到 locked 原因，管理员可跳转到 Settings。",
+          run: false,
+        },
+        secret: {
+          pill: ["server secret missing", "amber"],
+          target: ["secret missing", "amber"],
+          workbench: ["locked", "amber"],
+          title: "Metadata saved, server secret missing",
+          copy: "metadata 有效，但后端没有 CONTROLHUB_QUERY_CREDENTIAL_LOCAL_QUERY_RO。请 DBA 在服务端配置。",
+          runtime: "secret_missing",
+          ref: "LOCAL_QUERY_RO",
+          workbenchCopy: "Server secret 缺失。Query Workbench 不要求用户输入 DSN。",
+          run: false,
+        },
+        mismatch: {
+          pill: ["binding mismatch", "red"],
+          target: ["mismatch", "red"],
+          workbench: ["locked", "red"],
+          title: "Credential does not bind to target",
+          copy: "后端解析到 secret，但 DSN host/port 与当前 target 不一致。DSN 值不显示。",
+          runtime: "binding_mismatch",
+          ref: "LOCAL_QUERY_RO",
+          workbenchCopy: "凭据不匹配当前 target。需要管理员修正 server-side ref 或选择 cluster override。",
+          run: false,
+        },
+        ready: {
+          pill: ["readonly ready", "green"],
+          target: ["ready", "green"],
+          workbench: ["ready", "green"],
+          title: "Read-only credential ready",
+          copy: "metadata 有效，server secret 可解析，DSN host/port 绑定到当前 target。",
+          runtime: "secret_resolved",
+          ref: "LOCAL_QUERY_RO",
+          workbenchCopy: "只读凭据已就绪。Run 是否可用仍完全由后端 availableActions.run 控制。",
+          run: true,
+        },
+      };
+
+      function setPill(id, pair) {
+        const el = document.getElementById(id);
+        el.textContent = pair[0];
+        el.className = `pill ${pair[1]}`;
+      }
+
+      document.querySelectorAll(".state-button").forEach((button) => {
+        button.addEventListener("click", () => {
+          document.querySelectorAll(".state-button").forEach((item) => item.classList.remove("active"));
+          button.classList.add("active");
+
+          const state = states[button.dataset.state];
+          setPill("admin-pill", state.pill);
+          setPill("target-pill", state.target);
+          setPill("workbench-pill", state.workbench);
+
+          document.getElementById("detail-title").textContent = state.title;
+          document.getElementById("detail-copy").textContent = state.copy;
+          document.getElementById("credential-ref").value = state.ref;
+          document.getElementById("runtime-value").textContent = state.runtime;
+          document.getElementById("workbench-copy").textContent = state.workbenchCopy;
+
+          const run = document.getElementById("run-button");
+          run.disabled = !state.run;
+          run.textContent = state.run ? "Run" : "Run locked";
+        });
+      });
+    </script>
+  </body>
+</html>
