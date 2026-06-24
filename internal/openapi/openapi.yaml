@@ -238,6 +238,212 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/ErrorResponse"
+  /query-targets/{id}/credential:
+    get:
+      summary: Get query credential metadata status for a query target
+      operationId: getQueryTargetCredential
+      description: >
+        Phase 38A. Returns the credential metadata status for a MySQL/TiDB query
+        target — metadata only (opaque credential ref, enabled flag, environment
+        policy, runtime status). It NEVER returns a DSN, password, host, or port.
+        Requires a fresh Bearer token.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+            format: int64
+            minimum: 1
+      responses:
+        "200":
+          description: Credential metadata status
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/QueryCredentialStatusResponse"
+              examples:
+                missing:
+                  value:
+                    resourceId: 22
+                    configured: false
+                    engine: mysql
+                    credentialRef: ""
+                    enabled: false
+                    environmentPolicy: disabled
+                    runtimeStatus: missing_metadata
+                    executionEligible: false
+                    message: "No read-only credential reference is configured."
+                resolved:
+                  value:
+                    resourceId: 22
+                    configured: true
+                    engine: mysql
+                    credentialRef: ORDER_MYSQL_RO
+                    enabled: true
+                    environmentPolicy: non_prod_only
+                    runtimeStatus: secret_resolved
+                    executionEligible: true
+                    message: "Read-only credential is configured and bound to this target."
+        "400":
+          description: Invalid target id
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "401":
+          description: Missing or invalid Bearer token (or token older than the TTL)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "404":
+          description: Query target not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "500":
+          description: Unexpected server failure
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+    put:
+      summary: Create or update query credential metadata for a query target
+      operationId: putQueryTargetCredential
+      description: >
+        Phase 38A. Admin-only. Persists credential METADATA for a MySQL/TiDB query
+        target: an opaque credential reference, an enabled flag, and an environment
+        policy. The body must never carry a DSN, password, host, port, or actor
+        field (unknown fields are rejected by strict decoding). The engine is
+        derived from the target, never accepted from the request. Save succeeds
+        even when the secret cannot be resolved yet; the returned runtimeStatus
+        explains it and the target stays locked. Requires a fresh Bearer token and
+        the admin role.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+            format: int64
+            minimum: 1
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/QueryCredentialUpsertRequest"
+            examples:
+              nonProd:
+                value:
+                  credentialRef: ORDER_MYSQL_RO
+                  enabled: true
+                  environmentPolicy: non_prod_only
+              allEnvironments:
+                value:
+                  credentialRef: ORDER_MYSQL_RO
+                  enabled: true
+                  environmentPolicy: all_environments
+                  confirmAllEnvironments: true
+      responses:
+        "200":
+          description: Updated credential metadata status
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/QueryCredentialStatusResponse"
+        "400":
+          description: Validation failed (invalid id, invalid ref/policy, unknown/secret/actor field, all-environments confirmation missing)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "401":
+          description: Missing or invalid Bearer token (or token older than the TTL)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "403":
+          description: Authenticated actor is not an admin
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "404":
+          description: Query target not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "409":
+          description: Persistence conflict
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "500":
+          description: Unexpected server failure
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+    delete:
+      summary: Remove query credential metadata for a query target
+      operationId: deleteQueryTargetCredential
+      description: >
+        Phase 38A. Admin-only. Removes a target's credential metadata and returns
+        204. After delete the target remains visible and locked as
+        credential_required. Requires a fresh Bearer token and the admin role.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+            format: int64
+            minimum: 1
+      responses:
+        "204":
+          description: Credential metadata removed
+        "400":
+          description: Invalid target id
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "401":
+          description: Missing or invalid Bearer token (or token older than the TTL)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "403":
+          description: Authenticated actor is not an admin
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "404":
+          description: Query target not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "500":
+          description: Unexpected server failure
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
   /query-targets/{id}/executions:
     get:
       summary: List execution history for a query target
@@ -1431,6 +1637,25 @@ components:
           description: True only for ready mysql/tidb targets with an allowed credential (Phase 37).
         credentialState:
           type: string
+          description: >-
+            Backend-owned credential state for the target. On the Phase 38A
+            runtime-backed readiness path (resolver wired in production) it mirrors
+            QueryCredentialRuntimeStatus; on the legacy metadata-only path it is
+            one of missing_readonly_credential / configured_readonly_credential.
+            Clients must map these to localized labels and never render the raw
+            enum string.
+          enum:
+            - missing_metadata
+            - invalid_ref
+            - disabled
+            - policy_blocked
+            - secret_missing
+            - binding_mismatch
+            - secret_resolved
+            - unsupported_target
+            - incomplete_connection
+            - missing_readonly_credential
+            - configured_readonly_credential
         auditRequired:
           type: boolean
         safetyState:
@@ -1468,6 +1693,85 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/QueryTargetSchemaPreviewNode"
+    QueryEnvironmentPolicy:
+      type: string
+      description: >-
+        Controls which environments a credential may execute against. Unknown or
+        empty values fail closed. all_environments opens production execution and
+        requires explicit confirmation on write.
+      enum: [disabled, non_prod_only, all_environments]
+    QueryCredentialRuntimeStatus:
+      type: string
+      description: >-
+        Backend runtime status of a query target's credential binding. Only
+        secret_resolved can make a target execution-eligible. These strings are
+        the backend contract; clients must map them to localized labels and must
+        never render the raw enum.
+      enum:
+        - missing_metadata
+        - invalid_ref
+        - disabled
+        - policy_blocked
+        - secret_missing
+        - binding_mismatch
+        - secret_resolved
+        - unsupported_target
+        - incomplete_connection
+    QueryCredentialStatusResponse:
+      type: object
+      description: >-
+        Metadata-only credential status for a query target. Carries the opaque
+        credential reference, enabled flag, environment policy, and runtime
+        status. It NEVER carries a DSN, password, host, or port.
+      required: [resourceId, configured, engine, credentialRef, enabled, environmentPolicy, runtimeStatus, executionEligible, message]
+      additionalProperties: false
+      properties:
+        resourceId:
+          type: integer
+          format: int64
+        configured:
+          type: boolean
+          description: True when credential metadata exists for the target.
+        engine:
+          type: string
+          description: Target engine (mysql/tidb), derived by the backend.
+        credentialRef:
+          type: string
+          description: Opaque, validated credential reference. Empty when unconfigured.
+        enabled:
+          type: boolean
+        environmentPolicy:
+          $ref: "#/components/schemas/QueryEnvironmentPolicy"
+        runtimeStatus:
+          $ref: "#/components/schemas/QueryCredentialRuntimeStatus"
+        executionEligible:
+          type: boolean
+          description: True only when runtimeStatus is secret_resolved.
+        message:
+          type: string
+          description: Fixed, client-safe status message. Never echoes a DSN.
+    QueryCredentialUpsertRequest:
+      type: object
+      description: >-
+        Body of PUT /query-targets/{id}/credential. Metadata only. It must NEVER
+        carry a DSN, password, host, port, or actor field — unknown fields are
+        rejected by strict decoding (additionalProperties is false). The engine is
+        derived from the target, never accepted here.
+      required: [credentialRef, enabled, environmentPolicy]
+      additionalProperties: false
+      properties:
+        credentialRef:
+          type: string
+          pattern: '^[A-Z0-9_]+$'
+          maxLength: 64
+          description: Opaque, validated credential reference ([A-Z0-9_]+, max 64).
+        enabled:
+          type: boolean
+        environmentPolicy:
+          $ref: "#/components/schemas/QueryEnvironmentPolicy"
+        confirmAllEnvironments:
+          type: boolean
+          description: Required true when environmentPolicy is all_environments.
     PageInfo:
       type: object
       required: [page, pageSize, totalItems, totalPages]
