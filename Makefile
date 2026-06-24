@@ -1,4 +1,4 @@
-.PHONY: test test-integration test-openapi-fuzz run openapi-validate migrate-up migrate-status migrate-down-one migrate-reset-dev cutover-local seed-query-dev-credential seed-query-dev-target release-local-gates release-docker-gates release-readiness-gates
+.PHONY: test test-integration test-openapi-fuzz run openapi-validate migrate-up migrate-status migrate-down-one migrate-reset-dev cutover-local seed-query-dev-credential seed-query-dev-target query-e2e-mysql-up query-e2e-mysql-down query-e2e-mysql-status release-local-gates release-docker-gates release-readiness-gates
 
 GOOSE := $(shell go env GOPATH)/bin/goose
 GOOSE_DRIVER := mysql
@@ -37,6 +37,15 @@ seed-query-dev-credential: ## Seed local/dev query credential METADATA for one t
 
 seed-query-dev-target: ## Dev-only: ENSURE a local database_instance query target + profile (host/port from DATABASE_DSN), then seed its credential metadata in one idempotent pass. Requires DATABASE_DSN, QUERY_DEV_CREDENTIAL_REF, CONTROLHUB_QUERY_CREDENTIAL_<REF>. DSN is never stored/printed.
 	QUERY_DEV_ALLOW_TARGET_FIXTURE=true go run ./cmd/querydev
+
+query-e2e-mysql-up: ## Start the dedicated Query E2E Docker MySQL (dev/test). Writes gitignored .query-e2e-mysql.env with the read-only credential DSN (never printed). Does not touch the ControlHub metadata DB.
+	bash scripts/query-e2e-mysql.sh up
+
+query-e2e-mysql-down: ## Stop and remove the dedicated Query E2E Docker MySQL, and remove .query-e2e-mysql.env.
+	bash scripts/query-e2e-mysql.sh down
+
+query-e2e-mysql-status: ## Report whether the dedicated Query E2E Docker MySQL is running.
+	bash scripts/query-e2e-mysql.sh status
 
 migrate-up: ## Apply all pending migrations
 	@if [ -z "$(GOOSE_DBSTRING)" ]; then echo "Error: DATABASE_DSN not set. Export it or add to .env"; exit 1; fi

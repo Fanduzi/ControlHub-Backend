@@ -1,6 +1,7 @@
 /.superpowers/
 /.worktrees/
 .env
+.query-e2e-mysql.env
 .playwright-mcp/
 .gitnexus
 /.claude/
