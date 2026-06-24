@@ -56,15 +56,21 @@ func (r *QueryExecutionRepository) GetCredentialByResourceID(ctx context.Context
 	return meta, nil
 }
 
-// UpsertCredentialMetadata writes or replaces a target's credential metadata.
-// It is the local/dev seed write path (cmd/querydev). It stores
-// resource_id, engine, credential_ref, enabled, and environment_policy ONLY —
-// never a DSN or password. The upsert keys on the existing unique
-// (resource_id) index so repeated local/dev seeding is idempotent: re-running
-// the seed against the same target refreshes its metadata instead of failing
-// on the duplicate. The credential_ref is validated upstream by the seed
-// service; reads re-validate it fail-closed via model.ValidateCredentialRef.
+// UpsertCredentialMetadata writes or replaces a target's credential metadata. It
+// is shared by the local/dev seed path (cmd/querydev) and the Phase 38A product
+// write path, so it validates the credential_ref and environment_policy in-method
+// (defense in depth — it never trusts the caller) and stores resource_id, engine,
+// credential_ref, enabled, and environment_policy ONLY — never a DSN or password.
+// The upsert keys on the existing unique (resource_id) index so repeated writes
+// against the same target refresh its metadata instead of failing on the
+// duplicate. Reads re-validate the ref fail-closed via model.ValidateCredentialRef.
 func (r *QueryExecutionRepository) UpsertCredentialMetadata(ctx context.Context, meta model.QueryCredentialMetadata) error {
+	if err := model.ValidateCredentialRef(meta.CredentialRef); err != nil {
+		return fmt.Errorf("upsert query credential metadata: %w", err)
+	}
+	if err := meta.EnvironmentPolicy.Validate(); err != nil {
+		return fmt.Errorf("upsert query credential metadata: %w", err)
+	}
 	const q = `insert into query_target_credentials (resource_id, engine, credential_ref, enabled, environment_policy)
 	           values (?, ?, ?, ?, ?)
 	           on duplicate key update
@@ -76,6 +82,17 @@ func (r *QueryExecutionRepository) UpsertCredentialMetadata(ctx context.Context,
 		meta.ResourceID, meta.Engine, meta.CredentialRef, meta.Enabled, string(meta.EnvironmentPolicy),
 	); err != nil {
 		return fmt.Errorf("upsert query credential metadata: %w", err)
+	}
+	return nil
+}
+
+// DeleteCredentialByResourceID removes a target's credential metadata. It is
+// idempotent: deleting a target that has no row is not an error. It never touches
+// a DSN (none is stored) and is the Phase 38A product delete path.
+func (r *QueryExecutionRepository) DeleteCredentialByResourceID(ctx context.Context, resourceID uint64) error {
+	const q = `delete from query_target_credentials where resource_id = ?`
+	if _, err := r.db.ExecContext(ctx, q, resourceID); err != nil {
+		return fmt.Errorf("delete query credential metadata: %w", err)
 	}
 	return nil
 }
