@@ -2,12 +2,56 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"strings"
 	"testing"
 
 	"github.com/fan/controlhub/internal/model"
 )
+
+func TestResolveFixtureHostPort_UsesCredentialDSNNotDatabaseDSN(t *testing.T) {
+	// The credential DSN carries the dedicated query MySQL host:port.
+	t.Setenv("CONTROLHUB_QUERY_CREDENTIAL_LOCAL_QUERY_RO", "u:pw@tcp(127.0.0.1:13306)/query_e2e")
+	// DATABASE_DSN points at a different host:port and MUST be ignored.
+	t.Setenv("DATABASE_DSN", "other:pw@tcp(10.0.0.9:3306)/controlhub")
+	host, port, err := resolveFixtureHostPort(context.Background(), "LOCAL_QUERY_RO")
+	if err != nil {
+		t.Fatalf("err: %v", err)
+	}
+	if host != "127.0.0.1" || port != 13306 {
+		t.Fatalf("host:port = %s:%d, want 127.0.0.1:13306 (credential DSN, not DATABASE_DSN)", host, port)
+	}
+}
+
+func TestResolveFixtureHostPort_MissingCredentialDSN(t *testing.T) {
+	t.Setenv("CONTROLHUB_QUERY_CREDENTIAL_LOCAL_QUERY_RO", "")
+	_, _, err := resolveFixtureHostPort(context.Background(), "LOCAL_QUERY_RO")
+	if !errors.Is(err, errFixtureCredentialUnresolved) {
+		t.Fatalf("err = %v, want errFixtureCredentialUnresolved", err)
+	}
+	if strings.Contains(err.Error(), "tcp(") || strings.Contains(err.Error(), "@") || strings.Contains(err.Error(), "://") {
+		t.Fatalf("error leaks a DSN fragment: %q", err.Error())
+	}
+}
+
+func TestResolveFixtureHostPort_PortlessCredentialDSN(t *testing.T) {
+	t.Setenv("CONTROLHUB_QUERY_CREDENTIAL_LOCAL_QUERY_RO", "u:pw@tcp(127.0.0.1)/query_e2e")
+	_, _, err := resolveFixtureHostPort(context.Background(), "LOCAL_QUERY_RO")
+	if err == nil {
+		t.Fatal("expected error for a portless credential DSN")
+	}
+	if strings.Contains(err.Error(), "tcp(") || strings.Contains(err.Error(), "@") || strings.Contains(err.Error(), "://") {
+		t.Fatalf("error leaks a DSN fragment: %q", err.Error())
+	}
+}
+
+func TestLoadCredentialRefPolicy_MissingRef(t *testing.T) {
+	t.Setenv("QUERY_DEV_CREDENTIAL_REF", "")
+	if _, _, _, err := loadCredentialRefPolicy(); err == nil {
+		t.Fatal("expected error for missing QUERY_DEV_CREDENTIAL_REF")
+	}
+}
 
 func TestLoadFixtureConfig_FlagAbsent(t *testing.T) {
 	t.Setenv("QUERY_DEV_ALLOW_TARGET_FIXTURE", "")

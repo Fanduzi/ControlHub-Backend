@@ -111,8 +111,8 @@ func TestQueryDevTargetFixtureConfig_Validate(t *testing.T) {
 
 // --- DSN host:port parser ---
 
-func TestParseControlHubDSNHostPort_Valid(t *testing.T) {
-	host, port, err := ParseControlHubDSNHostPort("user:secret@tcp(127.0.0.1:3306)/controlhub")
+func TestParseMySQLDSNHostPort_Valid(t *testing.T) {
+	host, port, err := ParseMySQLDSNHostPort("user:secret@tcp(127.0.0.1:3306)/controlhub")
 	if err != nil {
 		t.Fatalf("err: %v", err)
 	}
@@ -121,14 +121,14 @@ func TestParseControlHubDSNHostPort_Valid(t *testing.T) {
 	}
 }
 
-func TestParseControlHubDSNHostPort_Rejects(t *testing.T) {
+func TestParseMySQLDSNHostPort_Rejects(t *testing.T) {
 	cases := []string{
 		"",                              // empty
 		"user:secret@tcp(127.0.0.1)/db", // portless raw address
 		"not a dsn at all",              // unparseable
 	}
 	for _, dsn := range cases {
-		_, _, err := ParseControlHubDSNHostPort(dsn)
+		_, _, err := ParseMySQLDSNHostPort(dsn)
 		if err == nil {
 			t.Fatalf("expected error for %q", dsn)
 		}

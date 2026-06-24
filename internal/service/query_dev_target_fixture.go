@@ -1,7 +1,7 @@
 // Package service provides the local/dev query target fixture.
 //
 // input: context, errors, net, strconv, strings, go-sql-driver/mysql, internal/model
-// output: QueryDevTargetFixtureConfig, DevTargetDictionary, DevTargetResourceStore, QueryDevTargetFixture, NewQueryDevTargetFixture, EnsureLocalQueryTarget, ParseControlHubDSNHostPort, fixture sentinel errors
+// output: QueryDevTargetFixtureConfig, DevTargetDictionary, DevTargetResourceStore, QueryDevTargetFixture, NewQueryDevTargetFixture, EnsureLocalQueryTarget, ParseMySQLDSNHostPort, fixture sentinel errors
 // pos: Explicit, dev/test-only orchestration that ensures one local database_instance query target + profile so the existing credential seed can make it ready. Reuses existing repository methods only — no new repository method, no migration, no credential-binding change. The DSN never enters this path; host/port arrive pre-parsed.
 // note: if this file changes, update header and README.md
 package service
@@ -63,7 +63,7 @@ type DevTargetResourceStore interface {
 }
 
 // QueryDevTargetFixtureConfig carries the fixture inputs. Host/Port are
-// pre-parsed from DATABASE_DSN by the caller (ParseControlHubDSNHostPort); the
+// pre-parsed from the credential DSN by the caller (ParseMySQLDSNHostPort); the
 // DSN itself never enters the fixture.
 type QueryDevTargetFixtureConfig struct {
 	EnvironmentSlug string
@@ -238,12 +238,12 @@ func (f *QueryDevTargetFixture) findExisting(ctx context.Context, cfg QueryDevTa
 	return 0, false, nil
 }
 
-// ParseControlHubDSNHostPort parses a go-sql-driver MySQL DSN and returns only
+// ParseMySQLDSNHostPort parses a go-sql-driver MySQL DSN and returns only
 // its host and port. It mirrors validateDSNBinding's portless-DSN defense (the
 // driver normalizes a portless tcp address to :3306 during ParseDSN), so a DSN
 // without an explicit port is rejected. It never returns or logs the full DSN;
 // every error is a fixed string that carries no DSN fragment.
-func ParseControlHubDSNHostPort(dsn string) (string, int, error) {
+func ParseMySQLDSNHostPort(dsn string) (string, int, error) {
 	cfg, err := mysql.ParseDSN(dsn)
 	if err != nil {
 		return "", 0, errFixtureDSNUnparseable

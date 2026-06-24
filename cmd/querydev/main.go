@@ -31,6 +31,11 @@ import (
 // fail-closed error. Fixed string — never carries a DSN.
 var errFixtureExplicitResourceIDForbidden = errors.New("QUERY_DEV_TARGET_RESOURCE_ID must be unset in fixture mode")
 
+// errFixtureCredentialUnresolved is returned when the credential DSN
+// (CONTROLHUB_QUERY_CREDENTIAL_<REF>) cannot be resolved in fixture mode. Fixed
+// string — never carries the DSN or password.
+var errFixtureCredentialUnresolved = errors.New("dev fixture credential DSN could not be resolved")
+
 func main() {
 	if err := config.LoadDotEnv(); err != nil {
 		log.Fatalf("load .env: %v", err)
@@ -40,17 +45,17 @@ func main() {
 	if dsn == "" {
 		log.Fatal("DATABASE_DSN is not set (set it in .env or export it)")
 	}
-	// The ControlHub bootstrap DSN is passed straight to the driver and never
-	// stored or printed. The credential DSN (CONTROLHUB_QUERY_CREDENTIAL_<REF>)
-	// is read only by the resolver, never here. In fixture mode DATABASE_DSN is
-	// parsed for host:port only (service.ParseControlHubDSNHostPort).
+	// DATABASE_DSN opens the ControlHub metadata database only — it is never used
+	// as the query target. The credential DSN (CONTROLHUB_QUERY_CREDENTIAL_<REF>)
+	// is read only by the resolver, never here; in fixture mode its host:port
+	// becomes the query target profile (see resolveFixtureHostPort).
 	db, err := sql.Open("mysql", dsn)
 	if err != nil {
 		log.Fatalf("open controlhub db: %v", err)
 	}
 	defer db.Close()
 
-	cfg, err := resolveSeedConfig(context.Background(), db, dsn)
+	cfg, err := resolveSeedConfig(context.Background(), db)
 	if err != nil {
 		log.Fatalf("%v", err)
 	}
@@ -72,11 +77,12 @@ func main() {
 }
 
 // resolveSeedConfig builds the credential seed config. In fixture mode it
-// ensures a local database_instance target + profile first (host:port from
-// DATABASE_DSN) and uses the ensured id; QUERY_DEV_TARGET_RESOURCE_ID must be
-// unset. Otherwise it reads the explicit target id from the env (the original
-// bind-only path, unchanged).
-func resolveSeedConfig(ctx context.Context, db *sql.DB, dsn string) (service.QueryDevCredentialSeedConfig, error) {
+// ensures a local database_instance target + profile first — with host:port
+// derived from the credential DSN (CONTROLHUB_QUERY_CREDENTIAL_<REF>), NOT from
+// DATABASE_DSN (which is the ControlHub metadata DB only) — and uses the ensured
+// id; QUERY_DEV_TARGET_RESOURCE_ID must be unset. Otherwise it reads the
+// explicit target id from the env (the original bind-only path, unchanged).
+func resolveSeedConfig(ctx context.Context, db *sql.DB) (service.QueryDevCredentialSeedConfig, error) {
 	ref, policy, allowAll, err := loadCredentialRefPolicy()
 	if err != nil {
 		return service.QueryDevCredentialSeedConfig{}, err
@@ -101,13 +107,15 @@ func resolveSeedConfig(ctx context.Context, db *sql.DB, dsn string) (service.Que
 		}, nil
 	}
 
-	// Fixture mode: the target id is derived (ensured), never supplied.
+	// Fixture mode: the target id is derived (ensured), never supplied. The
+	// profile host:port comes from the credential DSN the server will resolve at
+	// execute time — not from DATABASE_DSN (metadata DB only).
 	if err := fixtureModePreflight(os.Getenv("QUERY_DEV_TARGET_RESOURCE_ID")); err != nil {
 		return service.QueryDevCredentialSeedConfig{}, err
 	}
-	host, port, err := service.ParseControlHubDSNHostPort(dsn)
+	host, port, err := resolveFixtureHostPort(ctx, ref)
 	if err != nil {
-		return service.QueryDevCredentialSeedConfig{}, fmt.Errorf("parse controlhub dsn host/port: %w", err)
+		return service.QueryDevCredentialSeedConfig{}, err
 	}
 	fixtureCfg.Host, fixtureCfg.Port = host, port
 	fixture := service.NewQueryDevTargetFixture(
@@ -124,6 +132,23 @@ func resolveSeedConfig(ctx context.Context, db *sql.DB, dsn string) (service.Que
 		EnvironmentPolicy:    policy,
 		AllowAllEnvironments: allowAll,
 	}, nil
+}
+
+// resolveFixtureHostPort resolves the credential DSN from the environment
+// (CONTROLHUB_QUERY_CREDENTIAL_<REF>) and returns only its host and port. The
+// query target profile must point at the database the server will actually query
+// — the credential DSN — never the ControlHub metadata DATABASE_DSN. The
+// resolved DSN is parsed for host:port only and is never stored, printed, or
+// returned; every error is a fixed string carrying no DSN.
+func resolveFixtureHostPort(ctx context.Context, ref string) (string, int, error) {
+	dsn, err := service.NewEnvCredentialResolver().Resolve(ctx, ref)
+	if err != nil {
+		return "", 0, errFixtureCredentialUnresolved
+	}
+	if dsn == "" {
+		return "", 0, errFixtureCredentialUnresolved
+	}
+	return service.ParseMySQLDSNHostPort(dsn)
 }
 
 // loadCredentialRefPolicy reads the credential ref + environment policy shared

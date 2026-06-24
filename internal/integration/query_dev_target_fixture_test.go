@@ -31,7 +31,7 @@ func fixtureName(t *testing.T) string {
 // Splitting ensure from seed lets a test assert a failed (mismatched) seed.
 func ensureFixtureTarget(t *testing.T, db *sql.DB) uint64 {
 	t.Helper()
-	host, port, err := service.ParseControlHubDSNHostPort(globalEnv.dsn)
+	host, port, err := service.ParseMySQLDSNHostPort(globalEnv.dsn)
 	if err != nil {
 		t.Fatalf("parse dsn host/port: %v", err)
 	}
@@ -216,7 +216,7 @@ func TestQueryDevTargetFixture_NoDSNStored(t *testing.T) {
 func TestQueryDevTargetFixture_ProfileHostPortMatchesDSN(t *testing.T) {
 	db := setupTestDB(t)
 	targetID := ensureFixtureTarget(t, db)
-	wantHost, wantPort, err := service.ParseControlHubDSNHostPort(globalEnv.dsn)
+	wantHost, wantPort, err := service.ParseMySQLDSNHostPort(globalEnv.dsn)
 	if err != nil {
 		t.Fatalf("parse dsn: %v", err)
 	}
