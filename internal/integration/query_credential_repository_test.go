@@ -111,6 +111,26 @@ func TestQueryCredentialRepository_InvalidStoredRefFailsClosed(t *testing.T) {
 	}
 }
 
+// TestQueryCredentialRepository_InvalidStoredPolicyFailsClosed proves a row
+// whose environment_policy was bypassed into the table is returned with the
+// invalid metadata sentinel. WHY: invalid policy is corrupt metadata, not an
+// administrator policy block, and callers must classify it fail-closed.
+func TestQueryCredentialRepository_InvalidStoredPolicyFailsClosed(t *testing.T) {
+	db, repo := newCredentialRepoTestDB(t)
+	ctx := context.Background()
+	const rid uint64 = 7700000008
+
+	mustExec(t, db, `insert into query_target_credentials (resource_id, engine, credential_ref, enabled, environment_policy) values (?, 'mysql', 'ORDER_MYSQL_RO', true, 'prod_plus')`, rid)
+
+	_, err := repo.GetCredentialByResourceID(ctx, rid)
+	if !errors.Is(err, model.ErrInvalidCredentialMetadata) {
+		t.Fatalf("read of an invalid stored policy err = %v, want ErrInvalidCredentialMetadata", err)
+	}
+	if errors.Is(err, sql.ErrNoRows) {
+		t.Fatal("read of an invalid stored policy must error, not report not-found")
+	}
+}
+
 // TestQueryCredentialRepository_UpsertRejectsInvalidRefAndPolicy proves the
 // in-method validation guard rejects an invalid credential ref and an invalid
 // environment policy before any write, leaving the table untouched. WHY: the

@@ -447,6 +447,41 @@ func TestQueryCredentialService_GetStatus_InvalidStoredRef_ReturnsInvalidRefNotM
 	}
 }
 
+// TestQueryCredentialService_GetStatus_InvalidStoredPolicy_ReturnsInvalidRefAndSanitizedPolicy
+// proves a stored row whose environment_policy is invalid surfaces as runtime
+// invalid_ref with configured=true and a sanitized disabled policy. WHY: corrupt
+// metadata must fail closed without exposing raw invalid values or masquerading
+// as a normal policy block.
+func TestQueryCredentialService_GetStatus_InvalidStoredPolicy_ReturnsInvalidRefAndSanitizedPolicy(t *testing.T) {
+	store := newFakeCredentialStore()
+	store.metadata[credentialTargetID] = credentialMeta("ORDER_MYSQL_RO", true, model.QueryEnvironmentPolicy("prod_plus"))
+	store.getErr = model.ErrInvalidCredentialMetadata
+	svc := NewQueryCredentialService(
+		fakeTargetRepo{targets: []model.QueryTarget{credentialTarget("mysql", "db.internal", 3306, "staging")}},
+		store,
+		&fakeResolver{},
+	)
+	resp, err := svc.GetStatus(context.Background(), credentialTargetID)
+	if err != nil {
+		t.Fatalf("GetStatus: %v", err)
+	}
+	if resp.RuntimeStatus != model.QueryCredentialRuntimeInvalidRef {
+		t.Fatalf("runtime = %q, want invalid_ref", resp.RuntimeStatus)
+	}
+	if !resp.Configured {
+		t.Fatal("a row exists, so configured must be true")
+	}
+	if resp.ExecutionEligible {
+		t.Fatal("invalid stored metadata must never be execution eligible")
+	}
+	if resp.EnvironmentPolicy != model.QueryEnvPolicyDisabled {
+		t.Fatalf("policy = %q, want sanitized disabled", resp.EnvironmentPolicy)
+	}
+	if resp.CredentialRef != "" {
+		t.Fatalf("the raw ref must be suppressed for invalid stored metadata, got %q", resp.CredentialRef)
+	}
+}
+
 // TestQueryCredentialService_GetStatus_UnexpectedCredentialReadError_ReturnsBackendError
 // proves an unexpected DB/read error is propagated as a backend error and is
 // NEVER masked as a missing_metadata success. WHY: silently degrading a

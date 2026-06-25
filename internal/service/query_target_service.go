@@ -107,9 +107,9 @@ func (s *QueryTargetService) List(ctx context.Context, q model.QueryTargetListQu
 //   - valid row -> (&cred, nil);
 //   - no row (sql.ErrNoRows) -> (nil, nil) so the inspector reports missing_metadata;
 //   - a row whose stored ref/policy is invalid (ErrInvalidCredentialMetadata):
-//     in the runtime path return (&cred, nil) so the inspector reports
-//     invalid_ref; in the non-runtime path return (nil, nil) — that path cannot
-//     classify invalid_ref and must not let a corrupt row become ready;
+//     in the runtime path return sanitized metadata that forces invalid_ref; in
+//     the non-runtime path return (nil, nil) — that path cannot classify
+//     invalid_ref and must not let a corrupt row become ready;
 //   - any other read error -> (nil, err) so List fails loud.
 func (s *QueryTargetService) readTargetCredential(ctx context.Context, resourceID uint64) (*model.QueryCredentialMetadata, error) {
 	if s.credentials == nil {
@@ -125,6 +125,8 @@ func (s *QueryTargetService) readTargetCredential(ctx context.Context, resourceI
 		if s.resolver == nil {
 			return nil, nil
 		}
+		c.CredentialRef = ""
+		c.EnvironmentPolicy = model.QueryEnvPolicyDisabled
 		return &c, nil
 	default:
 		return nil, err

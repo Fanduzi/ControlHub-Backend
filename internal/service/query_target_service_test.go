@@ -407,6 +407,41 @@ func TestQueryTargetService_List_InvalidStoredCredentialYieldsInvalidRefNotMissi
 	}
 }
 
+// TestQueryTargetService_List_InvalidStoredPolicyYieldsInvalidRefNotPolicyBlocked
+// proves GET /query-targets treats any invalid stored credential metadata as
+// invalid_ref, even when the credential_ref itself is syntactically valid.
+// WHY: a corrupt environment_policy is not an administrator policy decision; it
+// must fail closed as invalid metadata rather than appear as policy_blocked.
+func TestQueryTargetService_List_InvalidStoredPolicyYieldsInvalidRefNotPolicyBlocked(t *testing.T) {
+	store := newFakeCredentialStore()
+	store.metadata[credentialTargetID] = credentialMeta("ORDER_MYSQL_RO", true, model.QueryEnvironmentPolicy("prod_plus"))
+	store.getErr = model.ErrInvalidCredentialMetadata
+	target := credentialTarget("mysql", "db.internal", 3306, "staging")
+	svc := NewQueryTargetService(fakeTargetRepo{targets: []model.QueryTarget{target}}).
+		WithCredentialReader(store).
+		WithCredentialResolver(&fakeResolver{})
+
+	got, err := svc.List(context.Background(), model.QueryTargetListQuery{})
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("got %d targets, want 1", len(got))
+	}
+	if got[0].Governance.CredentialState != "invalid_ref" {
+		t.Fatalf("credentialState = %q, want invalid_ref", got[0].Governance.CredentialState)
+	}
+	if got[0].Governance.CredentialState == "policy_blocked" {
+		t.Fatal("an invalid stored policy must NOT be reported as policy_blocked")
+	}
+	if got[0].Governance.CredentialState == "missing_metadata" {
+		t.Fatal("an invalid stored policy must NOT be reported as missing_metadata")
+	}
+	if got[0].Readiness == model.ReadinessReady || got[0].AvailableActions.Run || got[0].Governance.ExecutionEnabled {
+		t.Fatal("a target with invalid credential metadata must stay locked")
+	}
+}
+
 // TestQueryTargetService_List_UnexpectedCredentialReadErrorFailsLoud proves an
 // unexpected credential read error fails the whole List rather than masking the
 // target as missing_metadata. WHY: inventing a new credentialState for a DB error
