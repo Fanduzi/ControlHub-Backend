@@ -1,7 +1,7 @@
 # Phase 38A Query Credential Metadata Management — Backend Evidence
 
-Scope: backend only (Tasks B1–B6). Frontend (F1–F3) is a separate repo and out of
-scope for this worker.
+Scope: backend (Tasks B1–B6) + frontend evidence sync (Tasks F1–F3 completed in
+separate frontend repo).
 
 Worktree: `.worktrees/backend-phase-38a-query-credential-metadata`
 Branch: `phase-38a-query-credential-metadata` (base: `main` @ `e7e2a50`)
@@ -17,7 +17,7 @@ Branch: `phase-38a-query-credential-metadata` (base: `main` @ `e7e2a50`)
 | B5 | `ffba953` | docs: document query credential metadata API |
 | B6 | `bc58b74` | test: cover query credential metadata API |
 
-Frontend commits: none (out of scope).
+Frontend commits: `4f38d34..0974505` (fast-forward merge to main). See Frontend Evidence section below.
 
 ## API Paths (verified from `internal/api/router.go`)
 
@@ -171,7 +171,73 @@ existing tests untouched); the correction is additive via an optional resolver;
 the dev-seed path (resolver absent) preserves Phase 37 behavior; full unit +
 integration + fuzz coverage confirms the product path.
 
-## credentialState Frontend Contract (handoff note)
+## Frontend Evidence (Phase 38A Frontend Complete)
+
+Frontend repository: `/Users/fan/JsProjects/ControlHub`
+Frontend main HEAD: `0974505`
+Frontend push range: `4f38d34..0974505`
+Merge type: fast-forward
+
+### Frontend Commits
+
+Frontend commits `4f38d34..0974505` cover tasks F1–F3:
+
+- `types/query-credential.ts` — TypeScript types mirroring backend OpenAPI
+- `services/query-credentials.ts` — `getQueryCredential`, `saveQueryCredential`, `deleteQueryCredential`
+- `app/(console)/settings/query-credentials/page.tsx` — admin credential settings page
+- `components/settings/query-credential-settings.tsx` — credential management component
+- `components/query/query-governance-panel.tsx` — read-only credential status display
+- `lib/query-target-display.ts` — target display helpers
+- `messages/en.json` / `messages/zh-CN.json` — i18n labels for all credential states
+- `e2e/query-credential-settings.spec.ts` — real E2E spec
+
+### Admin / Settings Boundary
+
+Credential metadata configuration lives in **settings/admin** (`/settings/query-credentials`),
+not Query Workbench. The Query Workbench remains read-only for credential status and has no
+edit controls. Admin users see "Open credential settings"; non-admin users see
+"Contact administrator".
+
+### Backend / Frontend Boundary
+
+- Backend stores metadata only, not DSN/password.
+- Frontend sends only `credentialRef`, `enabled`, `environmentPolicy`, optional `confirmAllEnvironments`.
+- Frontend never sends `actorUserId`, DSN/password, host, port, or engine.
+- `actorUserId` is derived from the verified bearer token server-side; never accepted from request body.
+
+### Real E2E Evidence
+
+- Backend ran on `:8080`
+- Dedicated query MySQL fixture: `controlhub-query-e2e-mysql`, `127.0.0.1:13306`
+- Ready query target count: 1
+- Ready target: id `616`, `Local MySQL Query Dev`, engine `mysql`, host/port `127.0.0.1:13306`
+- **query credential E2E: 11/11 passed**
+- **query workbench E2E: 7/7 passed**
+- No fake backend used
+- No DSN/password browser state/request/log output
+- No `actorUserId` sent
+- No Workbench edit controls
+- list-pagination was outside this targeted query E2E evidence and is not part of this Phase 38A query credential conclusion
+
+### Frontend CI Evidence
+
+| Field | Value |
+|---|---|
+| CI run ID | `28252354273` |
+| CI URL | https://github.com/Fanduzi/ControlHub-Frontend/actions/runs/28252354273 |
+| `release-local` | succeeded |
+| `release-e2e` | skipped — workflow_dispatch/manual only (expected for non-manual push) |
+
+### Frontend Scope Confirmation
+
+- No backend product edits in frontend phase
+- No secret UI
+- No DSN/password browser state/request/log output
+- No `actorUserId` sent
+- No Workbench edit controls
+- No tag/release/deploy
+
+### credentialState Frontend Contract (handoff note)
 
 On the runtime-backed readiness path (resolver wired in production),
 `QueryTargetGovernance.credentialState` mirrors `QueryCredentialRuntimeStatus`:
@@ -185,7 +251,7 @@ for these values and must never render the raw enum.
 
 ## Scope Confirmation
 
-- No frontend edits (separate repo, untouched).
+- Frontend edits completed in separate repo (see Frontend Evidence section above).
 - No secret write API; no secret manager integration.
 - No new query engines; no SQL guard relaxation.
 - No migration (reused the existing `query_target_credentials` table).

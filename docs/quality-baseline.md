@@ -28,17 +28,19 @@ added in Phase 28.
 
 ### Backend Test Inventory (33 files)
 
-**API handler tests** (9 files):
+**API handler tests** (10 files):
 - `audit_handler_test.go`, `auth_handler_test.go`, `dictionary_handler_test.go`
-- `docs_handler_test.go`, `health_handler_test.go`, `query_target_handler_test.go`
+- `docs_handler_test.go`, `health_handler_test.go`, `query_credential_handler_test.go`
+- `query_target_handler_test.go`
 - `relation_handler_test.go`, `resource_handler_test.go`, `topology_handler_test.go`
 
-**Model tests** (3 files):
-- `pagination_test.go`, `resource_test.go`, `taxonomy_test.go`
+**Model tests** (4 files):
+- `pagination_test.go`, `query_credential_test.go`, `resource_test.go`, `taxonomy_test.go`
 
-**Service tests** (9 files):
+**Service tests** (10 files):
 - `auth_service_test.go`, `dictionary_service_test.go`, `profile_service_test.go`
-- `query_target_service_test.go`, `resource_read_service_test.go`, `resource_write_service_test.go`
+- `query_credential_service_test.go`, `query_target_service_test.go`
+- `resource_read_service_test.go`, `resource_write_service_test.go`
 - `topology_semantics_test.go`, `topology_service_test.go`
 
 **Repository tests** (1 file):
@@ -53,9 +55,10 @@ added in Phase 28.
 **OpenAPI tests** (1 file):
 - `openapi_test.go`
 
-**Integration tests** (9 files, require Docker):
+**Integration tests** (11 files, require Docker):
 - `archive_test.go`, `legacy_import_test.go`, `mysql_test.go`
-- `openapi_fuzz_test.go`, `query_target_test.go`, `relation_test.go`
+- `openapi_fuzz_test.go`, `query_credential_api_test.go`, `query_credential_repository_test.go`
+- `query_target_test.go`, `relation_test.go`
 - `resource_test.go`, `testenv_test.go`, `topology_test.go`
 
 ## Frontend Gates
@@ -76,7 +79,7 @@ added in Phase 28.
 
 ### Frontend Test Inventory
 
-**E2E specs** (11 files):
+**E2E specs** (12 files):
 - `console-ux.spec.ts` — Console shell navigation, environment context
 - `databases-sheet.spec.ts` — Database list interactions
 - `list-pagination.spec.ts` — Resource and audit list query params
@@ -84,6 +87,7 @@ added in Phase 28.
 - `operator-console-smoke.spec.ts` — Core smoke reachability
 - `operator-database-workflow.spec.ts` — Full database operator workflow
 - `operator-interaction-stability.spec.ts` — Sheet/dropdown/back-nav stability
+- `query-credential-settings.spec.ts` — Query credential admin settings E2E (Phase 38A)
 - `resource-archive.spec.ts` — Resource archive action
 - `resources-sheet.spec.ts` — Resource detail sheet
 - `settings.spec.ts` — Settings dictionaries
@@ -126,6 +130,7 @@ added in Phase 28.
 | Backend resource CRUD/read models | `resource_handler_test`, `resource_read_service_test`, `resource_write_service_test`, `resource_test` (model) | `resource_test` (integration), `relation_test` | Schema covers all resource endpoints | `resource-detail-sheet.test`, `resource-detail-sheet-loader.test`, `create-resource-sheet.test`, `edit-resource-sheet.test` | Partial (`resources-sheet.spec`) | Yes (`resources-sheet.spec`) | Yes | Yes | Covered. |
 | Backend database operational summary | `resource_read_service_test` | Yes (via resource integration) | OpenAPI schema for GET /resources/:id includes operational summary fields | `database-operational-signal.test`, `database-read-model-consistency.test` | No | No | Yes (`operator-database-workflow`) | Yes | Covered. Operational summary absence on instances is by design and tested at unit level. |
 | Query Workbench target directory (Phase 36) | `query_target_service_test`, `query_target_handler_test` | `query_target_test` | Schema covers GET /query-targets; fuzz exercised 28/28 ops after Phase 36A | `query-target-display.test`, `query-workbench-search-params.test`, `query-targets.test`, `query-workbench.test`, `pages.query.test` | Yes (`query-workbench.spec`) | No | Yes (manual cross-repo E2E run 27896155506) | Yes | Covered as a locked directory/workbench shell only. No query execution, credentials, SQL/Redis/Mongo execution, export, saved query, or query history API exists in Phase 36. |
+| Query credential metadata management (Phase 38A) | `query_credential_service_test`, `query_credential_handler_test`, `query_credential_test` (model) | `query_credential_api_test`, `query_credential_repository_test` | Schema covers GET/PUT/DELETE /query-targets/{id}/credential; fuzz exercised 33/33 ops after Phase 38A | `query-credential-settings.test` (service + component), i18n label tests | No | No | Yes (`query-credential-settings.spec`, 11/11 credential + 7/7 workbench passed) | Yes | Admin credential settings at `/settings/query-credentials`; read-only workbench credential status. No DSN/password in request/response/browser/audit. Real E2E with backend + Phase 37H dedicated query MySQL fixture. Frontend CI run `28252354273` (`release-local` PASS). |
 | OpenAPI schema validity | `openapi_test.go` | No | `make openapi-validate` + Schemathesis fuzz | N/A | N/A | N/A | N/A | N/A | Dual validation: JSON Schema validation + runtime fuzzing. |
 | OpenAPI fuzz behavior | N/A | `openapi_fuzz_test.go` | Schemathesis: 50 examples/operation, no-5xx, status conformance, content-type conformance, response schema conformance | N/A | N/A | N/A | N/A | N/A | Requires Docker. Run before merge when API changes or as nightly gate. |
 
@@ -144,6 +149,15 @@ added in Phase 28.
 6. **Seed data constants**: E2E tests reference seed resources by name (`analytics-ch-cluster-prod`, `Analytics ClickHouse Node 02`) and ID (`14`, `22`). These are stable in the seed migration but not centralized as typed constants.
 
 ## Frontend Baseline
+
+Frontend Phase 38A commit `0974505` (main, Query Credential Settings UI):
+- `/settings/query-credentials` page added as admin-only credential metadata management surface.
+- Query Workbench remains read-only for credential status; no edit controls exposed to query users.
+- Credential metadata configuration boundary: settings/admin only, not `/query`.
+- Backend/frontend boundary: frontend sends only `credentialRef`, `enabled`, `environmentPolicy`, optional `confirmAllEnvironments`; never sends `actorUserId`, DSN/password, host, port, or engine.
+- Real E2E against backend + Phase 37H dedicated query MySQL fixture: query credential 11/11 passed, query workbench 7/7 passed. No fake backend. No DSN/password leak.
+- Frontend CI run `28252354273`: `release-local` succeeded, `release-e2e` skipped (manual only, expected for non-manual push).
+- No backend product edits, no secret UI, no `actorUserId` sent, no Workbench edit controls, no tag/release/deploy.
 
 Frontend Phase 36B commit `ff2681a` (main, Query Workbench shell):
 - `/query` page added as a locked Query Workbench shell backed by backend Phase 36A `GET /query-targets`.

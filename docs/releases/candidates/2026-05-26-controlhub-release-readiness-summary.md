@@ -33,6 +33,7 @@
 | Backend fast CI (Phase 36A commit `0579b29`) | push | PASS | https://github.com/Fanduzi/ControlHub-Backend/actions/runs/27875169683 |
 | Frontend fast CI (Phase 36B commit `ff2681a`) | push | PASS | https://github.com/Fanduzi/ControlHub-Frontend/actions/runs/27896150307 |
 | Frontend manual E2E CI (Phase 36B) | workflow_dispatch `run_e2e=true` | PASS | https://github.com/Fanduzi/ControlHub-Frontend/actions/runs/27896155506 |
+| Frontend fast CI (Phase 38A commit `0974505`) | push | `release-local` PASS, `release-e2e` skipped (manual only) | https://github.com/Fanduzi/ControlHub-Frontend/actions/runs/28252354273 |
 
 ### Backend Heavy CI Detail (Run 26409102650)
 
@@ -92,6 +93,8 @@
 5. **Frontend cross-repo E2E CI implemented (Phase 35)** — Manual `workflow_dispatch run_e2e=true` starts MySQL, runs backend migrations, starts backend server, then runs frontend `release:e2e`. Backend checkout uses `CONTROLHUB_BACKEND_CHECKOUT_TOKEN` (PAT, read-only access to Fanduzi/ControlHub-Backend). Artifacts uploaded: playwright-report, test-results, backend.log. Full E2E is manual only; push/PR still run fast frontend CI only. Evidence: run `26519616558` PASS.
 
 6. **Query Workbench execution remains intentionally disabled (Phase 36)** — Backend Phase 36A exposes query targets from existing database resource metadata through `GET /query-targets`; frontend Phase 36B renders `/query` as a locked workbench shell. This is a capability directory and product shell only. There is no query execution API, no credential model, no SQL/Redis/Mongo execution path, no export path, no saved-query API, and no query-history API. Evidence: backend fast CI run `27875169683` PASS; frontend fast CI run `27896150307` PASS; manual cross-repo E2E run `27896155506` PASS.
+
+7. **Phase 38A Query Credential Metadata Management complete** — Backend Phase 38A (B1–B6) added credential metadata APIs (`GET/PUT/DELETE /query-targets/{id}/credential`) with admin-only authorization, runtime status inspection, readiness correction, and no-secret storage. Frontend Phase 38A (F1–F3) added admin credential settings UI at `/settings/query-credentials`, read-only Query Workbench credential status, and real E2E against backend + Phase 37H dedicated query MySQL fixture. Credential metadata configuration lives in settings/admin, not Query Workbench. Backend stores metadata only; frontend sends only `credentialRef`, `enabled`, `environmentPolicy`, optional `confirmAllEnvironments`. DSN/password never enters request/response/browser state/audit rows. Evidence: backend evidence `docs/superpowers/notes/2026-06-24-phase-38a-query-credential-metadata-management-evidence.md`; frontend main `0974505`; frontend CI run `28252354273` (`release-local` succeeded, `release-e2e` skipped as expected for non-manual push); real E2E query credential 11/11 passed, query workbench 7/7 passed; no fake backend; no DSN/password leak; no `actorUserId` sent; no Workbench edit controls.
 
 ## Non-actions
 
