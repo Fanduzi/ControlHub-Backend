@@ -52,7 +52,7 @@ Preferred fix: avoid ICU placeholders for this copy and use literal example text
 such as `CONTROLHUB_QUERY_CREDENTIAL_your-ref`. This prevents accidental exposure
 or implication of a real credential reference.
 
-### 3. `SHOW TABLES` is blocked by the SELECT-only guard
+### 3. `SHOW TABLES` is blocked by an overly narrow read-only guard
 
 Running `show tables;` in the query worksheet returns:
 
@@ -60,17 +60,34 @@ Running `show tables;` in the query worksheet returns:
 query validation failed: only a single SELECT statement is allowed
 ```
 
-This is consistent with the Phase 37 backend boundary: only a single `SELECT` is
-allowed. However, users expect database IDEs to help discover schema objects.
+This exposes a product-boundary correction. The intended query workbench
+boundary is not "SELECT only"; it is "read-only SQL only". Users expect a
+database IDE to support safe metadata exploration such as `SHOW TABLES`,
+`SHOW COLUMNS`, `DESCRIBE`, and `EXPLAIN SELECT`.
 
-Do not solve this by broadly allowing `SHOW`. Safer options:
+The backend guard is currently too narrow. It should widen through an explicit
+read-only whitelist, not by accepting arbitrary statements.
 
-- add a dedicated schema browser backed by read-only metadata APIs;
-- or explicitly whitelist a small set of metadata statements such as
-  `SHOW TABLES` / `SHOW COLUMNS`, with guard, audit, and tests.
+Initial allow-list candidates:
 
-Short-term UI copy should clearly state: "Only SELECT statements are executable;
-schema browsing is a separate capability."
+- single `SELECT`;
+- `SHOW TABLES`;
+- `SHOW COLUMNS FROM <table>`;
+- `DESCRIBE <table>` / `DESC <table>`;
+- `EXPLAIN SELECT ...`.
+
+Still forbidden:
+
+- multi-statement input;
+- DDL and DML;
+- `CALL`, `SET`, `USE`, transaction control, and lock statements;
+- file/export paths such as `INTO OUTFILE`, `DUMPFILE`, and `LOAD_FILE`;
+- side-effect or reliability-risk functions already rejected by Phase 37;
+- broad metadata statements such as `SHOW PROCESSLIST` or unconstrained
+  `SHOW DATABASES` unless a later design explicitly approves them.
+
+Short-term UI copy should say "Only read-only SQL statements are executable";
+it should not say "Only SELECT".
 
 ### 4. Governance and access panel is too large for its value
 
@@ -153,13 +170,15 @@ clear to avoid executing an old statement against the wrong target.
 
 ### Product follow-up
 
-6. Add explicit SELECT-only guidance and plan a schema browser.
+6. Widen the backend guard from SELECT-only to read-only SQL allow-list and
+   update frontend copy accordingly.
 7. Upgrade the worksheet editor with highlighting, formatting, and multiple
    worksheets.
 
 ## Scope Notes
 
-These findings do not require changing the Phase 37 SQL guard immediately.
-The backend SELECT-only boundary remains valid. The primary issue is that the
-frontend currently does not explain or structure that boundary in a way that
-matches user expectations for a query workbench.
+These findings require changing the Phase 37 SQL guard in a controlled follow-up.
+The original Phase 37 "SELECT only" rule was the safe starting point, but the
+product boundary for a query workbench is read-only SQL. The next phase should
+widen the guard through explicit parser-backed allow-listing while preserving
+the no-write, no-export, no-side-effect, audit-every-attempt boundary.
