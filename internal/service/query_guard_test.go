@@ -272,3 +272,128 @@ func TestQueryGuardPreviewIsTruncated(t *testing.T) {
 		t.Fatalf("preview length = %d, want <= 512", len(got.StatementPreview))
 	}
 }
+
+// --- Phase 38C: read-only metadata statement allow-list ---
+
+func TestQueryGuardAllowsShowTables(t *testing.T) {
+	t.Parallel()
+	g := newTestGuard()
+	// WHY: SHOW TABLES is a safe read-only metadata command that users expect
+	// in a database query workbench.
+	got, err := g.Guard("show tables", 100)
+	if err != nil {
+		t.Fatalf("Guard error: %v", err)
+	}
+	if got.LimitApplied != 0 {
+		t.Fatalf("LimitApplied = %d, want 0 (SHOW statements have no row cap)", got.LimitApplied)
+	}
+	if got.ExecutableSQL == "" {
+		t.Fatal("ExecutableSQL must not be empty for SHOW TABLES")
+	}
+}
+
+func TestQueryGuardAllowsShowColumns(t *testing.T) {
+	t.Parallel()
+	g := newTestGuard()
+	// WHY: SHOW COLUMNS FROM <table> is a safe metadata introspection command.
+	got, err := g.Guard("show columns from query_e2e_items", 100)
+	if err != nil {
+		t.Fatalf("Guard error: %v", err)
+	}
+	if got.ExecutableSQL == "" {
+		t.Fatal("ExecutableSQL must not be empty for SHOW COLUMNS")
+	}
+}
+
+func TestQueryGuardAllowsDescribeTable(t *testing.T) {
+	t.Parallel()
+	g := newTestGuard()
+	// WHY: DESCRIBE <table> is equivalent to SHOW COLUMNS and is a standard
+	// metadata exploration command.
+	got, err := g.Guard("describe query_e2e_items", 100)
+	if err != nil {
+		t.Fatalf("Guard error: %v", err)
+	}
+	if got.ExecutableSQL == "" {
+		t.Fatal("ExecutableSQL must not be empty for DESCRIBE")
+	}
+}
+
+func TestQueryGuardAllowsDescTable(t *testing.T) {
+	t.Parallel()
+	g := newTestGuard()
+	// WHY: DESC is a standard shorthand for DESCRIBE.
+	got, err := g.Guard("desc query_e2e_items", 100)
+	if err != nil {
+		t.Fatalf("Guard error: %v", err)
+	}
+	if got.ExecutableSQL == "" {
+		t.Fatal("ExecutableSQL must not be empty for DESC")
+	}
+}
+
+func TestQueryGuardAllowsExplainSelect(t *testing.T) {
+	t.Parallel()
+	g := newTestGuard()
+	// WHY: EXPLAIN SELECT is a safe read-only command that shows query execution
+	// plan without modifying data.
+	got, err := g.Guard("explain select * from query_e2e_items", 100)
+	if err != nil {
+		t.Fatalf("Guard error: %v", err)
+	}
+	if got.ExecutableSQL == "" {
+		t.Fatal("ExecutableSQL must not be empty for EXPLAIN SELECT")
+	}
+}
+
+// --- Phase 38C: rejection tests for forbidden SHOW/admin statements ---
+
+func TestQueryGuardRejectsShowProcesslist(t *testing.T) {
+	t.Parallel()
+	g := newTestGuard()
+	// WHY: SHOW PROCESSLIST exposes all connected sessions and their queries —
+	// a read-only sandbox must never leak cross-session visibility.
+	if _, err := g.Guard("show processlist", 100); !errors.Is(err, ErrQueryStatementNotAllowed) {
+		t.Fatalf("show processlist error = %v, want ErrQueryStatementNotAllowed", err)
+	}
+}
+
+func TestQueryGuardRejectsShowDatabases(t *testing.T) {
+	t.Parallel()
+	g := newTestGuard()
+	// WHY: SHOW DATABASES exposes all database names on the server — a read-only
+	// sandbox must not leak cross-schema visibility.
+	if _, err := g.Guard("show databases", 100); !errors.Is(err, ErrQueryStatementNotAllowed) {
+		t.Fatalf("show databases error = %v, want ErrQueryStatementNotAllowed", err)
+	}
+}
+
+func TestQueryGuardRejectsShowGrants(t *testing.T) {
+	t.Parallel()
+	g := newTestGuard()
+	// WHY: SHOW GRANTS exposes privilege information — not appropriate for a
+	// read-only query sandbox.
+	if _, err := g.Guard("show grants", 100); !errors.Is(err, ErrQueryStatementNotAllowed) {
+		t.Fatalf("show grants error = %v, want ErrQueryStatementNotAllowed", err)
+	}
+}
+
+func TestQueryGuardRejectsUseDatabase(t *testing.T) {
+	t.Parallel()
+	g := newTestGuard()
+	// WHY: USE changes the session database context — a session mutation that
+	// must be rejected in a read-only sandbox.
+	if _, err := g.Guard("use mysql", 100); !errors.Is(err, ErrQueryStatementNotAllowed) {
+		t.Fatalf("use database error = %v, want ErrQueryStatementNotAllowed", err)
+	}
+}
+
+func TestQueryGuardRejectsSetStatement(t *testing.T) {
+	t.Parallel()
+	g := newTestGuard()
+	// WHY: SET modifies session variables — a session mutation that must be
+	// rejected in a read-only sandbox.
+	if _, err := g.Guard("set sql_safe_updates = 1", 100); !errors.Is(err, ErrQueryStatementNotAllowed) {
+		t.Fatalf("set statement error = %v, want ErrQueryStatementNotAllowed", err)
+	}
+}
