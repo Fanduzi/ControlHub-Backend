@@ -141,14 +141,15 @@ paths:
                 $ref: "#/components/schemas/ErrorResponse"
   /query-targets/{id}/execute:
     post:
-      summary: Execute a read-only SELECT against a query target
+      summary: Execute a read-only SQL statement against a query target
       operationId: executeQueryTarget
       description: >
-        Phase 37 read-only sandbox. Runs a single guarded MySQL/TiDB SELECT under
-        a backend-owned credential, bounded timeout, row cap, and payload caps.
-        Requires a fresh Bearer token (bounded TTL). The actor is derived from the
-        verified token and is never accepted in the request body. The resolved DSN
-        is never returned.
+        Phase 37 read-only sandbox. Runs a single guarded MySQL/TiDB read-only
+        SQL statement under a backend-owned credential, bounded timeout, row cap,
+        and payload caps. Allowed statements: SELECT, SHOW TABLES, SHOW COLUMNS,
+        DESCRIBE/DESC, EXPLAIN SELECT. Requires a fresh Bearer token (bounded
+        TTL). The actor is derived from the verified token and is never accepted
+        in the request body. The resolved DSN is never returned.
       security:
         - bearerAuth: []
       parameters:
@@ -169,6 +170,10 @@ paths:
               acceptedSelect:
                 value:
                   statement: "select 1 as value"
+                  maxRows: 100
+              acceptedShowTables:
+                value:
+                  statement: "show tables"
                   maxRows: 100
               rejectedUpdate:
                 value:
@@ -207,7 +212,7 @@ paths:
                 blockedStatement:
                   value:
                     error: validation_failed
-                    message: only a single SELECT statement is allowed
+                    message: only read-only SQL statements are allowed
         "401":
           description: Missing or invalid Bearer token (or token older than the TTL)
           content:
@@ -2322,7 +2327,9 @@ components:
       properties:
         statement:
           type: string
-          description: A single MySQL/TiDB SELECT statement.
+          description: >
+            A single MySQL/TiDB read-only SQL statement. Allowed: SELECT, SHOW
+            TABLES, SHOW COLUMNS, DESCRIBE/DESC, EXPLAIN SELECT.
         maxRows:
           type: integer
           minimum: 0
