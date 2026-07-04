@@ -533,3 +533,95 @@ func TestQueryExecution_CastNullAsSignedIsNil(t *testing.T) {
 		t.Fatalf("cast(NULL as signed) = %v (%T), want nil", got, got)
 	}
 }
+
+// --- Phase 38C: read-only metadata statement execution tests ---
+
+func TestQueryExecution_ShowTablesSucceeds(t *testing.T) {
+	svc, targetID, _ := setupQuerySandboxTarget(t)
+
+	// WHY: SHOW TABLES is a safe read-only metadata command that users expect
+	// in a database query workbench.
+	resp, err := svc.Execute(context.Background(), ownerDBA, targetID, model.QueryExecuteRequest{
+		Statement: "show tables",
+		MaxRows:   100,
+	})
+	if err != nil {
+		t.Fatalf("Execute error: %v", err)
+	}
+	if resp.Status != model.QueryExecutionSuccess {
+		t.Fatalf("status = %q, want success", resp.Status)
+	}
+	// The fixture table qe_sandbox_fixtures must appear in the result.
+	found := false
+	for _, row := range resp.Rows {
+		if len(row) > 0 {
+			if name, ok := row[0].(string); ok && name == "qe_sandbox_fixtures" {
+				found = true
+				break
+			}
+		}
+	}
+	if !found {
+		t.Fatalf("SHOW TABLES must include qe_sandbox_fixtures, got rows=%v", resp.Rows)
+	}
+}
+
+func TestQueryExecution_DescribeTableSucceeds(t *testing.T) {
+	svc, targetID, _ := setupQuerySandboxTarget(t)
+
+	// WHY: DESCRIBE <table> is a safe metadata introspection command.
+	resp, err := svc.Execute(context.Background(), ownerDBA, targetID, model.QueryExecuteRequest{
+		Statement: "describe qe_sandbox_fixtures",
+		MaxRows:   100,
+	})
+	if err != nil {
+		t.Fatalf("Execute error: %v", err)
+	}
+	if resp.Status != model.QueryExecutionSuccess {
+		t.Fatalf("status = %q, want success", resp.Status)
+	}
+	if resp.RowCount < 2 {
+		t.Fatalf("rowCount = %d, want >= 2 (id and name columns)", resp.RowCount)
+	}
+	// Verify the column names are present.
+	colNames := make(map[string]bool)
+	for _, col := range resp.Columns {
+		colNames[col.Name] = true
+	}
+	if !colNames["Field"] || !colNames["Type"] {
+		t.Fatalf("DESCRIBE columns must include Field and Type, got %v", colNames)
+	}
+}
+
+func TestQueryExecution_ExplainSelectSucceeds(t *testing.T) {
+	svc, targetID, _ := setupQuerySandboxTarget(t)
+
+	// WHY: EXPLAIN SELECT is a safe read-only command that shows query execution
+	// plan without modifying data.
+	resp, err := svc.Execute(context.Background(), ownerDBA, targetID, model.QueryExecuteRequest{
+		Statement: "explain select * from qe_sandbox_fixtures",
+		MaxRows:   100,
+	})
+	if err != nil {
+		t.Fatalf("Execute error: %v", err)
+	}
+	if resp.Status != model.QueryExecutionSuccess {
+		t.Fatalf("status = %q, want success", resp.Status)
+	}
+	if resp.RowCount < 1 {
+		t.Fatalf("rowCount = %d, want >= 1", resp.RowCount)
+	}
+}
+
+func TestQueryExecution_UpdateRemainsRejected(t *testing.T) {
+	svc, targetID, _ := setupQuerySandboxTarget(t)
+
+	// WHY: writes must remain rejected even after the guard widening.
+	_, err := svc.Execute(context.Background(), ownerDBA, targetID, model.QueryExecuteRequest{
+		Statement: "update qe_sandbox_fixtures set name = 'x'",
+		MaxRows:   10,
+	})
+	if !errors.Is(err, service.ErrQueryValidationFailed) {
+		t.Fatalf("Execute(update) error = %v, want ErrQueryValidationFailed", err)
+	}
+}

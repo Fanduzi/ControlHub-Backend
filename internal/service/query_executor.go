@@ -100,8 +100,9 @@ func (e *MySQLQueryExecutor) Query(ctx context.Context, dsn string, guarded Guar
 	responseBytes := 0
 
 	for rows.Next() {
-		// Scan one row past the limit so truncation can be detected.
-		if result.RowCount >= limit {
+		// Scan one row past the limit so truncation can be detected. A limit of
+		// 0 means no row cap (SHOW/DESCRIBE metadata statements).
+		if limit > 0 && result.RowCount >= limit {
 			result.Truncated = true
 			break
 		}
