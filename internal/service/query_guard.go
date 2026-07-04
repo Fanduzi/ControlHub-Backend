@@ -152,7 +152,7 @@ func (g *QueryGuard) guardSelect(sel *sqlparser.Select, trimmed string, requeste
 
 // guardShow validates a SHOW statement against the read-only allow-list.
 // Allowed: SHOW TABLES, SHOW COLUMNS FROM <table>.
-// Rejected: SHOW PROCESSLIST, SHOW DATABASES, SHOW GRANTS, and everything else.
+// Rejected: SHOW PROCESSLIST, SHOW DATABASES, SHOW GRANTS, cross-schema qualifiers, and everything else.
 func (g *QueryGuard) guardShow(show *sqlparser.Show, trimmed string) (GuardedQuery, error) {
 	basic, ok := show.Internal.(*sqlparser.ShowBasic)
 	if !ok {
@@ -161,9 +161,15 @@ func (g *QueryGuard) guardShow(show *sqlparser.Show, trimmed string) (GuardedQue
 	}
 	switch basic.Command {
 	case sqlparser.Table:
-		// SHOW TABLES — allowed.
+		// SHOW TABLES — allowed, but not SHOW TABLES FROM <db>.
+		if basic.DbName.String() != "" {
+			return GuardedQuery{}, ErrQueryStatementNotAllowed
+		}
 	case sqlparser.Column:
-		// SHOW COLUMNS FROM <table> — allowed.
+		// SHOW COLUMNS FROM <table> — allowed, but not SHOW COLUMNS FROM <db>.<table>.
+		if basic.Tbl.Qualifier.String() != "" {
+			return GuardedQuery{}, ErrQueryStatementNotAllowed
+		}
 	default:
 		// SHOW PROCESSLIST, SHOW DATABASES, etc. — rejected.
 		return GuardedQuery{}, ErrQueryStatementNotAllowed
@@ -185,20 +191,65 @@ func (g *QueryGuard) guardShow(show *sqlparser.Show, trimmed string) (GuardedQue
 
 // guardExplain validates an EXPLAIN statement. Only EXPLAIN SELECT is allowed —
 // the inner statement must be a SELECT that passes the full side-effect guard.
+// The final ExecutableSQL preserves the EXPLAIN wrapper so the executor runs
+// EXPLAIN (returning the execution plan), not the bare SELECT (returning data).
 func (g *QueryGuard) guardExplain(explain *sqlparser.ExplainStmt, trimmed string, requestedMaxRows int) (GuardedQuery, error) {
 	innerSelect, ok := explain.Statement.(*sqlparser.Select)
 	if !ok {
 		// EXPLAIN of non-SELECT (e.g. EXPLAIN UPDATE) — rejected.
 		return GuardedQuery{}, ErrQueryStatementNotAllowed
 	}
-	// Validate the inner SELECT through the full guard path (side-effect walk,
-	// locking, INTO). The LIMIT injection applies to the inner SELECT.
-	return g.guardSelect(innerSelect, trimmed, requestedMaxRows)
+	// Validate the inner SELECT through the side-effect guard (INTO, locking,
+	// forbidden functions). We do NOT call guardSelect because that would
+	// overwrite ExecutableSQL with just the SELECT + LIMIT, stripping EXPLAIN.
+	if innerSelect.Into != nil {
+		return GuardedQuery{}, ErrQueryStatementNotAllowed
+	}
+	if innerSelect.Lock != sqlparser.NoLock {
+		return GuardedQuery{}, ErrQueryStatementNotAllowed
+	}
+	if err := g.rejectForbiddenNodes(innerSelect); err != nil {
+		return GuardedQuery{}, err
+	}
+
+	// Apply backend-owned LIMIT to the inner SELECT.
+	effective := requestedMaxRows
+	if effective == 0 {
+		effective = g.config.DefaultMaxRows
+	}
+	if effective > g.config.HardMaxRows {
+		effective = g.config.HardMaxRows
+	}
+	innerSelect.Limit = &sqlparser.Limit{
+		Rowcount: &sqlparser.Literal{Type: sqlparser.IntVal, Val: strconv.Itoa(effective + 1)},
+	}
+
+	// Rebuild the EXPLAIN wrapper with the guarded inner SELECT.
+	explain.Statement = innerSelect
+
+	preview := trimmed
+	if len(preview) > statementPreviewMax {
+		preview = preview[:statementPreviewMax]
+	}
+
+	return GuardedQuery{
+		OriginalStatement: trimmed,
+		ExecutableSQL:     sqlparser.String(explain),
+		LimitApplied:      effective,
+		StatementDigest:   g.digest(trimmed),
+		StatementPreview:  preview,
+	}, nil
 }
 
 // guardExplainTab validates a DESCRIBE/DESC <table> statement. These are safe
-// read-only metadata commands.
-func (g *QueryGuard) guardExplainTab(_ *sqlparser.ExplainTab, trimmed string) (GuardedQuery, error) {
+// read-only metadata commands, but cross-schema qualifiers (e.g. DESCRIBE
+// mysql.user) are rejected to prevent cross-schema enumeration.
+func (g *QueryGuard) guardExplainTab(tab *sqlparser.ExplainTab, trimmed string) (GuardedQuery, error) {
+	// Reject DESCRIBE <db>.<table> — the sandbox must not expose cross-schema metadata.
+	if tab.Table.Qualifier.String() != "" {
+		return GuardedQuery{}, ErrQueryStatementNotAllowed
+	}
+
 	preview := trimmed
 	if len(preview) > statementPreviewMax {
 		preview = preview[:statementPreviewMax]

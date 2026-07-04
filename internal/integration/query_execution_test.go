@@ -596,8 +596,8 @@ func TestQueryExecution_DescribeTableSucceeds(t *testing.T) {
 func TestQueryExecution_ExplainSelectSucceeds(t *testing.T) {
 	svc, targetID, _ := setupQuerySandboxTarget(t)
 
-	// WHY: EXPLAIN SELECT is a safe read-only command that shows query execution
-	// plan without modifying data.
+	// WHY: EXPLAIN SELECT must return the execution plan (EXPLAIN columns like
+	// id, select_type, table, type), NOT business data from the table itself.
 	resp, err := svc.Execute(context.Background(), ownerDBA, targetID, model.QueryExecuteRequest{
 		Statement: "explain select * from qe_sandbox_fixtures",
 		MaxRows:   100,
@@ -610,6 +610,15 @@ func TestQueryExecution_ExplainSelectSucceeds(t *testing.T) {
 	}
 	if resp.RowCount < 1 {
 		t.Fatalf("rowCount = %d, want >= 1", resp.RowCount)
+	}
+	// Verify we got EXPLAIN output columns, not business data columns.
+	// MySQL EXPLAIN always returns columns like id, select_type, table, type.
+	colNames := make(map[string]bool)
+	for _, col := range resp.Columns {
+		colNames[col.Name] = true
+	}
+	if !colNames["id"] || !colNames["select_type"] || !colNames["table"] {
+		t.Fatalf("EXPLAIN must return execution plan columns (id, select_type, table), got %v", colNames)
 	}
 }
 

@@ -341,8 +341,38 @@ func TestQueryGuardAllowsExplainSelect(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Guard error: %v", err)
 	}
-	if got.ExecutableSQL == "" {
-		t.Fatal("ExecutableSQL must not be empty for EXPLAIN SELECT")
+	// CRITICAL: ExecutableSQL must remain an EXPLAIN statement, not degrade to
+	// a bare SELECT that returns business data.
+	if !strings.HasPrefix(strings.ToLower(got.ExecutableSQL), "explain") {
+		t.Fatalf("ExecutableSQL %q must start with EXPLAIN, not bare SELECT", got.ExecutableSQL)
+	}
+}
+
+func TestQueryGuardExplainRejectsLockingInnerSelect(t *testing.T) {
+	t.Parallel()
+	g := newTestGuard()
+	// WHY: the inner SELECT of an EXPLAIN must still pass the full side-effect
+	// guard — locking clauses are not read-only.
+	if _, err := g.Guard("explain select * from t for update", 100); !errors.Is(err, ErrQueryStatementNotAllowed) {
+		t.Fatalf("explain+for update error = %v, want ErrQueryStatementNotAllowed", err)
+	}
+}
+
+func TestQueryGuardExplainRejectsSleepInnerSelect(t *testing.T) {
+	t.Parallel()
+	g := newTestGuard()
+	// WHY: side-effect functions in the inner SELECT must be rejected even under EXPLAIN.
+	if _, err := g.Guard("explain select sleep(1)", 100); !errors.Is(err, ErrQueryStatementNotAllowed) {
+		t.Fatalf("explain+sleep error = %v, want ErrQueryStatementNotAllowed", err)
+	}
+}
+
+func TestQueryGuardExplainRejectsIntoOutfileInnerSelect(t *testing.T) {
+	t.Parallel()
+	g := newTestGuard()
+	// WHY: INTO OUTFILE in the inner SELECT must be rejected even under EXPLAIN.
+	if _, err := g.Guard("explain select * from t into outfile '/tmp/x'", 100); !errors.Is(err, ErrQueryStatementNotAllowed) {
+		t.Fatalf("explain+into outfile error = %v, want ErrQueryStatementNotAllowed", err)
 	}
 }
 
@@ -395,5 +425,46 @@ func TestQueryGuardRejectsSetStatement(t *testing.T) {
 	// rejected in a read-only sandbox.
 	if _, err := g.Guard("set sql_safe_updates = 1", 100); !errors.Is(err, ErrQueryStatementNotAllowed) {
 		t.Fatalf("set statement error = %v, want ErrQueryStatementNotAllowed", err)
+	}
+}
+
+// --- Phase 38C fix: cross-schema qualifier rejection ---
+
+func TestQueryGuardRejectsShowTablesFromSchema(t *testing.T) {
+	t.Parallel()
+	g := newTestGuard()
+	// WHY: SHOW TABLES FROM <db> enumerates another schema's tables — the
+	// sandbox must not expose cross-schema visibility.
+	if _, err := g.Guard("show tables from mysql", 100); !errors.Is(err, ErrQueryStatementNotAllowed) {
+		t.Fatalf("show tables from mysql error = %v, want ErrQueryStatementNotAllowed", err)
+	}
+}
+
+func TestQueryGuardRejectsShowColumnsFromQualifiedTable(t *testing.T) {
+	t.Parallel()
+	g := newTestGuard()
+	// WHY: SHOW COLUMNS FROM <db>.<table> introspects another schema — the
+	// sandbox must not expose cross-schema metadata.
+	if _, err := g.Guard("show columns from mysql.user", 100); !errors.Is(err, ErrQueryStatementNotAllowed) {
+		t.Fatalf("show columns from mysql.user error = %v, want ErrQueryStatementNotAllowed", err)
+	}
+}
+
+func TestQueryGuardRejectsDescribeQualifiedTable(t *testing.T) {
+	t.Parallel()
+	g := newTestGuard()
+	// WHY: DESCRIBE <db>.<table> introspects another schema — the sandbox
+	// must not expose cross-schema metadata.
+	if _, err := g.Guard("describe mysql.user", 100); !errors.Is(err, ErrQueryStatementNotAllowed) {
+		t.Fatalf("describe mysql.user error = %v, want ErrQueryStatementNotAllowed", err)
+	}
+}
+
+func TestQueryGuardRejectsDescQualifiedTable(t *testing.T) {
+	t.Parallel()
+	g := newTestGuard()
+	// WHY: DESC <db>.<table> is shorthand for DESCRIBE — same cross-schema restriction.
+	if _, err := g.Guard("desc mysql.user", 100); !errors.Is(err, ErrQueryStatementNotAllowed) {
+		t.Fatalf("desc mysql.user error = %v, want ErrQueryStatementNotAllowed", err)
 	}
 }
