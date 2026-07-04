@@ -1,7 +1,7 @@
 // Package service provides business logic for the read-only query sandbox.
 // input: errors, fmt, strconv, strings, vitess.io/vitess/go/vt/sqlparser
 // output: QueryGuardConfig, GuardedQuery, NewQueryGuard, QueryGuard.Guard, guard sentinel errors
-// pos: AST-backed MySQL/TiDB SELECT-only guard — rejects non-read statements, side-effecting functions, locking clauses, and enforces a backend-owned LIMIT
+// pos: AST-backed MySQL/TiDB read-only guard — rejects non-read statements, side-effecting functions, locking clauses, and enforces a backend-owned LIMIT
 // note: if this file changes, update header and README.md
 package service
 
@@ -35,12 +35,12 @@ type GuardedQuery struct {
 
 var (
 	ErrQueryStatementEmpty      = errors.New("query statement is empty")
-	ErrQueryStatementNotAllowed = errors.New("only a single SELECT statement is allowed")
+	ErrQueryStatementNotAllowed = errors.New("only read-only SQL statements are allowed")
 	ErrQueryLimitInvalid        = errors.New("query maxRows must not be negative")
 )
 
-// QueryGuard parses and validates MySQL/TiDB SELECT statements. All rejections
-// are decided from the parsed AST, never by substring matching.
+// QueryGuard parses and validates MySQL/TiDB read-only statements. All
+// rejections are decided from the parsed AST, never by substring matching.
 type QueryGuard struct {
 	config QueryGuardConfig
 	parser *sqlparser.Parser
@@ -58,9 +58,9 @@ func NewQueryGuard(config QueryGuardConfig) *QueryGuard {
 }
 
 // Guard validates a user statement and returns the backend-owned executable
-// form. It allows exactly one SELECT, rejects side-effecting/resource/locking
-// constructs via AST walk, and injects a backend-owned LIMIT bounded by the
-// configured defaults.
+// form. It allows a small read-only allow-list (SELECT, SHOW TABLES, SHOW
+// COLUMNS, DESCRIBE/DESC, EXPLAIN SELECT), rejects side-effecting/resource/
+// locking constructs via AST walk, and injects a backend-owned LIMIT for SELECT.
 func (g *QueryGuard) Guard(statement string, requestedMaxRows int) (GuardedQuery, error) {
 	trimmed := strings.TrimSpace(statement)
 	if trimmed == "" {
@@ -82,11 +82,27 @@ func (g *QueryGuard) Guard(statement string, requestedMaxRows int) (GuardedQuery
 	if err != nil {
 		return GuardedQuery{}, fmt.Errorf("%w: %v", ErrQueryStatementNotAllowed, err)
 	}
-	sel, ok := stmt.(*sqlparser.Select)
-	if !ok {
+
+	// Dispatch on statement type. SELECT gets the full side-effect walk + LIMIT
+	// injection. Allowed metadata statements pass through as-is. Everything else
+	// is rejected.
+	switch s := stmt.(type) {
+	case *sqlparser.Select:
+		return g.guardSelect(s, trimmed, requestedMaxRows)
+	case *sqlparser.Show:
+		return g.guardShow(s, trimmed)
+	case *sqlparser.ExplainStmt:
+		return g.guardExplain(s, trimmed, requestedMaxRows)
+	case *sqlparser.ExplainTab:
+		return g.guardExplainTab(s, trimmed)
+	default:
 		return GuardedQuery{}, ErrQueryStatementNotAllowed
 	}
+}
 
+// guardSelect validates a SELECT statement: rejects INTO, locking clauses, and
+// side-effect functions, then injects a backend-owned LIMIT.
+func (g *QueryGuard) guardSelect(sel *sqlparser.Select, trimmed string, requestedMaxRows int) (GuardedQuery, error) {
 	// INTO (OUTFILE / DUMPFILE / S3 / @var) — any INTO is rejected. INTO OUTFILE
 	// and DUMPFILE write server-side files; INTO @var carries variable state.
 	if sel.Into != nil {
@@ -129,6 +145,69 @@ func (g *QueryGuard) Guard(statement string, requestedMaxRows int) (GuardedQuery
 		OriginalStatement: trimmed,
 		ExecutableSQL:     sqlparser.String(sel),
 		LimitApplied:      effective,
+		StatementDigest:   g.digest(trimmed),
+		StatementPreview:  preview,
+	}, nil
+}
+
+// guardShow validates a SHOW statement against the read-only allow-list.
+// Allowed: SHOW TABLES, SHOW COLUMNS FROM <table>.
+// Rejected: SHOW PROCESSLIST, SHOW DATABASES, SHOW GRANTS, and everything else.
+func (g *QueryGuard) guardShow(show *sqlparser.Show, trimmed string) (GuardedQuery, error) {
+	basic, ok := show.Internal.(*sqlparser.ShowBasic)
+	if !ok {
+		// ShowGrants, ShowCreate, ShowEngine, etc. — not in the allow-list.
+		return GuardedQuery{}, ErrQueryStatementNotAllowed
+	}
+	switch basic.Command {
+	case sqlparser.Table:
+		// SHOW TABLES — allowed.
+	case sqlparser.Column:
+		// SHOW COLUMNS FROM <table> — allowed.
+	default:
+		// SHOW PROCESSLIST, SHOW DATABASES, etc. — rejected.
+		return GuardedQuery{}, ErrQueryStatementNotAllowed
+	}
+
+	preview := trimmed
+	if len(preview) > statementPreviewMax {
+		preview = preview[:statementPreviewMax]
+	}
+
+	return GuardedQuery{
+		OriginalStatement: trimmed,
+		ExecutableSQL:     sqlparser.String(show),
+		LimitApplied:      0, // SHOW statements have no row cap
+		StatementDigest:   g.digest(trimmed),
+		StatementPreview:  preview,
+	}, nil
+}
+
+// guardExplain validates an EXPLAIN statement. Only EXPLAIN SELECT is allowed —
+// the inner statement must be a SELECT that passes the full side-effect guard.
+func (g *QueryGuard) guardExplain(explain *sqlparser.ExplainStmt, trimmed string, requestedMaxRows int) (GuardedQuery, error) {
+	innerSelect, ok := explain.Statement.(*sqlparser.Select)
+	if !ok {
+		// EXPLAIN of non-SELECT (e.g. EXPLAIN UPDATE) — rejected.
+		return GuardedQuery{}, ErrQueryStatementNotAllowed
+	}
+	// Validate the inner SELECT through the full guard path (side-effect walk,
+	// locking, INTO). The LIMIT injection applies to the inner SELECT.
+	return g.guardSelect(innerSelect, trimmed, requestedMaxRows)
+}
+
+// guardExplainTab validates a DESCRIBE/DESC <table> statement. These are safe
+// read-only metadata commands.
+func (g *QueryGuard) guardExplainTab(_ *sqlparser.ExplainTab, trimmed string) (GuardedQuery, error) {
+	preview := trimmed
+	if len(preview) > statementPreviewMax {
+		preview = preview[:statementPreviewMax]
+	}
+
+	return GuardedQuery{
+		OriginalStatement: trimmed,
+		ExecutableSQL:     trimmed,
+		LimitApplied:      0, // DESCRIBE statements have no row cap
 		StatementDigest:   g.digest(trimmed),
 		StatementPreview:  preview,
 	}, nil
