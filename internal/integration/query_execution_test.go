@@ -634,3 +634,172 @@ func TestQueryExecution_UpdateRemainsRejected(t *testing.T) {
 		t.Fatalf("Execute(update) error = %v, want ErrQueryValidationFailed", err)
 	}
 }
+
+// --- Phase 38D: read-only database metadata exploration tests ---
+
+// setupQueryE2EDatabase creates a dedicated query_e2e database with a
+// query_e2e_items table in the disposable MySQL container. This fixture is
+// separate from the sandbox target's qe_sandbox_fixtures table so
+// cross-database metadata queries can be tested. It uses the raw test DB
+// connection because CREATE DATABASE is intentionally rejected by the query
+// guard.
+func setupQueryE2EDatabase(t *testing.T) {
+	t.Helper()
+	db := setupTestDB(t)
+	mustExec(t, db, "CREATE DATABASE IF NOT EXISTS query_e2e")
+	mustExec(t, db, "DROP TABLE IF EXISTS query_e2e.query_e2e_items")
+	mustExec(t, db, "CREATE TABLE query_e2e.query_e2e_items (id BIGINT UNSIGNED NOT NULL PRIMARY KEY, name VARCHAR(64) NOT NULL)")
+	mustExec(t, db, "INSERT INTO query_e2e.query_e2e_items (id, name) VALUES (1,'alpha'),(2,'beta')")
+}
+
+func TestQueryExecution_ShowDatabasesSucceeds(t *testing.T) {
+	svc, targetID, _ := setupQuerySandboxTarget(t)
+	setupQueryE2EDatabase(t)
+
+	// WHY: SHOW DATABASES is a safe read-only metadata command that users
+	// expect in a database query workbench.
+	resp, err := svc.Execute(context.Background(), ownerDBA, targetID, model.QueryExecuteRequest{
+		Statement: "show databases",
+		MaxRows:   100,
+	})
+	if err != nil {
+		t.Fatalf("Execute error: %v", err)
+	}
+	if resp.Status != model.QueryExecutionSuccess {
+		t.Fatalf("status = %q, want success", resp.Status)
+	}
+	// The query_e2e database must appear in the result.
+	found := false
+	for _, row := range resp.Rows {
+		if len(row) > 0 {
+			if name, ok := row[0].(string); ok && name == "query_e2e" {
+				found = true
+				break
+			}
+		}
+	}
+	if !found {
+		t.Fatalf("SHOW DATABASES must include query_e2e, got rows=%v", resp.Rows)
+	}
+}
+
+func TestQueryExecution_ShowTablesFromDatabaseSucceeds(t *testing.T) {
+	svc, targetID, _ := setupQuerySandboxTarget(t)
+	setupQueryE2EDatabase(t)
+
+	// WHY: SHOW TABLES FROM <database> is a safe cross-schema metadata command.
+	resp, err := svc.Execute(context.Background(), ownerDBA, targetID, model.QueryExecuteRequest{
+		Statement: "show tables from query_e2e",
+		MaxRows:   100,
+	})
+	if err != nil {
+		t.Fatalf("Execute error: %v", err)
+	}
+	if resp.Status != model.QueryExecutionSuccess {
+		t.Fatalf("status = %q, want success", resp.Status)
+	}
+	// The query_e2e_items table must appear in the result.
+	found := false
+	for _, row := range resp.Rows {
+		if len(row) > 0 {
+			if name, ok := row[0].(string); ok && name == "query_e2e_items" {
+				found = true
+				break
+			}
+		}
+	}
+	if !found {
+		t.Fatalf("SHOW TABLES FROM query_e2e must include query_e2e_items, got rows=%v", resp.Rows)
+	}
+}
+
+func TestQueryExecution_ShowColumnsFromQualifiedTableSucceeds(t *testing.T) {
+	svc, targetID, _ := setupQuerySandboxTarget(t)
+	setupQueryE2EDatabase(t)
+
+	// WHY: SHOW COLUMNS FROM <db>.<table> is a safe cross-schema metadata
+	// introspection command.
+	resp, err := svc.Execute(context.Background(), ownerDBA, targetID, model.QueryExecuteRequest{
+		Statement: "show columns from query_e2e.query_e2e_items",
+		MaxRows:   100,
+	})
+	if err != nil {
+		t.Fatalf("Execute error: %v", err)
+	}
+	if resp.Status != model.QueryExecutionSuccess {
+		t.Fatalf("status = %q, want success", resp.Status)
+	}
+	if resp.RowCount < 2 {
+		t.Fatalf("rowCount = %d, want >= 2 (id and name columns)", resp.RowCount)
+	}
+}
+
+func TestQueryExecution_DescribeQualifiedTableSucceeds(t *testing.T) {
+	svc, targetID, _ := setupQuerySandboxTarget(t)
+	setupQueryE2EDatabase(t)
+
+	// WHY: DESCRIBE <db>.<table> is a safe cross-schema metadata introspection
+	// command. The credential controls actual schema access.
+	resp, err := svc.Execute(context.Background(), ownerDBA, targetID, model.QueryExecuteRequest{
+		Statement: "describe query_e2e.query_e2e_items",
+		MaxRows:   100,
+	})
+	if err != nil {
+		t.Fatalf("Execute error: %v", err)
+	}
+	if resp.Status != model.QueryExecutionSuccess {
+		t.Fatalf("status = %q, want success", resp.Status)
+	}
+	if resp.RowCount < 2 {
+		t.Fatalf("rowCount = %d, want >= 2 (id and name columns)", resp.RowCount)
+	}
+	colNames := make(map[string]bool)
+	for _, col := range resp.Columns {
+		colNames[col.Name] = true
+	}
+	if !colNames["Field"] || !colNames["Type"] {
+		t.Fatalf("DESCRIBE columns must include Field and Type, got %v", colNames)
+	}
+}
+
+func TestQueryExecution_ShowProcesslistRemainsRejected(t *testing.T) {
+	svc, targetID, _ := setupQuerySandboxTarget(t)
+
+	// WHY: SHOW PROCESSLIST exposes all connected sessions — not appropriate
+	// for a read-only sandbox.
+	_, err := svc.Execute(context.Background(), ownerDBA, targetID, model.QueryExecuteRequest{
+		Statement: "show processlist",
+		MaxRows:   10,
+	})
+	if !errors.Is(err, service.ErrQueryValidationFailed) {
+		t.Fatalf("Execute(show processlist) error = %v, want ErrQueryValidationFailed", err)
+	}
+}
+
+func TestQueryExecution_ShowGrantsRemainsRejected(t *testing.T) {
+	svc, targetID, _ := setupQuerySandboxTarget(t)
+
+	// WHY: SHOW GRANTS exposes privilege information — not appropriate for a
+	// read-only sandbox.
+	_, err := svc.Execute(context.Background(), ownerDBA, targetID, model.QueryExecuteRequest{
+		Statement: "show grants",
+		MaxRows:   10,
+	})
+	if !errors.Is(err, service.ErrQueryValidationFailed) {
+		t.Fatalf("Execute(show grants) error = %v, want ErrQueryValidationFailed", err)
+	}
+}
+
+func TestQueryExecution_UseDatabaseRemainsRejected(t *testing.T) {
+	svc, targetID, _ := setupQuerySandboxTarget(t)
+
+	// WHY: USE changes the session database context — a session mutation that
+	// must be rejected in a read-only sandbox.
+	_, err := svc.Execute(context.Background(), ownerDBA, targetID, model.QueryExecuteRequest{
+		Statement: "use query_e2e",
+		MaxRows:   10,
+	})
+	if !errors.Is(err, service.ErrQueryValidationFailed) {
+		t.Fatalf("Execute(use query_e2e) error = %v, want ErrQueryValidationFailed", err)
+	}
+}

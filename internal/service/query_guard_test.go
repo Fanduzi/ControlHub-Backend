@@ -388,13 +388,21 @@ func TestQueryGuardRejectsShowProcesslist(t *testing.T) {
 	}
 }
 
-func TestQueryGuardRejectsShowDatabases(t *testing.T) {
+func TestQueryGuardAllowsShowDatabases(t *testing.T) {
 	t.Parallel()
 	g := newTestGuard()
-	// WHY: SHOW DATABASES exposes all database names on the server — a read-only
-	// sandbox must not leak cross-schema visibility.
-	if _, err := g.Guard("show databases", 100); !errors.Is(err, ErrQueryStatementNotAllowed) {
-		t.Fatalf("show databases error = %v, want ErrQueryStatementNotAllowed", err)
+	// WHY: SHOW DATABASES is a safe read-only metadata command. The read-only
+	// credential controls what databases are actually accessible; the guard's
+	// job is to reject writes, session mutation, and privilege commands.
+	got, err := g.Guard("show databases", 100)
+	if err != nil {
+		t.Fatalf("Guard error: %v", err)
+	}
+	if got.LimitApplied != 0 {
+		t.Fatalf("LimitApplied = %d, want 0 (SHOW statements have no row cap)", got.LimitApplied)
+	}
+	if got.ExecutableSQL == "" {
+		t.Fatal("ExecutableSQL must not be empty for SHOW DATABASES")
 	}
 }
 
@@ -428,43 +436,60 @@ func TestQueryGuardRejectsSetStatement(t *testing.T) {
 	}
 }
 
-// --- Phase 38C fix: cross-schema qualifier rejection ---
+// --- Phase 38D: cross-schema metadata exploration is now allowed ---
 
-func TestQueryGuardRejectsShowTablesFromSchema(t *testing.T) {
+func TestQueryGuardAllowsShowTablesFromSchema(t *testing.T) {
 	t.Parallel()
 	g := newTestGuard()
-	// WHY: SHOW TABLES FROM <db> enumerates another schema's tables — the
-	// sandbox must not expose cross-schema visibility.
-	if _, err := g.Guard("show tables from mysql", 100); !errors.Is(err, ErrQueryStatementNotAllowed) {
-		t.Fatalf("show tables from mysql error = %v, want ErrQueryStatementNotAllowed", err)
+	// WHY: SHOW TABLES FROM <db> is a safe read-only metadata command. The
+	// read-only credential controls what schemas are actually accessible.
+	got, err := g.Guard("show tables from query_e2e", 100)
+	if err != nil {
+		t.Fatalf("Guard error: %v", err)
+	}
+	if got.ExecutableSQL == "" {
+		t.Fatal("ExecutableSQL must not be empty for SHOW TABLES FROM")
 	}
 }
 
-func TestQueryGuardRejectsShowColumnsFromQualifiedTable(t *testing.T) {
+func TestQueryGuardAllowsShowColumnsFromQualifiedTable(t *testing.T) {
 	t.Parallel()
 	g := newTestGuard()
-	// WHY: SHOW COLUMNS FROM <db>.<table> introspects another schema — the
-	// sandbox must not expose cross-schema metadata.
-	if _, err := g.Guard("show columns from mysql.user", 100); !errors.Is(err, ErrQueryStatementNotAllowed) {
-		t.Fatalf("show columns from mysql.user error = %v, want ErrQueryStatementNotAllowed", err)
+	// WHY: SHOW COLUMNS FROM <db>.<table> is a safe metadata introspection
+	// command. The credential controls actual schema access.
+	got, err := g.Guard("show columns from query_e2e.items", 100)
+	if err != nil {
+		t.Fatalf("Guard error: %v", err)
+	}
+	if got.ExecutableSQL == "" {
+		t.Fatal("ExecutableSQL must not be empty for SHOW COLUMNS FROM <db>.<table>")
 	}
 }
 
-func TestQueryGuardRejectsDescribeQualifiedTable(t *testing.T) {
+func TestQueryGuardAllowsDescribeQualifiedTable(t *testing.T) {
 	t.Parallel()
 	g := newTestGuard()
-	// WHY: DESCRIBE <db>.<table> introspects another schema — the sandbox
-	// must not expose cross-schema metadata.
-	if _, err := g.Guard("describe mysql.user", 100); !errors.Is(err, ErrQueryStatementNotAllowed) {
-		t.Fatalf("describe mysql.user error = %v, want ErrQueryStatementNotAllowed", err)
+	// WHY: DESCRIBE <db>.<table> is a safe metadata introspection command.
+	// The credential controls actual schema access.
+	got, err := g.Guard("describe query_e2e.items", 100)
+	if err != nil {
+		t.Fatalf("Guard error: %v", err)
+	}
+	if got.ExecutableSQL == "" {
+		t.Fatal("ExecutableSQL must not be empty for DESCRIBE <db>.<table>")
 	}
 }
 
-func TestQueryGuardRejectsDescQualifiedTable(t *testing.T) {
+func TestQueryGuardAllowsDescQualifiedTable(t *testing.T) {
 	t.Parallel()
 	g := newTestGuard()
-	// WHY: DESC <db>.<table> is shorthand for DESCRIBE — same cross-schema restriction.
-	if _, err := g.Guard("desc mysql.user", 100); !errors.Is(err, ErrQueryStatementNotAllowed) {
-		t.Fatalf("desc mysql.user error = %v, want ErrQueryStatementNotAllowed", err)
+	// WHY: DESC <db>.<table> is shorthand for DESCRIBE — same safe metadata
+	// introspection.
+	got, err := g.Guard("desc query_e2e.items", 100)
+	if err != nil {
+		t.Fatalf("Guard error: %v", err)
+	}
+	if got.ExecutableSQL == "" {
+		t.Fatal("ExecutableSQL must not be empty for DESC <db>.<table>")
 	}
 }

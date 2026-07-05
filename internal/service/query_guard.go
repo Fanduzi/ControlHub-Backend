@@ -58,9 +58,10 @@ func NewQueryGuard(config QueryGuardConfig) *QueryGuard {
 }
 
 // Guard validates a user statement and returns the backend-owned executable
-// form. It allows a small read-only allow-list (SELECT, SHOW TABLES, SHOW
-// COLUMNS, DESCRIBE/DESC, EXPLAIN SELECT), rejects side-effecting/resource/
-// locking constructs via AST walk, and injects a backend-owned LIMIT for SELECT.
+// form. It allows a small read-only allow-list (SELECT, SHOW DATABASES, SHOW
+// TABLES, SHOW COLUMNS, DESCRIBE/DESC, EXPLAIN SELECT), rejects side-effecting
+// /resource/locking constructs via AST walk, and injects a backend-owned LIMIT
+// for SELECT.
 func (g *QueryGuard) Guard(statement string, requestedMaxRows int) (GuardedQuery, error) {
 	trimmed := strings.TrimSpace(statement)
 	if trimmed == "" {
@@ -151,8 +152,11 @@ func (g *QueryGuard) guardSelect(sel *sqlparser.Select, trimmed string, requeste
 }
 
 // guardShow validates a SHOW statement against the read-only allow-list.
-// Allowed: SHOW TABLES, SHOW COLUMNS FROM <table>.
-// Rejected: SHOW PROCESSLIST, SHOW DATABASES, SHOW GRANTS, cross-schema qualifiers, and everything else.
+// Allowed: SHOW DATABASES, SHOW TABLES [FROM <db>], SHOW COLUMNS FROM
+// [<db>.]<table>. Cross-schema qualifiers are permitted because the read-only
+// credential controls actual access; the guard's job is to reject writes,
+// session mutation, and privilege commands.
+// Rejected: SHOW PROCESSLIST, SHOW GRANTS, and everything else.
 func (g *QueryGuard) guardShow(show *sqlparser.Show, trimmed string) (GuardedQuery, error) {
 	basic, ok := show.Internal.(*sqlparser.ShowBasic)
 	if !ok {
@@ -160,18 +164,16 @@ func (g *QueryGuard) guardShow(show *sqlparser.Show, trimmed string) (GuardedQue
 		return GuardedQuery{}, ErrQueryStatementNotAllowed
 	}
 	switch basic.Command {
+	case sqlparser.Database:
+		// SHOW DATABASES — safe read-only metadata command.
 	case sqlparser.Table:
-		// SHOW TABLES — allowed, but not SHOW TABLES FROM <db>.
-		if basic.DbName.String() != "" {
-			return GuardedQuery{}, ErrQueryStatementNotAllowed
-		}
+		// SHOW TABLES [FROM <db>] — both unqualified and cross-schema forms are
+		// allowed. The credential controls what schemas are actually accessible.
 	case sqlparser.Column:
-		// SHOW COLUMNS FROM <table> — allowed, but not SHOW COLUMNS FROM <db>.<table>.
-		if basic.Tbl.Qualifier.String() != "" {
-			return GuardedQuery{}, ErrQueryStatementNotAllowed
-		}
+		// SHOW COLUMNS FROM [<db>.]<table> — both unqualified and cross-schema
+		// forms are allowed. The credential controls actual schema access.
 	default:
-		// SHOW PROCESSLIST, SHOW DATABASES, etc. — rejected.
+		// SHOW PROCESSLIST, SHOW VARIABLES, etc. — rejected.
 		return GuardedQuery{}, ErrQueryStatementNotAllowed
 	}
 
@@ -242,14 +244,11 @@ func (g *QueryGuard) guardExplain(explain *sqlparser.ExplainStmt, trimmed string
 }
 
 // guardExplainTab validates a DESCRIBE/DESC <table> statement. These are safe
-// read-only metadata commands, but cross-schema qualifiers (e.g. DESCRIBE
-// mysql.user) are rejected to prevent cross-schema enumeration.
+// read-only metadata commands. Cross-schema qualifiers (e.g. DESCRIBE
+// db.table) are allowed because the read-only credential controls actual access;
+// the guard's job is to reject writes and session mutation, not to second-guess
+// schema visibility.
 func (g *QueryGuard) guardExplainTab(tab *sqlparser.ExplainTab, trimmed string) (GuardedQuery, error) {
-	// Reject DESCRIBE <db>.<table> — the sandbox must not expose cross-schema metadata.
-	if tab.Table.Qualifier.String() != "" {
-		return GuardedQuery{}, ErrQueryStatementNotAllowed
-	}
-
 	preview := trimmed
 	if len(preview) > statementPreviewMax {
 		preview = preview[:statementPreviewMax]

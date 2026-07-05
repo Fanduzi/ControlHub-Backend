@@ -146,8 +146,10 @@ paths:
       description: >
         Phase 37 read-only sandbox. Runs a single guarded MySQL/TiDB read-only
         SQL statement under a backend-owned credential, bounded timeout, row cap,
-        and payload caps. Allowed statements: SELECT, SHOW TABLES, SHOW COLUMNS,
-        DESCRIBE/DESC, EXPLAIN SELECT. Requires a fresh Bearer token (bounded
+        and payload caps. Allowed statements: SELECT, SHOW DATABASES, SHOW TABLES,
+        SHOW COLUMNS, DESCRIBE/DESC, EXPLAIN SELECT. Schema-qualified metadata
+        forms (SHOW TABLES FROM db, SHOW COLUMNS FROM db.tbl, DESCRIBE db.tbl)
+        are allowed. Requires a fresh Bearer token (bounded
         TTL). The actor is derived from the verified token and is never accepted
         in the request body. The resolved DSN is never returned.
       security:
@@ -2329,7 +2331,9 @@ components:
           type: string
           description: >
             A single MySQL/TiDB read-only SQL statement. Allowed: SELECT, SHOW
-            TABLES, SHOW COLUMNS, DESCRIBE/DESC, EXPLAIN SELECT.
+            DATABASES, SHOW TABLES, SHOW COLUMNS, DESCRIBE/DESC, EXPLAIN SELECT.
+            Schema-qualified metadata forms (SHOW TABLES FROM db, SHOW COLUMNS
+            FROM db.tbl, DESCRIBE db.tbl) are allowed.
         maxRows:
           type: integer
           minimum: 0
