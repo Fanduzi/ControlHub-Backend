@@ -67,7 +67,7 @@ added in Phase 28.
 |---|---|---|---|
 | `npx tsc --noEmit -p tsconfig.json` | TypeScript contract and type safety | Yes | Runs without backend |
 | `npm run lint` | ESLint rules and unused code | Yes | Runs without backend |
-| `npm run test` | Vitest unit/component behavior (53 test files, 547 tests) | Yes | Runs without backend |
+| `npm run test` | Vitest unit/component behavior (64 test files, 769 tests after Phase 38D) | Yes | Runs without backend |
 | `npm run build` | Next.js production build and SSR compatibility | Yes | Runs without backend |
 | `npm run check:e2e-governance` | Browser-test policy: no stderr suppression, no success-path screenshots, console/network guards, UI login for SSR | Yes | Runs without backend |
 | `npm run check:e2e-preflight` | Stale `:3100` dev server and `:8081` E2E proxy detection before Playwright runs | Yes (before E2E) | Detects and reports stale listeners; does not kill processes |
@@ -79,7 +79,7 @@ added in Phase 28.
 
 ### Frontend Test Inventory
 
-**E2E specs** (12 files):
+**E2E specs** (13 files):
 - `console-ux.spec.ts` — Console shell navigation, environment context
 - `databases-sheet.spec.ts` — Database list interactions
 - `list-pagination.spec.ts` — Resource and audit list query params
@@ -88,21 +88,21 @@ added in Phase 28.
 - `operator-database-workflow.spec.ts` — Full database operator workflow
 - `operator-interaction-stability.spec.ts` — Sheet/dropdown/back-nav stability
 - `query-credential-settings.spec.ts` — Query credential admin settings E2E (Phase 38A)
+- `query-workbench.spec.ts` — Query Workbench target selection, read-only SQL execution, and history E2E (Phase 38D)
 - `resource-archive.spec.ts` — Resource archive action
 - `resources-sheet.spec.ts` — Resource detail sheet
 - `settings.spec.ts` — Settings dictionaries
 - `topology.spec.ts` — Topology load and same-origin API proxy
 
-**Unit/component tests** (53 files across tests/, 547 tests):
-- Component tests: 27 files (accent-switcher, activity-timeline, audit-table, cluster-members-table, create-resource-sheet, database-consistency-panel, database-decision-deck, database-instance-facts-panel, database-operator-workbench, database-supporting-details, database-table, db-type-icon, edit-resource-sheet, environment-provider, language-switcher, multi-select-filter, overview-content, pagination-controls, resource-archive-button, resource-detail-sheet-loader, resource-detail-sheet, resource-link, resource-relation-panel, resource-table, sidebar, theme-toggle, topbar)
-- E2E harness tests: 2 files (console-guards, interaction-stability)
-- Lib tests: 9 files (database-diagnostic-runbook, database-operational-signal, database-operator-workbench, database-read-model-consistency, diagnostic-copy, environment-params, list-page-search-params, resource-copy, resource-summary, view-models)
-- Page integration tests: 2 files (pages.list-pagination, resource-detail-page)
-- Service tests: 5 files (api-client, audits, e2e-api-helpers, resources, settings)
-- Preflight script tests: 1 file (check-e2e-preflight)
-- Topology tests: 4 files (topology-mapper-semantic, topology-mapper, topology-panel, topology-service)
-- Hook tests: 1 file (use-sidebar-state)
-- E2E API proxy CORS test: 1 file
+**Unit/component tests** (64 files, 769 tests after Phase 38D; representative families):
+- Component tests: shell/navigation, settings, resource/database panels, Query Workbench, and Query Credential Settings.
+- E2E harness tests: console guards and interaction stability.
+- Lib tests: auth-role recovery, query credential operations, query target display, database operational models, environment params, pagination/search params, resource copy/summary, and view models.
+- Page integration tests: list pagination and resource detail page.
+- Service tests: API client, auth/query credential/query execution/query target/resource/settings service wrappers.
+- Script tests: E2E preflight and governance checks.
+- Topology tests: topology mapper, semantic mapper, panel, and service behavior.
+- Hook/API proxy tests: sidebar state and same-origin proxy/CORS behavior.
 
 **Scripts** (2 files):
 - `scripts/check-e2e-governance.mjs` — Policy compliance checker
@@ -131,6 +131,7 @@ added in Phase 28.
 | Backend database operational summary | `resource_read_service_test` | Yes (via resource integration) | OpenAPI schema for GET /resources/:id includes operational summary fields | `database-operational-signal.test`, `database-read-model-consistency.test` | No | No | Yes (`operator-database-workflow`) | Yes | Covered. Operational summary absence on instances is by design and tested at unit level. |
 | Query Workbench target directory (Phase 36) | `query_target_service_test`, `query_target_handler_test` | `query_target_test` | Schema covers GET /query-targets; fuzz exercised 28/28 ops after Phase 36A | `query-target-display.test`, `query-workbench-search-params.test`, `query-targets.test`, `query-workbench.test`, `pages.query.test` | Yes (`query-workbench.spec`) | No | Yes (manual cross-repo E2E run 27896155506) | Yes | Covered as a locked directory/workbench shell only. No query execution, credentials, SQL/Redis/Mongo execution, export, saved query, or query history API exists in Phase 36. |
 | Query credential metadata management (Phase 38A) | `query_credential_service_test`, `query_credential_handler_test`, `query_credential_test` (model) | `query_credential_api_test`, `query_credential_repository_test` | Schema covers GET/PUT/DELETE /query-targets/{id}/credential; fuzz exercised 33/33 ops after Phase 38A | `query-credential-settings.test` (service + component), i18n label tests | No | No | Yes (`query-credential-settings.spec`, 11/11 credential + 7/7 workbench passed) | Yes | Admin credential settings at `/settings/query-credentials`; read-only workbench credential status. No DSN/password in request/response/browser/audit. Real E2E with backend + Phase 37H dedicated query MySQL fixture. Frontend CI run `28252354273` (`release-local` PASS). |
+| Query Workbench read-only SQL and admin follow-ups (Phase 38C/38D) | `query_guard_test`, `query_executor` tests | `query_execution_test` (SHOW DATABASES, SHOW TABLES FROM db, SHOW COLUMNS FROM db.table, DESCRIBE db.table, forbidden SHOW/USE rejection) | OpenAPI copy updated from SELECT-only to read-only SQL; Schemathesis 1274 cases passed after backend Phase 38D | `query-workbench.test`, `auth-role.test`, `query-credential-settings.test` | No | No | Yes (`query-workbench.spec` 12/12 and `query-credential-settings.spec` 15/15 against real backend + query fixture) | Yes | Allows explicit read-only metadata statements while preserving write/session/privilege guardrails. Query target selection is searchable and consolidated; settings entry and direct URL admin-role recovery are covered. Browser role decode is presentation-only; server remains authorization boundary. Frontend CI run `28759996006` (`release-local` PASS). |
 | OpenAPI schema validity | `openapi_test.go` | No | `make openapi-validate` + Schemathesis fuzz | N/A | N/A | N/A | N/A | N/A | Dual validation: JSON Schema validation + runtime fuzzing. |
 | OpenAPI fuzz behavior | N/A | `openapi_fuzz_test.go` | Schemathesis: 50 examples/operation, no-5xx, status conformance, content-type conformance, response schema conformance | N/A | N/A | N/A | N/A | N/A | Requires Docker. Run before merge when API changes or as nightly gate. |
 
@@ -149,6 +150,15 @@ added in Phase 28.
 6. **Seed data constants**: E2E tests reference seed resources by name (`analytics-ch-cluster-prod`, `Analytics ClickHouse Node 02`) and ID (`14`, `22`). These are stable in the seed migration but not centralized as typed constants.
 
 ## Frontend Baseline
+
+Frontend Phase 38D commit `e632e44` (main, Query Workbench admin follow-ups):
+- `/query` target selection consolidated into a searchable picker with inline filters and compact target chips.
+- `/settings` exposes Query Credential settings; `/settings/query-credentials` supports direct URL access for admin users when only the auth cookie remains.
+- Frontend role recovery decodes the already-issued bearer token only as a presentation hint; browser code does not verify HMACs and does not authorize credential writes. Backend token verification and admin checks remain the enforcement boundary.
+- Read-only SQL copy and E2E align with backend Phase 38C/38D guard behavior: SELECT, SHOW TABLES, DESCRIBE, SHOW DATABASES, and qualified metadata exploration are covered while unsafe statements remain rejected.
+- Real E2E against backend + Phase 37H dedicated query MySQL fixture: query credential 15/15 passed, Query Workbench 12/12 passed. No fake backend. No DSN/password leak.
+- Frontend CI run `28759996006`: `release-local` succeeded, `release-e2e` skipped (manual/live-backend path only).
+- No backend product edits, no `actorUserId` sent, no Workbench credential edit controls, no tag/release/deploy.
 
 Frontend Phase 38A commit `0974505` (main, Query Credential Settings UI):
 - `/settings/query-credentials` page added as admin-only credential metadata management surface.

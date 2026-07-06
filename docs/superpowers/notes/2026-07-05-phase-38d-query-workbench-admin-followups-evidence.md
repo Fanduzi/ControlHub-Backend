@@ -1,6 +1,6 @@
-# Phase 38D Query Workbench Admin Follow-Ups — Backend Evidence
+# Phase 38D Query Workbench Admin Follow-Ups — Evidence
 
-## Commit
+## Backend Commit
 
 Implementation verified before commit; final commit hash is reported in the completion report.
 
@@ -110,7 +110,63 @@ Risk: MEDIUM — expected for a security-sensitive boundary change. The guard
 logic is the sole enforcement point for the read-only sandbox; the change
 expands the allow-list from schema-local to cross-schema metadata exploration.
 
+## Companion Frontend Evidence
+
+Frontend repository: `/Users/fan/JsProjects/ControlHub`.
+
+Frontend commits pushed to `origin/main`:
+
+| Commit | Message |
+|---|---|
+| `88a8692` | `feat: Phase 38D query admin navigation and target consolidation` |
+| `677cf22` | `fix: recover admin role from encoded auth token` |
+| `e632e44` | `docs: clarify frontend role recovery boundary` |
+
+Frontend scope completed:
+
+- Query target selection consolidated into a searchable picker with inline
+  engine / query-kind / readiness filters.
+- Large duplicate target fact grid replaced with compact chips plus a details
+  disclosure for owner, language, and cluster.
+- `/settings` now exposes a query credential settings entry.
+- `/settings/query-credentials` direct URL recovery handles the cookie-only
+  authenticated state by decoding the already-issued bearer token for a
+  presentation-only role hint and backfilling `sessionStorage`.
+- Frontend comments explicitly state that the browser does not verify token
+  HMACs; server-side token verification and admin checks remain the sole
+  authorization boundary for credential PUT/DELETE.
+
+Frontend verification:
+
+| Check | Result |
+|---|---|
+| `git diff --check` | Clean |
+| `npm run check:e2e-preflight` | PASS |
+| `npm run check:e2e-governance` | PASS (13 specs scanned) |
+| `npx tsc --noEmit` | PASS |
+| `npm run lint` | PASS |
+| `npm run test` | PASS (64 files, 769 tests) |
+| `npm run build` | PASS |
+| `npm run test:e2e -- --grep "query credential"` | PASS (15/15) |
+| `npm run test:e2e -- --grep "Query Workbench"` | PASS (12/12) |
+
+Real E2E environment:
+
+- Backend: Phase 38D main on `:8080`.
+- Dedicated query DB: `controlhub-query-e2e-mysql` on `127.0.0.1:13306`.
+- Ready target: resourceId `616`, engine `mysql`, readiness `ready`.
+- Frontend: Next.js dev server on `:3100`.
+
+Frontend CI:
+
+- Run: https://github.com/Fanduzi/ControlHub-Frontend/actions/runs/28759996006
+- `release-local`: PASS.
+- `release-e2e`: skipped; the frontend push workflow does not provision the
+  live backend/query fixture.
+
 ## Scope Confirmation
+
+Backend guard task:
 
 - [x] No frontend edits (backend task only)
 - [x] No new query engines
@@ -121,3 +177,12 @@ expands the allow-list from schema-local to cross-schema metadata exploration.
 - [x] Parser-backed AST checks only (no string-prefix matching)
 - [x] Phase 38C EXPLAIN SELECT wrapper fix preserved
 - [x] Credential binding, timeout, row cap, history, and audit guarantees preserved
+
+Companion frontend task:
+
+- [x] No backend product edits
+- [x] No credential DSN/password browser state, request body, or log output
+- [x] No `actorUserId` sent
+- [x] No Workbench credential edit controls
+- [x] No tag/release/deploy
+- [x] No AI co-author
