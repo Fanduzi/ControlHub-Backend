@@ -123,6 +123,98 @@ Suggested commit:
 git commit -m "fix: show query credential metadata save feedback"
 ```
 
+## Task F0b: Credential Terminology And Secret Location Clarity
+
+**Purpose:** Make the credential admin UI explain what `LOCAL_QUERY_RO` means and
+where the real database username/password/DSN is configured.
+
+- [ ] **Step 1: Write failing component tests**
+
+In `tests/components/query-credential-settings.test.tsx`, add tests that prove:
+
+- the credential reference field is labeled `Server secret reference`;
+- a configured ref such as `LOCAL_QUERY_RO` shows the derived environment
+  variable name `CONTROLHUB_QUERY_CREDENTIAL_LOCAL_QUERY_RO`;
+- the detail panel states that the real DSN, database username, and password are
+  configured in the backend runtime environment;
+- the page does not render DSN/password input controls;
+- `standard read-only account` and `cluster-specific override` are not prominent
+  top-level cards in the detail panel;
+- environment policy is rendered with localized labels, not raw
+  `non_prod_only`.
+
+Run:
+
+```bash
+npm run test -- tests/components/query-credential-settings.test.tsx
+```
+
+Expected before implementation: tests fail because the current detail panel
+uses "Credential reference", prominent operating-model cards, and raw-ish policy
+copy.
+
+- [ ] **Step 2: Implement terminology cleanup**
+
+In `components/settings/query-credential-settings.tsx`:
+
+- rename the visible label from "Credential reference" to
+  "Server secret reference";
+- derive the environment variable name with:
+
+```ts
+function credentialEnvVarName(ref: string): string {
+  return `CONTROLHUB_QUERY_CREDENTIAL_${ref.trim()}`;
+}
+```
+
+- render the derived environment variable only when the trimmed ref is non-empty;
+- add copy explaining that real DSN/username/password are configured in the
+  backend runtime environment and are never stored or edited in the browser;
+- replace the two prominent cards for "standard read-only account" and
+  "cluster-specific override" with one collapsed help/details block titled
+  "How this binding works";
+- ensure the policy select trigger displays localized labels from
+  `environmentPolicies.*`.
+
+In `messages/en.json`, use:
+
+```json
+"credentialRefLabel": "Server secret reference",
+"credentialRefHint": "Example: LOCAL_QUERY_RO resolves on the backend as CONTROLHUB_QUERY_CREDENTIAL_LOCAL_QUERY_RO.",
+"derivedEnvVarLabel": "Backend environment variable",
+"secretLocation": "The real DSN, database username, and password are configured in the backend runtime environment. ControlHub stores only this reference.",
+"bindingHelpTitle": "How this binding works",
+"bindingHelpBody": "DBA or platform operations provision a read-only database account and expose it to the backend as CONTROLHUB_QUERY_CREDENTIAL_<reference>. This page binds a query target to that server-side reference."
+```
+
+In `messages/zh-CN.json`, use:
+
+```json
+"credentialRefLabel": "服务端密钥引用",
+"credentialRefHint": "例如 LOCAL_QUERY_RO 会在后端解析为 CONTROLHUB_QUERY_CREDENTIAL_LOCAL_QUERY_RO。",
+"derivedEnvVarLabel": "后端环境变量",
+"secretLocation": "真实 DSN、数据库用户名和密码配置在后端运行环境中。ControlHub 只存储这个引用。",
+"bindingHelpTitle": "这个绑定如何工作",
+"bindingHelpBody": "DBA 或平台运维创建只读数据库账号，并通过 CONTROLHUB_QUERY_CREDENTIAL_<reference> 暴露给后端。本页面只是把查询目标绑定到这个服务端引用。"
+```
+
+- [ ] **Step 3: Verify F0b**
+
+Run:
+
+```bash
+npm run test -- tests/components/query-credential-settings.test.tsx
+```
+
+Expected: credential terminology tests pass, and existing save feedback tests
+still pass.
+
+Suggested commit:
+
+```bash
+git commit -m "fix: clarify query credential secret reference model"
+```
+
 ## Task F1: Connection Navigation Surface
 
 **Purpose:** Replace dropdown-shaped target picking with a scalable connection navigator.

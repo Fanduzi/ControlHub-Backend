@@ -19,6 +19,8 @@ Must deliver:
 
 - visible save feedback for single-target credential metadata edits;
 - operations table refresh after single-target save/delete;
+- credential detail copy that clearly explains `credentialRef` as a server-side
+  secret reference, not a username/password/ID;
 - query target navigation that behaves like a connection navigator, not a flat
   dropdown;
 - compact active target facts shown once;
@@ -84,6 +86,37 @@ Tests:
 - successful save shows status;
 - operations row refreshes to the new credential ref;
 - stale save result does not leak after target switch.
+
+### F0b. Credential terminology clarity
+
+The current UI terms are confusing. Fix the credential detail panel so an admin
+can answer: "What is `LOCAL_QUERY_RO`, and where is the real username/password?"
+
+Required behavior:
+
+- label the field as `Server secret reference` / `服务端密钥引用`;
+- explain that `LOCAL_QUERY_RO` is a reference name, not a database username,
+  password, or database row ID;
+- show the derived backend environment variable name:
+  `CONTROLHUB_QUERY_CREDENTIAL_LOCAL_QUERY_RO`;
+- state that the real DSN, database username, and password are configured in
+  the backend runtime environment, not in the browser and not in ControlHub's
+  metadata row;
+- remove or collapse the prominent `Standard read-only account` and
+  `Cluster-specific override` cards. If retained, they must live under a
+  collapsed `How this binding works` help section;
+- render `environmentPolicy` with localized labels such as `Non-production only`
+  / `仅非生产环境`, never raw `non_prod_only`;
+- do not change the request body shape.
+
+Tests:
+
+- configured ref shows the derived env var name;
+- copy names backend runtime environment as the real secret location;
+- no DSN/password inputs exist;
+- raw policy enum is not rendered in the detail panel;
+- the old prominent operating-model card titles are absent or hidden until the
+  help section is explicitly opened.
 
 ### F1. Query target connection navigation
 

@@ -16,6 +16,10 @@ Manual preview on 2026-07-07 exposed remaining UX issues:
 - governance details are useful but should not dominate the query workflow;
 - credential metadata save looked broken because the action saved successfully
   without visible feedback;
+- the credential detail panel exposes internal implementation terms:
+  "standard read-only account", "cluster-specific override", "credential
+  reference", and `CONTROLHUB_QUERY_CREDENTIAL_your-ref` without explaining
+  where the real username/password/DSN is configured;
 - `/settings/query-credentials` needs stronger mutation feedback so
   administrators can trust single-target edits and bulk operations.
 
@@ -85,12 +89,37 @@ operation. The query page may show credential state and link administrators to
 settings, but it must not render credential reference inputs, DSN/password
 fields, or metadata save/remove controls.
 
+The current backend model must be explained in user-facing terms:
+
+- `credentialRef` is a server-side secret reference name, not a database
+  username, password, or opaque database row ID;
+- example: `LOCAL_QUERY_RO` maps to the backend runtime environment variable
+  `CONTROLHUB_QUERY_CREDENTIAL_LOCAL_QUERY_RO`;
+- the value of that environment variable is the real database connection secret
+  such as a DSN containing username/password;
+- ControlHub stores only the target-to-reference metadata row;
+- the browser never sees the DSN/password;
+- if an operator asks "where do I configure the real username/password?", the
+  answer in Phase 38E is: in the backend runtime environment, with future
+  Secret Manager support explicitly out of scope.
+
 The admin page should make mutations observable:
 
 - save/delete/bulk actions show success/failure feedback;
 - single-target detail state and operations table state refresh together;
 - stale target guards remain in place;
 - raw credential refs are shown only as metadata refs, never as DSNs/passwords.
+
+The admin detail panel should not lead with abstract operating-model cards such
+as "standard read-only account" and "cluster-specific override". Those concepts
+may remain as collapsed help text, but the primary panel must answer:
+
+- which query target is selected;
+- which server-side secret reference is bound;
+- which backend environment variable name will be resolved;
+- whether the backend resolved the secret and bound it to the selected
+  host:port;
+- who owns real secret provisioning: backend/DBA/platform operations.
 
 ## Frontend Requirements
 
@@ -105,6 +134,23 @@ first:
 - refresh the operations table row after single-target save/delete;
 - preserve stale target guards;
 - add component tests for the feedback and parent refresh.
+
+### F0b. Credential Terminology And Secret Location Clarity
+
+Rewrite the credential detail panel so administrators understand the model:
+
+- label `credentialRef` as "Server secret reference" / "服务端密钥引用";
+- when the ref is non-empty, display the derived environment variable name,
+  for example `CONTROLHUB_QUERY_CREDENTIAL_LOCAL_QUERY_RO`;
+- explicitly state that the real DSN, database username, and password are
+  configured in the backend runtime environment and are not stored or edited in
+  the browser;
+- replace the prominent "standard read-only account" and "cluster-specific
+  override" cards with a collapsed "How this binding works" help section;
+- keep `enabled` and `environmentPolicy`, but render policy labels localized
+  (`Non-production only` / `仅非生产环境`) rather than raw enum values;
+- keep request body unchanged: only `credentialRef`, `enabled`,
+  `environmentPolicy`, and optional `confirmAllEnvironments`.
 
 ### F1. Connection Navigation Surface
 

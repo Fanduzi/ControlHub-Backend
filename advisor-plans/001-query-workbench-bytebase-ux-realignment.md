@@ -24,6 +24,12 @@ The credential admin detail button looks broken:
 - Reproduction evidence: selecting a target on `/settings/query-credentials` and clicking the button sends `PUT /__api/query-targets/{id}/credential` and receives `200`, but the UI shows no success state.
 - Root cause in current frontend: `CredentialDetailPanel.handleSave()` only calls `setCredential(result)` after save. It does not show a saved/success message and does not notify the parent operations table to refresh.
 - Wording mismatch: the button label says "edit credential metadata", but the behavior is "save current credential metadata".
+- Follow-up preview issue: the whole credential detail panel exposes internal
+  terms without explaining the model. `LOCAL_QUERY_RO` is a server-side secret
+  reference that maps to `CONTROLHUB_QUERY_CREDENTIAL_LOCAL_QUERY_RO`; it is not
+  a database username, password, or credential row ID. The real DSN/username/
+  password live in the backend runtime environment. The UI must say this
+  directly.
 
 Relevant current code:
 
@@ -202,6 +208,12 @@ Changes:
 - Rename `editButton` to save semantics.
 - Add success feedback after PUT.
 - Add parent callback from `CredentialDetailPanel` to refresh row status after save/delete.
+- Rename the visible credential field from "Credential reference" to "Server
+  secret reference".
+- Show the derived backend environment variable name for a non-empty ref.
+- Move "standard read-only account" and "cluster-specific override" into
+  collapsed help text; they should not be top-level detail cards.
+- Render environment policy labels, not raw `non_prod_only`.
 - Ensure operation results and detail state cannot diverge.
 
 Verification:
