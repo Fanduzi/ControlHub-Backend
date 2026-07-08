@@ -34,6 +34,7 @@
 | Frontend fast CI (Phase 36B commit `ff2681a`) | push | PASS | https://github.com/Fanduzi/ControlHub-Frontend/actions/runs/27896150307 |
 | Frontend manual E2E CI (Phase 36B) | workflow_dispatch `run_e2e=true` | PASS | https://github.com/Fanduzi/ControlHub-Frontend/actions/runs/27896155506 |
 | Frontend fast CI (Phase 38A commit `0974505`) | push | `release-local` PASS, `release-e2e` skipped (manual only) | https://github.com/Fanduzi/ControlHub-Frontend/actions/runs/28252354273 |
+| Frontend fast CI (Phase 38F commit `499c235`) | push | success | https://github.com/Fanduzi/ControlHub-Frontend/actions/runs/28948152448 |
 
 ### Backend Heavy CI Detail (Run 26409102650)
 
@@ -96,6 +97,8 @@
 
 7. **Phase 38A Query Credential Metadata Management complete** — Backend Phase 38A (B1–B6) added credential metadata APIs (`GET/PUT/DELETE /query-targets/{id}/credential`) with admin-only authorization, runtime status inspection, readiness correction, and no-secret storage. Frontend Phase 38A (F1–F3) added admin credential settings UI at `/settings/query-credentials`, read-only Query Workbench credential status, and real E2E against backend + Phase 37H dedicated query MySQL fixture. Credential metadata configuration lives in settings/admin, not Query Workbench. Backend stores metadata only; frontend sends only `credentialRef`, `enabled`, `environmentPolicy`, optional `confirmAllEnvironments`. DSN/password never enters request/response/browser state/audit rows. Evidence: backend evidence `docs/superpowers/notes/2026-06-24-phase-38a-query-credential-metadata-management-evidence.md`; frontend main `0974505`; frontend CI run `28252354273` (`release-local` succeeded, `release-e2e` skipped as expected for non-manual push); real E2E query credential 11/11 passed, query workbench 7/7 passed; no fake backend; no DSN/password leak; no `actorUserId` sent; no Workbench edit controls.
 
+8. **Phase 38F Query Workbench SQL Editor Foundation complete** — Frontend-only phase. CodeMirror 6 SQL editor replaces the plain textarea; local SQL formatting via `sql-formatter`; multi-worksheet state model with per-worksheet target synchronization and race guards; keyboard shortcuts (`Cmd/Ctrl+Enter` run, `Cmd/Ctrl+Shift+F` format). 800/800 unit/component tests. Real Query Workbench E2E: 16/16 passed against backend `:8080` + dedicated query MySQL fixture (feature branch and post-merge main). Lint: 0 errors, 4 warnings. Frontend CI run `28948152448` (success). Stale claim corrected: earlier "backend unavailable / E2E not run" was wrong. No backend product edits, no SQL guard changes, no DSN/password browser state, no `actorUserId`, no Workbench credential edit controls, no saved query/export/approval/worksheet persistence, no tag/release/deploy. Evidence: `docs/superpowers/notes/2026-07-08-phase-38f-query-workbench-sql-editor-evidence.md`.
+
 ## Non-actions
 
 - No tag created
@@ -121,6 +124,7 @@
 | Phase 36 Query Workbench implementation plan | `docs/superpowers/plans/2026-06-20-phase-36-query-workbench-foundation.md` |
 | Phase 36 Bytebase UI research | `docs/superpowers/notes/2026-06-20-phase-36-bytebase-ui-research.md` |
 | This summary | `docs/releases/candidates/2026-05-26-controlhub-release-readiness-summary.md` |
+| Phase 38F evidence note | `docs/superpowers/notes/2026-07-08-phase-38f-query-workbench-sql-editor-evidence.md` |
 
 ## Final Decision
 
