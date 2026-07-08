@@ -5,8 +5,11 @@
 .playwright-mcp/
 .gitnexus
 /.claude/
+/.omo/
 /mempalace.yaml
 /AGENTS.md
+/opencode.json
+/skills-lock.json
 /.idea/
 /.schemathesis-reports/
 /.review-screenshots/
