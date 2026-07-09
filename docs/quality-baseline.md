@@ -133,6 +133,7 @@ added in Phase 28.
 | Query credential metadata management (Phase 38A) | `query_credential_service_test`, `query_credential_handler_test`, `query_credential_test` (model) | `query_credential_api_test`, `query_credential_repository_test` | Schema covers GET/PUT/DELETE /query-targets/{id}/credential; fuzz exercised 33/33 ops after Phase 38A | `query-credential-settings.test` (service + component), i18n label tests | No | No | Yes (`query-credential-settings.spec`, 11/11 credential + 7/7 workbench passed) | Yes | Admin credential settings at `/settings/query-credentials`; read-only workbench credential status. No DSN/password in request/response/browser/audit. Real E2E with backend + Phase 37H dedicated query MySQL fixture. Frontend CI run `28252354273` (`release-local` PASS). |
 | Query Workbench read-only SQL and admin follow-ups (Phase 38C/38D) | `query_guard_test`, `query_executor` tests | `query_execution_test` (SHOW DATABASES, SHOW TABLES FROM db, SHOW COLUMNS FROM db.table, DESCRIBE db.table, forbidden SHOW/USE rejection) | OpenAPI copy updated from SELECT-only to read-only SQL; Schemathesis 1274 cases passed after backend Phase 38D | `query-workbench.test`, `auth-role.test`, `query-credential-settings.test` | No | No | Yes (`query-workbench.spec` 12/12 and `query-credential-settings.spec` 15/15 against real backend + query fixture) | Yes | Allows explicit read-only metadata statements while preserving write/session/privilege guardrails. Query target selection is searchable and consolidated; settings entry and direct URL admin-role recovery are covered. Browser role decode is presentation-only; server remains authorization boundary. Frontend CI run `28759996006` (`release-local` PASS). |
 | Query Workbench SQL editor foundation (Phase 38F) | No backend changes | No backend changes | No OpenAPI changes | `query-workbench.test`, `query-sql-format.test` | No | No | Yes (`query-workbench.spec` 16/16 against real backend + query fixture) | Yes | Frontend-only phase. CodeMirror 6 editor, local SQL formatting, multi-worksheet state with per-worksheet target sync and race guards, keyboard shortcuts (Mod-Enter run, Mod-Shift-f format). 800/800 unit/component tests. Lint 0 errors / 4 warnings. Frontend CI run `28948152448` (success). Real E2E 16/16 passed on feature branch and post-merge main. No backend edits, no SQL guard changes, no DSN/password browser state, no `actorUserId`, no credential edit controls, no worksheet persistence. |
+| Query Workbench real usability cleanup (Phase 38G) | No backend changes | No backend changes | No OpenAPI changes | `query-editor-preferences.test`, `query-connection-navigator.test`, `query-workbench.test`, `query-credential-settings.test` | No | No | Yes (`query-workbench.spec` + `query-credential-settings.spec`, 30 focused tests against real backend + query fixture) | Yes | Frontend-only phase. Adds readable dark/high-contrast editor styling, persisted editor height resizing, grouped connection navigator, sticky credential inspector, and reduced placeholder action clutter. Manual browser QA verified `/query` has no DSN/password rendering or credential edit controls, ready target runs `select 1`, and `/settings/query-credentials` exposes metadata only. |
 | OpenAPI schema validity | `openapi_test.go` | No | `make openapi-validate` + Schemathesis fuzz | N/A | N/A | N/A | N/A | N/A | Dual validation: JSON Schema validation + runtime fuzzing. |
 | OpenAPI fuzz behavior | N/A | `openapi_fuzz_test.go` | Schemathesis: 50 examples/operation, no-5xx, status conformance, content-type conformance, response schema conformance | N/A | N/A | N/A | N/A | N/A | Requires Docker. Run before merge when API changes or as nightly gate. |
 
@@ -165,6 +166,32 @@ Frontend Phase 38F commit `499c235` (main, Query Workbench SQL editor foundation
 - Frontend CI run `28948152448`: success.
 - Stale claim corrected: earlier "backend unavailable / E2E not run" was wrong; real E2E passed.
 - No backend product edits, no SQL guard changes, no DSN/password browser state, no `actorUserId`, no Workbench credential edit controls, no saved query/export/approval/worksheet persistence, no tag/release/deploy.
+
+Frontend Phase 38G branch `phase-38g-query-workbench-real-usability-cleanup`
+(worktree pending commit at evidence capture time):
+- Query Workbench editor usability: CodeMirror readable dark/high-contrast theme,
+  locally persisted editor height, and resize handle.
+- Connection navigation: grouped/searchable connection navigator replaces the
+  cramped target picker; active target state remains visible.
+- Credential settings: table/detail layout becomes a sticky inspector with
+  selected-row highlighting and empty state.
+- Placeholder action cleanup: primary worksheet toolbar is limited to Run and
+  Format; locked targets show one blocker instead of rows of disabled actions.
+- Post-review copy cleanup: the global `/query` banner now describes governed
+  read-only execution, and ready targets no longer show disabled-execution or
+  missing-credential governance badges.
+- Focused local gates: `npx tsc --noEmit -p tsconfig.json` passed;
+  `npm run check:e2e-governance` passed; targeted Vitest passed 131/131.
+- Fresh post-review gates: focused Vitest passed 82/82; full Vitest passed
+  820/820; `npm run lint` passed with 0 errors and 2 existing warnings;
+  `npm run build` passed with the existing middleware-to-proxy warning.
+- Real E2E: `query-workbench.spec.ts` + `query-credential-settings.spec.ts`
+  passed 30/30 against backend `:8080`, proxy `:8081`, frontend `:3100`, and
+  dedicated query MySQL fixture.
+- Manual browser QA: `/query` rendered no raw DSN/password-like values and no
+  inline credential edit controls; ready target executed `select 1`; credential
+  settings rendered `LOCAL_QUERY_RO` metadata only, with DSN/password kept
+  server-side.
 
 Frontend Phase 38D commit `e632e44` (main, Query Workbench admin follow-ups):
 - `/query` target selection consolidated into a searchable picker with inline filters and compact target chips.
