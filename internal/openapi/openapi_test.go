@@ -92,6 +92,20 @@ func TestOpenAPIStringIdentifiersRemainStrings(t *testing.T) {
 	assertSchemaPropertyInt64(t, doc, "TopologyGroup", "id")
 }
 
+func TestOpenAPIQueryTargetsListDocumentsPaginationContract(t *testing.T) {
+	loader := openapi3.NewLoader()
+	doc, err := loader.LoadFromData(openapi.YAML)
+	if err != nil {
+		t.Fatalf("failed to parse openapi.yaml: %v", err)
+	}
+
+	assertQueryParamString(t, doc, "/query-targets", "get", "q")
+	assertQueryParamInt64(t, doc, "/query-targets", "get", "targetId")
+	assertQueryParamIntegerBounds(t, doc, "/query-targets", "get", "page", 1, 1, 1000000000)
+	assertQueryParamIntegerBounds(t, doc, "/query-targets", "get", "pageSize", 50, 1, 100)
+	assertSchemaPropertyRef(t, doc, "QueryTargetListResponse", "pageInfo", "#/components/schemas/PageInfo")
+}
+
 func assertPathParamInt64(t *testing.T, doc *openapi3.T, path string, method string, paramName string) {
 	t.Helper()
 
@@ -115,11 +129,56 @@ func assertSchemaPropertyString(t *testing.T, doc *openapi3.T, schemaName string
 	}
 }
 
+func assertQueryParamString(t *testing.T, doc *openapi3.T, path string, method string, paramName string) {
+	t.Helper()
+
+	schema := findOperationParamSchema(t, doc, path, method, paramName)
+	if schema.Type == nil || !schema.Type.Is("string") {
+		t.Fatalf("expected %s %s query parameter %s type string, got %#v", path, method, paramName, schema.Type)
+	}
+}
+
 func assertQueryParamInt64(t *testing.T, doc *openapi3.T, path string, method string, paramName string) {
 	t.Helper()
 
 	schema := findOperationParamSchema(t, doc, path, method, paramName)
 	assertIntegerInt64(t, path+" "+method+" query parameter "+paramName, schema)
+}
+
+func assertQueryParamIntegerBounds(t *testing.T, doc *openapi3.T, path string, method string, paramName string, defaultValue int, minimum int, maximum int) {
+	t.Helper()
+
+	schema := findOperationParamSchema(t, doc, path, method, paramName)
+	if schema.Type == nil || !schema.Type.Is("integer") {
+		t.Fatalf("expected %s %s query parameter %s type integer, got %#v", path, method, paramName, schema.Type)
+	}
+	defaultNumber, ok := schema.Default.(float64)
+	if !ok || defaultNumber != float64(defaultValue) {
+		t.Fatalf("expected %s %s query parameter %s default %d, got %#v", path, method, paramName, defaultValue, schema.Default)
+	}
+	if schema.Min == nil || *schema.Min != float64(minimum) {
+		t.Fatalf("expected %s %s query parameter %s minimum %d, got %#v", path, method, paramName, minimum, schema.Min)
+	}
+	if maximum > 0 && (schema.Max == nil || *schema.Max != float64(maximum)) {
+		t.Fatalf("expected %s %s query parameter %s maximum %d, got %#v", path, method, paramName, maximum, schema.Max)
+	}
+}
+
+func assertSchemaPropertyRef(t *testing.T, doc *openapi3.T, schemaName string, propertyName string, ref string) {
+	t.Helper()
+
+	schemaRef := doc.Components.Schemas[schemaName]
+	if schemaRef == nil || schemaRef.Value == nil {
+		t.Fatalf("schema %q not found", schemaName)
+	}
+
+	propertyRef := schemaRef.Value.Properties[propertyName]
+	if propertyRef == nil {
+		t.Fatalf("property %q not found in schema %q", propertyName, schemaName)
+	}
+	if propertyRef.Ref != ref {
+		t.Fatalf("expected %s.%s ref %q, got %q", schemaName, propertyName, ref, propertyRef.Ref)
+	}
 }
 
 func assertQueryParamArrayItemsInt64(t *testing.T, doc *openapi3.T, path string, method string, paramName string) {

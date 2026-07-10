@@ -89,6 +89,34 @@ paths:
             format: int64
             minimum: 1
           description: Filter by environment ID
+        - in: query
+          name: q
+          schema:
+            type: string
+          description: Free-text search over target name, display name, host, and engine
+        - in: query
+          name: targetId
+          schema:
+            type: integer
+            format: int64
+            minimum: 1
+          description: Exact target resource ID lookup for deep links and target switching
+        - in: query
+          name: page
+          schema:
+            type: integer
+            default: 1
+            minimum: 1
+            maximum: 1000000000
+          description: Page number (1-based). Must not exceed 1000000000.
+        - in: query
+          name: pageSize
+          schema:
+            type: integer
+            default: 50
+            minimum: 1
+            maximum: 100
+          description: Items per page. Defaults to 50 and is capped at 100.
       responses:
         "200":
           description: Query target list
@@ -133,6 +161,11 @@ paths:
                       saveSheet: false
                       requestAccess: false
                     schemaPreview: []
+                pageInfo:
+                  page: 1
+                  pageSize: 50
+                  totalItems: 1
+                  totalPages: 1
         "400":
           description: Invalid query parameters
           content:
@@ -1532,12 +1565,14 @@ components:
   schemas:
     QueryTargetListResponse:
       type: object
-      required: [items]
+      required: [items, pageInfo]
       properties:
         items:
           type: array
           items:
             $ref: "#/components/schemas/QueryTarget"
+        pageInfo:
+          $ref: "#/components/schemas/PageInfo"
     QueryTarget:
       type: object
       description: >-
