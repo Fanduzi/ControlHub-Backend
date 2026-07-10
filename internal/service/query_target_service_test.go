@@ -389,7 +389,7 @@ func TestQueryTargetService_List_InvalidStoredCredentialYieldsInvalidRefNotMissi
 		WithCredentialReader(store).
 		WithCredentialResolver(&fakeResolver{})
 
-	got, err := svc.List(context.Background(), model.QueryTargetListQuery{})
+	got, _, err := svc.List(context.Background(), model.QueryTargetListQuery{})
 	if err != nil {
 		t.Fatalf("List: %v", err)
 	}
@@ -421,7 +421,7 @@ func TestQueryTargetService_List_InvalidStoredPolicyYieldsInvalidRefNotPolicyBlo
 		WithCredentialReader(store).
 		WithCredentialResolver(&fakeResolver{})
 
-	got, err := svc.List(context.Background(), model.QueryTargetListQuery{})
+	got, _, err := svc.List(context.Background(), model.QueryTargetListQuery{})
 	if err != nil {
 		t.Fatalf("List: %v", err)
 	}
@@ -455,7 +455,7 @@ func TestQueryTargetService_List_UnexpectedCredentialReadErrorFailsLoud(t *testi
 		WithCredentialReader(store).
 		WithCredentialResolver(&fakeResolver{})
 
-	got, err := svc.List(context.Background(), model.QueryTargetListQuery{})
+	got, _, err := svc.List(context.Background(), model.QueryTargetListQuery{})
 	if err == nil {
 		t.Fatalf("unexpected read error must fail List loud, got targets %+v", got)
 	}

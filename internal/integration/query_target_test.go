@@ -30,7 +30,7 @@ func TestQueryTargetRepository_DerivesConnectionContextFromSeed(t *testing.T) {
 	repo := mysql.NewQueryTargetRepository(db)
 	ctx := context.Background()
 
-	targets, err := repo.ListQueryTargets(ctx, model.QueryTargetListQuery{})
+	targets, _, err := repo.ListQueryTargets(ctx, model.QueryTargetListQuery{})
 	if err != nil {
 		t.Fatalf("list query targets: %v", err)
 	}
@@ -63,7 +63,7 @@ func TestQueryTargetRepository_EngineFilter(t *testing.T) {
 	repo := mysql.NewQueryTargetRepository(db)
 	ctx := context.Background()
 
-	targets, err := repo.ListQueryTargets(ctx, model.QueryTargetListQuery{Engine: "redis"})
+	targets, _, err := repo.ListQueryTargets(ctx, model.QueryTargetListQuery{Engine: "redis"})
 	if err != nil {
 		t.Fatalf("list: %v", err)
 	}
@@ -108,7 +108,7 @@ func TestQueryTargetService_CompleteConnectionIsCredentialRequired(t *testing.T)
 		t.Fatalf("upsert profile: %v", err)
 	}
 
-	targets, err := svc.List(ctx, model.QueryTargetListQuery{})
+	targets, _, err := svc.List(ctx, model.QueryTargetListQuery{})
 	if err != nil {
 		t.Fatalf("list: %v", err)
 	}
@@ -164,7 +164,7 @@ func TestQueryTargetRepository_InstanceWithoutProfileIsMissingConnection(t *test
 		t.Fatalf("create resource: %v", err)
 	}
 
-	targets, err := svc.List(ctx, model.QueryTargetListQuery{})
+	targets, _, err := svc.List(ctx, model.QueryTargetListQuery{})
 	if err != nil {
 		t.Fatalf("list: %v", err)
 	}
@@ -222,7 +222,7 @@ func TestQueryTargetRepository_EngineFilterIncludesInstanceWithoutProfile(t *tes
 		t.Fatalf("create resource: %v", err)
 	}
 
-	targets, err := repo.ListQueryTargets(ctx, model.QueryTargetListQuery{Engine: "mysql"})
+	targets, _, err := repo.ListQueryTargets(ctx, model.QueryTargetListQuery{Engine: "mysql"})
 	if err != nil {
 		t.Fatalf("list: %v", err)
 	}
