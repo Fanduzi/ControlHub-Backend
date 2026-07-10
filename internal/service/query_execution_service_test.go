@@ -25,10 +25,23 @@ const testResolverDSN = "rouser:secret-dsn-do-not-leak@tcp(db.internal:3306)/san
 
 type fakeTargetRepo struct {
 	targets []model.QueryTarget
+	queries *[]model.QueryTargetListQuery
 }
 
-func (f fakeTargetRepo) ListQueryTargets(context.Context, model.QueryTargetListQuery) ([]model.QueryTarget, error) {
-	return f.targets, nil
+func (f fakeTargetRepo) ListQueryTargets(_ context.Context, q model.QueryTargetListQuery) ([]model.QueryTarget, int, error) {
+	if f.queries != nil {
+		*f.queries = append(*f.queries, q)
+	}
+	if q.TargetID == 0 {
+		return f.targets, len(f.targets), nil
+	}
+	filtered := make([]model.QueryTarget, 0, 1)
+	for _, target := range f.targets {
+		if target.ResourceID == q.TargetID {
+			filtered = append(filtered, target)
+		}
+	}
+	return filtered, len(filtered), nil
 }
 
 type fakeExecRepo struct {
@@ -87,9 +100,9 @@ func (f *fakeExecRepo) InsertAuditEvent(_ context.Context, actor, target uint64,
 // closed), then return the configured DSN/error. It records whether it was
 // called so tests can assert no env lookup happens with an unvalidated ref.
 type fakeResolver struct {
-	dsn      string
-	err      error
-	called   bool
+	dsn       string
+	err       error
+	called    bool
 	calledRef string
 }
 
@@ -213,6 +226,30 @@ func TestExecute_RejectsMissingCredential(t *testing.T) {
 	_, err := svc.Execute(context.Background(), 1, 9001, model.QueryExecuteRequest{Statement: "select 1", MaxRows: 10})
 	if !errors.Is(err, ErrQueryNotAllowed) {
 		t.Fatalf("error = %v, want ErrQueryNotAllowed", err)
+	}
+}
+
+func TestExecute_TargetLookupUsesTargetIDFilter(t *testing.T) {
+	t.Parallel()
+	queries := []model.QueryTargetListQuery{}
+	svc := NewQueryExecutionService(
+		fakeTargetRepo{targets: []model.QueryTarget{mysqlTarget("Staging")}, queries: &queries},
+		&fakeExecRepo{credentials: map[uint64]model.QueryCredentialMetadata{9001: enabledCred(model.QueryEnvPolicyNonProdOnly)}},
+		&fakeResolver{dsn: testResolverDSN},
+		&fakeExecutor{result: QueryDatabaseResult{Columns: []model.QueryResultColumn{{Name: "value", DatabaseType: "BIGINT"}}, Rows: [][]any{{int64(1)}}, RowCount: 1}},
+		NewQueryGuard(QueryGuardConfig{DefaultMaxRows: 100, HardMaxRows: 500}),
+		&fakeClock{t: time.Now()},
+	)
+
+	_, err := svc.Execute(context.Background(), 1, 9001, model.QueryExecuteRequest{Statement: "select 1", MaxRows: 10})
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if len(queries) != 1 {
+		t.Fatalf("ListQueryTargets calls = %d, want 1", len(queries))
+	}
+	if queries[0].TargetID != 9001 {
+		t.Fatalf("TargetID filter = %d, want 9001", queries[0].TargetID)
 	}
 }
 

@@ -243,12 +243,8 @@ func (s *QueryExecutionService) ListHistory(ctx context.Context, targetID uint64
 	}, nil
 }
 
-// findTarget locates a single query target by id. Phase 37 reuses the list query
-// (the read-model interface exposes no single-target getter); the target set is
-// small so this O(n) scan is acceptable and avoids widening the repository
-// interface. A later phase may add a dedicated lookup.
 func (s *QueryExecutionService) findTarget(ctx context.Context, targetID uint64) (model.QueryTarget, error) {
-	targets, err := s.targets.ListQueryTargets(ctx, model.QueryTargetListQuery{})
+	targets, _, err := s.targets.ListQueryTargets(ctx, model.QueryTargetListQuery{TargetID: targetID})
 	if err != nil {
 		return model.QueryTarget{}, ErrQueryTargetNotFound
 	}
@@ -375,13 +371,13 @@ func rawAddressFor(dsn, netName string) (string, bool) {
 // DSN-binding errors are fixed strings; they never echo the parsed DSN, which
 // contains the credential password.
 var (
-	errDSNUnparseable     = errors.New("credential dsn is not parseable")
-	errDSNNotTCP          = errors.New("credential dsn is not a tcp connection")
+	errDSNUnparseable      = errors.New("credential dsn is not parseable")
+	errDSNNotTCP           = errors.New("credential dsn is not a tcp connection")
 	errDSNAddressMalformed = errors.New("credential dsn address is not host:port")
-	errDSNHostMismatch    = errors.New("credential dsn host does not match the target")
-	errDSNPortMissing     = errors.New("credential dsn port is missing")
-	errDSNPortInvalid     = errors.New("credential dsn port is not numeric")
-	errDSNPortMismatch    = errors.New("credential dsn port does not match the target")
+	errDSNHostMismatch     = errors.New("credential dsn host does not match the target")
+	errDSNPortMissing      = errors.New("credential dsn port is missing")
+	errDSNPortInvalid      = errors.New("credential dsn port is not numeric")
+	errDSNPortMismatch     = errors.New("credential dsn port does not match the target")
 )
 
 // engineHostMatches compares two host names case-insensitively after trimming.
