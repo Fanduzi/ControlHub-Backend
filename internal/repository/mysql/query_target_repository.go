@@ -9,6 +9,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"strings"
 
 	"github.com/fan/controlhub/internal/model"
 )
@@ -31,14 +32,16 @@ func NewQueryTargetRepository(db *sql.DB) *QueryTargetRepository {
 // missing_connection (host/port gap) instead of disappearing. Host/port still
 // come only from the profile. Cluster membership is resolved through the
 // member_of relation the same way the resource list resolves cluster_id.
-func (r *QueryTargetRepository) ListQueryTargets(ctx context.Context, q model.QueryTargetListQuery) ([]model.QueryTarget, error) {
-	// resolvedEngine = profile engine, falling back to resource_subtype when the
-	// profile row is missing. Used for both the returned engine and the engine
-	// filter so a no-profile mysql instance stays visible under ?engine=mysql.
+func (r *QueryTargetRepository) ListQueryTargets(ctx context.Context, q model.QueryTargetListQuery) ([]model.QueryTarget, int, error) {
 	const resolvedEngine = "coalesce(nullif(p.engine, ''), r.resource_subtype)"
 
 	where := "where r.resource_type = 'database_instance' and r.archived_at is null"
 	args := []any{}
+
+	if q.TargetID != 0 {
+		where += " and r.id = ?"
+		args = append(args, q.TargetID)
+	}
 	if q.Engine != "" {
 		where += " and lower(" + resolvedEngine + ") = ?"
 		args = append(args, q.Engine)
@@ -47,8 +50,32 @@ func (r *QueryTargetRepository) ListQueryTargets(ctx context.Context, q model.Qu
 		where += " and r.environment_id = ?"
 		args = append(args, q.EnvironmentID)
 	}
+	if q.Q != "" {
+		pattern := "%" + escapeLike(q.Q) + "%"
+		where += ` and (
+			r.name like ? ESCAPE '\\' or r.display_name like ? ESCAPE '\\'
+			or ` + resolvedEngine + ` like ? ESCAPE '\\'
+			or p.host like ? ESCAPE '\\'
+			or e.name like ? ESCAPE '\\'
+			or o.name like ? ESCAPE '\\'
+			or (select c.display_name from resource_relations rr
+			    join resources c on c.id = rr.to_resource_id
+			    where rr.from_resource_id = r.id and rr.relation_type = 'member_of' limit 1) like ? ESCAPE '\\'
+		)`
+		args = append(args, pattern, pattern, pattern, pattern, pattern, pattern, pattern)
+	}
 
-	query := `select
+	var total int
+	countQuery := `select count(*) from resources r
+		left join resource_profiles_database_instance p on p.resource_id = r.id
+		left join environments e on e.id = r.environment_id
+		left join owners o on o.id = r.owner_id
+		` + where
+	if err := r.db.QueryRowContext(ctx, countQuery, args...).Scan(&total); err != nil {
+		return nil, 0, fmt.Errorf("count query targets: %w", err)
+	}
+
+	dataQuery := `select
 		r.id, r.name, r.display_name,
 		e.name, o.name,
 		` + resolvedEngine + `, p.host, p.port,
@@ -64,25 +91,31 @@ func (r *QueryTargetRepository) ListQueryTargets(ctx context.Context, q model.Qu
 	` + where + `
 	order by r.name`
 
-	rows, err := r.db.QueryContext(ctx, query, args...)
+	if q.Page > 0 && q.PageSize > 0 {
+		offset := (q.Page - 1) * q.PageSize
+		dataQuery += " limit ? offset ?"
+		args = append(args, q.PageSize, offset)
+	}
+
+	rows, err := r.db.QueryContext(ctx, dataQuery, args...)
 	if err != nil {
-		return nil, fmt.Errorf("list query targets: %w", err)
+		return nil, 0, fmt.Errorf("list query targets: %w", err)
 	}
 	defer rows.Close()
 
 	items := make([]model.QueryTarget, 0)
 	for rows.Next() {
 		var (
-			id                uint64
-			name              string
-			displayName       string
-			environmentName   sql.NullString
-			ownerName         sql.NullString
-			engine            sql.NullString
-			host              sql.NullString
-			port              sql.NullInt64
-			clusterID         sql.NullInt64
-			clusterName       sql.NullString
+			id              uint64
+			name            string
+			displayName     string
+			environmentName sql.NullString
+			ownerName       sql.NullString
+			engine          sql.NullString
+			host            sql.NullString
+			port            sql.NullInt64
+			clusterID       sql.NullInt64
+			clusterName     sql.NullString
 		)
 		if err := rows.Scan(
 			&id, &name, &displayName,
@@ -90,7 +123,7 @@ func (r *QueryTargetRepository) ListQueryTargets(ctx context.Context, q model.Qu
 			&engine, &host, &port,
 			&clusterID, &clusterName,
 		); err != nil {
-			return nil, fmt.Errorf("scan query target: %w", err)
+			return nil, 0, fmt.Errorf("scan query target: %w", err)
 		}
 
 		target := model.QueryTarget{
@@ -113,7 +146,12 @@ func (r *QueryTargetRepository) ListQueryTargets(ctx context.Context, q model.Qu
 		items = append(items, target)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("iterate query targets: %w", err)
+		return nil, 0, fmt.Errorf("iterate query targets: %w", err)
 	}
-	return items, nil
+	return items, total, nil
+}
+
+func escapeLike(s string) string {
+	r := strings.NewReplacer(`\`, `\\`, `%`, `\%`, `_`, `\_`)
+	return r.Replace(s)
 }

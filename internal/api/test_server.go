@@ -548,18 +548,46 @@ type fakeQueryTargetRepo struct {
 	targets []fakeQueryTargetRow
 }
 
-func (f fakeQueryTargetRepo) ListQueryTargets(_ context.Context, q model.QueryTargetListQuery) ([]model.QueryTarget, error) {
+func (f fakeQueryTargetRepo) ListQueryTargets(_ context.Context, q model.QueryTargetListQuery) ([]model.QueryTarget, int, error) {
 	out := make([]model.QueryTarget, 0, len(f.targets))
 	for _, row := range f.targets {
+		if q.TargetID != 0 && row.target.ResourceID != q.TargetID {
+			continue
+		}
 		if q.Engine != "" && !strings.EqualFold(row.target.ConnectionContext.Engine, q.Engine) {
 			continue
 		}
 		if q.EnvironmentID != 0 && row.environmentID != q.EnvironmentID {
 			continue
 		}
+		if q.Q != "" {
+			lq := strings.ToLower(q.Q)
+			if !strings.Contains(strings.ToLower(row.target.ResourceName), lq) &&
+				!strings.Contains(strings.ToLower(row.target.DisplayName), lq) &&
+				!strings.Contains(strings.ToLower(row.target.ConnectionContext.Engine), lq) &&
+				!strings.Contains(strings.ToLower(row.target.ConnectionContext.Host), lq) &&
+				!strings.Contains(strings.ToLower(row.target.ConnectionContext.Environment), lq) &&
+				!strings.Contains(strings.ToLower(row.target.ConnectionContext.Owner), lq) &&
+				!strings.Contains(strings.ToLower(row.target.ConnectionContext.ClusterName), lq) {
+				continue
+			}
+		}
 		out = append(out, row.target)
 	}
-	return out, nil
+
+	total := len(out)
+	if q.Page > 0 && q.PageSize > 0 {
+		offset := (q.Page - 1) * q.PageSize
+		if offset >= total {
+			return []model.QueryTarget{}, total, nil
+		}
+		end := offset + q.PageSize
+		if end > total {
+			end = total
+		}
+		return out[offset:end], total, nil
+	}
+	return out, total, nil
 }
 
 func queryTargetSeed() []fakeQueryTargetRow {

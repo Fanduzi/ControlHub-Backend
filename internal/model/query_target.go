@@ -36,11 +36,11 @@ const (
 type QueryTargetSafetyState string
 
 const (
-	SafetyStateCredentialMissing       QueryTargetSafetyState = "credential_missing"
-	SafetyStateExecutionDisabled       QueryTargetSafetyState = "execution_disabled"
-	SafetyStateUnsupportedEngine       QueryTargetSafetyState = "unsupported_engine"
-	SafetyStateConnectionIncomplete    QueryTargetSafetyState = "connection_incomplete"
-	SafetyStateReadonlySandboxEnabled  QueryTargetSafetyState = "readonly_sandbox_enabled"
+	SafetyStateCredentialMissing      QueryTargetSafetyState = "credential_missing"
+	SafetyStateExecutionDisabled      QueryTargetSafetyState = "execution_disabled"
+	SafetyStateUnsupportedEngine      QueryTargetSafetyState = "unsupported_engine"
+	SafetyStateConnectionIncomplete   QueryTargetSafetyState = "connection_incomplete"
+	SafetyStateReadonlySandboxEnabled QueryTargetSafetyState = "readonly_sandbox_enabled"
 )
 
 // queryTargetSafetyStateDictionaryItems is the single source of truth for valid
@@ -93,12 +93,12 @@ type QueryTargetCapability struct {
 // QueryTargetGovernance is the explicit, backend-owned governance state for a
 // target. Phase 36 always reports execution disabled.
 type QueryTargetGovernance struct {
-	ExecutionEnabled bool                 `json:"executionEnabled"`
-	CredentialState  string               `json:"credentialState"`
-	AuditRequired    bool                 `json:"auditRequired"`
+	ExecutionEnabled bool                   `json:"executionEnabled"`
+	CredentialState  string                 `json:"credentialState"`
+	AuditRequired    bool                   `json:"auditRequired"`
 	SafetyState      QueryTargetSafetyState `json:"safetyState"`
-	SafetyNote       string               `json:"safetyNote"`
-	PolicyNotes      []string             `json:"policyNotes"`
+	SafetyNote       string                 `json:"safetyNote"`
+	PolicyNotes      []string               `json:"policyNotes"`
 }
 
 // QueryTargetAvailableActions are the locked/unlocked action flags for the
@@ -115,36 +115,48 @@ type QueryTargetAvailableActions struct {
 // derived only from existing ControlHub metadata. Phase 36 never introspects
 // live databases.
 type QueryTargetSchemaPreviewNode struct {
-	Kind     string                       `json:"kind"`
-	Name     string                       `json:"name"`
+	Kind     string                         `json:"kind"`
+	Name     string                         `json:"name"`
 	Children []QueryTargetSchemaPreviewNode `json:"children,omitempty"`
 }
 
 // QueryTarget is the read-only query capability context for one database
 // resource, ready to drive a locked Query Workbench shell.
 type QueryTarget struct {
-	ResourceID        uint64                       `json:"resourceId"`
-	ResourceName      string                       `json:"resourceName"`
-	DisplayName       string                       `json:"displayName"`
-	ResourceType      ResourceType                 `json:"resourceType"`
-	ConnectionContext QueryTargetConnectionContext `json:"connectionContext"`
-	Capability        QueryTargetCapability        `json:"capability"`
-	Readiness         QueryTargetReadiness         `json:"readiness"`
-	MissingFields     []string                     `json:"missingFields"`
-	Governance        QueryTargetGovernance        `json:"governance"`
-	AvailableActions  QueryTargetAvailableActions  `json:"availableActions"`
+	ResourceID        uint64                         `json:"resourceId"`
+	ResourceName      string                         `json:"resourceName"`
+	DisplayName       string                         `json:"displayName"`
+	ResourceType      ResourceType                   `json:"resourceType"`
+	ConnectionContext QueryTargetConnectionContext   `json:"connectionContext"`
+	Capability        QueryTargetCapability          `json:"capability"`
+	Readiness         QueryTargetReadiness           `json:"readiness"`
+	MissingFields     []string                       `json:"missingFields"`
+	Governance        QueryTargetGovernance          `json:"governance"`
+	AvailableActions  QueryTargetAvailableActions    `json:"availableActions"`
 	SchemaPreview     []QueryTargetSchemaPreviewNode `json:"schemaPreview"`
 }
 
-// QueryTargetListResponse is the { items: [...] } envelope for GET /query-targets.
+const (
+	QueryTargetDefaultPage     = 1
+	QueryTargetDefaultPageSize = 50
+	QueryTargetMaxPageSize     = 100
+)
+
+// QueryTargetListResponse is the { items: [...], pageInfo: {...} } envelope
+// for GET /query-targets.
 type QueryTargetListResponse struct {
-	Items []QueryTarget `json:"items"`
+	Items    []QueryTarget `json:"items"`
+	PageInfo *PageInfo     `json:"pageInfo"`
 }
 
-// QueryTargetListQuery carries the cheap, conventional filters for
-// GET /query-targets. Readiness and query kind are derived client-side, so
-// they are intentionally not part of the server-side query.
+// QueryTargetListQuery carries the filters and pagination for GET /query-targets.
+// Readiness and query kind are derived client-side, so they are intentionally
+// not part of the server-side query.
 type QueryTargetListQuery struct {
 	Engine        string
 	EnvironmentID uint64
+	Q             string
+	TargetID      uint64
+	Page          int
+	PageSize      int
 }

@@ -18,7 +18,7 @@ import (
 // read model. The concrete MySQL implementation lives in
 // internal/repository/mysql/query_target_repository.go.
 type QueryTargetRepository interface {
-	ListQueryTargets(ctx context.Context, q model.QueryTargetListQuery) ([]model.QueryTarget, error)
+	ListQueryTargets(ctx context.Context, q model.QueryTargetListQuery) ([]model.QueryTarget, int, error)
 }
 
 // QueryCredentialReader reads credential metadata for a query target. The
@@ -77,27 +77,33 @@ func (s *QueryTargetService) WithCredentialResolver(resolver QueryCredentialReso
 // row yields a credential the runtime inspector classifies as invalid_ref (a
 // known locked state); an unexpected DB/read error fails the whole list loud
 // rather than degrade the target to missing_metadata.
-func (s *QueryTargetService) List(ctx context.Context, q model.QueryTargetListQuery) ([]model.QueryTarget, error) {
-	targets, err := s.repo.ListQueryTargets(ctx, q)
+func (s *QueryTargetService) List(ctx context.Context, q model.QueryTargetListQuery) ([]model.QueryTarget, *model.PageInfo, error) {
+	targets, total, err := s.repo.ListQueryTargets(ctx, q)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	for i := range targets {
 		cred, readErr := s.readTargetCredential(ctx, targets[i].ResourceID)
 		if readErr != nil {
-			// Unexpected credential read error: fail loud (the handler maps it to
-			// 500). Never mask it as missing_metadata or invent a new credentialState.
-			return nil, readErr
+			return nil, nil, readErr
 		}
 		if s.resolver != nil {
-			// Phase 38A readiness correction: ready only on secret_resolved.
 			runtime := InspectCredentialRuntime(ctx, s.resolver, targets[i], cred)
 			targets[i] = completeQueryTargetWithRuntime(targets[i], cred, runtime)
 		} else {
 			targets[i] = completeQueryTarget(targets[i], cred)
 		}
 	}
-	return targets, nil
+	var pageInfo *model.PageInfo
+	if q.Page > 0 && q.PageSize > 0 {
+		pageInfo = &model.PageInfo{
+			Page:       q.Page,
+			PageSize:   q.PageSize,
+			TotalItems: total,
+			TotalPages: model.ComputeTotalPages(total, q.PageSize),
+		}
+	}
+	return targets, pageInfo, nil
 }
 
 // readTargetCredential reads one target's credential metadata and classifies the
