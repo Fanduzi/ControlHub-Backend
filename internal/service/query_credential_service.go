@@ -201,7 +201,7 @@ func (s *QueryCredentialService) Delete(ctx context.Context, actor Authenticated
 // A read error or missing target maps to ErrQueryTargetNotFound so writes fail
 // closed rather than against an unresolved target.
 func (s *QueryCredentialService) findTarget(ctx context.Context, targetID uint64) (model.QueryTarget, error) {
-	targets, err := s.targets.ListQueryTargets(ctx, model.QueryTargetListQuery{})
+	targets, _, err := s.targets.ListQueryTargets(ctx, model.QueryTargetListQuery{TargetID: targetID})
 	if err != nil {
 		return model.QueryTarget{}, ErrQueryTargetNotFound
 	}

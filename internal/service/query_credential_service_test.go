@@ -275,6 +275,26 @@ func TestQueryCredentialService_GetStatus_MissingMetadata(t *testing.T) {
 	}
 }
 
+func TestQueryCredentialService_GetStatus_TargetLookupUsesTargetIDFilter(t *testing.T) {
+	queries := []model.QueryTargetListQuery{}
+	svc := NewQueryCredentialService(
+		fakeTargetRepo{targets: []model.QueryTarget{credentialTarget("mysql", "db.internal", 3306, "staging")}, queries: &queries},
+		newFakeCredentialStore(),
+		&fakeResolver{},
+	)
+
+	_, err := svc.GetStatus(context.Background(), credentialTargetID)
+	if err != nil {
+		t.Fatalf("GetStatus: %v", err)
+	}
+	if len(queries) != 1 {
+		t.Fatalf("ListQueryTargets calls = %d, want 1", len(queries))
+	}
+	if queries[0].TargetID != credentialTargetID {
+		t.Fatalf("TargetID filter = %d, want %d", queries[0].TargetID, credentialTargetID)
+	}
+}
+
 // TestQueryCredentialService_Upsert_WritesMetadataAndAudit proves an admin upsert
 // persists metadata, records a query.credential.updated audit event, derives the
 // engine from the target (never the request), and returns the post-save status.
