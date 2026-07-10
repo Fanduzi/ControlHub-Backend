@@ -141,7 +141,7 @@ func (c QueryDevCredentialSeedConfig) validate() error {
 // target list. A lookup or read error is treated as not-found so the seed fails
 // closed rather than writing metadata against an unresolved target.
 func (s *QueryDevCredentialSeeder) findTarget(ctx context.Context, targetID uint64) (model.QueryTarget, error) {
-	targets, err := s.targets.ListQueryTargets(ctx, model.QueryTargetListQuery{})
+	targets, _, err := s.targets.ListQueryTargets(ctx, model.QueryTargetListQuery{})
 	if err != nil {
 		return model.QueryTarget{}, errSeedTargetNotFound
 	}

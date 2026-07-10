@@ -214,7 +214,7 @@ func TestQueryDevSeed_RejectsMismatchedCredentialAndStaysLocked(t *testing.T) {
 // mustList lists all query targets through a service, failing the test on error.
 func mustList(t *testing.T, svc *service.QueryTargetService, ctx context.Context) []model.QueryTarget {
 	t.Helper()
-	targets, err := svc.List(ctx, model.QueryTargetListQuery{})
+	targets, _, err := svc.List(ctx, model.QueryTargetListQuery{})
 	if err != nil {
 		t.Fatalf("list query targets: %v", err)
 	}

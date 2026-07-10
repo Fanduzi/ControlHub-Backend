@@ -211,7 +211,7 @@ func envOrDefault(key, def string) string {
 // mirrors exactly what GET /query-targets would report after the seed.
 func deriveReadiness(ctx context.Context, targetRepo *mysql.QueryTargetRepository, execRepo *mysql.QueryExecutionRepository, resourceID uint64) (model.QueryTargetReadiness, bool) {
 	svc := service.NewQueryTargetService(targetRepo).WithCredentialReader(execRepo)
-	targets, err := svc.List(ctx, model.QueryTargetListQuery{})
+	targets, _, err := svc.List(ctx, model.QueryTargetListQuery{})
 	if err != nil {
 		return model.ReadinessCredentialRequired, false
 	}
