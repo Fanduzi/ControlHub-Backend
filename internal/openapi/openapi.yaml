@@ -551,6 +551,265 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/ErrorResponse"
+  /query-targets/{id}/schema/databases:
+    get:
+      summary: List databases for a query target
+      operationId: listQueryTargetDatabases
+      description: >
+        Phase 38I. Returns the list of databases visible to the target's
+        read-only credential. The default database (if known) is flagged.
+        Requires a fresh Bearer token. Never returns credentials or DSNs.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+            format: int64
+            minimum: 1
+          description: Query target resource ID.
+        - name: page
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            default: 1
+          description: Page number (1-based).
+        - name: pageSize
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            default: 50
+            maximum: 100
+          description: Items per page. Defaults to 50, capped at 100.
+      responses:
+        "200":
+          description: Database list
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DatabaseListResponse"
+              example:
+                targetResourceId: 616
+                defaultDatabase: "query_e2e"
+                items:
+                  - name: "query_e2e"
+                    isDefault: true
+                pageInfo:
+                  page: 1
+                  pageSize: 50
+                  totalItems: 1
+                  totalPages: 1
+                  hasNextPage: false
+                  hasPreviousPage: false
+        "400":
+          description: Invalid parameters
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "401":
+          description: Missing or invalid Bearer token
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "404":
+          description: Query target not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "502":
+          description: Target database rejected or connection failed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+  /query-targets/{id}/schema/objects:
+    get:
+      summary: List tables and views in a database
+      operationId: listQueryTargetObjects
+      description: >
+        Phase 38I. Returns tables and views in the specified database for a
+        query target. Requires a fresh Bearer token. Never returns credentials
+        or DSNs.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+            format: int64
+            minimum: 1
+          description: Query target resource ID.
+        - name: database
+          in: query
+          required: true
+          schema:
+            type: string
+            minLength: 1
+          description: Database name to list objects from.
+        - name: page
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            default: 1
+          description: Page number (1-based).
+        - name: pageSize
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            default: 50
+            maximum: 100
+          description: Items per page. Defaults to 50, capped at 100.
+      responses:
+        "200":
+          description: Object list
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ObjectListResponse"
+              example:
+                targetResourceId: 616
+                database: "query_e2e"
+                items:
+                  - database: "query_e2e"
+                    name: "query_e2e_items"
+                    kind: "table"
+                pageInfo:
+                  page: 1
+                  pageSize: 50
+                  totalItems: 1
+                  totalPages: 1
+                  hasNextPage: false
+                  hasPreviousPage: false
+        "400":
+          description: Invalid parameters (missing database, bad id)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "401":
+          description: Missing or invalid Bearer token
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "404":
+          description: Query target not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "502":
+          description: Target database rejected or connection failed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+  /query-targets/{id}/schema/object-details:
+    get:
+      summary: Get columns, indexes, and foreign keys for a database object
+      operationId: getQueryTargetObjectDetails
+      description: >
+        Phase 38I. Returns full column, index, and foreign key metadata for
+        one table or view. The response may be truncated for very large
+        objects — the truncated flags indicate which sections are incomplete.
+        Requires a fresh Bearer token. Never returns credentials, DSNs, or
+        sample data.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+            format: int64
+            minimum: 1
+          description: Query target resource ID.
+        - name: database
+          in: query
+          required: true
+          schema:
+            type: string
+            minLength: 1
+          description: Database name.
+        - name: object
+          in: query
+          required: true
+          schema:
+            type: string
+            minLength: 1
+          description: Object (table/view) name.
+      responses:
+        "200":
+          description: Object detail with columns, indexes, and foreign keys
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ObjectDetailResponse"
+              example:
+                targetResourceId: 616
+                database: "query_e2e"
+                name: "query_e2e_items"
+                kind: "table"
+                columns:
+                  - name: "id"
+                    ordinalPosition: 1
+                    databaseType: "bigint"
+                    nullable: false
+                    primaryKey: true
+                    autoIncrement: false
+                indexes:
+                  - name: "PRIMARY"
+                    columns: ["id"]
+                    unique: true
+                    primary: true
+                foreignKeys:
+                  - name: "fk_item_category"
+                    columns: ["category_id"]
+                    referencedDatabase: "query_e2e"
+                    referencedObject: "query_e2e_categories"
+                    referencedColumns: ["id"]
+                    onUpdate: "RESTRICT"
+                    onDelete: "RESTRICT"
+                truncated:
+                  columns: false
+                  indexes: false
+                  foreignKeys: false
+        "400":
+          description: Invalid parameters (missing database/object, bad id)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "401":
+          description: Missing or invalid Bearer token
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "404":
+          description: Query target or object not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "502":
+          description: Target database rejected or connection failed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
   /resources:
     get:
       summary: List resources
@@ -1822,6 +2081,167 @@ components:
         confirmAllEnvironments:
           type: boolean
           description: Required true when environmentPolicy is all_environments.
+    ObjectKind:
+      type: string
+      description: >-
+        Classifies a database object as either a table or a view. Unknown
+        kinds are rejected by the backend.
+      enum: [table, view]
+    DatabaseSummary:
+      type: object
+      required: [name, isDefault]
+      properties:
+        name:
+          type: string
+          description: Database name.
+        isDefault:
+          type: boolean
+          description: True when this is the default database for the target.
+    ObjectSummary:
+      type: object
+      required: [database, name, kind]
+      properties:
+        database:
+          type: string
+          description: Parent database name.
+        name:
+          type: string
+          description: Object (table/view) name.
+        kind:
+          $ref: "#/components/schemas/ObjectKind"
+    ColumnDetail:
+      type: object
+      required: [name, databaseType, ordinalPosition, nullable, primaryKey, autoIncrement]
+      properties:
+        name:
+          type: string
+        databaseType:
+          type: string
+          description: Native database type string (e.g. bigint, varchar(255)).
+        ordinalPosition:
+          type: integer
+          description: 1-based ordinal position of the column in the table.
+        nullable:
+          type: boolean
+        primaryKey:
+          type: boolean
+        autoIncrement:
+          type: boolean
+    IndexDetail:
+      type: object
+      required: [name, columns, unique, primary]
+      properties:
+        name:
+          type: string
+        columns:
+          type: array
+          items:
+            type: string
+          description: Ordered list of column names in the index.
+        unique:
+          type: boolean
+        primary:
+          type: boolean
+    ForeignKeyDetail:
+      type: object
+      required: [name, columns, referencedDatabase, referencedObject, referencedColumns, onUpdate, onDelete]
+      properties:
+        name:
+          type: string
+        columns:
+          type: array
+          items:
+            type: string
+          description: Ordered list of local column names in the FK.
+        referencedDatabase:
+          type: string
+        referencedObject:
+          type: string
+        referencedColumns:
+          type: array
+          items:
+            type: string
+          description: Ordered list of referenced column names.
+        onUpdate:
+          type: string
+          description: Referential action on update (e.g. RESTRICT, CASCADE).
+        onDelete:
+          type: string
+          description: Referential action on delete (e.g. RESTRICT, CASCADE).
+    TruncationFlags:
+      type: object
+      required: [columns, indexes, foreignKeys]
+      properties:
+        columns:
+          type: boolean
+          description: True when the columns list was truncated.
+        indexes:
+          type: boolean
+          description: True when the indexes list was truncated.
+        foreignKeys:
+          type: boolean
+          description: True when the foreign keys list was truncated.
+    DatabaseListResponse:
+      type: object
+      required: [targetResourceId, items, pageInfo]
+      properties:
+        targetResourceId:
+          type: integer
+          format: int64
+          description: Owning query target resource ID.
+        defaultDatabase:
+          type: string
+          nullable: true
+          description: Default database name for the target, if known.
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/DatabaseSummary"
+        pageInfo:
+          $ref: "#/components/schemas/PageInfo"
+    ObjectListResponse:
+      type: object
+      required: [targetResourceId, database, items, pageInfo]
+      properties:
+        targetResourceId:
+          type: integer
+          format: int64
+        database:
+          type: string
+          description: The database these objects belong to.
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/ObjectSummary"
+        pageInfo:
+          $ref: "#/components/schemas/PageInfo"
+    ObjectDetailResponse:
+      type: object
+      required: [targetResourceId, database, name, kind, columns, indexes, foreignKeys, truncated]
+      properties:
+        targetResourceId:
+          type: integer
+          format: int64
+        database:
+          type: string
+        name:
+          type: string
+        kind:
+          $ref: "#/components/schemas/ObjectKind"
+        columns:
+          type: array
+          items:
+            $ref: "#/components/schemas/ColumnDetail"
+        indexes:
+          type: array
+          items:
+            $ref: "#/components/schemas/IndexDetail"
+        foreignKeys:
+          type: array
+          items:
+            $ref: "#/components/schemas/ForeignKeyDetail"
+        truncated:
+          $ref: "#/components/schemas/TruncationFlags"
     PageInfo:
       type: object
       required: [page, pageSize, totalItems, totalPages, hasNextPage, hasPreviousPage]
