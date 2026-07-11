@@ -1,10 +1,12 @@
 #!/usr/bin/env bash
-# Phase 37H dedicated Query E2E MySQL fixture (dev/test only).
+# Phase 37H/38I dedicated Query E2E MySQL fixture (dev/test only).
 #
 # up/down/status for a disposable Docker MySQL used by the Query Workbench
-# ready-target E2E. It creates a query_e2e schema, a seed table, stable seed
-# rows, and a SELECT-only user, then writes a gitignored .query-e2e-mysql.env
-# containing the read-only credential DSN.
+# ready-target E2E. It creates a query_e2e schema (seed table, stable rows),
+# a query_e2e_aux schema (parent/child tables, view, composite index,
+# secondary index, foreign key), and a SELECT-only user with access to both
+# databases, then writes a gitignored .query-e2e-mysql.env containing the
+# read-only credential DSN.
 #
 # Safety: this script NEVER prints the credential DSN or any password. It only
 # logs safe facts (container name, host, port, database name, readiness). The
@@ -173,6 +175,8 @@ cmd_up() {
 
   wait_ready "$PW"
 
+  AUX_DATABASE="query_e2e_aux"
+
   # Schema/database is created by MYSQL_DATABASE on init; ensure table, seed rows,
   # and the SELECT-only user. Safe to re-run. MYSQL_PWD authenticates root without
   # putting the password on the command line.
@@ -189,8 +193,51 @@ insert into query_e2e_items (id, name, category) values
 on duplicate key update
   name = values(name),
   category = values(category);
+SQL
+
+  # Auxiliary database with richer schema objects for schema metadata tests.
+  docker exec -i -e MYSQL_PWD="$PW" "$CONTAINER" mysql -uroot >&2 <<SQL
+create database if not exists \`$AUX_DATABASE\`;
+use \`$AUX_DATABASE\`;
+
+create table if not exists schema_parent (
+  id bigint unsigned not null auto_increment,
+  parent_code varchar(32) not null,
+  label varchar(128) not null default '',
+  created_at timestamp not null default current_timestamp,
+  primary key (id),
+  unique key uq_schema_parent_code (parent_code),
+  key idx_schema_parent_label (label)
+) engine=InnoDB;
+
+create table if not exists schema_child (
+  id bigint unsigned not null auto_increment,
+  parent_id bigint unsigned not null,
+  child_name varchar(64) not null,
+  sort_order int not null default 0,
+  primary key (id),
+  key idx_schema_child_parent (parent_id, sort_order),
+  constraint fk_schema_child_parent foreign key (parent_id) references schema_parent (id) on update cascade on delete restrict
+) engine=InnoDB;
+
+create or replace view schema_parent_summary as
+  select id, parent_code, label from schema_parent;
+
+insert ignore into schema_parent (id, parent_code, label) values
+  (1, 'P_ALPHA', 'Alpha Parent'),
+  (2, 'P_BETA',  'Beta Parent');
+
+insert ignore into schema_child (id, parent_id, child_name, sort_order) values
+  (1, 1, 'child_a1', 1),
+  (2, 1, 'child_a2', 2),
+  (3, 2, 'child_b1', 1);
+SQL
+
+  # Grant SELECT on both application databases only.
+  docker exec -i -e MYSQL_PWD="$PW" "$CONTAINER" mysql -uroot >&2 <<SQL
 create user if not exists '$RO_USER'@'%' identified by '$PW';
-grant select on $DATABASE.* to '$RO_USER'@'%';
+grant select on \`$DATABASE\`.* to '$RO_USER'@'%';
+grant select on \`$AUX_DATABASE\`.* to '$RO_USER'@'%';
 flush privileges;
 SQL
 

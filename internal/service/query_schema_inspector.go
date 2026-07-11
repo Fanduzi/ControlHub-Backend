@@ -278,7 +278,7 @@ func (s *MySQLSchemaInspector) GetObjectDetails(ctx context.Context, dsn string,
 
 	detail := &ObjectDetail{
 		Name: name,
-		Kind: normalizeObjectKind(kind),
+		Kind: normalizeTableType(kind),
 	}
 
 	// Columns (capped at 512).
