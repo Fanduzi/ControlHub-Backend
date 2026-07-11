@@ -39,6 +39,10 @@ type Dependencies struct {
 	// satisfies it. All three routes require a fresh bearer token; PUT/DELETE
 	// additionally require the admin role (enforced in the handler).
 	QueryCredentialService queryCredentialAPI
+	// Query schema metadata (Phase 38I). querySchemaAPI is the thin interface
+	// the handlers depend on; the concrete *service.QuerySchemaService satisfies
+	// it. All three routes require a fresh bearer token.
+	QuerySchemaService querySchemaAPI
 }
 
 func corsLocalDev(next http.Handler) http.Handler {
@@ -111,6 +115,16 @@ func NewRouter(deps Dependencies) *chi.Mux {
 			r.Get("/query-targets/{id}/credential", handleGetQueryCredential(deps.QueryCredentialService))
 			r.Put("/query-targets/{id}/credential", handlePutQueryCredential(deps.QueryCredentialService))
 			r.Delete("/query-targets/{id}/credential", handleDeleteQueryCredential(deps.QueryCredentialService))
+		})
+	}
+	// Query schema metadata routes (Phase 38I). All three require a fresh
+	// bearer token (same freshness policy as query execution).
+	if deps.QuerySchemaService != nil {
+		router.Group(func(r chi.Router) {
+			r.Use(requireFreshQueryActor(deps.AuthService, deps.QueryExecutionAuth))
+			r.Get("/query-targets/{id}/schema/databases", handleListSchemaDatabases(deps.QuerySchemaService))
+			r.Get("/query-targets/{id}/schema/objects", handleListSchemaObjects(deps.QuerySchemaService))
+			r.Get("/query-targets/{id}/schema/object-details", handleGetObjectDetails(deps.QuerySchemaService))
 		})
 	}
 	return router

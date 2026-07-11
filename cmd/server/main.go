@@ -70,6 +70,15 @@ func buildDependencies(db *sql.DB, cfg config.Config) api.Dependencies {
 		realClock{},
 	)
 
+	accessResolver := service.NewTargetAccessResolver(queryTargetRepo, queryExecutionRepo, credentialResolver)
+	querySchemaSvc := service.NewQuerySchemaService(
+		accessResolver,
+		service.NewMySQLSchemaInspector(),
+		service.NewQuerySchemaCache(256, realClock{}),
+		queryExecutionRepo,
+		realClock{},
+	)
+
 	return api.Dependencies{
 		ResourceService:        service.NewResourceService(resourceRepo, profileSvc),
 		RelationService:        service.NewRelationService(relationRepo),
@@ -88,6 +97,7 @@ func buildDependencies(db *sql.DB, cfg config.Config) api.Dependencies {
 		QueryTargetService:     queryTargetSvc,
 		QueryCredentialService: queryCredentialSvc,
 		QueryExecutionService:  queryExecutionSvc,
+		QuerySchemaService:     querySchemaSvc,
 		QueryExecutionAuth: api.QueryExecutionAuthConfig{
 			TokenMaxAge: cfg.QueryExecutionTokenMaxAge,
 			Clock:       time.Now,

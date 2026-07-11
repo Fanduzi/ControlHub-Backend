@@ -672,6 +672,35 @@ func (f *fakeCredentialMetadataStore) DeleteCredentialMetadataWithAudit(_ contex
 	return nil
 }
 
+type fakeQuerySchema struct{}
+
+func (f *fakeQuerySchema) ListDatabases(_ context.Context, _, targetID uint64, _ string, _, _ int, _, _ bool) (model.DatabaseListResponse, error) {
+	return model.DatabaseListResponse{
+		TargetResourceID: int64(targetID),
+		Items:            []model.DatabaseSummary{{Name: "testdb"}},
+		PageInfo:         model.NewPageInfo(1, 50, 1),
+	}, nil
+}
+
+func (f *fakeQuerySchema) ListObjects(_ context.Context, _, targetID uint64, database, _, _ string, _, _ int, _ bool) (model.ObjectListResponse, error) {
+	return model.ObjectListResponse{
+		TargetResourceID: int64(targetID),
+		Database:         database,
+		Items:            []model.ObjectSummary{{Database: database, Name: "users", Kind: model.ObjectKindTable}},
+		PageInfo:         model.NewPageInfo(1, 50, 1),
+	}, nil
+}
+
+func (f *fakeQuerySchema) GetObjectDetails(_ context.Context, _, targetID uint64, database, name, kind string, _ bool) (model.ObjectDetailResponse, error) {
+	return model.ObjectDetailResponse{
+		TargetResourceID: int64(targetID),
+		Database:         database,
+		Name:             name,
+		Kind:             model.ObjectKind(kind),
+		Columns:          []model.ColumnDetail{{Name: "id", DatabaseType: "BIGINT", OrdinalPosition: 1, PrimaryKey: true}},
+	}, nil
+}
+
 func NewTestServer() *TestServer {
 	archivedAt := time.Date(2026, 4, 11, 22, 0, 0, 0, time.UTC)
 	archiveReason := "retired"
@@ -731,6 +760,7 @@ func NewTestServer() *TestServer {
 		ProfileService:         profileSvc,
 		QueryTargetService:     service.NewQueryTargetService(queryTargetRepo),
 		QueryCredentialService: service.NewQueryCredentialService(queryTargetRepo, credentialStore, service.NewEnvCredentialResolver()),
+		QuerySchemaService:     &fakeQuerySchema{},
 	}
 
 	return &TestServer{Router: NewRouter(deps)}

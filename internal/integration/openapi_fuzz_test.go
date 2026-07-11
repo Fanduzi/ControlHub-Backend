@@ -79,6 +79,7 @@ func TestOpenAPIFuzz(t *testing.T) {
 		QueryTargetService:     service.NewQueryTargetService(queryTargetRepo).WithCredentialReader(queryExecutionRepo).WithCredentialResolver(credentialResolver),
 		QueryCredentialService: queryCredentialSvc,
 		QueryExecutionService:  queryExecutionSvc,
+		QuerySchemaService:     service.NewQuerySchemaService(service.NewTargetAccessResolver(queryTargetRepo, queryExecutionRepo, credentialResolver), service.NewMySQLSchemaInspector(), service.NewQuerySchemaCache(256, wallClock{}), queryExecutionRepo, wallClock{}),
 		QueryExecutionAuth: api.QueryExecutionAuthConfig{
 			TokenMaxAge: 8 * time.Hour,
 			Clock:       time.Now,
