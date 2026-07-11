@@ -166,6 +166,8 @@ paths:
                   pageSize: 50
                   totalItems: 1
                   totalPages: 1
+                  hasNextPage: false
+                  hasPreviousPage: false
         "400":
           description: Invalid query parameters
           content:
@@ -541,6 +543,8 @@ paths:
                       pageSize: 20
                       totalItems: 1
                       totalPages: 1
+                      hasNextPage: false
+                      hasPreviousPage: false
         "401":
           description: Missing or invalid Bearer token (or token older than the TTL)
           content:
@@ -676,6 +680,8 @@ paths:
                   pageSize: 20
                   totalItems: 64
                   totalPages: 4
+                  hasNextPage: true
+                  hasPreviousPage: false
         "400":
           description: Invalid query parameters
           content:
@@ -1280,6 +1286,8 @@ paths:
                   pageSize: 20
                   totalItems: 25
                   totalPages: 2
+                  hasNextPage: true
+                  hasPreviousPage: false
         "400":
           description: Invalid query parameters
           content:
@@ -1816,7 +1824,7 @@ components:
           description: Required true when environmentPolicy is all_environments.
     PageInfo:
       type: object
-      required: [page, pageSize, totalItems, totalPages]
+      required: [page, pageSize, totalItems, totalPages, hasNextPage, hasPreviousPage]
       properties:
         page:
           type: integer
@@ -1830,6 +1838,12 @@ components:
         totalPages:
           type: integer
           description: Total number of pages
+        hasNextPage:
+          type: boolean
+          description: Whether there is a page after this one
+        hasPreviousPage:
+          type: boolean
+          description: Whether there is a page before this one
     LoginRequest:
       type: object
       required: [email, password]
