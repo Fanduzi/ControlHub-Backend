@@ -96,6 +96,7 @@ type QueryExecutionService struct {
 	executor    QueryDatabaseExecutor
 	guard       *QueryGuard
 	clock       Clock
+	access      *TargetAccessResolver
 }
 
 // NewQueryExecutionService wires the service. targets is reused from the query
@@ -115,6 +116,7 @@ func NewQueryExecutionService(
 		executor:    executor,
 		guard:       guard,
 		clock:       clock,
+		access:      NewTargetAccessResolver(targets, executions, credentials),
 	}
 }
 
@@ -128,24 +130,28 @@ func NewQueryExecutionService(
 func (s *QueryExecutionService) Execute(ctx context.Context, actorUserID uint64, targetID uint64, req model.QueryExecuteRequest) (model.QueryExecuteResponse, error) {
 	start := s.clock.Now()
 
-	target, err := s.findTarget(ctx, targetID)
+	// Resolve governed target access. The resolver performs: target lookup,
+	// engine check, credential validation, policy enforcement, secret
+	// resolution, and DSN binding validation — the same checks that
+	// InspectCredentialRuntime performs so the two paths never drift.
+	access, err := s.access.Resolve(ctx, actorUserID, targetID)
 	if err != nil {
-		// Unknown target: no history row (no valid target to attribute it to).
+		if errors.Is(err, ErrQueryTargetNotFound) {
+			// Unknown target: no history row (no valid target to attribute it to).
+			return model.QueryExecuteResponse{}, err
+		}
+		var accessErr *TargetAccessError
+		if errors.As(err, &accessErr) {
+			// access.Target is populated even on denial so we can record the
+			// rejected attempt. The message is a fixed, leak-free string.
+			return s.reject(ctx, access.Target, actorUserID, nil, "query_not_allowed", accessErr.Error(),
+				fmt.Errorf("%w: %s", ErrQueryNotAllowed, accessErr.Error()), start)
+		}
 		return model.QueryExecuteResponse{}, err
 	}
 
+	target := access.Target
 	engine := target.ConnectionContext.Engine
-	if !isExecutableEngine(engine) {
-		return s.reject(ctx, target, actorUserID, nil, "query_not_allowed", "engine is not supported for read-only execution",
-			fmt.Errorf("%w: engine is not supported for read-only execution", ErrQueryNotAllowed), start)
-	}
-
-	cred, err := s.executions.GetCredentialByResourceID(ctx, targetID)
-	if err != nil || !credentialAllowsExecution(cred, engine, target.ConnectionContext.Environment) {
-		// No credential, invalid ref, disabled, engine mismatch, or policy disallows -> locked.
-		return s.reject(ctx, target, actorUserID, nil, "query_not_allowed", "target is not enabled for execution",
-			fmt.Errorf("%w: target is not enabled for execution", ErrQueryNotAllowed), start)
-	}
 
 	// Production requests are capped tighter before the guard applies its own
 	// default/hard-cap logic.
@@ -161,20 +167,6 @@ func (s *QueryExecutionService) Execute(ctx context.Context, actorUserID uint64,
 			fmt.Errorf("%w: %v", ErrQueryValidationFailed, err), start)
 	}
 
-	dsn, err := s.credentials.Resolve(ctx, cred.CredentialRef)
-	if err != nil {
-		// Resolver rejects invalid refs (fail closed) and unset env keys. The DSN
-		// is never included in the recorded or returned message.
-		return s.reject(ctx, target, actorUserID, &guarded, "query_not_allowed", "credential could not be resolved",
-			fmt.Errorf("%w: credential could not be resolved", ErrQueryNotAllowed), start)
-	}
-	// Defense in depth: the resolved DSN must point at the selected target's
-	// host/port. A credential misconfigured to another database is fail-closed.
-	if err := validateDSNBinding(dsn, target); err != nil {
-		return s.reject(ctx, target, actorUserID, &guarded, "query_not_allowed", "credential is not bound to this target",
-			fmt.Errorf("%w: credential is not bound to this target", ErrQueryNotAllowed), start)
-	}
-
 	timeout := defaultQueryTimeout
 	if isProductionEnvironment(target.ConnectionContext.Environment) {
 		timeout = productionQueryTimeout
@@ -182,7 +174,7 @@ func (s *QueryExecutionService) Execute(ctx context.Context, actorUserID uint64,
 	execCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
-	result, err := s.executor.Query(execCtx, dsn, guarded)
+	result, err := s.executor.Query(execCtx, access.dsn, guarded)
 	if err != nil {
 		status, sentinel, code, safeMsg := classifyExecutorError(err)
 		// safeMsg is a fixed string; the raw executor error (which may echo parts
