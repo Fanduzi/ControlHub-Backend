@@ -29,13 +29,8 @@ func (s *AuditService) List(ctx context.Context, q model.AuditListQuery) ([]mode
 	if err != nil {
 		return nil, nil, err
 	}
-	pageInfo := &model.PageInfo{
-		Page:       q.Page,
-		PageSize:   q.PageSize,
-		TotalItems: total,
-		TotalPages: model.ComputeTotalPages(total, q.PageSize),
-	}
-	return items, pageInfo, nil
+	pageInfo := model.NewPageInfo(q.Page, q.PageSize, total)
+	return items, &pageInfo, nil
 }
 
 func (s *AuditService) ListByResourceID(resourceID uint64) ([]model.AuditEvent, error) {

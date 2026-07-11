@@ -96,12 +96,8 @@ func (s *QueryTargetService) List(ctx context.Context, q model.QueryTargetListQu
 	}
 	var pageInfo *model.PageInfo
 	if q.Page > 0 && q.PageSize > 0 {
-		pageInfo = &model.PageInfo{
-			Page:       q.Page,
-			PageSize:   q.PageSize,
-			TotalItems: total,
-			TotalPages: model.ComputeTotalPages(total, q.PageSize),
-		}
+		pi := model.NewPageInfo(q.Page, q.PageSize, total)
+		pageInfo = &pi
 	}
 	return targets, pageInfo, nil
 }

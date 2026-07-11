@@ -235,12 +235,8 @@ func (s *QueryExecutionService) ListHistory(ctx context.Context, targetID uint64
 	if err != nil {
 		return nil, nil, err
 	}
-	return items, &model.PageInfo{
-		Page:       page,
-		PageSize:   pageSize,
-		TotalItems: total,
-		TotalPages: model.ComputeTotalPages(total, pageSize),
-	}, nil
+	pageInfo := model.NewPageInfo(page, pageSize, total)
+	return items, &pageInfo, nil
 }
 
 func (s *QueryExecutionService) findTarget(ctx context.Context, targetID uint64) (model.QueryTarget, error) {

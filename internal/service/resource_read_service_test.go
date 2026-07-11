@@ -83,6 +83,12 @@ func TestResourceReadListReturnsItemsWithPageInfo(t *testing.T) {
 	if pageInfo.PageSize != 20 {
 		t.Fatalf("expected pageSize 20, got %d", pageInfo.PageSize)
 	}
+	if pageInfo.HasNextPage {
+		t.Fatalf("expected hasNextPage false on single page, got true")
+	}
+	if pageInfo.HasPreviousPage {
+		t.Fatalf("expected hasPreviousPage false on first page, got true")
+	}
 }
 
 func TestResourceReadListEmptyWhenNoMatch(t *testing.T) {
