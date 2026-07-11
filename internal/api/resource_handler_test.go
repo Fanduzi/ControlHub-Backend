@@ -483,6 +483,12 @@ func TestListResources_DefaultPagination(t *testing.T) {
 	if resp.PageInfo.TotalPages != 1 {
 		t.Fatalf("expected totalPages 1, got %d", resp.PageInfo.TotalPages)
 	}
+	if resp.PageInfo.HasNextPage {
+		t.Fatalf("expected hasNextPage false on single page, got true")
+	}
+	if resp.PageInfo.HasPreviousPage {
+		t.Fatalf("expected hasPreviousPage false on first page, got true")
+	}
 	if len(resp.Items) != 3 {
 		t.Fatalf("expected 3 items, got %d", len(resp.Items))
 	}
@@ -512,6 +518,12 @@ func TestListResources_CustomPage(t *testing.T) {
 	if resp.PageInfo.TotalPages != 3 {
 		t.Fatalf("expected totalPages 3, got %d", resp.PageInfo.TotalPages)
 	}
+	if !resp.PageInfo.HasNextPage {
+		t.Fatalf("expected hasNextPage true on first of 3 pages, got false")
+	}
+	if resp.PageInfo.HasPreviousPage {
+		t.Fatalf("expected hasPreviousPage false on first page, got true")
+	}
 	if len(resp.Items) != 1 {
 		t.Fatalf("expected 1 item on first page, got %d", len(resp.Items))
 	}
@@ -534,6 +546,12 @@ func TestListResources_PageBeyondData(t *testing.T) {
 	}
 	if resp.PageInfo.TotalItems != 3 {
 		t.Fatalf("expected totalItems 3, got %d", resp.PageInfo.TotalItems)
+	}
+	if resp.PageInfo.HasNextPage {
+		t.Fatalf("expected hasNextPage false on page beyond data, got true")
+	}
+	if !resp.PageInfo.HasPreviousPage {
+		t.Fatalf("expected hasPreviousPage true on page beyond data, got false")
 	}
 }
 

@@ -562,13 +562,15 @@ func (f fakeQueryTargetRepo) ListQueryTargets(_ context.Context, q model.QueryTa
 		}
 		if q.Q != "" {
 			lq := strings.ToLower(q.Q)
+			portStr := fmt.Sprintf("%d", row.target.ConnectionContext.Port)
 			if !strings.Contains(strings.ToLower(row.target.ResourceName), lq) &&
 				!strings.Contains(strings.ToLower(row.target.DisplayName), lq) &&
 				!strings.Contains(strings.ToLower(row.target.ConnectionContext.Engine), lq) &&
 				!strings.Contains(strings.ToLower(row.target.ConnectionContext.Host), lq) &&
 				!strings.Contains(strings.ToLower(row.target.ConnectionContext.Environment), lq) &&
 				!strings.Contains(strings.ToLower(row.target.ConnectionContext.Owner), lq) &&
-				!strings.Contains(strings.ToLower(row.target.ConnectionContext.ClusterName), lq) {
+				!strings.Contains(strings.ToLower(row.target.ConnectionContext.ClusterName), lq) &&
+				!strings.Contains(portStr, q.Q) {
 				continue
 			}
 		}

@@ -50,6 +50,12 @@ func TestListAuditEvents_DefaultPagination(t *testing.T) {
 	if resp.PageInfo.TotalPages != 1 {
 		t.Fatalf("expected totalPages 1, got %d", resp.PageInfo.TotalPages)
 	}
+	if resp.PageInfo.HasNextPage {
+		t.Fatalf("expected hasNextPage false on single page, got true")
+	}
+	if resp.PageInfo.HasPreviousPage {
+		t.Fatalf("expected hasPreviousPage false on first page, got true")
+	}
 	if len(resp.Items) != 2 {
 		t.Fatalf("expected 2 items, got %d", len(resp.Items))
 	}
@@ -72,6 +78,12 @@ func TestListAuditEvents_CustomPagination(t *testing.T) {
 	}
 	if resp.PageInfo.TotalPages != 2 {
 		t.Fatalf("expected totalPages 2, got %d", resp.PageInfo.TotalPages)
+	}
+	if !resp.PageInfo.HasNextPage {
+		t.Fatalf("expected hasNextPage true on first of 2 pages, got false")
+	}
+	if resp.PageInfo.HasPreviousPage {
+		t.Fatalf("expected hasPreviousPage false on first page, got true")
 	}
 }
 
@@ -220,6 +232,12 @@ func TestListAuditEvents_NoMatch(t *testing.T) {
 	}
 	if resp.PageInfo.TotalItems != 0 {
 		t.Fatalf("expected totalItems 0, got %d", resp.PageInfo.TotalItems)
+	}
+	if resp.PageInfo.HasNextPage {
+		t.Fatalf("expected hasNextPage false on empty result, got true")
+	}
+	if resp.PageInfo.HasPreviousPage {
+		t.Fatalf("expected hasPreviousPage false on empty result, got true")
 	}
 }
 

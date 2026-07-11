@@ -214,6 +214,13 @@ func TestQueryExecution_ListHistory(t *testing.T) {
 	if strings.Contains(body, `"rows"`) {
 		t.Fatalf("history response must not include result rows: %s", body)
 	}
+	// WHY: hasNextPage/hasPreviousPage must be present in the serialized response.
+	if !strings.Contains(body, `"hasNextPage"`) {
+		t.Fatalf("response missing hasNextPage: %s", body)
+	}
+	if !strings.Contains(body, `"hasPreviousPage"`) {
+		t.Fatalf("response missing hasPreviousPage: %s", body)
+	}
 }
 
 func TestQueryExecution_ListHistory_MissingBearer(t *testing.T) {
