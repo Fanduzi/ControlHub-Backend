@@ -58,11 +58,12 @@ func (r *QueryTargetRepository) ListQueryTargets(ctx context.Context, q model.Qu
 			or p.host like ? ESCAPE '\\'
 			or e.name like ? ESCAPE '\\'
 			or o.name like ? ESCAPE '\\'
+			or cast(p.port as char) like ? ESCAPE '\\'
 			or (select c.display_name from resource_relations rr
 			    join resources c on c.id = rr.to_resource_id
 			    where rr.from_resource_id = r.id and rr.relation_type = 'member_of' limit 1) like ? ESCAPE '\\'
 		)`
-		args = append(args, pattern, pattern, pattern, pattern, pattern, pattern, pattern)
+		args = append(args, pattern, pattern, pattern, pattern, pattern, pattern, pattern, pattern)
 	}
 
 	var total int

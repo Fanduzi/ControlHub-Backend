@@ -224,6 +224,9 @@ func TestListQueryTargets_DefaultResponseIncludesPageInfo(t *testing.T) {
 	if resp.PageInfo.TotalPages <= 0 {
 		t.Errorf("totalPages = %d, want > 0", resp.PageInfo.TotalPages)
 	}
+	if resp.PageInfo.HasPreviousPage {
+		t.Errorf("hasPreviousPage = true, want false on first page")
+	}
 }
 
 // TestListQueryTargets_CustomPageSizeReturnsCorrectPageInfo proves explicit
@@ -342,6 +345,29 @@ func TestListQueryTargets_QSearchMatchesDisplayResourceNameHostEngineEnvironment
 	}
 }
 
+// TestListQueryTargets_QSearchMatchesPort proves the q parameter matches the
+// connection port as a string. Port 6379 uniquely identifies the staging redis
+// target (resource 24).
+// WHY: the frontend search box must match port numbers so operators can find
+// targets by their listen address without knowing the resource name.
+func TestListQueryTargets_QSearchMatchesPort(t *testing.T) {
+	server := NewTestServer()
+
+	resp := listQueryTargets(t, server, "?q=6379")
+	if len(resp.Items) == 0 {
+		t.Fatal("q=6379: expected at least one match")
+	}
+	found := false
+	for _, item := range resp.Items {
+		if item.ResourceID == 24 {
+			found = true
+		}
+	}
+	if !found {
+		t.Error("q=6379: expected to find target 24 (Session Redis Staging)")
+	}
+}
+
 // TestListQueryTargets_TargetIdExactLookupReturnsTargetEvenOffPage proves
 // targetId bypasses pagination and returns the requested target even when it
 // would not appear on page 1.
@@ -425,6 +451,12 @@ func TestListQueryTargets_LargeFixtureReturnsOnlyPageSizeItems(t *testing.T) {
 	if resp.PageInfo.TotalPages != 3 {
 		t.Errorf("totalPages = %d, want 3", resp.PageInfo.TotalPages)
 	}
+	if !resp.PageInfo.HasNextPage {
+		t.Errorf("hasNextPage = false, want true on first of 3 pages")
+	}
+	if resp.PageInfo.HasPreviousPage {
+		t.Errorf("hasPreviousPage = true, want false on first page")
+	}
 
 	// Page 2 should return the next 2 items.
 	resp2 := listQueryTargets(t, server, "?pageSize=2&page=2")
@@ -436,9 +468,21 @@ func TestListQueryTargets_LargeFixtureReturnsOnlyPageSizeItems(t *testing.T) {
 	if len(resp3.Items) != 2 {
 		t.Fatalf("page 3 with pageSize=2: expected 2 items, got %d", len(resp3.Items))
 	}
+	if resp3.PageInfo.HasNextPage {
+		t.Errorf("page 3 hasNextPage = true, want false (last page)")
+	}
+	if !resp3.PageInfo.HasPreviousPage {
+		t.Errorf("page 3 hasPreviousPage = false, want true")
+	}
 	// Page 4 should return empty.
 	resp4 := listQueryTargets(t, server, "?pageSize=2&page=4")
 	if len(resp4.Items) != 0 {
 		t.Fatalf("page 4 with pageSize=2: expected 0 items, got %d", len(resp4.Items))
+	}
+	if resp4.PageInfo.HasNextPage {
+		t.Errorf("page 4 hasNextPage = true, want false (beyond data)")
+	}
+	if !resp4.PageInfo.HasPreviousPage {
+		t.Errorf("page 4 hasPreviousPage = false, want true (beyond data)")
 	}
 }
