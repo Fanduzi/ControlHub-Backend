@@ -65,6 +65,97 @@ func TestDedupStrings(t *testing.T) {
 	}
 }
 
+func TestNewPageInfo(t *testing.T) {
+	tests := []struct {
+		name             string
+		page             int
+		pageSize         int
+		totalItems       int
+		wantHasNext      bool
+		wantHasPrevious  bool
+		wantTotalPages   int
+	}{
+		{
+			name:            "first page of many",
+			page:            1,
+			pageSize:        20,
+			totalItems:      64,
+			wantHasNext:     true,
+			wantHasPrevious: false,
+			wantTotalPages:  4,
+		},
+		{
+			name:            "middle page",
+			page:            2,
+			pageSize:        20,
+			totalItems:      64,
+			wantHasNext:     true,
+			wantHasPrevious: true,
+			wantTotalPages:  4,
+		},
+		{
+			name:            "last page",
+			page:            4,
+			pageSize:        20,
+			totalItems:      64,
+			wantHasNext:     false,
+			wantHasPrevious: true,
+			wantTotalPages:  4,
+		},
+		{
+			name:            "single page fits all",
+			page:            1,
+			pageSize:        20,
+			totalItems:      5,
+			wantHasNext:     false,
+			wantHasPrevious: false,
+			wantTotalPages:  1,
+		},
+		{
+			name:            "empty result set",
+			page:            1,
+			pageSize:        20,
+			totalItems:      0,
+			wantHasNext:     false,
+			wantHasPrevious: false,
+			wantTotalPages:  0,
+		},
+		{
+			name:            "page beyond data",
+			page:            5,
+			pageSize:        20,
+			totalItems:      64,
+			wantHasNext:     false,
+			wantHasPrevious: true,
+			wantTotalPages:  4,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := NewPageInfo(tt.page, tt.pageSize, tt.totalItems)
+			if got.Page != tt.page {
+				t.Errorf("Page = %d, want %d", got.Page, tt.page)
+			}
+			if got.PageSize != tt.pageSize {
+				t.Errorf("PageSize = %d, want %d", got.PageSize, tt.pageSize)
+			}
+			if got.TotalItems != tt.totalItems {
+				t.Errorf("TotalItems = %d, want %d", got.TotalItems, tt.totalItems)
+			}
+			if got.TotalPages != tt.wantTotalPages {
+				t.Errorf("TotalPages = %d, want %d", got.TotalPages, tt.wantTotalPages)
+			}
+			if got.HasNextPage != tt.wantHasNext {
+				t.Errorf("HasNextPage = %v, want %v", got.HasNextPage, tt.wantHasNext)
+			}
+			if got.HasPreviousPage != tt.wantHasPrevious {
+				t.Errorf("HasPreviousPage = %v, want %v", got.HasPreviousPage, tt.wantHasPrevious)
+			}
+		})
+	}
+}
+
 func TestNormalizePagination(t *testing.T) {
 tests := []struct {
 	name         string

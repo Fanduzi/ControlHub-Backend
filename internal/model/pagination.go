@@ -13,10 +13,27 @@ const (
 
 // PageInfo carries pagination metadata in list responses.
 type PageInfo struct {
-	Page       int `json:"page"`
-	PageSize   int `json:"pageSize"`
-	TotalItems int `json:"totalItems"`
-	TotalPages int `json:"totalPages"`
+	Page            int  `json:"page"`
+	PageSize        int  `json:"pageSize"`
+	TotalItems      int  `json:"totalItems"`
+	TotalPages      int  `json:"totalPages"`
+	HasNextPage     bool `json:"hasNextPage"`
+	HasPreviousPage bool `json:"hasPreviousPage"`
+}
+
+// NewPageInfo constructs a PageInfo from page, pageSize, and totalItems,
+// computing totalPages and navigation booleans. Empty result sets yield
+// both hasNextPage and hasPreviousPage as false.
+func NewPageInfo(page, pageSize, totalItems int) PageInfo {
+	totalPages := ComputeTotalPages(totalItems, pageSize)
+	return PageInfo{
+		Page:            page,
+		PageSize:        pageSize,
+		TotalItems:      totalItems,
+		TotalPages:      totalPages,
+		HasNextPage:     page < totalPages,
+		HasPreviousPage: page > 1,
+	}
 }
 
 // ResourceListQuery holds all query parameters for GET /resources.
