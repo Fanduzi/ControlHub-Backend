@@ -336,6 +336,25 @@ verified when the environment is stable:
    `sql-code-editor-client.tsx`. Resolved by committing F4's refactor first,
    then F2's explorer.
 
+4. **E2E locale mismatch**: Schema intelligence tests failed because
+   `openQueryWorkbench` helper lacked English locale cookie. Dialog accessible
+   name was Chinese "连接" instead of English "Connections". Fixed in `d0c4703`.
+
+5. **Locked target schema fetch guard**: `query-editor-shell.tsx` was fetching
+   schema databases for locked targets. Added `availableActions.run` guard.
+   Fixed in `d0c4703`.
+
+6. **Broad 403 console error suppression**: `query-workbench.spec.ts` had
+   `/Failed to load resource:.*403/` in allowedErrors which would suppress ANY
+   403 console error, hiding real API regressions. Removed the broad suppression
+   and added regression test proving unexpected 403s are caught. Fixed in
+   `9fec6c0`.
+
+7. **Unused allowedNetworkErrors parameter**: `console-guards.ts` had
+   `allowedNetworkErrors` parameter that was never used by any call site,
+   creating a potential test escape hatch. Removed the parameter. Fixed in
+   `9fec6c0`.
+
 ## Remaining P1/P2 Findings
 
 None. All identified issues were fixed with regression tests.
@@ -364,6 +383,7 @@ Frontend:
 
 Backend worktree (`phase-38i-schema-intelligence`):
 ```
+78192c2 docs: record phase 38i schema intelligence evidence
 6648129 test(query): prove schema metadata integration
 51da86c feat(api): expose governed schema metadata
 007b52d feat(query): govern cached schema metadata
@@ -374,6 +394,8 @@ c10a780 feat(query): inspect mysql schema metadata
 
 Frontend worktree (`phase-38i-schema-intelligence`):
 ```
+9fec6c0 fix(e2e): remove broad 403 console error suppression
+d0c4703 fix(query): fix schema intelligence E2E locale and guard locked target fetch
 bc176a1 test(query): cover schema intelligence workflows
 f8ad12b fix(query): resolve lint errors in schema explorer and editor
 18b7e3e feat(query): add governed schema-aware SQL completion
@@ -433,6 +455,35 @@ Both worktrees are clean.
 
 Implementation is complete. Backend and frontend changes are committed in focused
 commits. Both worktrees are clean. Backend integration tests pass against the
-dedicated MySQL fixture. Frontend unit tests pass. E2E tests have pre-existing
-environment issues (login/navigation step fails) that affect both new and old
-tests equally.
+dedicated MySQL fixture. Frontend unit tests pass. E2E tests pass with 0 failed
+and 0 skipped.
+
+### E2E Fix Evidence
+
+**Root cause of previous failures:**
+- 3 schema intelligence tests failed due to locale mismatch (Chinese "连接"
+  instead of English "Connections")
+- Broad 403 console error suppression could hide API regressions
+
+**Fixes applied:**
+- `d0c4703`: Added English locale cookie to schema intelligence E2E tests
+- `9fec6c0`: Removed broad 403 suppression, added regression test
+
+**Final E2E command:**
+```bash
+npm run test:e2e -- e2e/query-workbench.spec.ts e2e/query-credential-settings.spec.ts
+```
+
+**Final E2E result:** 40 passed, 0 failed, 0 skipped
+
+**Regression test proving unexpected 403s are caught:**
+```typescript
+it("REGRESSION: unexpected 403 console error must NOT be suppressed by default", () => {
+  const standardOpts: ConsoleGuardOptions = {
+    allowedErrors: [/Fast Refresh/, /HMR/, /Download the React DevTools/],
+    allowedWarnings: [/was preloaded using link preload but not used/],
+  };
+  expect(isAllowedConsoleMessage("error", "Failed to load resource: the server responded with a status of 403 (Forbidden)", standardOpts)).toBe(false);
+  expect(isAllowedConsoleMessage("error", "Failed to load resource: http://localhost:8080/query-targets/616/schema/databases?page=1&pageSize=50 → 403", standardOpts)).toBe(false);
+});
+```
