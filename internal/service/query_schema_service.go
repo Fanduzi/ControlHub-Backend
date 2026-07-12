@@ -281,12 +281,17 @@ func (s *QuerySchemaService) toModelObjects(database string, items []ObjectSumma
 }
 
 // toModelObjectDetail converts inspector ObjectDetail to model.ObjectDetailResponse.
+// All declared collections (including nested index/FK column lists) are non-nil
+// empty slices when empty so JSON never emits null for OpenAPI required arrays.
 func (s *QuerySchemaService) toModelObjectDetail(targetID uint64, database string, detail *ObjectDetail) model.ObjectDetailResponse {
 	resp := model.ObjectDetailResponse{
 		TargetResourceID: int64(targetID),
 		Database:         database,
 		Name:             detail.Name,
 		Kind:             model.ObjectKind(detail.Kind),
+		Columns:          make([]model.ColumnDetail, 0, len(detail.Columns)),
+		Indexes:          make([]model.IndexDetail, 0, len(detail.Indexes)),
+		ForeignKeys:      make([]model.ForeignKeyDetail, 0, len(detail.ForeignKeys)),
 	}
 	for _, c := range detail.Columns {
 		resp.Columns = append(resp.Columns, model.ColumnDetail{
@@ -303,6 +308,7 @@ func (s *QuerySchemaService) toModelObjectDetail(targetID uint64, database strin
 			Name:    idx.Name,
 			Unique:  !idx.NonUnique,
 			Primary: idx.Name == "PRIMARY",
+			Columns: make([]string, 0, len(idx.Columns)),
 		}
 		for _, ic := range idx.Columns {
 			md.Columns = append(md.Columns, ic.Name)
@@ -311,9 +317,11 @@ func (s *QuerySchemaService) toModelObjectDetail(targetID uint64, database strin
 	}
 	for _, fk := range detail.ForeignKeys {
 		fd := model.ForeignKeyDetail{
-			Name:     fk.Name,
-			OnUpdate: fk.UpdateRule,
-			OnDelete: fk.DeleteRule,
+			Name:              fk.Name,
+			OnUpdate:          fk.UpdateRule,
+			OnDelete:          fk.DeleteRule,
+			Columns:           make([]string, 0, len(fk.Columns)),
+			ReferencedColumns: make([]string, 0, len(fk.Columns)),
 		}
 		for _, fc := range fk.Columns {
 			fd.Columns = append(fd.Columns, fc.Column)
@@ -330,5 +338,6 @@ func (s *QuerySchemaService) toModelObjectDetail(targetID uint64, database strin
 			ForeignKeys: len(detail.ForeignKeys) >= schemaMaxFKColumnPairs,
 		}
 	}
+	resp.EnsureNonNilCollections()
 	return resp
 }

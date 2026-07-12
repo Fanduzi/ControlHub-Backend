@@ -6,6 +6,7 @@
 package model
 
 import (
+	"encoding/json"
 	"reflect"
 	"strings"
 	"testing"
@@ -166,5 +167,57 @@ func TestForeignKeyDetail_HasReferencedColumns(t *testing.T) {
 		if _, ok := typ.FieldByName(name); !ok {
 			t.Fatalf("ForeignKeyDetail must have %s field", name)
 		}
+	}
+}
+
+// TestObjectDetailResponse_EmptyCollectionsSerializeAsEmptyArrays proves the
+// OpenAPI required-array invariant: empty columns/indexes/foreignKeys and nested
+// index/FK column lists must serialize as JSON [] never null. Frontend calls
+// .length; null crashes Object Explorer for tables with no secondary indexes/FKs.
+func TestObjectDetailResponse_EmptyCollectionsSerializeAsEmptyArrays(t *testing.T) {
+	t.Parallel()
+	resp := ObjectDetailResponse{
+		TargetResourceID: 22,
+		Database:         "sandbox",
+		Name:             "plain_table",
+		Kind:             ObjectKindTable,
+		// Intentionally leave Columns/Indexes/ForeignKeys as nil zero-values —
+		// successful responses must still marshal them as [].
+		Indexes: []IndexDetail{
+			{Name: "idx_empty_cols", Unique: false, Primary: false},
+			// Columns left nil
+		},
+		ForeignKeys: []ForeignKeyDetail{
+			{Name: "fk_empty_cols", ReferencedDatabase: "sandbox", ReferencedObject: "parent"},
+			// Columns + ReferencedColumns left nil
+		},
+	}
+	raw, err := json.Marshal(resp)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	body := string(raw)
+	for _, forbidden := range []string{
+		`"columns":null`,
+		`"indexes":null`,
+		`"foreignKeys":null`,
+	} {
+		if strings.Contains(body, forbidden) {
+			t.Fatalf("body contains %s (must be []): %s", forbidden, body)
+		}
+	}
+	// Nested arrays on the empty-column index/FK entries
+	if !strings.Contains(body, `"columns":[]`) {
+		t.Fatalf("expected nested columns:[] in body: %s", body)
+	}
+	if !strings.Contains(body, `"referencedColumns":[]`) {
+		t.Fatalf("expected referencedColumns:[] in body: %s", body)
+	}
+	// Top-level indexes/foreignKeys must be present as arrays (not omitted/null)
+	if !strings.Contains(body, `"indexes":[`) {
+		t.Fatalf("expected indexes array: %s", body)
+	}
+	if !strings.Contains(body, `"foreignKeys":[`) {
+		t.Fatalf("expected foreignKeys array: %s", body)
 	}
 }

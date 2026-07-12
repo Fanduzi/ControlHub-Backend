@@ -1,11 +1,14 @@
 // Package model provides domain entities for the resource management system.
-// input: fmt package
+// input: encoding/json, fmt packages
 // output: ObjectKind type + Validate, DatabaseSummary, ObjectSummary, ColumnDetail, IndexDetail, ForeignKeyDetail, TruncationFlags, DatabaseListResponse, ObjectListResponse, ObjectDetailResponse
 // pos: Schema metadata response types for the governed query schema introspection API (Phase 38I)
 // note: if this file changes, update header and README.md
 package model
 
-import "fmt"
+import (
+	"encoding/json"
+	"fmt"
+)
 
 // ObjectKind classifies a database object as either a table or a view.
 // Unknown kinds fail closed so the frontend never renders an unsupported
@@ -113,4 +116,64 @@ type ObjectDetailResponse struct {
 	Indexes          []IndexDetail      `json:"indexes"`
 	ForeignKeys      []ForeignKeyDetail `json:"foreignKeys"`
 	Truncated        TruncationFlags    `json:"truncated"`
+}
+
+// MarshalJSON preserves the OpenAPI required-array invariant: columns, indexes,
+// and foreignKeys are always JSON arrays (never null), including nested index
+// and foreign-key column lists. Empty metadata is a valid ready state.
+func (r ObjectDetailResponse) MarshalJSON() ([]byte, error) {
+	type alias ObjectDetailResponse
+	out := alias(r)
+	if out.Columns == nil {
+		out.Columns = []ColumnDetail{}
+	}
+	if out.Indexes == nil {
+		out.Indexes = []IndexDetail{}
+	} else {
+		for i := range out.Indexes {
+			if out.Indexes[i].Columns == nil {
+				out.Indexes[i].Columns = []string{}
+			}
+		}
+	}
+	if out.ForeignKeys == nil {
+		out.ForeignKeys = []ForeignKeyDetail{}
+	} else {
+		for i := range out.ForeignKeys {
+			if out.ForeignKeys[i].Columns == nil {
+				out.ForeignKeys[i].Columns = []string{}
+			}
+			if out.ForeignKeys[i].ReferencedColumns == nil {
+				out.ForeignKeys[i].ReferencedColumns = []string{}
+			}
+		}
+	}
+	return json.Marshal(out)
+}
+
+// EnsureNonNilCollections mutates r so all declared collection fields are
+// non-nil empty slices. Call at the service boundary before caching/returning.
+func (r *ObjectDetailResponse) EnsureNonNilCollections() {
+	if r.Columns == nil {
+		r.Columns = []ColumnDetail{}
+	}
+	if r.Indexes == nil {
+		r.Indexes = []IndexDetail{}
+	}
+	for i := range r.Indexes {
+		if r.Indexes[i].Columns == nil {
+			r.Indexes[i].Columns = []string{}
+		}
+	}
+	if r.ForeignKeys == nil {
+		r.ForeignKeys = []ForeignKeyDetail{}
+	}
+	for i := range r.ForeignKeys {
+		if r.ForeignKeys[i].Columns == nil {
+			r.ForeignKeys[i].Columns = []string{}
+		}
+		if r.ForeignKeys[i].ReferencedColumns == nil {
+			r.ForeignKeys[i].ReferencedColumns = []string{}
+		}
+	}
 }

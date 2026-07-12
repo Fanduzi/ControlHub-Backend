@@ -5,7 +5,9 @@ package service
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -401,5 +403,37 @@ func TestQuerySchemaService_RawInspectorErrorsMapToSentinels(t *testing.T) {
 				t.Fatal("expected audit event even on inspector failure")
 			}
 		})
+	}
+}
+
+// TestToModelObjectDetail_EmptyCollectionsJSONNotNull proves the conversion
+// path for a table with no secondary indexes/FKs never emits JSON null for
+// required array fields (top-level or nested).
+func TestToModelObjectDetail_EmptyCollectionsJSONNotNull(t *testing.T) {
+	svc := &QuerySchemaService{}
+	detail := &ObjectDetail{
+		Name: "plain_table",
+		Kind: "table",
+		Columns: []ColumnSummary{
+			{Name: "id", Type: "bigint", Position: 1, Nullable: "NO", Key: "PRI"},
+		},
+		// Indexes and ForeignKeys intentionally empty (nil)
+	}
+	resp := svc.toModelObjectDetail(22, "sandbox", detail)
+	raw, err := json.Marshal(resp)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	body := string(raw)
+	for _, bad := range []string{`"columns":null`, `"indexes":null`, `"foreignKeys":null`} {
+		if strings.Contains(body, bad) {
+			t.Fatalf("body contains %s: %s", bad, body)
+		}
+	}
+	if !strings.Contains(body, `"indexes":[]`) || !strings.Contains(body, `"foreignKeys":[]`) {
+		t.Fatalf("expected empty arrays: %s", body)
+	}
+	if resp.Columns == nil || resp.Indexes == nil || resp.ForeignKeys == nil {
+		t.Fatal("in-memory slices must be non-nil")
 	}
 }
