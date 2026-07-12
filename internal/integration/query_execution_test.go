@@ -803,3 +803,66 @@ func TestQueryExecution_UseDatabaseRemainsRejected(t *testing.T) {
 		t.Fatalf("Execute(use query_e2e) error = %v, want ErrQueryValidationFailed", err)
 	}
 }
+
+// TestQueryExecutionRepository_ActorProjectionAndScope proves LEFT JOIN users
+// display names, Unknown user fallback, admin-all vs non-admin-own filtering.
+func TestQueryExecutionRepository_ActorProjectionAndScope(t *testing.T) {
+	db := setupTestDB(t)
+	ctx := context.Background()
+	targetID := createQueryTargetResource(t, db, "hist-scope-target")
+	// Seed two actors: ownerDBA (seeded user) and a synthetic orphan actor id with no users row.
+	adminID := ownerDBA
+	orphanID := uint64(9_000_001)
+	repo := mysql.NewQueryExecutionRepository(db)
+	if _, err := repo.InsertExecution(ctx, model.QueryExecutionRecord{
+		TargetResourceID: targetID, ActorUserID: adminID, Engine: "mysql",
+		StatementDigest: "select 1", StatementPreview: "select 1",
+		Status: model.QueryExecutionSuccess, RowCount: 1,
+	}); err != nil {
+		t.Fatalf("insert admin: %v", err)
+	}
+	if _, err := repo.InsertExecution(ctx, model.QueryExecutionRecord{
+		TargetResourceID: targetID, ActorUserID: orphanID, Engine: "mysql",
+		StatementDigest: "select 2", StatementPreview: "select 2",
+		Status: model.QueryExecutionSuccess, RowCount: 1,
+	}); err != nil {
+		t.Fatalf("insert orphan: %v", err)
+	}
+
+	all, total, err := repo.ListExecutions(ctx, model.QueryExecutionListQuery{TargetResourceID: targetID, Page: 1, PageSize: 20})
+	if err != nil {
+		t.Fatalf("list all: %v", err)
+	}
+	if total != 2 || len(all) != 2 {
+		t.Fatalf("all total/len = %d/%d, want 2/2", total, len(all))
+	}
+	// Admin seed display_name is "ControlHub Admin"
+	var sawAdmin, sawUnknown bool
+	for _, item := range all {
+		if item.ActorUserID == adminID {
+			sawAdmin = true
+			if item.Actor.DisplayName == "" || item.Actor.DisplayName == model.UnknownHistoryActorDisplayName {
+				t.Fatalf("admin displayName = %q, want real name", item.Actor.DisplayName)
+			}
+		}
+		if item.ActorUserID == orphanID {
+			sawUnknown = true
+			if item.Actor.DisplayName != model.UnknownHistoryActorDisplayName {
+				t.Fatalf("orphan displayName = %q, want Unknown user", item.Actor.DisplayName)
+			}
+		}
+	}
+	if !sawAdmin || !sawUnknown {
+		t.Fatalf("missing projected actors: admin=%v unknown=%v items=%+v", sawAdmin, sawUnknown, all)
+	}
+
+	own, ownTotal, err := repo.ListExecutions(ctx, model.QueryExecutionListQuery{
+		TargetResourceID: targetID, Page: 1, PageSize: 20, ActorUserID: &adminID,
+	})
+	if err != nil {
+		t.Fatalf("list own: %v", err)
+	}
+	if ownTotal != 1 || len(own) != 1 || own[0].ActorUserID != adminID {
+		t.Fatalf("own scope = total=%d items=%+v, want only admin", ownTotal, own)
+	}
+}

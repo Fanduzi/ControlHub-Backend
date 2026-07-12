@@ -79,8 +79,21 @@ func (f *fakeExecRepo) InsertExecution(_ context.Context, rec model.QueryExecuti
 	return rec.ID, nil
 }
 
-func (f *fakeExecRepo) ListExecutions(_ context.Context, _ model.QueryExecutionListQuery) ([]model.QueryExecutionRecord, int, error) {
-	return f.insertedAttempts, len(f.insertedAttempts), nil
+func (f *fakeExecRepo) ListExecutions(_ context.Context, q model.QueryExecutionListQuery) ([]model.QueryExecutionRecord, int, error) {
+	items := make([]model.QueryExecutionRecord, 0, len(f.insertedAttempts))
+	for _, rec := range f.insertedAttempts {
+		if rec.TargetResourceID != q.TargetResourceID && q.TargetResourceID != 0 {
+			// still allow unfiltered fakes when TargetResourceID is zero
+		}
+		if q.ActorUserID != nil && rec.ActorUserID != *q.ActorUserID {
+			continue
+		}
+		if q.TargetResourceID != 0 && rec.TargetResourceID != q.TargetResourceID {
+			continue
+		}
+		items = append(items, rec)
+	}
+	return items, len(items), nil
 }
 
 func (f *fakeExecRepo) InsertAuditEvent(_ context.Context, actor, target uint64, etype, result string) error {
@@ -668,4 +681,81 @@ func asString(v any) string {
 		return ""
 	}
 	return string(b)
+}
+
+func TestListHistory_AdminSeesAllActors(t *testing.T) {
+	target := mysqlTarget("Staging")
+	target.ResourceID = 22
+	repo := &fakeExecRepo{
+		insertedAttempts: []model.QueryExecutionRecord{
+			{ID: 1, TargetResourceID: 22, ActorUserID: 1, Actor: model.QueryExecutionActor{DisplayName: "Admin"}, Status: model.QueryExecutionSuccess},
+			{ID: 2, TargetResourceID: 22, ActorUserID: 7, Actor: model.QueryExecutionActor{DisplayName: "Editor"}, Status: model.QueryExecutionSuccess},
+		},
+	}
+	svc := NewQueryExecutionService(fakeTargetRepo{targets: []model.QueryTarget{target}}, repo, &fakeResolver{}, &fakeExecutor{}, NewQueryGuard(QueryGuardConfig{DefaultMaxRows: 100, HardMaxRows: 500}), &fakeClock{t: time.Date(2026, 6, 22, 8, 0, 0, 0, time.UTC)})
+	items, page, err := svc.ListHistory(context.Background(), 1, "admin", 22, model.QueryExecutionListQuery{Page: 1, PageSize: 20})
+	if err != nil {
+		t.Fatalf("ListHistory: %v", err)
+	}
+	if len(items) != 2 {
+		t.Fatalf("admin items = %d, want 2", len(items))
+	}
+	if page.TotalItems != 2 {
+		t.Fatalf("total = %d, want 2", page.TotalItems)
+	}
+}
+
+func TestListHistory_NonAdminSeesOwnOnly(t *testing.T) {
+	target := mysqlTarget("Staging")
+	target.ResourceID = 22
+	repo := &fakeExecRepo{
+		insertedAttempts: []model.QueryExecutionRecord{
+			{ID: 1, TargetResourceID: 22, ActorUserID: 1, Actor: model.QueryExecutionActor{DisplayName: "Admin"}, Status: model.QueryExecutionSuccess},
+			{ID: 2, TargetResourceID: 22, ActorUserID: 7, Actor: model.QueryExecutionActor{DisplayName: "Editor"}, Status: model.QueryExecutionSuccess},
+		},
+	}
+	svc := NewQueryExecutionService(fakeTargetRepo{targets: []model.QueryTarget{target}}, repo, &fakeResolver{}, &fakeExecutor{}, NewQueryGuard(QueryGuardConfig{DefaultMaxRows: 100, HardMaxRows: 500}), &fakeClock{t: time.Date(2026, 6, 22, 8, 0, 0, 0, time.UTC)})
+	items, page, err := svc.ListHistory(context.Background(), 7, "editor", 22, model.QueryExecutionListQuery{Page: 1, PageSize: 20})
+	if err != nil {
+		t.Fatalf("ListHistory: %v", err)
+	}
+	if len(items) != 1 || items[0].ActorUserID != 7 {
+		t.Fatalf("non-admin items = %+v, want only actor 7", items)
+	}
+	if page.TotalItems != 1 {
+		t.Fatalf("total = %d, want 1", page.TotalItems)
+	}
+}
+
+func TestListHistory_UnknownTarget404(t *testing.T) {
+	svc := NewQueryExecutionService(fakeTargetRepo{targets: nil}, &fakeExecRepo{}, &fakeResolver{}, &fakeExecutor{}, NewQueryGuard(QueryGuardConfig{DefaultMaxRows: 100, HardMaxRows: 500}), &fakeClock{t: time.Date(2026, 6, 22, 8, 0, 0, 0, time.UTC)})
+	_, _, err := svc.ListHistory(context.Background(), 1, "admin", 999, model.QueryExecutionListQuery{Page: 1, PageSize: 20})
+	if !errors.Is(err, ErrQueryTargetNotFound) {
+		t.Fatalf("err = %v, want ErrQueryTargetNotFound", err)
+	}
+}
+
+func TestListHistory_UnknownActorFallback(t *testing.T) {
+	target := mysqlTarget("Staging")
+	target.ResourceID = 22
+	repo := &fakeExecRepo{
+		insertedAttempts: []model.QueryExecutionRecord{
+			{ID: 1, TargetResourceID: 22, ActorUserID: 99, Actor: model.QueryExecutionActor{DisplayName: ""}, Status: model.QueryExecutionSuccess},
+		},
+	}
+	svc := NewQueryExecutionService(fakeTargetRepo{targets: []model.QueryTarget{target}}, repo, &fakeResolver{}, &fakeExecutor{}, NewQueryGuard(QueryGuardConfig{DefaultMaxRows: 100, HardMaxRows: 500}), &fakeClock{t: time.Date(2026, 6, 22, 8, 0, 0, 0, time.UTC)})
+	items, _, err := svc.ListHistory(context.Background(), 1, "admin", 22, model.QueryExecutionListQuery{Page: 1, PageSize: 20})
+	if err != nil {
+		t.Fatalf("ListHistory: %v", err)
+	}
+	if items[0].Actor.DisplayName != model.UnknownHistoryActorDisplayName {
+		t.Fatalf("displayName = %q, want Unknown user", items[0].Actor.DisplayName)
+	}
+	raw, _ := json.Marshal(items[0])
+	if strings.Contains(string(raw), "actorUserId") {
+		t.Fatalf("public JSON must not include actorUserId: %s", raw)
+	}
+	if !strings.Contains(string(raw), `"displayName":"Unknown user"`) {
+		t.Fatalf("public JSON missing actor.displayName: %s", raw)
+	}
 }
