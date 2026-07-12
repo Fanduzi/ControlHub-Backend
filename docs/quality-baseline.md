@@ -135,6 +135,7 @@ added in Phase 28.
 | Query Workbench SQL editor foundation (Phase 38F) | No backend changes | No backend changes | No OpenAPI changes | `query-workbench.test`, `query-sql-format.test` | No | No | Yes (`query-workbench.spec` 16/16 against real backend + query fixture) | Yes | Frontend-only phase. CodeMirror 6 editor, local SQL formatting, multi-worksheet state with per-worksheet target sync and race guards, keyboard shortcuts (Mod-Enter run, Mod-Shift-f format). 800/800 unit/component tests. Lint 0 errors / 4 warnings. Frontend CI run `28948152448` (success). Real E2E 16/16 passed on feature branch and post-merge main. No backend edits, no SQL guard changes, no DSN/password browser state, no `actorUserId`, no credential edit controls, no worksheet persistence. |
 | Query Workbench real usability cleanup (Phase 38G) | No backend changes | No backend changes | No OpenAPI changes | `query-editor-preferences.test`, `query-connection-navigator.test`, `query-workbench.test`, `query-credential-settings.test` | No | No | Yes (`query-workbench.spec` + `query-credential-settings.spec`, 30 focused tests against real backend + query fixture) | Yes | Frontend-only phase. Adds readable dark/high-contrast editor styling, persisted editor height resizing, grouped connection navigator, sticky credential inspector, and reduced placeholder action clutter. Manual browser QA verified `/query` has no DSN/password rendering or credential edit controls, ready target runs `select 1`, and `/settings/query-credentials` exposes metadata only. |
 | Query Workbench scalable IA reset (Phase 38H) | `query_target_handler_test`, `query_target_service_test`, pagination model tests | `query_target_test`, `openapi_fuzz_test` | Schema adds `q`, `page`, `pageSize`, `targetId` params and `pageInfo` to GET /query-targets; Schemathesis 1274/1274 passed | `query-workbench.test`, `query-credential-settings.test`, pagination/view-model/audit/resource tests | No | No | Yes (`query-workbench.spec` + `query-credential-settings.spec`, 37/37 passed against real backend + query fixture) | Yes | Backend adds paged/searchable query-target API with `pageInfo`, `hasNextPage`/`hasPreviousPage`, and port-in-search support. Frontend replaces permanent three-column layout with two-region database IDE: bounded connection navigator opens on demand, inline governance, dominant editor/results. Credential admin paginated with modal/drawer detail. 850/850 unit tests. Real E2E 37/37 passed. No SQL guard changes, no DSN/password leak, no `actorUserId`, no credential edit controls on `/query`. |
+| Query Workbench schema intelligence (Phase 38I) | `query_schema_*` service/inspector/cache/access tests; handler tests | `query_schema_api_test`, `query_schema_inspector_test` | OpenAPI schema databases/objects/object-details contracts; fuzz suite updated | `query-schema-store.test`, `query-sql-completion.test`, `use-worksheet-schema-adapter.test`, `query-object-explorer.test`, `query-object-quick-navigator.test`, `query-workbench.test`, `console-guards.test` | No | No | Yes (`query-workbench.spec` + `query-credential-settings.spec`, **41/41** against real backend + query fixture) | Yes | Governed schema metadata API + frontend Object Explorer, Quick Navigator, schema-aware completion. Remediation: per-item Database context (`6ddb326`); final FE repair `d1efc4d` (single initial worksheet, exact one-shot HTTP error URLs, no `allowedNetworkErrors`). No SQL guard changes, no browser DB connection, no DSN/password, no credential edit on `/query`. |
 | OpenAPI schema validity | `openapi_test.go` | No | `make openapi-validate` + Schemathesis fuzz | N/A | N/A | N/A | N/A | N/A | Dual validation: JSON Schema validation + runtime fuzzing. |
 | OpenAPI fuzz behavior | N/A | `openapi_fuzz_test.go` | Schemathesis: 50 examples/operation, no-5xx, status conformance, content-type conformance, response schema conformance | N/A | N/A | N/A | N/A | N/A | Requires Docker. Run before merge when API changes or as nightly gate. |
 
@@ -153,6 +154,27 @@ added in Phase 28.
 6. **Seed data constants**: E2E tests reference seed resources by name (`analytics-ch-cluster-prod`, `Analytics ClickHouse Node 02`) and ID (`14`, `22`). These are stable in the seed migration but not centralized as typed constants.
 
 ## Frontend Baseline
+
+Frontend Phase 38I branch `phase-38i-schema-intelligence` (final repair `d1efc4d`):
+- Backend: governed schema metadata endpoints (databases/objects/object-details),
+  inspector, cache, centralized target access; database context preserved on
+  ObjectSummary items (`6ddb326`).
+- Frontend: bounded schema client/store, Object Explorer, database Quick
+  Navigator, schema-aware SQL completion via `useWorksheetSchemaAdapter`.
+- Workbench IA productization: compact context bar, on-demand connections,
+  collapsible objects pane, mobile Objects/Connections sheets, dirty close
+  protection, Grid-only results.
+- Final release-blocker repair (`d1efc4d`):
+  - Initial mount has exactly one worksheet (`Worksheet 1`); no automatic
+    `Worksheet 2` from `targetSelectionVersion` mount effect.
+  - E2E intentional HTTP errors match method + full normalized URL + status
+    (one-shot); another target’s execute 400 is not consumed.
+  - `allowedNetworkErrors` removed from console-guards public API.
+- Unit/component: 986/986 passed. Real focused E2E: **41 passed, 0 failed,
+  0 skipped** (`query-workbench` + `query-credential-settings`) against backend
+  `:8080` + dedicated query MySQL fixture.
+- No SQL guard changes, no browser database connection, no DSN/password leak,
+  no `actorUserId`, no credential edit controls on `/query`, no AI co-author.
 
 Frontend Phase 38F commit `499c235` (main, Query Workbench SQL editor foundation):
 - CodeMirror 6 SQL editor replaces the plain textarea; syntax highlighting, line numbers, bracket matching, fold gutter.
