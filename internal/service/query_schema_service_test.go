@@ -15,13 +15,13 @@ import (
 // fakeSchemaInspector is a test double for QuerySchemaInspector. It returns
 // pre-configured results and records calls for assertion.
 type fakeSchemaInspector struct {
-	databases  []DatabaseSummary
-	dbPageInfo model.PageInfo
-	objects    []ObjectSummary
+	databases   []DatabaseSummary
+	dbPageInfo  model.PageInfo
+	objects     []ObjectSummary
 	objPageInfo model.PageInfo
-	detail     *ObjectDetail
-	err        error
-	called     bool
+	detail      *ObjectDetail
+	err         error
+	called      bool
 }
 
 func (f *fakeSchemaInspector) ListDatabases(_ context.Context, _ string, _ string, _ bool, _, _ int) ([]DatabaseSummary, model.PageInfo, error) {
@@ -93,9 +93,9 @@ func TestQuerySchemaService_IndependentTargetAccess(t *testing.T) {
 func TestQuerySchemaService_UnsupportedTargetNeverCallsInspector(t *testing.T) {
 	t.Parallel()
 	cases := []struct {
-		name        string
-		engine      string
-		wantErr     error
+		name    string
+		engine  string
+		wantErr error
 	}{
 		{
 			name:    "unsupported engine",
@@ -216,6 +216,136 @@ func TestQuerySchemaService_AuditEventStringsAreFixed(t *testing.T) {
 	}
 }
 
+// TestQuerySchemaService_ObjectListItemsCarryRequestedDatabase verifies that
+// every ObjectSummary in the ListObjects response carries the requested
+// database name, not just the envelope-level Database field.
+// WHY: downstream consumers (frontend, export) rely on per-item Database to
+// render cross-database summaries without re-scanning the envelope.
+func TestQuerySchemaService_ObjectListItemsCarryRequestedDatabase(t *testing.T) {
+	t.Parallel()
+	audit := &fakeExecRepo{
+		credentials: map[uint64]model.QueryCredentialMetadata{
+			9001: enabledCred(model.QueryEnvPolicyNonProdOnly),
+		},
+	}
+	inspector := &fakeSchemaInspector{
+		objects: []ObjectSummary{{Name: "users", Kind: string(model.ObjectKindTable)}},
+	}
+	clock := &fakeClock{t: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)}
+	cache := NewQuerySchemaCache(100, clock)
+
+	svc := NewQuerySchemaService(
+		NewTargetAccessResolver(
+			fakeTargetRepo{targets: []model.QueryTarget{mysqlTarget("Staging")}},
+			audit,
+			&fakeResolver{dsn: testResolverDSN},
+		),
+		inspector,
+		cache,
+		audit,
+		clock,
+	)
+
+	resp, err := svc.ListObjects(context.Background(), 1, 9001, "mydb", "", "", 1, 20, false)
+	if err != nil {
+		t.Fatalf("ListObjects: %v", err)
+	}
+	if resp.Database != "mydb" {
+		t.Fatalf("envelope Database = %q, want %q", resp.Database, "mydb")
+	}
+	if len(resp.Items) == 0 {
+		t.Fatal("expected at least one item")
+	}
+	if resp.Items[0].Database != "mydb" {
+		t.Fatalf("per-item Database = %q, want %q", resp.Items[0].Database, "mydb")
+	}
+}
+
+// TestQuerySchemaService_ObjectDetailCarryRequestedDatabase verifies that the
+// GetObjectDetails response carries the requested database name at envelope level.
+// WHY: the detail response must echo the database the caller asked about.
+func TestQuerySchemaService_ObjectDetailCarryRequestedDatabase(t *testing.T) {
+	t.Parallel()
+	audit := &fakeExecRepo{
+		credentials: map[uint64]model.QueryCredentialMetadata{
+			9001: enabledCred(model.QueryEnvPolicyNonProdOnly),
+		},
+	}
+	inspector := &fakeSchemaInspector{
+		detail: &ObjectDetail{Name: "users", Kind: "table"},
+	}
+	clock := &fakeClock{t: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)}
+	cache := NewQuerySchemaCache(100, clock)
+
+	svc := NewQuerySchemaService(
+		NewTargetAccessResolver(
+			fakeTargetRepo{targets: []model.QueryTarget{mysqlTarget("Staging")}},
+			audit,
+			&fakeResolver{dsn: testResolverDSN},
+		),
+		inspector,
+		cache,
+		audit,
+		clock,
+	)
+
+	resp, err := svc.GetObjectDetails(context.Background(), 1, 9001, "mydb", "users", "table", false)
+	if err != nil {
+		t.Fatalf("GetObjectDetails: %v", err)
+	}
+	if resp.Database != "mydb" {
+		t.Fatalf("envelope Database = %q, want %q", resp.Database, "mydb")
+	}
+}
+
+// TestQuerySchemaService_EmptyDatabaseRejectedAtService verifies that empty
+// database parameters are rejected with ErrSchemaValidationFailed before
+// reaching the inspector or cache.
+// WHY: an empty database would produce nonsensical metadata; the service must
+// reject it as a validation error so the handler can return 400.
+func TestQuerySchemaService_EmptyDatabaseRejectedAtService(t *testing.T) {
+	t.Parallel()
+	audit := &fakeExecRepo{
+		credentials: map[uint64]model.QueryCredentialMetadata{
+			9001: enabledCred(model.QueryEnvPolicyNonProdOnly),
+		},
+	}
+	inspector := &fakeSchemaInspector{}
+	clock := &fakeClock{t: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)}
+	cache := NewQuerySchemaCache(100, clock)
+
+	svc := NewQuerySchemaService(
+		NewTargetAccessResolver(
+			fakeTargetRepo{targets: []model.QueryTarget{mysqlTarget("Staging")}},
+			audit,
+			&fakeResolver{dsn: testResolverDSN},
+		),
+		inspector,
+		cache,
+		audit,
+		clock,
+	)
+
+	// ListObjects with empty database
+	_, err := svc.ListObjects(context.Background(), 1, 9001, "", "", "", 1, 20, false)
+	if !errors.Is(err, ErrSchemaValidationFailed) {
+		t.Fatalf("ListObjects empty database error = %v, want ErrSchemaValidationFailed", err)
+	}
+	if inspector.called {
+		t.Fatal("inspector must not be called when database is empty")
+	}
+
+	// GetObjectDetails with empty database
+	inspector.called = false
+	_, err = svc.GetObjectDetails(context.Background(), 1, 9001, "", "users", "table", false)
+	if !errors.Is(err, ErrSchemaValidationFailed) {
+		t.Fatalf("GetObjectDetails empty database error = %v, want ErrSchemaValidationFailed", err)
+	}
+	if inspector.called {
+		t.Fatal("inspector must not be called when database is empty")
+	}
+}
+
 // TestQuerySchemaService_RawInspectorErrorsMapToSentinels verifies that raw
 // inspector errors are mapped to controlled service sentinels.
 // WHY: the handler layer must map errors to HTTP status codes without
@@ -223,19 +353,19 @@ func TestQuerySchemaService_AuditEventStringsAreFixed(t *testing.T) {
 func TestQuerySchemaService_RawInspectorErrorsMapToSentinels(t *testing.T) {
 	t.Parallel()
 	cases := []struct {
-		name        string
+		name         string
 		inspectorErr error
-		wantErr     error
+		wantErr      error
 	}{
 		{
-			name:        "context deadline exceeded maps to timeout",
+			name:         "context deadline exceeded maps to timeout",
 			inspectorErr: context.DeadlineExceeded,
-			wantErr:     ErrSchemaTimeout,
+			wantErr:      ErrSchemaTimeout,
 		},
 		{
-			name:        "generic inspector error maps to backend error",
+			name:         "generic inspector error maps to backend error",
 			inspectorErr: errors.New("connection refused"),
-			wantErr:     ErrSchemaBackendError,
+			wantErr:      ErrSchemaBackendError,
 		},
 	}
 	for _, tc := range cases {

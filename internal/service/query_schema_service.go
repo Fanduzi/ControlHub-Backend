@@ -137,6 +137,11 @@ func (s *QuerySchemaService) ListObjects(
 		return model.ObjectListResponse{}, s.mapAccessError(err)
 	}
 
+	// 1b. Validate database is not empty.
+	if database == "" {
+		return model.ObjectListResponse{}, ErrSchemaValidationFailed
+	}
+
 	// 2. Check cache (unless refresh).
 	key := cacheKey("objects", targetID, bound.Credential.CredentialRef, database, kind, q, page, pageSize, false)
 	if !refresh {
@@ -158,7 +163,7 @@ func (s *QuerySchemaService) ListObjects(
 		return model.ObjectListResponse{
 			TargetResourceID: int64(targetID),
 			Database:         database,
-			Items:            s.toModelObjects(items),
+			Items:            s.toModelObjects(database, items),
 			PageInfo:         pageInfo,
 		}, nil
 	})
@@ -191,6 +196,11 @@ func (s *QuerySchemaService) GetObjectDetails(
 	bound, err := s.access.Resolve(ctx, actorID, targetID)
 	if err != nil {
 		return model.ObjectDetailResponse{}, s.mapAccessError(err)
+	}
+
+	// 1b. Validate database is not empty.
+	if database == "" {
+		return model.ObjectDetailResponse{}, ErrSchemaValidationFailed
 	}
 
 	// 2. Check cache (unless refresh).
@@ -258,11 +268,11 @@ func (s *QuerySchemaService) toModelDatabases(items []DatabaseSummary) []model.D
 }
 
 // toModelObjects converts inspector ObjectSummary to model.ObjectSummary.
-func (s *QuerySchemaService) toModelObjects(items []ObjectSummary) []model.ObjectSummary {
+func (s *QuerySchemaService) toModelObjects(database string, items []ObjectSummary) []model.ObjectSummary {
 	result := make([]model.ObjectSummary, len(items))
 	for i, o := range items {
 		result[i] = model.ObjectSummary{
-			Database: "", // filled by caller
+			Database: database,
 			Name:     o.Name,
 			Kind:     model.ObjectKind(o.Kind),
 		}
