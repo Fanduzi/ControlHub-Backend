@@ -218,14 +218,29 @@ func (s *QueryExecutionService) reject(ctx context.Context, target model.QueryTa
 }
 
 // ListHistory returns execution history (metadata only) for a target with
-// pagination metadata.
-func (s *QueryExecutionService) ListHistory(ctx context.Context, targetID uint64, q model.QueryExecutionListQuery) ([]model.QueryExecutionRecord, *model.PageInfo, error) {
+// pagination metadata. actorRole "admin" sees all target rows; other roles see
+// only their own. History is readable without credential readiness — it is an
+// audit record. Unknown targets return ErrQueryTargetNotFound (404).
+func (s *QueryExecutionService) ListHistory(ctx context.Context, actorUserID uint64, actorRole string, targetID uint64, q model.QueryExecutionListQuery) ([]model.QueryExecutionRecord, *model.PageInfo, error) {
+	if _, err := s.findTarget(ctx, targetID); err != nil {
+		return nil, nil, err
+	}
 	page, pageSize := model.NormalizePagination(q.Page, q.PageSize)
-	items, total, err := s.executions.ListExecutions(ctx, model.QueryExecutionListQuery{
+	listQ := model.QueryExecutionListQuery{
 		TargetResourceID: targetID, Page: page, PageSize: pageSize,
-	})
+	}
+	if actorRole != "admin" {
+		id := actorUserID
+		listQ.ActorUserID = &id
+	}
+	items, total, err := s.executions.ListExecutions(ctx, listQ)
 	if err != nil {
 		return nil, nil, err
+	}
+	for i := range items {
+		if items[i].Actor.DisplayName == "" {
+			items[i].Actor.DisplayName = model.UnknownHistoryActorDisplayName
+		}
 	}
 	pageInfo := model.NewPageInfo(page, pageSize, total)
 	return items, &pageInfo, nil

@@ -24,7 +24,7 @@ import (
 // accepted from the request body — it is read from the auth middleware context.
 type queryExecutionAPI interface {
 	Execute(ctx context.Context, actorUserID uint64, targetID uint64, req model.QueryExecuteRequest) (model.QueryExecuteResponse, error)
-	ListHistory(ctx context.Context, targetID uint64, q model.QueryExecutionListQuery) ([]model.QueryExecutionRecord, *model.PageInfo, error)
+	ListHistory(ctx context.Context, actorUserID uint64, actorRole string, targetID uint64, q model.QueryExecutionListQuery) ([]model.QueryExecutionRecord, *model.PageInfo, error)
 }
 
 func handleExecuteQuery(svc queryExecutionAPI) http.HandlerFunc {
@@ -64,12 +64,18 @@ func handleListQueryExecutions(svc queryExecutionAPI) http.HandlerFunc {
 			writeJSONError(w, http.StatusBadRequest, "validation_failed", err.Error())
 			return
 		}
+		actorUserID, ok := actorUserIDFromContext(r.Context())
+		if !ok {
+			writeJSONError(w, http.StatusInternalServerError, "internal_error", "authenticated actor missing")
+			return
+		}
+		actorRole, _ := actorRoleFromContext(r.Context())
 		page, pageSize := parseExecutionPagination(r)
-		items, pageInfo, err := svc.ListHistory(r.Context(), targetID, model.QueryExecutionListQuery{
+		items, pageInfo, err := svc.ListHistory(r.Context(), actorUserID, actorRole, targetID, model.QueryExecutionListQuery{
 			TargetResourceID: targetID, Page: page, PageSize: pageSize,
 		})
 		if err != nil {
-			writeJSONError(w, http.StatusInternalServerError, "internal_error", "unexpected server failure")
+			writeQueryExecutionError(w, err)
 			return
 		}
 		writeJSON(w, http.StatusOK, model.QueryExecutionListResponse{Items: items, PageInfo: pageInfo})

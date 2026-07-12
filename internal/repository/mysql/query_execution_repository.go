@@ -199,21 +199,35 @@ func (r *QueryExecutionRepository) InsertExecution(ctx context.Context, rec mode
 
 // ListExecutions returns execution history (newest first) for a target plus the
 // total row count, for pagination. It returns metadata only — never result rows.
+// When q.ActorUserID is non-nil, only that actor's rows are included (non-admin
+// scope). Actor display names come from a parameterized LEFT JOIN on users;
+// missing users project as "Unknown user".
 func (r *QueryExecutionRepository) ListExecutions(ctx context.Context, q model.QueryExecutionListQuery) ([]model.QueryExecutionRecord, int, error) {
+	where := `qe.target_resource_id = ?`
+	args := []any{q.TargetResourceID}
+	if q.ActorUserID != nil {
+		where += ` and qe.actor_user_id = ?`
+		args = append(args, *q.ActorUserID)
+	}
+
 	var total int
-	if err := r.db.QueryRowContext(ctx,
-		`select count(*) from query_executions where target_resource_id = ?`,
-		q.TargetResourceID,
-	).Scan(&total); err != nil {
+	countSQL := `select count(*) from query_executions qe where ` + where
+	if err := r.db.QueryRowContext(ctx, countSQL, args...).Scan(&total); err != nil {
 		return nil, 0, fmt.Errorf("count query executions: %w", err)
 	}
 
 	offset := (q.Page - 1) * q.PageSize
-	rows, err := r.db.QueryContext(ctx,
-		`select id, target_resource_id, actor_user_id, engine, statement_digest, statement_preview, status, row_count, duration_ms, error_code, error_message, created_at
-		 from query_executions where target_resource_id = ? order by created_at desc limit ? offset ?`,
-		q.TargetResourceID, q.PageSize, offset,
-	)
+	listSQL := `select qe.id, qe.target_resource_id, qe.actor_user_id, qe.engine, qe.statement_digest, qe.statement_preview,
+		 qe.status, qe.row_count, qe.duration_ms, qe.error_code, qe.error_message, qe.created_at,
+		 coalesce(nullif(trim(u.display_name), ''), ?) as actor_display_name
+		 from query_executions qe
+		 left join users u on u.id = qe.actor_user_id
+		 where ` + where + ` order by qe.created_at desc limit ? offset ?`
+	listArgs := make([]any, 0, len(args)+3)
+	listArgs = append(listArgs, model.UnknownHistoryActorDisplayName)
+	listArgs = append(listArgs, args...)
+	listArgs = append(listArgs, q.PageSize, offset)
+	rows, err := r.db.QueryContext(ctx, listSQL, listArgs...)
 	if err != nil {
 		return nil, 0, fmt.Errorf("list query executions: %w", err)
 	}
@@ -222,17 +236,20 @@ func (r *QueryExecutionRepository) ListExecutions(ctx context.Context, q model.Q
 	items := make([]model.QueryExecutionRecord, 0)
 	for rows.Next() {
 		var (
-			rec    model.QueryExecutionRecord
-			status string
+			rec         model.QueryExecutionRecord
+			status      string
+			displayName string
 		)
 		if err := rows.Scan(
 			&rec.ID, &rec.TargetResourceID, &rec.ActorUserID, &rec.Engine,
 			&rec.StatementDigest, &rec.StatementPreview, &status,
 			&rec.RowCount, &rec.DurationMs, &rec.ErrorCode, &rec.ErrorMessage, &rec.CreatedAt,
+			&displayName,
 		); err != nil {
 			return nil, 0, fmt.Errorf("scan query execution: %w", err)
 		}
 		rec.Status = model.QueryExecutionStatus(status)
+		rec.Actor = model.QueryExecutionActor{DisplayName: displayName}
 		items = append(items, rec)
 	}
 	if err := rows.Err(); err != nil {

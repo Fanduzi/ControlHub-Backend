@@ -52,12 +52,24 @@ type QueryExecuteResponse struct {
 	ExecutedAt       time.Time            `json:"executedAt"`
 }
 
+// QueryExecutionActor is the privacy-safe actor projection for history rows.
+// Only displayName is public; email and raw numeric user IDs stay internal.
+type QueryExecutionActor struct {
+	DisplayName string `json:"displayName"`
+}
+
+// UnknownHistoryActorDisplayName is returned when the actor user row is missing
+// or has an empty display name (deleted/orphaned actors).
+const UnknownHistoryActorDisplayName = "Unknown user"
+
 // QueryExecutionRecord is the persisted metadata for one execution attempt.
 // It stores a statement digest and short preview, never full result rows.
+// ActorUserID is internal (insert/scan); the public JSON shape uses Actor only.
 type QueryExecutionRecord struct {
 	ID               uint64               `json:"id"`
 	TargetResourceID uint64               `json:"targetResourceId"`
-	ActorUserID      uint64               `json:"actorUserId"`
+	ActorUserID      uint64               `json:"-"`
+	Actor            QueryExecutionActor  `json:"actor"`
 	Engine           string               `json:"engine"`
 	StatementDigest  string               `json:"statementDigest"`
 	StatementPreview string               `json:"statementPreview"`
@@ -69,11 +81,14 @@ type QueryExecutionRecord struct {
 	CreatedAt        time.Time            `json:"createdAt"`
 }
 
-// QueryExecutionListQuery carries the pagination for execution history.
+// QueryExecutionListQuery carries pagination and optional actor visibility scope
+// for execution history. When ActorUserID is non-nil, only that actor's rows for
+// the target are returned (non-admin). Nil means all actors for the target (admin).
 type QueryExecutionListQuery struct {
 	TargetResourceID uint64
 	Page             int
 	PageSize         int
+	ActorUserID      *uint64
 }
 
 // QueryExecutionListResponse is the { items: [...] } envelope for execution

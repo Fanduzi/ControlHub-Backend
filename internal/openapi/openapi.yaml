@@ -491,8 +491,11 @@ paths:
       summary: List execution history for a query target
       operationId: listQueryExecutions
       description: >
-        Returns execution metadata (digest, status, row count, duration, errors)
-        only — never full result rows. Requires a fresh Bearer token.
+        Returns execution metadata (digest, status, row count, duration, errors,
+        actor display name) only — never full result rows, email, or raw actor
+        ids. Ordinary users see their own rows for the target; admins see all
+        rows for the target. Unknown targets return 404. History is readable
+        without current credential readiness. Requires a fresh Bearer token.
       security:
         - bearerAuth: []
       parameters:
@@ -528,7 +531,8 @@ paths:
                     items:
                       - id: 1001
                         targetResourceId: 22
-                        actorUserId: 1
+                        actor:
+                          displayName: "ControlHub Admin"
                         engine: mysql
                         statementDigest: "select id, name from resources where resource_type = ? limit ?"
                         statementPreview: "select id, name from resources where resource_type = 'service' limit 20"
@@ -2856,9 +2860,18 @@ components:
         executedAt:
           type: string
           format: date-time
+    QueryExecutionActor:
+      type: object
+      required: [displayName]
+      properties:
+        displayName:
+          type: string
+          description: >
+            Privacy-safe actor label for history. Never email or raw numeric
+            user id. Missing/deleted users project as "Unknown user".
     QueryExecutionRecord:
       type: object
-      required: [id, targetResourceId, actorUserId, engine, statementDigest, statementPreview, status, rowCount, durationMs, errorCode, errorMessage, createdAt]
+      required: [id, targetResourceId, actor, engine, statementDigest, statementPreview, status, rowCount, durationMs, errorCode, errorMessage, createdAt]
       properties:
         id:
           type: integer
@@ -2866,9 +2879,8 @@ components:
         targetResourceId:
           type: integer
           format: int64
-        actorUserId:
-          type: integer
-          format: int64
+        actor:
+          $ref: "#/components/schemas/QueryExecutionActor"
         engine:
           type: string
         statementDigest:
