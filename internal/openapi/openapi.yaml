@@ -3027,12 +3027,12 @@ components:
           maxItems: 16
           items:
             type: string
-            minLength: 1
             maxLength: 1024
           description: >
-            Ordered non-null scalar values for the FK local columns. Count must
-            match the FK column count exactly. Values are bound via database/sql
-            placeholders; they are never interpolated into SQL.
+            Ordered scalar values for the FK local columns. Count must match the
+            FK column count exactly. Values are bound via database/sql
+            placeholders; they are never interpolated into SQL. Empty strings
+            are permitted when the column semantics allow them.
         maxRows:
           type: integer
           minimum: 0

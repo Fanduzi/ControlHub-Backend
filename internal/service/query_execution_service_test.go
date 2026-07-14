@@ -133,11 +133,12 @@ func (f *fakeResolver) Resolve(_ context.Context, ref string) (string, error) {
 }
 
 type fakeExecutor struct {
-	result QueryDatabaseResult
-	err    error
-	delay  time.Duration
-	called bool
-	gotDSN string
+	result      QueryDatabaseResult
+	err         error
+	delay       time.Duration
+	called      bool
+	gotDSN      string
+	gotNavInput *RelatedRecordsQueryInput
 }
 
 func (f *fakeExecutor) Query(ctx context.Context, dsn string, _ GuardedQuery) (QueryDatabaseResult, error) {
@@ -156,9 +157,10 @@ func (f *fakeExecutor) Query(ctx context.Context, dsn string, _ GuardedQuery) (Q
 	return f.result, nil
 }
 
-func (f *fakeExecutor) QueryBound(ctx context.Context, dsn string, _ string, _ []any, _ int) (QueryDatabaseResult, error) {
+func (f *fakeExecutor) QueryRelatedRecords(ctx context.Context, dsn string, input RelatedRecordsQueryInput) (QueryDatabaseResult, error) {
 	f.called = true
 	f.gotDSN = dsn
+	f.gotNavInput = &input
 	if f.delay > 0 {
 		select {
 		case <-ctx.Done():

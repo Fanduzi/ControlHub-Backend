@@ -77,71 +77,14 @@ func (e *MySQLQueryExecutor) Query(ctx context.Context, dsn string, guarded Guar
 	}
 	defer rows.Close()
 
-	colTypes, err := rows.ColumnTypes()
-	if err != nil {
-		return QueryDatabaseResult{}, err
-	}
-	if len(colTypes) > e.caps.MaxColumns {
-		return QueryDatabaseResult{}, ErrQueryResultTooLarge
-	}
-
-	columns := make([]model.QueryResultColumn, len(colTypes))
-	for i, ct := range colTypes {
-		nullable, _ := ct.Nullable()
-		columns[i] = model.QueryResultColumn{
-			Name:         ct.Name(),
-			DatabaseType: normalizeDatabaseType(ct.DatabaseTypeName()),
-			Nullable:     nullable,
-		}
-	}
-
-	result := QueryDatabaseResult{Columns: columns}
-	limit := guarded.LimitApplied
-	responseBytes := 0
-
-	for rows.Next() {
-		// Scan one row past the limit so truncation can be detected. A limit of
-		// 0 means no row cap (SHOW/DESCRIBE metadata statements).
-		if limit > 0 && result.RowCount >= limit {
-			result.Truncated = true
-			break
-		}
-		// NULL-safe scan: each column scans into a sql.Null* chosen by its
-		// database type so SQL NULL becomes JSON null (never a forged 0), while
-		// non-null numbers stay numbers.
-		ptrs := make([]any, len(colTypes))
-		for i, ct := range colTypes {
-			ptrs[i] = newScanPointer(ct.DatabaseTypeName())
-		}
-		if err := rows.Scan(ptrs...); err != nil {
-			return QueryDatabaseResult{}, err
-		}
-		row := make([]any, len(colTypes))
-		rowBytes := 0
-		for i, p := range ptrs {
-			safe, n := e.toJSONSafe(normalizeScanned(p))
-			row[i] = safe
-			rowBytes += n
-		}
-		responseBytes += rowBytes
-		if responseBytes > e.caps.MaxResponseBytes {
-			result.Truncated = true
-			break
-		}
-		result.Rows = append(result.Rows, row)
-		result.RowCount++
-	}
-	if err := rows.Err(); err != nil {
-		return QueryDatabaseResult{}, err
-	}
-	return result, nil
+	return e.scanBoundedRows(rows, guarded.LimitApplied)
 }
 
-// QueryBound executes a parameterized SELECT with bound arguments under a
-// read-only transaction. The SQL string is constructed by the service from
-// trusted identifiers only; args are bound via database/sql placeholders.
-// The limit parameter caps the result row count (0 = no cap).
-func (e *MySQLQueryExecutor) QueryBound(ctx context.Context, dsn string, query string, args []any, limit int) (QueryDatabaseResult, error) {
+// QueryRelatedRecords executes a parameterized SELECT built by the service for
+// related-record navigation. It runs under a read-only transaction, binds only
+// the service-supplied values, and enforces the same column/cell/payload caps as
+// Query. This method is not a generic parameterized-query API.
+func (e *MySQLQueryExecutor) QueryRelatedRecords(ctx context.Context, dsn string, input RelatedRecordsQueryInput) (QueryDatabaseResult, error) {
 	db, err := sql.Open("mysql", dsn)
 	if err != nil {
 		return QueryDatabaseResult{}, fmt.Errorf("open target database: %w", err)
@@ -155,12 +98,18 @@ func (e *MySQLQueryExecutor) QueryBound(ctx context.Context, dsn string, query s
 	}
 	defer tx.Rollback()
 
-	rows, err := tx.QueryContext(ctx, query, args...)
+	rows, err := tx.QueryContext(ctx, input.Statement, input.Values...)
 	if err != nil {
 		return QueryDatabaseResult{}, err
 	}
 	defer rows.Close()
 
+	return e.scanBoundedRows(rows, input.Limit)
+}
+
+// scanBoundedRows reads rows into a bounded QueryDatabaseResult, enforcing
+// column, cell, and payload caps. It is shared by Query and QueryRelatedRecords.
+func (e *MySQLQueryExecutor) scanBoundedRows(rows *sql.Rows, limit int) (QueryDatabaseResult, error) {
 	colTypes, err := rows.ColumnTypes()
 	if err != nil {
 		return QueryDatabaseResult{}, err

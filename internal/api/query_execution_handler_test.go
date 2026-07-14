@@ -25,20 +25,20 @@ var qeTestNow = time.Date(2026, 6, 22, 8, 0, 0, 0, time.UTC)
 
 // stubQueryExec is a configurable queryExecutionAPI stub for handler tests.
 type stubQueryExec struct {
-	executeResp    model.QueryExecuteResponse
-	executeErr     error
-	listItems      []model.QueryExecutionRecord
-	listPageInfo   *model.PageInfo
-	listErr        error
-	navResp        model.RelatedRecordNavigationResponse
-	navErr         error
-	gotActor       uint64
-	gotRole        string
-	gotTargetID    uint64
-	gotMaxRows     int
-	gotNavRequest  model.RelatedRecordNavigationRequest
-	executeCalled  bool
-	navCalled      bool
+	executeResp   model.QueryExecuteResponse
+	executeErr    error
+	listItems     []model.QueryExecutionRecord
+	listPageInfo  *model.PageInfo
+	listErr       error
+	navResp       model.RelatedRecordNavigationResponse
+	navErr        error
+	gotActor      uint64
+	gotRole       string
+	gotTargetID   uint64
+	gotMaxRows    int
+	gotNavRequest model.RelatedRecordNavigationRequest
+	executeCalled bool
+	navCalled     bool
 }
 
 func (s *stubQueryExec) Execute(_ context.Context, actorUserID uint64, targetID uint64, req model.QueryExecuteRequest) (model.QueryExecuteResponse, error) {
@@ -211,12 +211,12 @@ func TestQueryExecution_ListHistory(t *testing.T) {
 	items := []model.QueryExecutionRecord{
 		{
 			ID: 1, TargetResourceID: 22, ActorUserID: 42,
-			Actor: model.QueryExecutionActor{DisplayName: "ControlHub Admin"},
+			Actor:  model.QueryExecutionActor{DisplayName: "ControlHub Admin"},
 			Status: model.QueryExecutionSuccess, RowCount: 1, CreatedAt: qeTestNow,
 		},
 		{
 			ID: 2, TargetResourceID: 22, ActorUserID: 42,
-			Actor: model.QueryExecutionActor{DisplayName: "ControlHub Admin"},
+			Actor:  model.QueryExecutionActor{DisplayName: "ControlHub Admin"},
 			Status: model.QueryExecutionRejected, CreatedAt: qeTestNow,
 		},
 	}

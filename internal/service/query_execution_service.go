@@ -77,12 +77,22 @@ type QueryCredentialResolver interface {
 // cell, and payload caps and returns ErrQueryResultTooLarge when they are hit.
 type QueryDatabaseExecutor interface {
 	Query(ctx context.Context, dsn string, guarded GuardedQuery) (QueryDatabaseResult, error)
-	// QueryBound runs a parameterized SELECT with bound arguments. The SQL
-	// string is constructed by the service from trusted identifiers only;
-	// args are bound via database/sql placeholders (?). This method is used
-	// exclusively by related-record navigation and is not exposed to
-	// browser-originated normal execution.
-	QueryBound(ctx context.Context, dsn string, query string, args []any, limit int) (QueryDatabaseResult, error)
+	// QueryRelatedRecords runs a parameterized SELECT built exclusively for
+	// related-record navigation. The SQL string is constructed by the service
+	// from trusted identifiers only; values are bound via database/sql
+	// placeholders (?). This method is not a generic parameterized-query API and
+	// cannot be used for normal execution.
+	QueryRelatedRecords(ctx context.Context, dsn string, input RelatedRecordsQueryInput) (QueryDatabaseResult, error)
+}
+
+// RelatedRecordsQueryInput is the narrow, navigation-only executor input. It
+// carries only service-generated SQL and bound local values; it never carries
+// referenced identifiers from the request, DSN, credentials, or raw SQL from the
+// browser.
+type RelatedRecordsQueryInput struct {
+	Statement string
+	Values    []any
+	Limit     int
 }
 
 // QueryDatabaseResult is the bounded result set returned by the executor.
@@ -279,10 +289,11 @@ func (s *QueryExecutionService) findTarget(ctx context.Context, targetID uint64)
 
 // NavigateRelatedRecords executes a governed FK navigation: it resolves the
 // target, retrieves FK metadata from the schema inspector, matches the
-// constraint, constructs a parameterized SELECT, binds values, and records
-// history + audit. The browser never supplies referenced identifiers, SQL,
-// credentials, or actor identity. Every attempt is recorded; localValues,
-// result rows, SQL text, DSN, and credentials are never persisted.
+// constraint, validates referenced identifiers, constructs a parameterized
+// SELECT with a server-clamped numeric LIMIT, binds values, and records history
+// + audit. The browser never supplies referenced identifiers, SQL, credentials,
+// or actor identity. Every attempt is recorded; localValues, result rows, SQL
+// text, DSN, and credentials are never persisted.
 func (s *QueryExecutionService) NavigateRelatedRecords(ctx context.Context, actorUserID uint64, targetID uint64, req model.RelatedRecordNavigationRequest) (model.RelatedRecordNavigationResponse, error) {
 	start := s.clock.Now()
 
@@ -294,20 +305,24 @@ func (s *QueryExecutionService) NavigateRelatedRecords(ctx context.Context, acto
 		}
 		var accessErr *TargetAccessError
 		if errors.As(err, &accessErr) {
-			return s.rejectNavigation(ctx, access.Target, actorUserID, req, "navigation_not_allowed", accessErr.Error(),
+			// access.Target is populated even on denial so we can record the
+			// rejected attempt. Before FK resolution, use fixed generic metadata.
+			return s.rejectNavigation(ctx, access.Target, actorUserID, nil,
+				"navigation_not_allowed", accessErr.Error(),
 				fmt.Errorf("%w: %s", ErrQueryNotAllowed, accessErr.Error()), start)
 		}
 		return model.RelatedRecordNavigationResponse{}, err
 	}
 
 	target := access.Target
-	engine := target.ConnectionContext.Engine
 
-	// 2. Retrieve source table FK metadata via the schema inspector.
+	// 2. Retrieve source table FK metadata via the schema inspector. The raw
+	// inspector error must never be exposed, persisted, or audited.
 	detail, err := s.inspector.GetObjectDetails(ctx, access.dsn, req.Source.Database, req.Source.Object, req.Source.Kind)
 	if err != nil {
-		return s.rejectNavigation(ctx, target, actorUserID, req, "navigation_source_error", "could not retrieve source table metadata",
-			fmt.Errorf("%w: %v", ErrNavigationSourceNotFound, err), start)
+		return s.rejectNavigation(ctx, target, actorUserID, nil,
+			"navigation_source_error", "could not retrieve source table metadata",
+			ErrNavigationSourceNotFound, start)
 	}
 
 	// 3. Match the FK constraint by name.
@@ -319,37 +334,52 @@ func (s *QueryExecutionService) NavigateRelatedRecords(ctx context.Context, acto
 		}
 	}
 	if matchedFK == nil {
-		return s.rejectNavigation(ctx, target, actorUserID, req, "navigation_fk_not_found", "foreign key not found on source table",
+		return s.rejectNavigation(ctx, target, actorUserID, nil,
+			"navigation_fk_not_found", "foreign key not found on source table",
 			ErrNavigationSourceNotFound, start)
 	}
 
-	// 4. Validate localValues count matches FK column count.
+	// 4. Validate the live FK metadata is structurally sound and consistent.
+	if err := validateRelatedRecordsFKMetadata(matchedFK); err != nil {
+		return s.rejectNavigation(ctx, target, actorUserID, nil,
+			"navigation_metadata_invalid", "foreign key metadata is invalid",
+			ErrNavigationSourceNotFound, start)
+	}
+
+	// 5. Validate localValues count matches FK column count.
 	if len(req.LocalValues) != len(matchedFK.Columns) {
-		return s.rejectNavigation(ctx, target, actorUserID, req, "navigation_value_mismatch",
-			fmt.Sprintf("localValues count %d does not match foreign key column count %d", len(req.LocalValues), len(matchedFK.Columns)),
+		return s.rejectNavigation(ctx, target, actorUserID, nil,
+			"navigation_value_mismatch", "localValues count does not match foreign key column count",
 			ErrNavigationValueMismatch, start)
 	}
 
-	// 5. Build the parameterized SELECT from trusted FK metadata.
-	//    SELECT * FROM <ref_schema>.<ref_table> WHERE <ref_col1> = ? AND ... LIMIT ?
-	//    Identifiers are backtick-quoted; values are bound via args.
+	// 6. Build the parameterized SELECT from trusted FK metadata.
+	//    SELECT * FROM `<ref_schema>`.`<ref_table>` WHERE `<ref_col1>` = ? AND ... LIMIT <decimal>
+	//    Identifiers are backtick-quoted with embedded backticks doubled; values
+	//    are bound via database/sql placeholders; the limit is a server-clamped
+	//    decimal literal so the placeholder count matches the argument count.
 	refSchema := matchedFK.Columns[0].ReferencedSchema
 	refTable := matchedFK.Columns[0].ReferencedTable
 
 	var whereClauses []string
-	var args []any
 	for _, col := range matchedFK.Columns {
-		whereClauses = append(whereClauses, "`"+col.ReferencedColumn+"` = ?")
-	}
-	query := fmt.Sprintf("SELECT * FROM `%s`.`%s` WHERE %s LIMIT ?",
-		refSchema, refTable, strings.Join(whereClauses, " AND "))
-	limit := req.ClampMaxRows()
-	args = make([]any, len(req.LocalValues))
-	for i, v := range req.LocalValues {
-		args[i] = v
+		whereClauses = append(whereClauses, fmt.Sprintf("%s = ?", quoteMySQLIdentifier(col.ReferencedColumn)))
 	}
 
-	// 6. Execute with timeout (same policy as Execute).
+	limit := req.ClampMaxRows()
+	if isProductionEnvironment(target.ConnectionContext.Environment) && limit > productionHardMaxRows {
+		limit = productionHardMaxRows
+	}
+
+	query := fmt.Sprintf("SELECT * FROM %s.%s WHERE %s LIMIT %d",
+		quoteMySQLIdentifier(refSchema), quoteMySQLIdentifier(refTable), strings.Join(whereClauses, " AND "), limit)
+
+	values := make([]any, len(req.LocalValues))
+	for i, v := range req.LocalValues {
+		values[i] = v
+	}
+
+	// 7. Execute with timeout (same policy as Execute).
 	timeout := defaultQueryTimeout
 	if isProductionEnvironment(target.ConnectionContext.Environment) {
 		timeout = productionQueryTimeout
@@ -357,24 +387,28 @@ func (s *QueryExecutionService) NavigateRelatedRecords(ctx context.Context, acto
 	execCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
-	// 7. Execute the bound query.
-	result, err := s.executor.QueryBound(execCtx, access.dsn, query, args, limit)
+	// 8. Execute the bound query.
+	result, err := s.executor.QueryRelatedRecords(execCtx, access.dsn, RelatedRecordsQueryInput{
+		Statement: query,
+		Values:    values,
+		Limit:     limit,
+	})
 	if err != nil {
 		status, sentinel, code, safeMsg := classifyExecutorError(err)
-		if _, perr := s.persistNavigationAttempt(ctx, target, actorUserID, req, status, 0, code, safeMsg, start); perr != nil {
+		if _, perr := s.persistNavigationAttempt(ctx, target, actorUserID, matchedFK, status, 0, code, safeMsg, start); perr != nil {
 			return model.RelatedRecordNavigationResponse{}, errPersistAttempt
 		}
 		return model.RelatedRecordNavigationResponse{}, fmt.Errorf("%w: %s", sentinel, safeMsg)
 	}
 
-	// 8. Build relation metadata from trusted FK columns.
+	// 9. Build relation metadata from trusted FK columns.
 	refColumns := make([]string, len(matchedFK.Columns))
 	for i, col := range matchedFK.Columns {
 		refColumns[i] = col.ReferencedColumn
 	}
 
-	// 9. Record success.
-	execID, perr := s.persistNavigationAttempt(ctx, target, actorUserID, req, model.QueryExecutionSuccess, result.RowCount, "", "", start)
+	// 10. Record success using canonical inspected relation identity.
+	execID, perr := s.persistNavigationAttempt(ctx, target, actorUserID, matchedFK, model.QueryExecutionSuccess, result.RowCount, "", "", start)
 	if perr != nil {
 		return model.RelatedRecordNavigationResponse{}, errPersistAttempt
 	}
@@ -383,7 +417,7 @@ func (s *QueryExecutionService) NavigateRelatedRecords(ctx context.Context, acto
 		ExecutionID:        execID,
 		Status:             model.QueryExecutionSuccess,
 		TargetResourceID:   target.ResourceID,
-		Engine:             engine,
+		Engine:             target.ConnectionContext.Engine,
 		Columns:            result.Columns,
 		Rows:               result.Rows,
 		RowCount:           result.RowCount,
@@ -393,7 +427,7 @@ func (s *QueryExecutionService) NavigateRelatedRecords(ctx context.Context, acto
 		ExecutedAt:         s.clock.Now(),
 		SourceDatabase:     req.Source.Database,
 		SourceObject:       req.Source.Object,
-		ForeignKey:         req.Source.ForeignKey,
+		ForeignKey:         matchedFK.Name,
 		ReferencedDatabase: refSchema,
 		ReferencedObject:   refTable,
 		ReferencedColumns:  refColumns,
@@ -401,8 +435,8 @@ func (s *QueryExecutionService) NavigateRelatedRecords(ctx context.Context, acto
 }
 
 // rejectNavigation records a rejected navigation attempt and returns the error.
-func (s *QueryExecutionService) rejectNavigation(ctx context.Context, target model.QueryTarget, actorUserID uint64, req model.RelatedRecordNavigationRequest, code, msg string, retErr error, start time.Time) (model.RelatedRecordNavigationResponse, error) {
-	if _, perr := s.persistNavigationAttempt(ctx, target, actorUserID, req, model.QueryExecutionRejected, 0, code, msg, start); perr != nil {
+func (s *QueryExecutionService) rejectNavigation(ctx context.Context, target model.QueryTarget, actorUserID uint64, fk *FKSummary, code, msg string, retErr error, start time.Time) (model.RelatedRecordNavigationResponse, error) {
+	if _, perr := s.persistNavigationAttempt(ctx, target, actorUserID, fk, model.QueryExecutionRejected, 0, code, msg, start); perr != nil {
 		return model.RelatedRecordNavigationResponse{}, errPersistAttempt
 	}
 	return model.RelatedRecordNavigationResponse{}, retErr
@@ -411,11 +445,23 @@ func (s *QueryExecutionService) rejectNavigation(ctx context.Context, target mod
 // persistNavigationAttempt records a navigation attempt. The recorded action is
 // fixed "related_record_navigation" with relation identity metadata only.
 // It never stores localValues, result rows, SQL, credentials, or raw errors.
-func (s *QueryExecutionService) persistNavigationAttempt(ctx context.Context, target model.QueryTarget, actorUserID uint64, req model.RelatedRecordNavigationRequest, status model.QueryExecutionStatus, rowCount int, code, msg string, start time.Time) (uint64, error) {
-	// Build a safe statement preview that names the relation, never the values.
-	preview := fmt.Sprintf("related:%s.%s/%s→%s",
-		req.Source.Database, req.Source.Object, req.Source.ForeignKey, "referenced")
-	digest := fmt.Sprintf("nav:%s/%s", req.Source.Object, req.Source.ForeignKey)
+// When fk is nil (trusted resolution has not succeeded), only fixed generic
+// metadata is recorded. When fk is non-nil, canonical inspected relation
+// identity is used.
+func (s *QueryExecutionService) persistNavigationAttempt(ctx context.Context, target model.QueryTarget, actorUserID uint64, fk *FKSummary, status model.QueryExecutionStatus, rowCount int, code, msg string, start time.Time) (uint64, error) {
+	var preview, digest string
+	if fk == nil {
+		// Pre-resolution: fixed generic metadata only. Request-controlled source
+		// identity is never persisted until trusted resolution succeeds.
+		preview = "related:unresolved"
+		digest = "nav:unresolved"
+	} else {
+		// Post-resolution: canonical inspected relation identity and FK name.
+		refSchema := fk.Columns[0].ReferencedSchema
+		refTable := fk.Columns[0].ReferencedTable
+		preview = fmt.Sprintf("related:%s.%s/%s", refSchema, refTable, fk.Name)
+		digest = fmt.Sprintf("nav:%s.%s/%s", refSchema, refTable, fk.Name)
+	}
 
 	rec := model.QueryExecutionRecord{
 		TargetResourceID: target.ResourceID,
@@ -440,6 +486,42 @@ func (s *QueryExecutionService) persistNavigationAttempt(ctx context.Context, ta
 		return id, err
 	}
 	return id, nil
+}
+
+// quoteMySQLIdentifier quotes a MySQL identifier with backticks and doubles
+// any embedded backticks to prevent identifier injection.
+func quoteMySQLIdentifier(name string) string {
+	return "`" + strings.ReplaceAll(name, "`", "``") + "`"
+}
+
+// validateRelatedRecordsFKMetadata checks that live FK metadata is safe to use
+// for query construction. It requires at least one mapping, non-empty local and
+// referenced columns, non-empty referenced schema/table, and that every mapping
+// points to the same referenced schema/table.
+func validateRelatedRecordsFKMetadata(fk *FKSummary) error {
+	if fk == nil || len(fk.Columns) == 0 {
+		return fmt.Errorf("foreign key has no column mappings")
+	}
+	refSchema := strings.TrimSpace(fk.Columns[0].ReferencedSchema)
+	refTable := strings.TrimSpace(fk.Columns[0].ReferencedTable)
+	if refSchema == "" || refTable == "" {
+		return fmt.Errorf("foreign key referenced schema or table is empty")
+	}
+	for i, col := range fk.Columns {
+		if strings.TrimSpace(col.Column) == "" {
+			return fmt.Errorf("foreign key local column %d is empty", i)
+		}
+		if strings.TrimSpace(col.ReferencedSchema) == "" || strings.TrimSpace(col.ReferencedTable) == "" {
+			return fmt.Errorf("foreign key referenced schema or table is empty at column %d", i)
+		}
+		if strings.TrimSpace(col.ReferencedColumn) == "" {
+			return fmt.Errorf("foreign key referenced column %d is empty", i)
+		}
+		if !strings.EqualFold(strings.TrimSpace(col.ReferencedSchema), refSchema) || !strings.EqualFold(strings.TrimSpace(col.ReferencedTable), refTable) {
+			return fmt.Errorf("foreign key maps to multiple referenced tables")
+		}
+	}
+	return nil
 }
 
 // classifyExecutorError maps an executor error to a history status, a sentinel

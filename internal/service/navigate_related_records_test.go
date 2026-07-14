@@ -84,8 +84,8 @@ func navCompositeScaffold(t *testing.T) (*QueryExecutionService, *fakeExecRepo, 
 				{
 					Name: "fk_junction_composite",
 					Columns: []FKColumn{
-						{Column: "tenant_id", ReferencedSchema: "app", ReferencedTable: "tenants", ReferencedColumn: "id"},
-						{Column: "user_id", ReferencedSchema: "app", ReferencedTable: "users", ReferencedColumn: "id"},
+						{Column: "tenant_id", ReferencedSchema: "app", ReferencedTable: "memberships", ReferencedColumn: "tenant_id"},
+						{Column: "user_id", ReferencedSchema: "app", ReferencedTable: "memberships", ReferencedColumn: "user_id"},
 					},
 				},
 			},
@@ -278,14 +278,14 @@ func TestNavigateRelatedRecords_CompositeFK(t *testing.T) {
 	if len(resp.ReferencedColumns) != 2 {
 		t.Fatalf("referencedColumns count = %d, want 2", len(resp.ReferencedColumns))
 	}
-	if resp.ReferencedColumns[0] != "id" || resp.ReferencedColumns[1] != "id" {
-		t.Fatalf("referencedColumns = %v, want [id, id]", resp.ReferencedColumns)
+	if resp.ReferencedColumns[0] != "tenant_id" || resp.ReferencedColumns[1] != "user_id" {
+		t.Fatalf("referencedColumns = %v, want [tenant_id, user_id]", resp.ReferencedColumns)
 	}
 	if resp.ReferencedDatabase != "app" {
 		t.Fatalf("referencedDatabase = %q, want %q", resp.ReferencedDatabase, "app")
 	}
-	if resp.ReferencedObject != "tenants" {
-		t.Fatalf("referencedObject = %q, want %q", resp.ReferencedObject, "tenants")
+	if resp.ReferencedObject != "memberships" {
+		t.Fatalf("referencedObject = %q, want %q", resp.ReferencedObject, "memberships")
 	}
 }
 
@@ -317,12 +317,19 @@ func TestNavigateRelatedRecords_HistoryAuditNoValues(t *testing.T) {
 		t.Fatalf("errorMessage must not contain DSN: %q", rec.ErrorMessage)
 	}
 
-	// History must contain relation identity.
+	// History after resolution must use canonical inspected relation identity
+	// and the matched FK name.
 	if !strings.Contains(rec.StatementDigest, "fk_order_items_order") {
 		t.Fatalf("statementDigest should contain FK name: %q", rec.StatementDigest)
 	}
-	if !strings.Contains(rec.StatementPreview, "order_items") {
-		t.Fatalf("statementPreview should contain source object: %q", rec.StatementPreview)
+	if !strings.Contains(rec.StatementDigest, "orders.orders") {
+		t.Fatalf("statementDigest should contain referenced schema.table: %q", rec.StatementDigest)
+	}
+	if !strings.Contains(rec.StatementPreview, "orders.orders") {
+		t.Fatalf("statementPreview should contain referenced schema.table: %q", rec.StatementPreview)
+	}
+	if strings.Contains(rec.StatementPreview, "orders_db") {
+		t.Fatalf("statementPreview must not contain request source database: %q", rec.StatementPreview)
 	}
 
 	// Verify audit event was created with fixed action.
@@ -599,13 +606,330 @@ func TestNavigateRelatedRecords_BoundArgsNotInSQL(t *testing.T) {
 		t.Fatalf("NavigateRelatedRecords: %v", err)
 	}
 
-	// The executor's QueryBound was called. The args should contain the value,
-	// but we can't directly inspect them from the fake. What we CAN verify is
-	// that the executor was called (it was), and that the history record does
-	// not contain the value (tested elsewhere). The key guarantee is that the
-	// service constructs the SQL from trusted identifiers and passes values
-	// as args — the executor's QueryBound signature enforces this.
+	// The executor's QueryRelatedRecords was called with a typed input. Verify
+	// the generated SQL contains only trusted identifiers and ? placeholders,
+	// and the local value is bound as an argument rather than interpolated.
 	if !executor.called {
-		t.Fatal("executor.QueryBound was not called")
+		t.Fatal("executor.QueryRelatedRecords was not called")
+	}
+	if executor.gotNavInput == nil {
+		t.Fatal("executor did not capture navigation input")
+	}
+	input := executor.gotNavInput
+	if !strings.Contains(input.Statement, "`orders`.`orders`") {
+		t.Fatalf("SQL must use quoted trusted identifiers, got: %s", input.Statement)
+	}
+	if strings.Contains(input.Statement, "secret-value-12345") {
+		t.Fatalf("SQL must not contain the local value: %s", input.Statement)
+	}
+	if len(input.Values) != 1 || input.Values[0] != "secret-value-12345" {
+		t.Fatalf("expected bound value [secret-value-12345], got %v", input.Values)
+	}
+}
+
+func TestNavigateRelatedRecords_SQLHasNumericLimitAndCorrectPlaceholders(t *testing.T) {
+	t.Parallel()
+	svc, _, executor, _ := navTestScaffold(t)
+	req := validNavRequest()
+	req.MaxRows = 77
+
+	_, err := svc.NavigateRelatedRecords(context.Background(), 1, 9001, req)
+	if err != nil {
+		t.Fatalf("NavigateRelatedRecords: %v", err)
+	}
+	if executor.gotNavInput == nil {
+		t.Fatal("executor did not capture navigation input")
+	}
+	input := executor.gotNavInput
+	if !strings.Contains(input.Statement, "LIMIT 77") {
+		t.Fatalf("SQL must contain a numeric LIMIT literal, got: %s", input.Statement)
+	}
+	if strings.Contains(input.Statement, "LIMIT ?") {
+		t.Fatalf("SQL must not contain an unbound LIMIT placeholder: %s", input.Statement)
+	}
+	if strings.Count(input.Statement, "?") != 1 {
+		t.Fatalf("SQL should have exactly one placeholder for one local value, got: %s", input.Statement)
+	}
+	if len(input.Values) != 1 || input.Values[0] != "42" {
+		t.Fatalf("expected one bound value [42], got %v", input.Values)
+	}
+	if input.Limit != 77 {
+		t.Fatalf("executor limit = %d, want 77", input.Limit)
+	}
+}
+
+func TestNavigateRelatedRecords_EmptyLocalValueIsBound(t *testing.T) {
+	t.Parallel()
+	svc, _, executor, _ := navTestScaffold(t)
+	req := validNavRequest()
+	req.LocalValues = []string{""}
+
+	_, err := svc.NavigateRelatedRecords(context.Background(), 1, 9001, req)
+	if err != nil {
+		t.Fatalf("NavigateRelatedRecords: %v", err)
+	}
+	if executor.gotNavInput == nil {
+		t.Fatal("executor did not capture navigation input")
+	}
+	if len(executor.gotNavInput.Values) != 1 || executor.gotNavInput.Values[0] != "" {
+		t.Fatalf("expected one empty bound value, got %v", executor.gotNavInput.Values)
+	}
+}
+
+func TestNavigateRelatedRecords_EmbeddedBacktickEscaped(t *testing.T) {
+	t.Parallel()
+	repo := &fakeExecRepo{
+		credentials: map[uint64]model.QueryCredentialMetadata{
+			9001: enabledCred(model.QueryEnvPolicyNonProdOnly),
+		},
+	}
+	executor := &fakeExecutor{result: QueryDatabaseResult{RowCount: 1}}
+	inspector := &fakeNavSchemaInspector{
+		detail: &ObjectDetail{
+			Name: "order_items",
+			Kind: "table",
+			ForeignKeys: []FKSummary{
+				{
+					Name:    "fk_order_items_order",
+					Columns: []FKColumn{{Column: "order_id", ReferencedSchema: "or`ders", ReferencedTable: "or`ders", ReferencedColumn: "i`d"}},
+				},
+			},
+		},
+	}
+	svc := NewQueryExecutionService(
+		fakeTargetRepo{targets: []model.QueryTarget{mysqlTarget("Staging")}},
+		repo, &fakeResolver{dsn: testResolverDSN}, executor,
+		NewQueryGuard(QueryGuardConfig{DefaultMaxRows: 100, HardMaxRows: 500}),
+		&fakeClock{t: time.Now()},
+		inspector,
+	)
+
+	_, err := svc.NavigateRelatedRecords(context.Background(), 1, 9001, validNavRequest())
+	if err != nil {
+		t.Fatalf("NavigateRelatedRecords: %v", err)
+	}
+	if executor.gotNavInput == nil {
+		t.Fatal("executor did not capture navigation input")
+	}
+	stmt := executor.gotNavInput.Statement
+	if !strings.Contains(stmt, "`or``ders`") {
+		t.Fatalf("embedded backticks must be doubled in schema/table identifiers, got: %s", stmt)
+	}
+	if !strings.Contains(stmt, "`i``d`") {
+		t.Fatalf("embedded backticks must be doubled in column identifiers, got: %s", stmt)
+	}
+	if strings.Contains(stmt, "or`ders") {
+		t.Fatalf("unescaped backtick must not appear in identifier: %s", stmt)
+	}
+}
+
+func TestNavigateRelatedRecords_ProductionCapEnforced(t *testing.T) {
+	t.Parallel()
+	target := mysqlTarget("Production")
+	repo := &fakeExecRepo{
+		credentials: map[uint64]model.QueryCredentialMetadata{
+			9001: enabledCred(model.QueryEnvPolicyAllEnvironments),
+		},
+	}
+	executor := &fakeExecutor{result: QueryDatabaseResult{RowCount: 1}}
+	inspector := &fakeNavSchemaInspector{
+		detail: &ObjectDetail{
+			Name: "order_items",
+			Kind: "table",
+			ForeignKeys: []FKSummary{
+				{
+					Name:    "fk_order_items_order",
+					Columns: []FKColumn{{Column: "order_id", ReferencedSchema: "orders", ReferencedTable: "orders", ReferencedColumn: "id"}},
+				},
+			},
+		},
+	}
+	svc := NewQueryExecutionService(
+		fakeTargetRepo{targets: []model.QueryTarget{target}},
+		repo, &fakeResolver{dsn: testResolverDSN}, executor,
+		NewQueryGuard(QueryGuardConfig{DefaultMaxRows: 100, HardMaxRows: 500}),
+		&fakeClock{t: time.Now()},
+		inspector,
+	)
+	req := validNavRequest()
+	req.MaxRows = 500
+
+	resp, err := svc.NavigateRelatedRecords(context.Background(), 1, 9001, req)
+	if err != nil {
+		t.Fatalf("NavigateRelatedRecords: %v", err)
+	}
+	if resp.LimitApplied != productionHardMaxRows {
+		t.Fatalf("limitApplied = %d, want production hard cap %d", resp.LimitApplied, productionHardMaxRows)
+	}
+	if executor.gotNavInput == nil || !strings.Contains(executor.gotNavInput.Statement, "LIMIT 100") {
+		t.Fatalf("production SQL must use LIMIT 100, got: %s", executor.gotNavInput.Statement)
+	}
+}
+
+func TestNavigateRelatedRecords_EmptyReferencedSchemaRejected(t *testing.T) {
+	t.Parallel()
+	repo := &fakeExecRepo{
+		credentials: map[uint64]model.QueryCredentialMetadata{
+			9001: enabledCred(model.QueryEnvPolicyNonProdOnly),
+		},
+	}
+	executor := &fakeExecutor{result: QueryDatabaseResult{RowCount: 1}}
+	inspector := &fakeNavSchemaInspector{
+		detail: &ObjectDetail{
+			Name: "order_items",
+			Kind: "table",
+			ForeignKeys: []FKSummary{
+				{
+					Name:    "fk_order_items_order",
+					Columns: []FKColumn{{Column: "order_id", ReferencedSchema: "", ReferencedTable: "orders", ReferencedColumn: "id"}},
+				},
+			},
+		},
+	}
+	svc := NewQueryExecutionService(
+		fakeTargetRepo{targets: []model.QueryTarget{mysqlTarget("Staging")}},
+		repo, &fakeResolver{dsn: testResolverDSN}, executor,
+		NewQueryGuard(QueryGuardConfig{DefaultMaxRows: 100, HardMaxRows: 500}),
+		&fakeClock{t: time.Now()},
+		inspector,
+	)
+
+	_, err := svc.NavigateRelatedRecords(context.Background(), 1, 9001, validNavRequest())
+	if !errors.Is(err, ErrNavigationSourceNotFound) {
+		t.Fatalf("error = %v, want ErrNavigationSourceNotFound", err)
+	}
+	if executor.called {
+		t.Fatal("executor must not be called for invalid FK metadata")
+	}
+}
+
+func TestNavigateRelatedRecords_MixedReferencedTableRejected(t *testing.T) {
+	t.Parallel()
+	repo := &fakeExecRepo{
+		credentials: map[uint64]model.QueryCredentialMetadata{
+			9001: enabledCred(model.QueryEnvPolicyNonProdOnly),
+		},
+	}
+	executor := &fakeExecutor{result: QueryDatabaseResult{RowCount: 1}}
+	inspector := &fakeNavSchemaInspector{
+		detail: &ObjectDetail{
+			Name: "order_items",
+			Kind: "table",
+			ForeignKeys: []FKSummary{
+				{
+					Name: "fk_order_items_order",
+					Columns: []FKColumn{
+						{Column: "order_id", ReferencedSchema: "orders", ReferencedTable: "orders", ReferencedColumn: "id"},
+						{Column: "product_id", ReferencedSchema: "orders", ReferencedTable: "products", ReferencedColumn: "id"},
+					},
+				},
+			},
+		},
+	}
+	svc := NewQueryExecutionService(
+		fakeTargetRepo{targets: []model.QueryTarget{mysqlTarget("Staging")}},
+		repo, &fakeResolver{dsn: testResolverDSN}, executor,
+		NewQueryGuard(QueryGuardConfig{DefaultMaxRows: 100, HardMaxRows: 500}),
+		&fakeClock{t: time.Now()},
+		inspector,
+	)
+	req := validNavRequest()
+	req.LocalValues = []string{"1", "2"}
+
+	_, err := svc.NavigateRelatedRecords(context.Background(), 1, 9001, req)
+	if !errors.Is(err, ErrNavigationSourceNotFound) {
+		t.Fatalf("error = %v, want ErrNavigationSourceNotFound", err)
+	}
+	if executor.called {
+		t.Fatal("executor must not be called for mixed referenced tables")
+	}
+}
+
+func TestNavigateRelatedRecords_InspectorErrorNotLeaked(t *testing.T) {
+	t.Parallel()
+	repo := &fakeExecRepo{
+		credentials: map[uint64]model.QueryCredentialMetadata{
+			9001: enabledCred(model.QueryEnvPolicyNonProdOnly),
+		},
+	}
+	inspector := &fakeNavSchemaInspector{
+		err: errors.New("connection refused: tcp(db.internal:3306) password=secret"),
+	}
+	svc := NewQueryExecutionService(
+		fakeTargetRepo{targets: []model.QueryTarget{mysqlTarget("Staging")}},
+		repo, &fakeResolver{dsn: testResolverDSN}, &fakeExecutor{},
+		NewQueryGuard(QueryGuardConfig{DefaultMaxRows: 100, HardMaxRows: 500}),
+		&fakeClock{t: time.Now()},
+		inspector,
+	)
+
+	_, err := svc.NavigateRelatedRecords(context.Background(), 1, 9001, validNavRequest())
+	if !errors.Is(err, ErrNavigationSourceNotFound) {
+		t.Fatalf("error = %v, want ErrNavigationSourceNotFound", err)
+	}
+	if err.Error() != "navigation source object or foreign key not found" {
+		t.Fatalf("returned error must be a fixed safe message, got: %s", err.Error())
+	}
+	if len(repo.insertedAttempts) != 1 {
+		t.Fatalf("expected 1 history row, got %d", len(repo.insertedAttempts))
+	}
+	rec := repo.insertedAttempts[0]
+	if strings.Contains(rec.ErrorMessage, "tcp(") || strings.Contains(rec.ErrorMessage, "secret") {
+		t.Fatalf("history errorMessage must not leak raw inspector error: %q", rec.ErrorMessage)
+	}
+	if rec.StatementDigest != "nav:unresolved" || rec.StatementPreview != "related:unresolved" {
+		t.Fatalf("pre-resolution history must use generic metadata, got digest=%q preview=%q", rec.StatementDigest, rec.StatementPreview)
+	}
+}
+
+func TestNavigateRelatedRecords_RejectedHistoryUsesGenericMetadata(t *testing.T) {
+	t.Parallel()
+	svc, repo, _, _ := navTestScaffold(t)
+	req := validNavRequest()
+	req.Source.ForeignKey = "fk_nonexistent"
+
+	_, _ = svc.NavigateRelatedRecords(context.Background(), 1, 9001, req)
+
+	if len(repo.insertedAttempts) != 1 {
+		t.Fatalf("history attempts = %d, want 1", len(repo.insertedAttempts))
+	}
+	rec := repo.insertedAttempts[0]
+	if rec.Status != model.QueryExecutionRejected {
+		t.Fatalf("status = %q, want rejected", rec.Status)
+	}
+	if rec.StatementDigest != "nav:unresolved" || rec.StatementPreview != "related:unresolved" {
+		t.Fatalf("pre-resolution history must use generic metadata, got digest=%q preview=%q", rec.StatementDigest, rec.StatementPreview)
+	}
+	if strings.Contains(rec.StatementPreview, "order_items") || strings.Contains(rec.StatementDigest, "order_items") {
+		t.Fatalf("pre-resolution history must not contain request source object: digest=%q preview=%q", rec.StatementDigest, rec.StatementPreview)
+	}
+	if len(repo.auditEvents) != 1 {
+		t.Fatalf("audit events = %d, want 1", len(repo.auditEvents))
+	}
+	if repo.auditEvents[0].result != "validation_failed" {
+		t.Fatalf("audit result = %q, want validation_failed", repo.auditEvents[0].result)
+	}
+}
+
+func TestNavigateRelatedRecords_SuccessHistoryUsesCanonicalIdentity(t *testing.T) {
+	t.Parallel()
+	svc, repo, _, _ := navTestScaffold(t)
+
+	_, err := svc.NavigateRelatedRecords(context.Background(), 1, 9001, validNavRequest())
+	if err != nil {
+		t.Fatalf("NavigateRelatedRecords: %v", err)
+	}
+	if len(repo.insertedAttempts) != 1 {
+		t.Fatalf("history attempts = %d, want 1", len(repo.insertedAttempts))
+	}
+	rec := repo.insertedAttempts[0]
+	if !strings.Contains(rec.StatementDigest, "orders.orders") {
+		t.Fatalf("post-resolution digest should contain referenced schema.table: %q", rec.StatementDigest)
+	}
+	if !strings.Contains(rec.StatementDigest, "fk_order_items_order") {
+		t.Fatalf("post-resolution digest should contain FK name: %q", rec.StatementDigest)
+	}
+	if strings.Contains(rec.StatementPreview, "orders_db") {
+		t.Fatalf("post-resolution preview must not contain request source database: %q", rec.StatementPreview)
 	}
 }

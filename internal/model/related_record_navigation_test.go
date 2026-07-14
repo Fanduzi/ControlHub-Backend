@@ -6,8 +6,10 @@
 package model
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
+	"time"
 )
 
 func validRequest() RelatedRecordNavigationRequest {
@@ -136,13 +138,19 @@ func TestRelatedRecordNavigationRequest_Validate_TooManyLocalValues(t *testing.T
 	}
 }
 
-func TestRelatedRecordNavigationRequest_Validate_EmptyLocalValue(t *testing.T) {
+func TestRelatedRecordNavigationRequest_Validate_EmptyLocalValue_Allowed(t *testing.T) {
 	req := validRequest()
 	req.LocalValues = []string{"42", ""}
-	if err := req.Validate(); err == nil {
-		t.Fatal("expected error for empty localValue entry")
-	} else if !strings.Contains(err.Error(), "localValues[1]") {
-		t.Fatalf("unexpected error: %v", err)
+	if err := req.Validate(); err != nil {
+		t.Fatalf("expected empty localValue entry to be valid, got: %v", err)
+	}
+}
+
+func TestRelatedRecordNavigationRequest_Validate_EmptyLocalValue_AsOnlyValue(t *testing.T) {
+	req := validRequest()
+	req.LocalValues = []string{""}
+	if err := req.Validate(); err != nil {
+		t.Fatalf("expected empty string as sole localValue to be valid, got: %v", err)
 	}
 }
 
@@ -221,8 +229,8 @@ func TestRelatedRecordNavigationRequest_Validate_MaxLocalValuesCount(t *testing.
 
 func TestRelatedRecordNavigationResponse_ColumnsNeverNull(t *testing.T) {
 	resp := RelatedRecordNavigationResponse{
-		Columns:         nil,
-		Rows:            nil,
+		Columns:           nil,
+		Rows:              nil,
 		ReferencedColumns: nil,
 	}
 	// Verify the struct fields can be set to nil (JSON marshal test is in OpenAPI).
@@ -252,6 +260,20 @@ func TestRelatedRecordNavigationRequest_Validate_WhitespaceOnlyForeignKey(t *tes
 	req.Source.ForeignKey = "   "
 	if err := req.Validate(); err == nil {
 		t.Fatal("expected error for whitespace-only foreign key")
+	}
+}
+
+func TestRelatedRecordNavigationResponse_JSONUsesRFC3339(t *testing.T) {
+	resp := RelatedRecordNavigationResponse{
+		ExecutionID: 1,
+		ExecutedAt:  time.Date(2026, 7, 14, 8, 0, 0, 0, time.UTC),
+	}
+	b, err := json.Marshal(resp)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	if !strings.Contains(string(b), "2026-07-14T08:00:00Z") {
+		t.Fatalf("expected RFC3339 timestamp in JSON, got %s", string(b))
 	}
 }
 

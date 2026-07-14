@@ -151,7 +151,7 @@ func TestNavigateRelatedRecords_NonTableKind(t *testing.T) {
 	}
 }
 
-func TestNavigateRelatedRecords_EmptyLocalValues(t *testing.T) {
+func TestNavigateRelatedRecords_EmptyLocalValuesArray(t *testing.T) {
 	router := newNavRouter(&stubQueryExec{})
 	token := navBearer(t)
 
@@ -161,6 +161,52 @@ func TestNavigateRelatedRecords_EmptyLocalValues(t *testing.T) {
 
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d, want 400", rec.Code)
+	}
+}
+
+func TestNavigateRelatedRecords_EmptyLocalValueAllowed(t *testing.T) {
+	stub := &stubQueryExec{
+		navResp: model.RelatedRecordNavigationResponse{
+			Status: model.QueryExecutionSuccess,
+		},
+	}
+	router := newNavRouter(stub)
+	token := navBearer(t)
+
+	body := `{"source":{"database":"db","object":"tbl","kind":"table","foreignKey":"fk"},"localValues":[""]}`
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, qeRequest(http.MethodPost, "/query-targets/9001/related-records", body, token))
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", rec.Code, rec.Body.String())
+	}
+	if !stub.navCalled {
+		t.Fatal("NavigateRelatedRecords was not called")
+	}
+	if len(stub.gotNavRequest.LocalValues) != 1 || stub.gotNavRequest.LocalValues[0] != "" {
+		t.Fatalf("localValues = %v, want [\"\"]", stub.gotNavRequest.LocalValues)
+	}
+}
+
+func TestNavigateRelatedRecords_ResponseExecutedAtRFC3339(t *testing.T) {
+	stub := &stubQueryExec{
+		navResp: model.RelatedRecordNavigationResponse{
+			Status:     model.QueryExecutionSuccess,
+			ExecutedAt: time.Date(2026, 7, 14, 8, 0, 0, 0, time.UTC),
+		},
+	}
+	router := newNavRouter(stub)
+	token := navBearer(t)
+
+	body := `{"source":{"database":"db","object":"tbl","kind":"table","foreignKey":"fk"},"localValues":["1"]}`
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, qeRequest(http.MethodPost, "/query-targets/9001/related-records", body, token))
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "2026-07-14T08:00:00Z") {
+		t.Fatalf("response missing RFC3339 executedAt: %s", rec.Body.String())
 	}
 }
 

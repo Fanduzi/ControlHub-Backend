@@ -8,19 +8,20 @@ package model
 import (
 	"fmt"
 	"strings"
+	"time"
 )
 
 // Validation bounds for related-record navigation requests. These are tight
 // enough to reject abuse but generous enough for real FK names and values.
 const (
-	MaxSourceDatabaseLength  = 128
-	MaxSourceObjectLength    = 128
-	MaxForeignKeyNameLength  = 128
-	MaxLocalValueLength      = 1024
-	MaxLocalValuesCount      = 16
-	MaxRelatedRowsDefault    = 100
-	MaxRelatedRowsHard       = 500
-	MaxRelatedRowsMin        = 1
+	MaxSourceDatabaseLength = 128
+	MaxSourceObjectLength   = 128
+	MaxForeignKeyNameLength = 128
+	MaxLocalValueLength     = 1024
+	MaxLocalValuesCount     = 16
+	MaxRelatedRowsDefault   = 100
+	MaxRelatedRowsHard      = 500
+	MaxRelatedRowsMin       = 1
 )
 
 // RelatedRecordNavigationSource describes the trusted source table and FK
@@ -77,9 +78,6 @@ func (r *RelatedRecordNavigationRequest) Validate() error {
 		return fmt.Errorf("localValues exceeds maximum of %d entries", MaxLocalValuesCount)
 	}
 	for i, v := range r.LocalValues {
-		if v == "" {
-			return fmt.Errorf("localValues[%d] must not be empty", i)
-		}
 		if len(v) > MaxLocalValueLength {
 			return fmt.Errorf("localValues[%d] exceeds %d characters", i, MaxLocalValueLength)
 		}
@@ -111,17 +109,17 @@ func (r *RelatedRecordNavigationRequest) ClampMaxRows() int {
 // or raw driver errors.
 type RelatedRecordNavigationResponse struct {
 	// Result fields (same shape as QueryExecuteResponse).
-	ExecutionID      uint64              `json:"executionId"`
+	ExecutionID      uint64               `json:"executionId"`
 	Status           QueryExecutionStatus `json:"status"`
-	TargetResourceID uint64              `json:"targetResourceId"`
-	Engine           string              `json:"engine"`
-	Columns          []QueryResultColumn `json:"columns"`
-	Rows             [][]any             `json:"rows"`
-	RowCount         int                 `json:"rowCount"`
-	Truncated        bool                `json:"truncated"`
-	DurationMs       int64               `json:"durationMs"`
-	LimitApplied     int                 `json:"limitApplied"`
-	ExecutedAt       interface{}         `json:"executedAt"`
+	TargetResourceID uint64               `json:"targetResourceId"`
+	Engine           string               `json:"engine"`
+	Columns          []QueryResultColumn  `json:"columns"`
+	Rows             [][]any              `json:"rows"`
+	RowCount         int                  `json:"rowCount"`
+	Truncated        bool                 `json:"truncated"`
+	DurationMs       int64                `json:"durationMs"`
+	LimitApplied     int                  `json:"limitApplied"`
+	ExecutedAt       time.Time            `json:"executedAt"`
 
 	// Relation metadata — safe to display; no values or SQL.
 	SourceDatabase     string   `json:"sourceDatabase"`
