@@ -58,6 +58,7 @@ func TestOpenAPIFuzz(t *testing.T) {
 		service.NewMySQLQueryExecutor(service.QueryExecutorCaps{}),
 		service.NewQueryGuard(service.QueryGuardConfig{DefaultMaxRows: 100, HardMaxRows: 500}),
 		wallClock{},
+		service.NewMySQLSchemaInspector(),
 	)
 	queryCredentialSvc := service.NewQueryCredentialService(queryTargetRepo, queryExecutionRepo, credentialResolver)
 

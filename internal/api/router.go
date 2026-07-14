@@ -103,6 +103,7 @@ func NewRouter(deps Dependencies) *chi.Mux {
 			r.Use(requireFreshQueryActor(deps.AuthService, deps.QueryExecutionAuth))
 			r.Post("/query-targets/{id}/execute", handleExecuteQuery(deps.QueryExecutionService))
 			r.Get("/query-targets/{id}/executions", handleListQueryExecutions(deps.QueryExecutionService))
+			r.Post("/query-targets/{id}/related-records", handleNavigateRelatedRecords(deps.QueryExecutionService))
 		})
 	}
 	// Query credential metadata routes (Phase 38A). All three require a fresh

@@ -34,6 +34,14 @@ var (
 // 400 (validation_failed), never a 500.
 var ErrQueryResultTooLarge = errors.New("query result exceeds configured limits")
 
+// Navigation-specific sentinel errors. They reuse the handler error mapping
+// (ErrQueryValidationFailed → 400, ErrQueryTargetNotFound → 404, etc.) but
+// carry distinct messages for navigation failures.
+var (
+	ErrNavigationSourceNotFound = errors.New("navigation source object or foreign key not found")
+	ErrNavigationValueMismatch  = errors.New("localValues count does not match foreign key column count")
+)
+
 // errPersistAttempt is returned when an attempt cannot be recorded to history or
 // audit. Phase 37 guarantees every attempt is recorded, so a recording failure
 // is surfaced as a controlled backend failure (502) rather than a silent
@@ -69,6 +77,12 @@ type QueryCredentialResolver interface {
 // cell, and payload caps and returns ErrQueryResultTooLarge when they are hit.
 type QueryDatabaseExecutor interface {
 	Query(ctx context.Context, dsn string, guarded GuardedQuery) (QueryDatabaseResult, error)
+	// QueryBound runs a parameterized SELECT with bound arguments. The SQL
+	// string is constructed by the service from trusted identifiers only;
+	// args are bound via database/sql placeholders (?). This method is used
+	// exclusively by related-record navigation and is not exposed to
+	// browser-originated normal execution.
+	QueryBound(ctx context.Context, dsn string, query string, args []any, limit int) (QueryDatabaseResult, error)
 }
 
 // QueryDatabaseResult is the bounded result set returned by the executor.
@@ -97,10 +111,12 @@ type QueryExecutionService struct {
 	guard       *QueryGuard
 	clock       Clock
 	access      *TargetAccessResolver
+	inspector   QuerySchemaInspector
 }
 
 // NewQueryExecutionService wires the service. targets is reused from the query
-// target read model to look up the target under execution.
+// target read model to look up the target under execution. inspector is used
+// for FK metadata resolution in related-record navigation.
 func NewQueryExecutionService(
 	targets QueryTargetRepository,
 	executions QueryExecutionRepository,
@@ -108,6 +124,7 @@ func NewQueryExecutionService(
 	executor QueryDatabaseExecutor,
 	guard *QueryGuard,
 	clock Clock,
+	inspector QuerySchemaInspector,
 ) *QueryExecutionService {
 	return &QueryExecutionService{
 		targets:     targets,
@@ -117,6 +134,7 @@ func NewQueryExecutionService(
 		guard:       guard,
 		clock:       clock,
 		access:      NewTargetAccessResolver(targets, executions, credentials),
+		inspector:   inspector,
 	}
 }
 
@@ -257,6 +275,171 @@ func (s *QueryExecutionService) findTarget(ctx context.Context, targetID uint64)
 		}
 	}
 	return model.QueryTarget{}, ErrQueryTargetNotFound
+}
+
+// NavigateRelatedRecords executes a governed FK navigation: it resolves the
+// target, retrieves FK metadata from the schema inspector, matches the
+// constraint, constructs a parameterized SELECT, binds values, and records
+// history + audit. The browser never supplies referenced identifiers, SQL,
+// credentials, or actor identity. Every attempt is recorded; localValues,
+// result rows, SQL text, DSN, and credentials are never persisted.
+func (s *QueryExecutionService) NavigateRelatedRecords(ctx context.Context, actorUserID uint64, targetID uint64, req model.RelatedRecordNavigationRequest) (model.RelatedRecordNavigationResponse, error) {
+	start := s.clock.Now()
+
+	// 1. Resolve governed target access (same path as Execute).
+	access, err := s.access.Resolve(ctx, actorUserID, targetID)
+	if err != nil {
+		if errors.Is(err, ErrQueryTargetNotFound) {
+			return model.RelatedRecordNavigationResponse{}, err
+		}
+		var accessErr *TargetAccessError
+		if errors.As(err, &accessErr) {
+			return s.rejectNavigation(ctx, access.Target, actorUserID, req, "navigation_not_allowed", accessErr.Error(),
+				fmt.Errorf("%w: %s", ErrQueryNotAllowed, accessErr.Error()), start)
+		}
+		return model.RelatedRecordNavigationResponse{}, err
+	}
+
+	target := access.Target
+	engine := target.ConnectionContext.Engine
+
+	// 2. Retrieve source table FK metadata via the schema inspector.
+	detail, err := s.inspector.GetObjectDetails(ctx, access.dsn, req.Source.Database, req.Source.Object, req.Source.Kind)
+	if err != nil {
+		return s.rejectNavigation(ctx, target, actorUserID, req, "navigation_source_error", "could not retrieve source table metadata",
+			fmt.Errorf("%w: %v", ErrNavigationSourceNotFound, err), start)
+	}
+
+	// 3. Match the FK constraint by name.
+	var matchedFK *FKSummary
+	for i := range detail.ForeignKeys {
+		if detail.ForeignKeys[i].Name == req.Source.ForeignKey {
+			matchedFK = &detail.ForeignKeys[i]
+			break
+		}
+	}
+	if matchedFK == nil {
+		return s.rejectNavigation(ctx, target, actorUserID, req, "navigation_fk_not_found", "foreign key not found on source table",
+			ErrNavigationSourceNotFound, start)
+	}
+
+	// 4. Validate localValues count matches FK column count.
+	if len(req.LocalValues) != len(matchedFK.Columns) {
+		return s.rejectNavigation(ctx, target, actorUserID, req, "navigation_value_mismatch",
+			fmt.Sprintf("localValues count %d does not match foreign key column count %d", len(req.LocalValues), len(matchedFK.Columns)),
+			ErrNavigationValueMismatch, start)
+	}
+
+	// 5. Build the parameterized SELECT from trusted FK metadata.
+	//    SELECT * FROM <ref_schema>.<ref_table> WHERE <ref_col1> = ? AND ... LIMIT ?
+	//    Identifiers are backtick-quoted; values are bound via args.
+	refSchema := matchedFK.Columns[0].ReferencedSchema
+	refTable := matchedFK.Columns[0].ReferencedTable
+
+	var whereClauses []string
+	var args []any
+	for _, col := range matchedFK.Columns {
+		whereClauses = append(whereClauses, "`"+col.ReferencedColumn+"` = ?")
+	}
+	query := fmt.Sprintf("SELECT * FROM `%s`.`%s` WHERE %s LIMIT ?",
+		refSchema, refTable, strings.Join(whereClauses, " AND "))
+	limit := req.ClampMaxRows()
+	args = make([]any, len(req.LocalValues))
+	for i, v := range req.LocalValues {
+		args[i] = v
+	}
+
+	// 6. Execute with timeout (same policy as Execute).
+	timeout := defaultQueryTimeout
+	if isProductionEnvironment(target.ConnectionContext.Environment) {
+		timeout = productionQueryTimeout
+	}
+	execCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+
+	// 7. Execute the bound query.
+	result, err := s.executor.QueryBound(execCtx, access.dsn, query, args, limit)
+	if err != nil {
+		status, sentinel, code, safeMsg := classifyExecutorError(err)
+		if _, perr := s.persistNavigationAttempt(ctx, target, actorUserID, req, status, 0, code, safeMsg, start); perr != nil {
+			return model.RelatedRecordNavigationResponse{}, errPersistAttempt
+		}
+		return model.RelatedRecordNavigationResponse{}, fmt.Errorf("%w: %s", sentinel, safeMsg)
+	}
+
+	// 8. Build relation metadata from trusted FK columns.
+	refColumns := make([]string, len(matchedFK.Columns))
+	for i, col := range matchedFK.Columns {
+		refColumns[i] = col.ReferencedColumn
+	}
+
+	// 9. Record success.
+	execID, perr := s.persistNavigationAttempt(ctx, target, actorUserID, req, model.QueryExecutionSuccess, result.RowCount, "", "", start)
+	if perr != nil {
+		return model.RelatedRecordNavigationResponse{}, errPersistAttempt
+	}
+
+	return model.RelatedRecordNavigationResponse{
+		ExecutionID:        execID,
+		Status:             model.QueryExecutionSuccess,
+		TargetResourceID:   target.ResourceID,
+		Engine:             engine,
+		Columns:            result.Columns,
+		Rows:               result.Rows,
+		RowCount:           result.RowCount,
+		Truncated:          result.Truncated,
+		DurationMs:         s.clock.Now().Sub(start).Milliseconds(),
+		LimitApplied:       limit,
+		ExecutedAt:         s.clock.Now(),
+		SourceDatabase:     req.Source.Database,
+		SourceObject:       req.Source.Object,
+		ForeignKey:         req.Source.ForeignKey,
+		ReferencedDatabase: refSchema,
+		ReferencedObject:   refTable,
+		ReferencedColumns:  refColumns,
+	}, nil
+}
+
+// rejectNavigation records a rejected navigation attempt and returns the error.
+func (s *QueryExecutionService) rejectNavigation(ctx context.Context, target model.QueryTarget, actorUserID uint64, req model.RelatedRecordNavigationRequest, code, msg string, retErr error, start time.Time) (model.RelatedRecordNavigationResponse, error) {
+	if _, perr := s.persistNavigationAttempt(ctx, target, actorUserID, req, model.QueryExecutionRejected, 0, code, msg, start); perr != nil {
+		return model.RelatedRecordNavigationResponse{}, errPersistAttempt
+	}
+	return model.RelatedRecordNavigationResponse{}, retErr
+}
+
+// persistNavigationAttempt records a navigation attempt. The recorded action is
+// fixed "related_record_navigation" with relation identity metadata only.
+// It never stores localValues, result rows, SQL, credentials, or raw errors.
+func (s *QueryExecutionService) persistNavigationAttempt(ctx context.Context, target model.QueryTarget, actorUserID uint64, req model.RelatedRecordNavigationRequest, status model.QueryExecutionStatus, rowCount int, code, msg string, start time.Time) (uint64, error) {
+	// Build a safe statement preview that names the relation, never the values.
+	preview := fmt.Sprintf("related:%s.%s/%s→%s",
+		req.Source.Database, req.Source.Object, req.Source.ForeignKey, "referenced")
+	digest := fmt.Sprintf("nav:%s/%s", req.Source.Object, req.Source.ForeignKey)
+
+	rec := model.QueryExecutionRecord{
+		TargetResourceID: target.ResourceID,
+		ActorUserID:      actorUserID,
+		Engine:           target.ConnectionContext.Engine,
+		StatementDigest:  truncateString(digest, 128),
+		StatementPreview: truncateString(preview, 256),
+		Status:           status,
+		RowCount:         rowCount,
+		DurationMs:       s.clock.Now().Sub(start).Milliseconds(),
+		ErrorCode:        truncateString(code, 64),
+		ErrorMessage:     truncateString(msg, 512),
+		CreatedAt:        s.clock.Now(),
+	}
+	id, err := s.executions.InsertExecution(ctx, rec)
+	if err != nil {
+		return 0, err
+	}
+	// Audit event uses fixed action "related_record_navigation" with relation identity.
+	auditResult := auditResultFor(status)
+	if err := s.executions.InsertAuditEvent(ctx, actorUserID, target.ResourceID, "related_record_navigation", auditResult); err != nil {
+		return id, err
+	}
+	return id, nil
 }
 
 // classifyExecutorError maps an executor error to a history status, a sentinel

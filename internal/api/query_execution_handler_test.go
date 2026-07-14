@@ -25,16 +25,20 @@ var qeTestNow = time.Date(2026, 6, 22, 8, 0, 0, 0, time.UTC)
 
 // stubQueryExec is a configurable queryExecutionAPI stub for handler tests.
 type stubQueryExec struct {
-	executeResp   model.QueryExecuteResponse
-	executeErr    error
-	listItems     []model.QueryExecutionRecord
-	listPageInfo  *model.PageInfo
-	listErr       error
-	gotActor      uint64
-	gotRole       string
-	gotTargetID   uint64
-	gotMaxRows    int
-	executeCalled bool
+	executeResp    model.QueryExecuteResponse
+	executeErr     error
+	listItems      []model.QueryExecutionRecord
+	listPageInfo   *model.PageInfo
+	listErr        error
+	navResp        model.RelatedRecordNavigationResponse
+	navErr         error
+	gotActor       uint64
+	gotRole        string
+	gotTargetID    uint64
+	gotMaxRows     int
+	gotNavRequest  model.RelatedRecordNavigationRequest
+	executeCalled  bool
+	navCalled      bool
 }
 
 func (s *stubQueryExec) Execute(_ context.Context, actorUserID uint64, targetID uint64, req model.QueryExecuteRequest) (model.QueryExecuteResponse, error) {
@@ -50,6 +54,14 @@ func (s *stubQueryExec) ListHistory(_ context.Context, actorUserID uint64, actor
 	s.gotTargetID = targetID
 	s.gotRole = actorRole
 	return s.listItems, s.listPageInfo, s.listErr
+}
+
+func (s *stubQueryExec) NavigateRelatedRecords(_ context.Context, actorUserID uint64, targetID uint64, req model.RelatedRecordNavigationRequest) (model.RelatedRecordNavigationResponse, error) {
+	s.navCalled = true
+	s.gotActor = actorUserID
+	s.gotTargetID = targetID
+	s.gotNavRequest = req
+	return s.navResp, s.navErr
 }
 
 func newQueryExecRouter(stub queryExecutionAPI) *chi.Mux {

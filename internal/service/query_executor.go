@@ -137,6 +137,84 @@ func (e *MySQLQueryExecutor) Query(ctx context.Context, dsn string, guarded Guar
 	return result, nil
 }
 
+// QueryBound executes a parameterized SELECT with bound arguments under a
+// read-only transaction. The SQL string is constructed by the service from
+// trusted identifiers only; args are bound via database/sql placeholders.
+// The limit parameter caps the result row count (0 = no cap).
+func (e *MySQLQueryExecutor) QueryBound(ctx context.Context, dsn string, query string, args []any, limit int) (QueryDatabaseResult, error) {
+	db, err := sql.Open("mysql", dsn)
+	if err != nil {
+		return QueryDatabaseResult{}, fmt.Errorf("open target database: %w", err)
+	}
+	defer db.Close()
+	db.SetMaxOpenConns(1)
+
+	tx, err := db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
+	if err != nil {
+		return QueryDatabaseResult{}, err
+	}
+	defer tx.Rollback()
+
+	rows, err := tx.QueryContext(ctx, query, args...)
+	if err != nil {
+		return QueryDatabaseResult{}, err
+	}
+	defer rows.Close()
+
+	colTypes, err := rows.ColumnTypes()
+	if err != nil {
+		return QueryDatabaseResult{}, err
+	}
+	if len(colTypes) > e.caps.MaxColumns {
+		return QueryDatabaseResult{}, ErrQueryResultTooLarge
+	}
+
+	columns := make([]model.QueryResultColumn, len(colTypes))
+	for i, ct := range colTypes {
+		nullable, _ := ct.Nullable()
+		columns[i] = model.QueryResultColumn{
+			Name:         ct.Name(),
+			DatabaseType: normalizeDatabaseType(ct.DatabaseTypeName()),
+			Nullable:     nullable,
+		}
+	}
+
+	result := QueryDatabaseResult{Columns: columns}
+	responseBytes := 0
+
+	for rows.Next() {
+		if limit > 0 && result.RowCount >= limit {
+			result.Truncated = true
+			break
+		}
+		ptrs := make([]any, len(colTypes))
+		for i, ct := range colTypes {
+			ptrs[i] = newScanPointer(ct.DatabaseTypeName())
+		}
+		if err := rows.Scan(ptrs...); err != nil {
+			return QueryDatabaseResult{}, err
+		}
+		row := make([]any, len(colTypes))
+		rowBytes := 0
+		for i, p := range ptrs {
+			safe, n := e.toJSONSafe(normalizeScanned(p))
+			row[i] = safe
+			rowBytes += n
+		}
+		responseBytes += rowBytes
+		if responseBytes > e.caps.MaxResponseBytes {
+			result.Truncated = true
+			break
+		}
+		result.Rows = append(result.Rows, row)
+		result.RowCount++
+	}
+	if err := rows.Err(); err != nil {
+		return QueryDatabaseResult{}, err
+	}
+	return result, nil
+}
+
 // newScanPointer returns a pointer to a NULL-safe scan destination chosen by the
 // column's database type name. SQL NULL lands as a zero-valued sql.Null*
 // (Valid=false); non-null values keep their native type (int64, float64,

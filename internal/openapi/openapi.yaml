@@ -280,6 +280,136 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/ErrorResponse"
+  /query-targets/{id}/related-records:
+    post:
+      summary: Navigate to referenced records via a governed foreign key
+      operationId: navigateRelatedRecords
+      description: >
+        Phase 38J governed FK record navigation. Resolves the source table's
+        foreign key metadata from the live schema, constructs a parameterized
+        SELECT from trusted referenced identifiers, binds local values via
+        database/sql placeholders, and returns bounded result rows plus
+        relation metadata. The browser never supplies referenced identifiers,
+        SQL, credentials, DSN, or actor identity. Requires a fresh Bearer
+        token (same TTL as query execution). Every attempt is recorded with
+        fixed action "related_record_navigation" and relation identity only;
+        localValues, result rows, SQL, credentials, and raw errors are never
+        persisted.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+            format: int64
+            minimum: 1
+          description: Query target resource ID
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RelatedRecordNavigationRequest"
+            examples:
+              singleColumnFK:
+                summary: Navigate via a single-column FK
+                value:
+                  source:
+                    database: orders
+                    object: order_items
+                    kind: table
+                    foreignKey: fk_order_items_order
+                  localValues: ["42"]
+                  maxRows: 100
+              compositeFK:
+                summary: Navigate via a composite FK (two columns)
+                value:
+                  source:
+                    database: app
+                    object: junction_table
+                    kind: table
+                    foreignKey: fk_junction_composite
+                  localValues: ["10", "20"]
+                  maxRows: 50
+      responses:
+        "200":
+          description: Navigation result with bounded rows and relation metadata
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RelatedRecordNavigationResponse"
+              examples:
+                success:
+                  value:
+                    executionId: 2001
+                    status: success
+                    targetResourceId: 22
+                    engine: mysql
+                    columns:
+                      - {name: id, databaseType: BIGINT, nullable: false}
+                      - {name: name, databaseType: VARCHAR, nullable: true}
+                    rows:
+                      - [100, "Widget"]
+                    rowCount: 1
+                    truncated: false
+                    durationMs: 12
+                    limitApplied: 100
+                    executedAt: "2026-07-14T08:00:00Z"
+                    sourceDatabase: orders
+                    sourceObject: order_items
+                    foreignKey: fk_order_items_order
+                    referencedDatabase: orders
+                    referencedObject: orders
+                    referencedColumns: ["id"]
+        "400":
+          description: >
+            Validation failed (bad request shape, unknown source/FK, value
+            count mismatch, non-table kind, overlong values)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              examples:
+                fkNotFound:
+                  value:
+                    error: validation_failed
+                    message: "navigation source object or foreign key not found"
+                valueMismatch:
+                  value:
+                    error: validation_failed
+                    message: "localValues count does not match foreign key column count"
+        "401":
+          description: Missing or invalid Bearer token (or token older than the TTL)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "403":
+          description: Target not enabled or environment disallows execution
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "404":
+          description: Query target not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "408":
+          description: Navigation exceeded the timeout
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "502":
+          description: Target database rejected or connection failed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
   /query-targets/{id}/credential:
     get:
       summary: Get query credential metadata status for a query target
@@ -2860,6 +2990,128 @@ components:
         executedAt:
           type: string
           format: date-time
+    RelatedRecordNavigationSource:
+      type: object
+      required: [database, object, kind, foreignKey]
+      properties:
+        database:
+          type: string
+          minLength: 1
+          maxLength: 128
+          description: Source database name
+        object:
+          type: string
+          minLength: 1
+          maxLength: 128
+          description: Source table name
+        kind:
+          type: string
+          enum: [table]
+          description: Must be "table"; views are not supported
+        foreignKey:
+          type: string
+          minLength: 1
+          maxLength: 128
+          description: >
+            FK constraint name on the source table, as reported by schema
+            metadata. The backend resolves referenced identifiers from this.
+    RelatedRecordNavigationRequest:
+      type: object
+      required: [source, localValues]
+      properties:
+        source:
+          $ref: "#/components/schemas/RelatedRecordNavigationSource"
+        localValues:
+          type: array
+          minItems: 1
+          maxItems: 16
+          items:
+            type: string
+            minLength: 1
+            maxLength: 1024
+          description: >
+            Ordered non-null scalar values for the FK local columns. Count must
+            match the FK column count exactly. Values are bound via database/sql
+            placeholders; they are never interpolated into SQL.
+        maxRows:
+          type: integer
+          minimum: 0
+          maximum: 500
+          description: >
+            Optional row cap. Zero/omitted uses the backend default (100);
+            values above the hard maximum (500) are clamped.
+    RelatedRecordNavigationResponse:
+      type: object
+      required:
+        - executionId
+        - status
+        - targetResourceId
+        - engine
+        - columns
+        - rows
+        - rowCount
+        - truncated
+        - durationMs
+        - limitApplied
+        - executedAt
+        - sourceDatabase
+        - sourceObject
+        - foreignKey
+        - referencedDatabase
+        - referencedObject
+        - referencedColumns
+      properties:
+        executionId:
+          type: integer
+          format: int64
+        status:
+          type: string
+          enum: [success, rejected, failed, timeout]
+        targetResourceId:
+          type: integer
+          format: int64
+        engine:
+          type: string
+        columns:
+          type: array
+          items:
+            $ref: "#/components/schemas/QueryResultColumn"
+        rows:
+          type: array
+          items:
+            type: array
+            items: {}
+        rowCount:
+          type: integer
+        truncated:
+          type: boolean
+        durationMs:
+          type: integer
+        limitApplied:
+          type: integer
+        executedAt:
+          type: string
+          format: date-time
+        sourceDatabase:
+          type: string
+          description: Source database from the request
+        sourceObject:
+          type: string
+          description: Source table from the request
+        foreignKey:
+          type: string
+          description: FK constraint name from the request
+        referencedDatabase:
+          type: string
+          description: Referenced database resolved from FK metadata
+        referencedObject:
+          type: string
+          description: Referenced table resolved from FK metadata
+        referencedColumns:
+          type: array
+          items:
+            type: string
+          description: Referenced columns in schema ordinal order
     QueryExecutionActor:
       type: object
       required: [displayName]

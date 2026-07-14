@@ -68,6 +68,7 @@ func buildDependencies(db *sql.DB, cfg config.Config) api.Dependencies {
 		service.NewMySQLQueryExecutor(service.QueryExecutorCaps{}),
 		service.NewQueryGuard(service.QueryGuardConfig{DefaultMaxRows: 100, HardMaxRows: 500}),
 		realClock{},
+		service.NewMySQLSchemaInspector(),
 	)
 
 	accessResolver := service.NewTargetAccessResolver(queryTargetRepo, queryExecutionRepo, credentialResolver)
