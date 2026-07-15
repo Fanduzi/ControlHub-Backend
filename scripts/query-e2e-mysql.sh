@@ -220,6 +220,140 @@ create table if not exists schema_child (
   constraint fk_schema_child_parent foreign key (parent_id) references schema_parent (id) on update cascade on delete restrict
 ) engine=InnoDB;
 
+-- Pagination fixture: 26 deterministic tables so schema object page 2 is real.
+-- Names sort after schema_parent (zz prefix) but before any future view.
+-- Each table has a minimal shape: numeric PK + non-sensitive label.
+
+create table if not exists schema_zz_page_01 (
+  id bigint unsigned not null primary key,
+  label varchar(128) not null default ''
+) engine=InnoDB;
+
+create table if not exists schema_zz_page_02 (
+  id bigint unsigned not null primary key,
+  label varchar(128) not null default ''
+) engine=InnoDB;
+
+create table if not exists schema_zz_page_03 (
+  id bigint unsigned not null primary key,
+  label varchar(128) not null default ''
+) engine=InnoDB;
+
+create table if not exists schema_zz_page_04 (
+  id bigint unsigned not null primary key,
+  label varchar(128) not null default ''
+) engine=InnoDB;
+
+create table if not exists schema_zz_page_05 (
+  id bigint unsigned not null primary key,
+  label varchar(128) not null default ''
+) engine=InnoDB;
+
+create table if not exists schema_zz_page_06 (
+  id bigint unsigned not null primary key,
+  label varchar(128) not null default ''
+) engine=InnoDB;
+
+create table if not exists schema_zz_page_07 (
+  id bigint unsigned not null primary key,
+  label varchar(128) not null default ''
+) engine=InnoDB;
+
+create table if not exists schema_zz_page_08 (
+  id bigint unsigned not null primary key,
+  label varchar(128) not null default ''
+) engine=InnoDB;
+
+create table if not exists schema_zz_page_09 (
+  id bigint unsigned not null primary key,
+  label varchar(128) not null default ''
+) engine=InnoDB;
+
+create table if not exists schema_zz_page_10 (
+  id bigint unsigned not null primary key,
+  label varchar(128) not null default ''
+) engine=InnoDB;
+
+create table if not exists schema_zz_page_11 (
+  id bigint unsigned not null primary key,
+  label varchar(128) not null default ''
+) engine=InnoDB;
+
+create table if not exists schema_zz_page_12 (
+  id bigint unsigned not null primary key,
+  label varchar(128) not null default ''
+) engine=InnoDB;
+
+create table if not exists schema_zz_page_13 (
+  id bigint unsigned not null primary key,
+  label varchar(128) not null default ''
+) engine=InnoDB;
+
+create table if not exists schema_zz_page_14 (
+  id bigint unsigned not null primary key,
+  label varchar(128) not null default ''
+) engine=InnoDB;
+
+create table if not exists schema_zz_page_15 (
+  id bigint unsigned not null primary key,
+  label varchar(128) not null default ''
+) engine=InnoDB;
+
+create table if not exists schema_zz_page_16 (
+  id bigint unsigned not null primary key,
+  label varchar(128) not null default ''
+) engine=InnoDB;
+
+create table if not exists schema_zz_page_17 (
+  id bigint unsigned not null primary key,
+  label varchar(128) not null default ''
+) engine=InnoDB;
+
+create table if not exists schema_zz_page_18 (
+  id bigint unsigned not null primary key,
+  label varchar(128) not null default ''
+) engine=InnoDB;
+
+create table if not exists schema_zz_page_19 (
+  id bigint unsigned not null primary key,
+  label varchar(128) not null default ''
+) engine=InnoDB;
+
+create table if not exists schema_zz_page_20 (
+  id bigint unsigned not null primary key,
+  label varchar(128) not null default ''
+) engine=InnoDB;
+
+create table if not exists schema_zz_page_21 (
+  id bigint unsigned not null primary key,
+  label varchar(128) not null default ''
+) engine=InnoDB;
+
+create table if not exists schema_zz_page_22 (
+  id bigint unsigned not null primary key,
+  label varchar(128) not null default ''
+) engine=InnoDB;
+
+create table if not exists schema_zz_page_23 (
+  id bigint unsigned not null primary key,
+  label varchar(128) not null default ''
+) engine=InnoDB;
+
+create table if not exists schema_zz_page_24 (
+  id bigint unsigned not null primary key,
+  label varchar(128) not null default ''
+) engine=InnoDB;
+
+create table if not exists schema_zz_page_25 (
+  id bigint unsigned not null primary key,
+  label varchar(128) not null default ''
+) engine=InnoDB;
+
+create table if not exists schema_zz_page_26 (
+  id bigint unsigned not null primary key,
+  label varchar(128) not null default ''
+) engine=InnoDB;
+
 create or replace view schema_parent_summary as
   select id, parent_code, label from schema_parent;
 
