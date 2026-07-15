@@ -18,19 +18,21 @@ import (
 // Sentinel errors for the schema metadata service. They map to controlled HTTP
 // responses and never carry a DSN, host, port, or secret.
 var (
-	ErrSchemaValidationFailed = errors.New("schema validation failed")
-	ErrSchemaNotAllowed       = errors.New("schema access not allowed")
-	ErrSchemaTargetNotFound   = errors.New("schema target not found")
-	ErrSchemaObjectNotFound   = errors.New("schema object not found")
-	ErrSchemaTimeout          = errors.New("schema query timed out")
-	ErrSchemaBackendError     = errors.New("schema backend error")
+	ErrSchemaValidationFailed       = errors.New("schema validation failed")
+	ErrSchemaNotAllowed             = errors.New("schema access not allowed")
+	ErrSchemaTargetNotFound         = errors.New("schema target not found")
+	ErrSchemaObjectNotFound         = errors.New("schema object not found")
+	ErrSchemaDefinitionNotSupported = errors.New("schema definition not supported")
+	ErrSchemaTimeout                = errors.New("schema query timed out")
+	ErrSchemaBackendError           = errors.New("schema backend error")
 )
 
 // Fixed audit event type strings for schema operations.
 const (
-	auditSchemaDatabasesListed = "query.schema.databases.listed"
-	auditSchemaObjectsListed   = "query.schema.objects.listed"
-	auditSchemaObjectRead      = "query.schema.object.read"
+	auditSchemaDatabasesListed     = "query.schema.databases.listed"
+	auditSchemaObjectsListed       = "query.schema.objects.listed"
+	auditSchemaObjectRead          = "query.schema.object.read"
+	auditSchemaTableDefinitionRead = "query.schema.table_definition.read"
 )
 
 // QuerySchemaService orchestrates schema metadata introspection. It resolves
@@ -240,6 +242,53 @@ func (s *QuerySchemaService) GetObjectDetails(
 	return resp, nil
 }
 
+// GetTableDefinition returns a governed, bounded MySQL SHOW CREATE TABLE
+// result for a single verified base table. It resolves target access, verifies
+// the object is a BASE TABLE via parameterized information_schema lookup, then
+// executes SHOW CREATE TABLE with server-side quoted identifiers. Definition
+// text is request-ephemeral: never cached, persisted, logged, or placed in
+// query history.
+func (s *QuerySchemaService) GetTableDefinition(
+	ctx context.Context,
+	actorID, targetID uint64,
+	database, name string,
+) (model.TableDefinitionResponse, error) {
+	// 1. Resolve target access.
+	bound, err := s.access.Resolve(ctx, actorID, targetID)
+	if err != nil {
+		return model.TableDefinitionResponse{}, s.mapAccessError(err)
+	}
+
+	// 2. Validate required parameters.
+	if database == "" || name == "" {
+		return model.TableDefinitionResponse{}, ErrSchemaValidationFailed
+	}
+
+	// 3. Call inspector directly — no cache for table definitions.
+	def, iErr := s.inspector.GetTableDefinition(ctx, bound.dsn, database, name)
+	if iErr != nil {
+		// Write audit for failed attempt.
+		_ = s.audit.InsertAuditEvent(ctx, actorID, targetID, auditSchemaTableDefinitionRead, "failed")
+		return model.TableDefinitionResponse{}, s.mapTableDefinitionError(iErr)
+	}
+
+	// 4. Write audit for successful attempt.
+	if aErr := s.audit.InsertAuditEvent(ctx, actorID, targetID, auditSchemaTableDefinitionRead, "success"); aErr != nil {
+		return model.TableDefinitionResponse{}, fmt.Errorf("%w: %v", ErrSchemaBackendError, aErr)
+	}
+
+	// 5. Build response.
+	return model.TableDefinitionResponse{
+		TargetResourceID: int64(targetID),
+		Database:         database,
+		Name:             name,
+		Kind:             model.ObjectKindTable,
+		Dialect:          "mysql",
+		Definition:       def.Definition,
+		Truncated:        def.Truncated,
+	}, nil
+}
+
 // mapAccessError maps a target-access error to a controlled schema sentinel.
 func (s *QuerySchemaService) mapAccessError(err error) error {
 	if errors.Is(err, ErrQueryTargetNotFound) {
@@ -252,6 +301,22 @@ func (s *QuerySchemaService) mapAccessError(err error) error {
 
 // mapInspectorError maps a raw inspector error to a controlled schema sentinel.
 func (s *QuerySchemaService) mapInspectorError(err error) error {
+	if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
+		return ErrSchemaTimeout
+	}
+	return ErrSchemaBackendError
+}
+
+// mapTableDefinitionError maps a raw inspector error from GetTableDefinition
+// to a controlled schema sentinel. It preserves ErrSchemaObjectNotFound and
+// ErrSchemaDefinitionNotSupported.
+func (s *QuerySchemaService) mapTableDefinitionError(err error) error {
+	if errors.Is(err, ErrSchemaObjectNotFound) {
+		return ErrSchemaObjectNotFound
+	}
+	if errors.Is(err, ErrSchemaDefinitionNotSupported) {
+		return ErrSchemaDefinitionNotSupported
+	}
 	if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
 		return ErrSchemaTimeout
 	}

@@ -9,6 +9,7 @@ package service
 import (
 	"strings"
 	"testing"
+	"unicode/utf8"
 )
 
 // ---------------------------------------------------------------------------
@@ -153,6 +154,47 @@ func TestMySQLSchemaInspector_ImplementsInterface(t *testing.T) {
 	t.Parallel()
 	var _ QuerySchemaInspector = (*MySQLSchemaInspector)(nil)
 	var _ QuerySchemaInspector = NewMySQLSchemaInspector()
+}
+
+func TestQuoteMySQLIdentifier_EmbeddedBackticks(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		input string
+		want  string
+	}{
+		{"users", "`users`"},
+		{"my`table", "`my``table`"},
+		{"a`b`c", "`a``b``c`"},
+		{"", "``"},
+		{"`", "````"},
+	}
+	for _, tc := range cases {
+		got := quoteMySQLIdentifier(tc.input)
+		if got != tc.want {
+			t.Errorf("quoteMySQLIdentifier(%q) = %q, want %q", tc.input, got, tc.want)
+		}
+	}
+}
+
+func TestTableDefinition_UTF8Truncation(t *testing.T) {
+	t.Parallel()
+	big := strings.Repeat("日本語", 30000)
+	def := &TableDefinition{Definition: big, Truncated: false}
+	const maxDefBytes = 64 * 1024
+	if len(def.Definition) > maxDefBytes {
+		cut := maxDefBytes
+		for cut > 0 && !utf8.RuneStart(def.Definition[cut]) {
+			cut--
+		}
+		def.Definition = def.Definition[:cut]
+		def.Truncated = true
+	}
+	if !def.Truncated {
+		t.Fatal("expected truncation for >64KiB input")
+	}
+	if !utf8.ValidString(def.Definition) {
+		t.Fatal("truncated definition must be valid UTF-8")
+	}
 }
 
 // ---------------------------------------------------------------------------

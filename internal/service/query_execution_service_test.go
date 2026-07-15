@@ -202,6 +202,10 @@ func (f *fakeNavSchemaInspector) GetObjectDetails(_ context.Context, _ string, _
 	return &ObjectDetail{}, nil
 }
 
+func (f *fakeNavSchemaInspector) GetTableDefinition(_ context.Context, _, _, _ string) (*TableDefinition, error) {
+	return &TableDefinition{}, nil
+}
+
 // --- fixtures ---
 
 func mysqlTarget(environment string) model.QueryTarget {

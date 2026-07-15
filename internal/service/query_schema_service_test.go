@@ -22,6 +22,8 @@ type fakeSchemaInspector struct {
 	objects     []ObjectSummary
 	objPageInfo model.PageInfo
 	detail      *ObjectDetail
+	tableDef    *TableDefinition
+	tableDefErr error
 	err         error
 	called      bool
 }
@@ -48,6 +50,14 @@ func (f *fakeSchemaInspector) GetObjectDetails(_ context.Context, _, _, _, _ str
 		return nil, f.err
 	}
 	return f.detail, nil
+}
+
+func (f *fakeSchemaInspector) GetTableDefinition(_ context.Context, _, _, _ string) (*TableDefinition, error) {
+	f.called = true
+	if f.tableDefErr != nil {
+		return nil, f.tableDefErr
+	}
+	return f.tableDef, nil
 }
 
 // --- Service tests ---
@@ -435,5 +445,298 @@ func TestToModelObjectDetail_EmptyCollectionsJSONNotNull(t *testing.T) {
 	}
 	if resp.Columns == nil || resp.Indexes == nil || resp.ForeignKeys == nil {
 		t.Fatal("in-memory slices must be non-nil")
+	}
+}
+
+func TestQuerySchemaService_TableDefinition_TargetAccessFirst(t *testing.T) {
+	t.Parallel()
+	audit := &fakeExecRepo{}
+	inspector := &fakeSchemaInspector{
+		tableDef: &TableDefinition{Definition: "CREATE TABLE t (id INT)", Truncated: false},
+	}
+	clock := &fakeClock{t: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)}
+	cache := NewQuerySchemaCache(100, clock)
+
+	// No targets → access must fail before inspector is called.
+	svc := NewQuerySchemaService(
+		NewTargetAccessResolver(
+			fakeTargetRepo{targets: nil},
+			&fakeExecRepo{},
+			&fakeResolver{},
+		),
+		inspector,
+		cache,
+		audit,
+		clock,
+	)
+
+	_, err := svc.GetTableDefinition(context.Background(), 1, 9999, "db", "tbl")
+	if !errors.Is(err, ErrSchemaTargetNotFound) {
+		t.Fatalf("error = %v, want ErrSchemaTargetNotFound", err)
+	}
+	if inspector.called {
+		t.Fatal("inspector must not be called when target resolution fails")
+	}
+}
+
+func TestQuerySchemaService_TableDefinition_EmptyParamsRejected(t *testing.T) {
+	t.Parallel()
+	audit := &fakeExecRepo{
+		credentials: map[uint64]model.QueryCredentialMetadata{
+			9001: enabledCred(model.QueryEnvPolicyNonProdOnly),
+		},
+	}
+	inspector := &fakeSchemaInspector{}
+	clock := &fakeClock{t: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)}
+	cache := NewQuerySchemaCache(100, clock)
+
+	svc := NewQuerySchemaService(
+		NewTargetAccessResolver(
+			fakeTargetRepo{targets: []model.QueryTarget{mysqlTarget("Staging")}},
+			audit,
+			&fakeResolver{dsn: testResolverDSN},
+		),
+		inspector,
+		cache,
+		audit,
+		clock,
+	)
+
+	// Empty database
+	_, err := svc.GetTableDefinition(context.Background(), 1, 9001, "", "tbl")
+	if !errors.Is(err, ErrSchemaValidationFailed) {
+		t.Fatalf("empty database error = %v, want ErrSchemaValidationFailed", err)
+	}
+
+	// Empty name
+	inspector.called = false
+	_, err = svc.GetTableDefinition(context.Background(), 1, 9001, "db", "")
+	if !errors.Is(err, ErrSchemaValidationFailed) {
+		t.Fatalf("empty name error = %v, want ErrSchemaValidationFailed", err)
+	}
+	if inspector.called {
+		t.Fatal("inspector must not be called when params are empty")
+	}
+}
+
+func TestQuerySchemaService_TableDefinition_Success(t *testing.T) {
+	t.Parallel()
+	audit := &fakeExecRepo{
+		credentials: map[uint64]model.QueryCredentialMetadata{
+			9001: enabledCred(model.QueryEnvPolicyNonProdOnly),
+		},
+	}
+	inspector := &fakeSchemaInspector{
+		tableDef: &TableDefinition{Definition: "CREATE TABLE orders (id INT)", Truncated: false},
+	}
+	clock := &fakeClock{t: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)}
+	cache := NewQuerySchemaCache(100, clock)
+
+	svc := NewQuerySchemaService(
+		NewTargetAccessResolver(
+			fakeTargetRepo{targets: []model.QueryTarget{mysqlTarget("Staging")}},
+			audit,
+			&fakeResolver{dsn: testResolverDSN},
+		),
+		inspector,
+		cache,
+		audit,
+		clock,
+	)
+
+	resp, err := svc.GetTableDefinition(context.Background(), 1, 9001, "orders", "order_items")
+	if err != nil {
+		t.Fatalf("GetTableDefinition: %v", err)
+	}
+	if resp.TargetResourceID != 9001 {
+		t.Fatalf("targetResourceId = %d, want 9001", resp.TargetResourceID)
+	}
+	if resp.Database != "orders" {
+		t.Fatalf("database = %q, want orders", resp.Database)
+	}
+	if resp.Name != "order_items" {
+		t.Fatalf("name = %q, want order_items", resp.Name)
+	}
+	if resp.Kind != model.ObjectKindTable {
+		t.Fatalf("kind = %q, want table", resp.Kind)
+	}
+	if resp.Dialect != "mysql" {
+		t.Fatalf("dialect = %q, want mysql", resp.Dialect)
+	}
+	if resp.Definition != "CREATE TABLE orders (id INT)" {
+		t.Fatalf("definition = %q", resp.Definition)
+	}
+	if resp.Truncated {
+		t.Fatal("truncated = true, want false")
+	}
+}
+
+func TestQuerySchemaService_TableDefinition_NoCache(t *testing.T) {
+	t.Parallel()
+	audit := &fakeExecRepo{
+		credentials: map[uint64]model.QueryCredentialMetadata{
+			9001: enabledCred(model.QueryEnvPolicyNonProdOnly),
+		},
+	}
+	inspector := &fakeSchemaInspector{
+		tableDef: &TableDefinition{Definition: "CREATE TABLE t (id INT)", Truncated: false},
+	}
+	clock := &fakeClock{t: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)}
+	cache := NewQuerySchemaCache(100, clock)
+
+	svc := NewQuerySchemaService(
+		NewTargetAccessResolver(
+			fakeTargetRepo{targets: []model.QueryTarget{mysqlTarget("Staging")}},
+			audit,
+			&fakeResolver{dsn: testResolverDSN},
+		),
+		inspector,
+		cache,
+		audit,
+		clock,
+	)
+
+	// Call twice
+	if _, err := svc.GetTableDefinition(context.Background(), 1, 9001, "db", "tbl"); err != nil {
+		t.Fatalf("first call: %v", err)
+	}
+	inspector.called = false
+	if _, err := svc.GetTableDefinition(context.Background(), 1, 9001, "db", "tbl"); err != nil {
+		t.Fatalf("second call: %v", err)
+	}
+	// Inspector must be called again — no caching.
+	if !inspector.called {
+		t.Fatal("inspector must be called on repeated reads (no cache)")
+	}
+}
+
+func TestQuerySchemaService_TableDefinition_MissingTable(t *testing.T) {
+	t.Parallel()
+	audit := &fakeExecRepo{
+		credentials: map[uint64]model.QueryCredentialMetadata{
+			9001: enabledCred(model.QueryEnvPolicyNonProdOnly),
+		},
+	}
+	inspector := &fakeSchemaInspector{tableDefErr: ErrSchemaObjectNotFound}
+	clock := &fakeClock{t: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)}
+	cache := NewQuerySchemaCache(100, clock)
+
+	svc := NewQuerySchemaService(
+		NewTargetAccessResolver(
+			fakeTargetRepo{targets: []model.QueryTarget{mysqlTarget("Staging")}},
+			audit,
+			&fakeResolver{dsn: testResolverDSN},
+		),
+		inspector,
+		cache,
+		audit,
+		clock,
+	)
+
+	_, err := svc.GetTableDefinition(context.Background(), 1, 9001, "db", "missing")
+	if !errors.Is(err, ErrSchemaObjectNotFound) {
+		t.Fatalf("error = %v, want ErrSchemaObjectNotFound", err)
+	}
+}
+
+func TestQuerySchemaService_TableDefinition_ViewRejected(t *testing.T) {
+	t.Parallel()
+	audit := &fakeExecRepo{
+		credentials: map[uint64]model.QueryCredentialMetadata{
+			9001: enabledCred(model.QueryEnvPolicyNonProdOnly),
+		},
+	}
+	inspector := &fakeSchemaInspector{tableDefErr: ErrSchemaDefinitionNotSupported}
+	clock := &fakeClock{t: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)}
+	cache := NewQuerySchemaCache(100, clock)
+
+	svc := NewQuerySchemaService(
+		NewTargetAccessResolver(
+			fakeTargetRepo{targets: []model.QueryTarget{mysqlTarget("Staging")}},
+			audit,
+			&fakeResolver{dsn: testResolverDSN},
+		),
+		inspector,
+		cache,
+		audit,
+		clock,
+	)
+
+	_, err := svc.GetTableDefinition(context.Background(), 1, 9001, "db", "my_view")
+	if !errors.Is(err, ErrSchemaDefinitionNotSupported) {
+		t.Fatalf("error = %v, want ErrSchemaDefinitionNotSupported", err)
+	}
+}
+
+func TestQuerySchemaService_TableDefinition_Timeout(t *testing.T) {
+	t.Parallel()
+	audit := &fakeExecRepo{
+		credentials: map[uint64]model.QueryCredentialMetadata{
+			9001: enabledCred(model.QueryEnvPolicyNonProdOnly),
+		},
+	}
+	inspector := &fakeSchemaInspector{tableDefErr: context.DeadlineExceeded}
+	clock := &fakeClock{t: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)}
+	cache := NewQuerySchemaCache(100, clock)
+
+	svc := NewQuerySchemaService(
+		NewTargetAccessResolver(
+			fakeTargetRepo{targets: []model.QueryTarget{mysqlTarget("Staging")}},
+			audit,
+			&fakeResolver{dsn: testResolverDSN},
+		),
+		inspector,
+		cache,
+		audit,
+		clock,
+	)
+
+	_, err := svc.GetTableDefinition(context.Background(), 1, 9001, "db", "tbl")
+	if !errors.Is(err, ErrSchemaTimeout) {
+		t.Fatalf("error = %v, want ErrSchemaTimeout", err)
+	}
+}
+
+func TestQuerySchemaService_TableDefinition_AuditFixedEvent(t *testing.T) {
+	t.Parallel()
+	audit := &fakeExecRepo{
+		credentials: map[uint64]model.QueryCredentialMetadata{
+			9001: enabledCred(model.QueryEnvPolicyNonProdOnly),
+		},
+	}
+	inspector := &fakeSchemaInspector{
+		tableDef: &TableDefinition{Definition: "CREATE TABLE t (id INT)", Truncated: false},
+	}
+	clock := &fakeClock{t: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)}
+	cache := NewQuerySchemaCache(100, clock)
+
+	svc := NewQuerySchemaService(
+		NewTargetAccessResolver(
+			fakeTargetRepo{targets: []model.QueryTarget{mysqlTarget("Staging")}},
+			audit,
+			&fakeResolver{dsn: testResolverDSN},
+		),
+		inspector,
+		cache,
+		audit,
+		clock,
+	)
+
+	if _, err := svc.GetTableDefinition(context.Background(), 1, 9001, "db", "tbl"); err != nil {
+		t.Fatalf("GetTableDefinition: %v", err)
+	}
+	if len(audit.auditEvents) == 0 {
+		t.Fatal("expected audit event")
+	}
+	last := audit.auditEvents[len(audit.auditEvents)-1]
+	if last.etype != "query.schema.table_definition.read" {
+		t.Fatalf("audit event type = %q, want %q", last.etype, "query.schema.table_definition.read")
+	}
+	if last.result != "success" {
+		t.Fatalf("audit result = %q, want success", last.result)
+	}
+	// Audit must not contain definition text.
+	if strings.Contains(last.etype, "CREATE") || strings.Contains(last.result, "CREATE") {
+		t.Fatal("audit must not contain definition text")
 	}
 }

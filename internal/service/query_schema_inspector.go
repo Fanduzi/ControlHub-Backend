@@ -1,7 +1,7 @@
 // Package service provides a parameterized MySQL/TiDB schema inspector that
 // queries information_schema with fixed SQL and bind parameters.
-// input: context, database/sql, strings, go-sql-driver/mysql, internal/model
-// output: QuerySchemaInspector interface, MySQLSchemaInspector, EscapeSchemaSearch
+// input: context, database/sql, strings, unicode/utf8, go-sql-driver/mysql, internal/model
+// output: QuerySchemaInspector interface, TableDefinition, MySQLSchemaInspector, EscapeSchemaSearch, GetTableDefinition
 // pos: Introspects databases, objects (tables/views), columns, indexes, and
 // foreign keys from information_schema using parameterized queries; never
 // interpolates external values into SQL text
@@ -14,15 +14,16 @@ import (
 	"fmt"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/fan/controlhub/internal/model"
 )
 
 // Response caps for schema metadata queries.
 const (
-	schemaMaxColumns        = 512
-	schemaMaxIndexColumns   = 256
-	schemaMaxFKColumnPairs  = 256
+	schemaMaxColumns       = 512
+	schemaMaxIndexColumns  = 256
+	schemaMaxFKColumnPairs = 256
 )
 
 // System databases excluded by default when listing schemas.
@@ -47,12 +48,20 @@ type ObjectSummary struct {
 // ObjectDetail holds the full column, index, and foreign-key metadata for a
 // single table or view.
 type ObjectDetail struct {
-	Name       string           `json:"name"`
-	Kind       string           `json:"kind"`
-	Columns    []ColumnSummary  `json:"columns"`
-	Indexes    []IndexSummary   `json:"indexes"`
+	Name        string          `json:"name"`
+	Kind        string          `json:"kind"`
+	Columns     []ColumnSummary `json:"columns"`
+	Indexes     []IndexSummary  `json:"indexes"`
 	ForeignKeys []FKSummary     `json:"foreignKeys"`
-	Truncated  bool             `json:"truncated,omitempty"`
+	Truncated   bool            `json:"truncated,omitempty"`
+}
+
+// TableDefinition holds the bounded SHOW CREATE TABLE output for a single
+// verified base table. The definition is request-ephemeral and must not be
+// cached, persisted, or logged.
+type TableDefinition struct {
+	Definition string
+	Truncated  bool
 }
 
 // ColumnSummary is one row from information_schema.COLUMNS.
@@ -68,32 +77,32 @@ type ColumnSummary struct {
 // IndexSummary groups one logical index (potentially composite) with its
 // constituent columns in SEQ_IN_INDEX order.
 type IndexSummary struct {
-	Name       string           `json:"name"`
-	NonUnique  bool             `json:"nonUnique"`
-	Columns    []IndexColumn    `json:"columns"`
+	Name      string        `json:"name"`
+	NonUnique bool          `json:"nonUnique"`
+	Columns   []IndexColumn `json:"columns"`
 }
 
 // IndexColumn is one column within an index.
 type IndexColumn struct {
-	Name    string `json:"name"`
-	SeqInIndex int `json:"seqInIndex"`
+	Name       string `json:"name"`
+	SeqInIndex int    `json:"seqInIndex"`
 }
 
 // FKSummary groups one foreign key constraint with its column mappings in
 // ORDINAL_POSITION order and its update/delete rules.
 type FKSummary struct {
-	Name       string       `json:"name"`
-	Columns    []FKColumn   `json:"columns"`
-	UpdateRule string       `json:"updateRule"`
-	DeleteRule string       `json:"deleteRule"`
+	Name       string     `json:"name"`
+	Columns    []FKColumn `json:"columns"`
+	UpdateRule string     `json:"updateRule"`
+	DeleteRule string     `json:"deleteRule"`
 }
 
 // FKColumn is one column mapping within a foreign key.
 type FKColumn struct {
-	Column              string `json:"column"`
-	ReferencedSchema    string `json:"referencedSchema"`
-	ReferencedTable     string `json:"referencedTable"`
-	ReferencedColumn    string `json:"referencedColumn"`
+	Column           string `json:"column"`
+	ReferencedSchema string `json:"referencedSchema"`
+	ReferencedTable  string `json:"referencedTable"`
+	ReferencedColumn string `json:"referencedColumn"`
 }
 
 // QuerySchemaInspector inspects MySQL/TiDB schema metadata using parameterized
@@ -102,6 +111,7 @@ type QuerySchemaInspector interface {
 	ListDatabases(ctx context.Context, dsn string, q string, includeSystem bool, page, pageSize int) ([]DatabaseSummary, model.PageInfo, error)
 	ListObjects(ctx context.Context, dsn string, database, kind, q string, page, pageSize int) ([]ObjectSummary, model.PageInfo, error)
 	GetObjectDetails(ctx context.Context, dsn string, database, name, kind string) (*ObjectDetail, error)
+	GetTableDefinition(ctx context.Context, dsn string, database, name string) (*TableDefinition, error)
 }
 
 // MySQLSchemaInspector implements QuerySchemaInspector using parameterized
@@ -297,6 +307,64 @@ func (s *MySQLSchemaInspector) GetObjectDetails(ctx context.Context, dsn string,
 	}
 
 	return detail, nil
+}
+
+// GetTableDefinition returns the bounded SHOW CREATE TABLE output for a
+// verified base table.
+func (s *MySQLSchemaInspector) GetTableDefinition(ctx context.Context, dsn string, database, name string) (*TableDefinition, error) {
+	db, err := sql.Open("mysql", dsn)
+	if err != nil {
+		return nil, fmt.Errorf("open target database: %w", err)
+	}
+	defer db.Close()
+	db.SetMaxOpenConns(1)
+
+	tx, err := db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback()
+
+	var tableType string
+	err = tx.QueryRowContext(ctx,
+		"SELECT TABLE_TYPE FROM information_schema.TABLES WHERE TABLE_SCHEMA = ? AND TABLE_NAME = ? LIMIT 1",
+		database, name,
+	).Scan(&tableType)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return nil, ErrSchemaObjectNotFound
+		}
+		return nil, err
+	}
+
+	if strings.ToUpper(strings.TrimSpace(tableType)) != "BASE TABLE" {
+		return nil, ErrSchemaDefinitionNotSupported
+	}
+
+	quotedDB := quoteMySQLIdentifier(database)
+	quotedTable := quoteMySQLIdentifier(name)
+	showSQL := "SHOW CREATE TABLE " + quotedDB + "." + quotedTable
+
+	var tableName, definition string
+	if err := tx.QueryRowContext(ctx, showSQL).Scan(&tableName, &definition); err != nil {
+		return nil, err
+	}
+
+	const maxDefBytes = 64 * 1024
+	truncated := false
+	if len(definition) > maxDefBytes {
+		cut := maxDefBytes
+		for cut > 0 && !utf8.RuneStart(definition[cut]) {
+			cut--
+		}
+		definition = definition[:cut]
+		truncated = true
+	}
+
+	return &TableDefinition{
+		Definition: definition,
+		Truncated:  truncated,
+	}, nil
 }
 
 // loadColumns queries COLUMNS for the given table, capped at schemaMaxColumns.
