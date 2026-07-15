@@ -701,6 +701,18 @@ func (f *fakeQuerySchema) GetObjectDetails(_ context.Context, _, targetID uint64
 	}, nil
 }
 
+func (f *fakeQuerySchema) GetTableDefinition(_ context.Context, _, targetID uint64, database, name string) (model.TableDefinitionResponse, error) {
+	return model.TableDefinitionResponse{
+		TargetResourceID: int64(targetID),
+		Database:         database,
+		Name:             name,
+		Kind:             model.ObjectKindTable,
+		Dialect:          "mysql",
+		Definition:       "CREATE TABLE `" + name + "` (id BIGINT PRIMARY KEY)",
+		Truncated:        false,
+	}, nil
+}
+
 func NewTestServer() *TestServer {
 	archivedAt := time.Date(2026, 4, 11, 22, 0, 0, 0, time.UTC)
 	archiveReason := "retired"

@@ -1,7 +1,7 @@
 // Package api provides HTTP handlers and routing for the ControlHub REST API.
 // input: context, errors, net/http, strconv, chi, internal/model, internal/service
-// output: querySchemaAPI interface, handleListSchemaDatabases, handleListSchemaObjects, handleGetObjectDetails, writeQuerySchemaError
-// pos: HTTP handlers for GET /query-targets/{id}/schema/databases, /schema/objects, /schema/object-details (Phase 38I schema metadata)
+// output: querySchemaAPI interface, handleListSchemaDatabases, handleListSchemaObjects, handleGetObjectDetails, handleGetTableDefinition, writeQuerySchemaError
+// pos: HTTP handlers for GET /query-targets/{id}/schema/databases, /schema/objects, /schema/object-details, /schema/table-definition (Phase 38I schema metadata)
 // note: if this file changes, update header and README.md
 package api
 
@@ -26,16 +26,17 @@ type querySchemaAPI interface {
 	ListDatabases(ctx context.Context, actorID, targetID uint64, q string, page, pageSize int, includeSystem, refresh bool) (model.DatabaseListResponse, error)
 	ListObjects(ctx context.Context, actorID, targetID uint64, database, kind, q string, page, pageSize int, refresh bool) (model.ObjectListResponse, error)
 	GetObjectDetails(ctx context.Context, actorID, targetID uint64, database, name, kind string, refresh bool) (model.ObjectDetailResponse, error)
+	GetTableDefinition(ctx context.Context, actorID, targetID uint64, database, name string) (model.TableDefinitionResponse, error)
 }
 
 // Schema query parameter length caps. Exceeding these is a 400.
 const (
-	schemaQMaxLen      = 200
-	schemaDatabaseMax  = 128
-	schemaNameMaxLen   = 128
-	schemaPageSizeMax  = 100
-	schemaPageSizeDef  = 50
-	schemaPageDef      = 1
+	schemaQMaxLen     = 200
+	schemaDatabaseMax = 128
+	schemaNameMaxLen  = 128
+	schemaPageSizeMax = 100
+	schemaPageSizeDef = 50
+	schemaPageDef     = 1
 )
 
 // handleListSchemaDatabases handles GET /query-targets/{id}/schema/databases.
@@ -193,6 +194,49 @@ func handleGetObjectDetails(svc querySchemaAPI) http.HandlerFunc {
 	}
 }
 
+// handleGetTableDefinition handles GET /query-targets/{id}/schema/table-definition.
+// It parses query params (database, name), extracts the actor from the verified
+// token, and delegates to the service. The endpoint returns a governed MySQL
+// SHOW CREATE TABLE result for a single verified base table.
+func handleGetTableDefinition(svc querySchemaAPI) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		targetID, err := parseUint64IDParam(chi.URLParam(r, "id"), "target id")
+		if err != nil {
+			writeJSONError(w, http.StatusBadRequest, "validation_failed", err.Error())
+			return
+		}
+		database := r.URL.Query().Get("database")
+		if database == "" {
+			writeJSONError(w, http.StatusBadRequest, "validation_failed", "database is required")
+			return
+		}
+		if len(database) > schemaDatabaseMax {
+			writeJSONError(w, http.StatusBadRequest, "validation_failed", "database exceeds maximum length")
+			return
+		}
+		name := r.URL.Query().Get("name")
+		if name == "" {
+			writeJSONError(w, http.StatusBadRequest, "validation_failed", "name is required")
+			return
+		}
+		if len(name) > schemaNameMaxLen {
+			writeJSONError(w, http.StatusBadRequest, "validation_failed", "name exceeds maximum length")
+			return
+		}
+		actorUserID, ok := actorUserIDFromContext(r.Context())
+		if !ok {
+			writeJSONError(w, http.StatusInternalServerError, "internal_error", "authenticated actor missing")
+			return
+		}
+		resp, err := svc.GetTableDefinition(r.Context(), actorUserID, targetID, database, name)
+		if err != nil {
+			writeQuerySchemaError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, resp)
+	}
+}
+
 // writeQuerySchemaError maps a service sentinel to a controlled HTTP response.
 func writeQuerySchemaError(w http.ResponseWriter, err error) {
 	switch {
@@ -202,6 +246,8 @@ func writeQuerySchemaError(w http.ResponseWriter, err error) {
 		writeJSONError(w, http.StatusForbidden, "schema_not_allowed", err.Error())
 	case errors.Is(err, service.ErrSchemaTargetNotFound):
 		writeJSONError(w, http.StatusNotFound, "schema_target_not_found", err.Error())
+	case errors.Is(err, service.ErrSchemaDefinitionNotSupported):
+		writeJSONError(w, http.StatusBadRequest, "schema_definition_not_supported", err.Error())
 	case errors.Is(err, service.ErrSchemaObjectNotFound):
 		writeJSONError(w, http.StatusNotFound, "schema_object_not_found", err.Error())
 	case errors.Is(err, service.ErrSchemaTimeout):

@@ -126,6 +126,7 @@ func NewRouter(deps Dependencies) *chi.Mux {
 			r.Get("/query-targets/{id}/schema/databases", handleListSchemaDatabases(deps.QuerySchemaService))
 			r.Get("/query-targets/{id}/schema/objects", handleListSchemaObjects(deps.QuerySchemaService))
 			r.Get("/query-targets/{id}/schema/object-details", handleGetObjectDetails(deps.QuerySchemaService))
+			r.Get("/query-targets/{id}/schema/table-definition", handleGetTableDefinition(deps.QuerySchemaService))
 		})
 	}
 	return router

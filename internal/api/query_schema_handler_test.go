@@ -1,6 +1,6 @@
 // Package api provides tests for the Phase 38I query schema metadata handlers.
 // input: bytes, context, fmt, net/http, net/http/httptest, strings, testing, time, chi, internal/model, internal/service
-// output: TestQuerySchema_* (auth, parsing, sentinel mapping, special chars, no-secret assertions)
+// output: TestQuerySchema_* (auth, parsing, sentinel mapping, special chars, table definitions, no-secret assertions)
 // pos: Handler + auth middleware + error-mapping coverage for the Phase 38I schema metadata endpoints
 // note: if this file changes, update header and README.md
 package api
@@ -25,25 +25,30 @@ var schemaTestNow = time.Date(2026, 6, 22, 8, 0, 0, 0, time.UTC)
 
 // stubQuerySchema is a configurable querySchemaAPI stub for handler tests.
 type stubQuerySchema struct {
-	databasesResp model.DatabaseListResponse
-	databasesErr  error
-	objectsResp   model.ObjectListResponse
-	objectsErr    error
-	detailResp    model.ObjectDetailResponse
-	detailErr     error
-	gotActor      uint64
-	gotTargetID   uint64
-	gotQ          string
-	gotDatabase   string
-	gotName       string
-	gotKind       string
-	gotPage       int
-	gotPageSize   int
-	gotIncSystem  bool
-	gotRefresh    bool
-	databasesCalled bool
-	objectsCalled   bool
-	detailCalled    bool
+	databasesResp       model.DatabaseListResponse
+	databasesErr        error
+	objectsResp         model.ObjectListResponse
+	objectsErr          error
+	detailResp          model.ObjectDetailResponse
+	detailErr           error
+	tableDefResp        model.TableDefinitionResponse
+	tableDefErr         error
+	gotActor            uint64
+	gotTargetID         uint64
+	gotQ                string
+	gotDatabase         string
+	gotName             string
+	gotKind             string
+	tableDefCalled      bool
+	gotTableDefDatabase string
+	gotTableDefName     string
+	gotPage             int
+	gotPageSize         int
+	gotIncSystem        bool
+	gotRefresh          bool
+	databasesCalled     bool
+	objectsCalled       bool
+	detailCalled        bool
 }
 
 func (s *stubQuerySchema) ListDatabases(_ context.Context, actorID, targetID uint64, q string, page, pageSize int, includeSystem, refresh bool) (model.DatabaseListResponse, error) {
@@ -82,10 +87,19 @@ func (s *stubQuerySchema) GetObjectDetails(_ context.Context, actorID, targetID 
 	return s.detailResp, s.detailErr
 }
 
+func (s *stubQuerySchema) GetTableDefinition(_ context.Context, actorID, targetID uint64, database, name string) (model.TableDefinitionResponse, error) {
+	s.tableDefCalled = true
+	s.gotActor = actorID
+	s.gotTargetID = targetID
+	s.gotTableDefDatabase = database
+	s.gotTableDefName = name
+	return s.tableDefResp, s.tableDefErr
+}
+
 func newSchemaRouter(stub querySchemaAPI) *chi.Mux {
 	deps := Dependencies{
-		AuthService:           service.NewAuthService(nil, "qs-test-secret"),
-		QuerySchemaService:   stub,
+		AuthService:        service.NewAuthService(nil, "qs-test-secret"),
+		QuerySchemaService: stub,
 		QueryExecutionAuth: QueryExecutionAuthConfig{
 			TokenMaxAge: 8 * time.Hour,
 			Clock:       fixedClock(schemaTestNow),
@@ -568,5 +582,193 @@ func TestQuerySchema_ObjectDetailsPassesParams(t *testing.T) {
 	}
 	if !stub.gotRefresh {
 		t.Fatal("refresh = false, want true")
+	}
+}
+
+func TestQuerySchema_TableDefinitionRequiresBearer(t *testing.T) {
+	router := newSchemaRouter(&stubQuerySchema{})
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, schemaRequest(http.MethodGet, "/query-targets/22/schema/table-definition?database=testdb&name=users", ""))
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("GET table-definition without bearer = %d, want 401", rec.Code)
+	}
+}
+
+func TestQuerySchema_TableDefinitionRejectsInvalidBearer(t *testing.T) {
+	router := newSchemaRouter(&stubQuerySchema{})
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, schemaRequest(http.MethodGet, "/query-targets/22/schema/table-definition?database=testdb&name=users", "not-a-valid-token"))
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("GET table-definition with invalid bearer = %d, want 401", rec.Code)
+	}
+}
+
+func TestQuerySchema_TableDefinitionInvalidTargetID(t *testing.T) {
+	router := newSchemaRouter(&stubQuerySchema{})
+	token := schemaToken(t)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, schemaRequest(http.MethodGet, "/query-targets/abc/schema/table-definition?database=testdb&name=users", token))
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400", rec.Code)
+	}
+	if !strings.Contains(rec.Body.String(), "validation_failed") {
+		t.Fatalf("body = %s, want validation_failed", rec.Body.String())
+	}
+}
+
+func TestQuerySchema_TableDefinitionDatabaseRequired(t *testing.T) {
+	router := newSchemaRouter(&stubQuerySchema{})
+	token := schemaToken(t)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, schemaRequest(http.MethodGet, "/query-targets/22/schema/table-definition?name=users", token))
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400", rec.Code)
+	}
+	if !strings.Contains(rec.Body.String(), "database is required") {
+		t.Fatalf("body = %s, want database required", rec.Body.String())
+	}
+}
+
+func TestQuerySchema_TableDefinitionNameRequired(t *testing.T) {
+	router := newSchemaRouter(&stubQuerySchema{})
+	token := schemaToken(t)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, schemaRequest(http.MethodGet, "/query-targets/22/schema/table-definition?database=testdb", token))
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400", rec.Code)
+	}
+	if !strings.Contains(rec.Body.String(), "name is required") {
+		t.Fatalf("body = %s, want name required", rec.Body.String())
+	}
+}
+
+func TestQuerySchema_TableDefinitionDatabaseMaxLength(t *testing.T) {
+	router := newSchemaRouter(&stubQuerySchema{})
+	token := schemaToken(t)
+	longDB := strings.Repeat("a", 129)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, schemaRequest(http.MethodGet, "/query-targets/22/schema/table-definition?database="+url.QueryEscape(longDB)+"&name=users", token))
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("long database: status = %d, want 400", rec.Code)
+	}
+}
+
+func TestQuerySchema_TableDefinitionNameMaxLength(t *testing.T) {
+	router := newSchemaRouter(&stubQuerySchema{})
+	token := schemaToken(t)
+	longName := strings.Repeat("a", 129)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, schemaRequest(http.MethodGet, "/query-targets/22/schema/table-definition?database=testdb&name="+url.QueryEscape(longName), token))
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("long name: status = %d, want 400", rec.Code)
+	}
+}
+
+func TestQuerySchema_TableDefinitionActorFromToken(t *testing.T) {
+	stub := &stubQuerySchema{
+		tableDefResp: model.TableDefinitionResponse{
+			TargetResourceID: 22,
+			Database:         "testdb",
+			Name:             "users",
+			Kind:             model.ObjectKindTable,
+			Dialect:          "mysql",
+			Definition:       "CREATE TABLE users (id INT)",
+		},
+	}
+	router := newSchemaRouter(stub)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, schemaRequest(http.MethodGet, "/query-targets/22/schema/table-definition?database=testdb&name=users", schemaToken(t)))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", rec.Code, rec.Body.String())
+	}
+	if !stub.tableDefCalled {
+		t.Fatal("GetTableDefinition was not called")
+	}
+	if stub.gotActor != 42 {
+		t.Fatalf("actor = %d, want 42 (from token)", stub.gotActor)
+	}
+	if stub.gotTargetID != 22 {
+		t.Fatalf("target = %d, want 22", stub.gotTargetID)
+	}
+	if stub.gotTableDefDatabase != "testdb" {
+		t.Fatalf("database = %q, want testdb", stub.gotTableDefDatabase)
+	}
+	if stub.gotTableDefName != "users" {
+		t.Fatalf("name = %q, want users", stub.gotTableDefName)
+	}
+}
+
+func TestQuerySchema_TableDefinitionSuccessResponse(t *testing.T) {
+	stub := &stubQuerySchema{
+		tableDefResp: model.TableDefinitionResponse{
+			TargetResourceID: 22,
+			Database:         "testdb",
+			Name:             "users",
+			Kind:             model.ObjectKindTable,
+			Dialect:          "mysql",
+			Definition:       "CREATE TABLE `users` (`id` BIGINT PRIMARY KEY)",
+			Truncated:        false,
+		},
+	}
+	router := newSchemaRouter(stub)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, schemaRequest(http.MethodGet, "/query-targets/22/schema/table-definition?database=testdb&name=users", schemaToken(t)))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", rec.Code, rec.Body.String())
+	}
+	body := rec.Body.String()
+	for _, want := range []string{`"targetResourceId":22`, `"database":"testdb"`, `"name":"users"`, `"kind":"table"`, `"dialect":"mysql"`, `"truncated":false`} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("body missing %q: %s", want, body)
+		}
+	}
+	for _, forbidden := range []string{"dsn", "password", "secret", "host", "port", "credentialRef"} {
+		if strings.Contains(strings.ToLower(body), forbidden) {
+			t.Fatalf("response contains forbidden field %q: %s", forbidden, body)
+		}
+	}
+}
+
+func TestQuerySchema_TableDefinitionSentinelMapping(t *testing.T) {
+	cases := []struct {
+		name       string
+		svcErr     error
+		wantStatus int
+		wantCode   string
+	}{
+		{"ErrSchemaValidationFailed", service.ErrSchemaValidationFailed, http.StatusBadRequest, "schema_validation_failed"},
+		{"ErrSchemaNotAllowed", service.ErrSchemaNotAllowed, http.StatusForbidden, "schema_not_allowed"},
+		{"ErrSchemaTargetNotFound", service.ErrSchemaTargetNotFound, http.StatusNotFound, "schema_target_not_found"},
+		{"ErrSchemaObjectNotFound", service.ErrSchemaObjectNotFound, http.StatusNotFound, "schema_object_not_found"},
+		{"ErrSchemaDefinitionNotSupported", service.ErrSchemaDefinitionNotSupported, http.StatusBadRequest, "schema_definition_not_supported"},
+		{"ErrSchemaTimeout", service.ErrSchemaTimeout, http.StatusRequestTimeout, "schema_timeout"},
+		{"ErrSchemaBackendError", service.ErrSchemaBackendError, http.StatusBadGateway, "schema_backend_error"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			stub := &stubQuerySchema{tableDefErr: tc.svcErr}
+			router := newSchemaRouter(stub)
+			rec := httptest.NewRecorder()
+			router.ServeHTTP(rec, schemaRequest(http.MethodGet, "/query-targets/22/schema/table-definition?database=testdb&name=users", schemaToken(t)))
+			if rec.Code != tc.wantStatus {
+				t.Fatalf("status = %d, want %d; body=%s", rec.Code, tc.wantStatus, rec.Body.String())
+			}
+			if !strings.Contains(rec.Body.String(), tc.wantCode) {
+				t.Fatalf("body = %s, want code %s", rec.Body.String(), tc.wantCode)
+			}
+		})
+	}
+}
+
+func TestQuerySchema_TableDefinitionErrorNoSecrets(t *testing.T) {
+	stub := &stubQuerySchema{tableDefErr: service.ErrSchemaBackendError}
+	router := newSchemaRouter(stub)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, schemaRequest(http.MethodGet, "/query-targets/22/schema/table-definition?database=testdb&name=users", schemaToken(t)))
+	body := rec.Body.String()
+	for _, forbidden := range []string{"dsn", "password", "secret", "host", "port"} {
+		if strings.Contains(strings.ToLower(body), forbidden) {
+			t.Fatalf("error response contains forbidden field %q: %s", forbidden, body)
+		}
 	}
 }
