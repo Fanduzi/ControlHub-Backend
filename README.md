@@ -236,6 +236,7 @@ Dependency flow (strict, one-directional): `cmd/server` → `api` → `service` 
 | GET | /relation-types | List relation type dictionary items |
 | GET | /lifecycle-statuses | List lifecycle status dictionary items |
 | GET | /health-statuses | List health status dictionary items |
+| GET | /query-targets/{id}/schema/table-definition | Get MySQL table definition (base tables only) |
 | GET | /openapi.yaml | Raw OpenAPI 3.1.0 spec |
 | GET | /docs | Scalar API Reference docs UI |
 

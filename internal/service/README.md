@@ -16,6 +16,7 @@ Business logic layer with interface-based repository dependencies. Each service 
 | relation_type_service.go | Relation type dictionary listing |
 | lifecycle_status_service.go | Lifecycle status dictionary listing |
 | health_status_service.go | Health status dictionary listing |
+| query_schema_service.go | QuerySchemaService.GetTableDefinition returns governed MySQL table definitions |
 | auth_service_test.go | Auth service tests |
 | dictionary_service_test.go | Dictionary service tests |
 
