@@ -16,6 +16,7 @@ Domain structs, taxonomy constants, validation methods, and dictionary definitio
 | query_target.go | QueryTarget read-model types, query capability/readiness/safety enums, QueryTargetSafetyStateDictionary + Validate |
 | query_execution.go | Query execution request/response/history types, execution status enum, QueryEnvironmentPolicy enum + Validate, ValidateCredentialRef, QueryCredentialMetadata, ErrInvalidCredentialMetadata |
 | query_credential.go | Phase 38A query credential metadata request/response/runtime-status types + Validate (metadata only; never DSN/password) |
+| query_schema.go | Query schema metadata response types, including the governed TableDefinitionResponse contract |
 | resource_test.go | Validation and dictionary completeness tests |
 | query_execution_test.go | Environment-policy and credential_ref fail-closed validator tests |
 | query_credential_test.go | Runtime-status and upsert-request validation tests (fail-closed enum, all-environments confirmation) |

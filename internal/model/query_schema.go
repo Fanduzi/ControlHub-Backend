@@ -1,6 +1,6 @@
 // Package model provides domain entities for the resource management system.
 // input: encoding/json, fmt packages
-// output: ObjectKind type + Validate, DatabaseSummary, ObjectSummary, ColumnDetail, IndexDetail, ForeignKeyDetail, TruncationFlags, DatabaseListResponse, ObjectListResponse, ObjectDetailResponse
+// output: ObjectKind type + Validate, DatabaseSummary, ObjectSummary, ColumnDetail, IndexDetail, ForeignKeyDetail, TruncationFlags, DatabaseListResponse, ObjectListResponse, ObjectDetailResponse, TableDefinitionResponse
 // pos: Schema metadata response types for the governed query schema introspection API (Phase 38I)
 // note: if this file changes, update header and README.md
 package model
@@ -68,13 +68,13 @@ type IndexDetail struct {
 // ForeignKeyDetail describes one foreign key relationship from a database
 // object to another object (possibly in a different database).
 type ForeignKeyDetail struct {
-	Name                string   `json:"name"`
-	Columns             []string `json:"columns"`
-	ReferencedDatabase  string   `json:"referencedDatabase"`
-	ReferencedObject    string   `json:"referencedObject"`
-	ReferencedColumns   []string `json:"referencedColumns"`
-	OnUpdate            string   `json:"onUpdate"`
-	OnDelete            string   `json:"onDelete"`
+	Name               string   `json:"name"`
+	Columns            []string `json:"columns"`
+	ReferencedDatabase string   `json:"referencedDatabase"`
+	ReferencedObject   string   `json:"referencedObject"`
+	ReferencedColumns  []string `json:"referencedColumns"`
+	OnUpdate           string   `json:"onUpdate"`
+	OnDelete           string   `json:"onDelete"`
 }
 
 // TruncationFlags explicitly reports whether any section of the object detail
@@ -90,18 +90,18 @@ type TruncationFlags struct {
 // It always carries the owning TargetResourceID so the frontend can correlate
 // responses when switching targets.
 type DatabaseListResponse struct {
-	TargetResourceID int64              `json:"targetResourceId"`
-	DefaultDatabase  *string            `json:"defaultDatabase"`
-	Items            []DatabaseSummary  `json:"items"`
-	PageInfo         PageInfo           `json:"pageInfo"`
+	TargetResourceID int64             `json:"targetResourceId"`
+	DefaultDatabase  *string           `json:"defaultDatabase"`
+	Items            []DatabaseSummary `json:"items"`
+	PageInfo         PageInfo          `json:"pageInfo"`
 }
 
 // ObjectListResponse is the envelope for GET /query-targets/{id}/schema/objects.
 type ObjectListResponse struct {
-	TargetResourceID int64            `json:"targetResourceId"`
-	Database         string           `json:"database"`
-	Items            []ObjectSummary  `json:"items"`
-	PageInfo         PageInfo         `json:"pageInfo"`
+	TargetResourceID int64           `json:"targetResourceId"`
+	Database         string          `json:"database"`
+	Items            []ObjectSummary `json:"items"`
+	PageInfo         PageInfo        `json:"pageInfo"`
 }
 
 // ObjectDetailResponse is the full detail for one database object
@@ -116,6 +116,20 @@ type ObjectDetailResponse struct {
 	Indexes          []IndexDetail      `json:"indexes"`
 	ForeignKeys      []ForeignKeyDetail `json:"foreignKeys"`
 	Truncated        TruncationFlags    `json:"truncated"`
+}
+
+// TableDefinitionResponse is the governed response for
+// GET /query-targets/{id}/schema/table-definition. It returns a bounded
+// MySQL SHOW CREATE TABLE result. Definition text is request-ephemeral:
+// never cached, persisted, logged, or placed in query history.
+type TableDefinitionResponse struct {
+	TargetResourceID int64      `json:"targetResourceId"`
+	Database         string     `json:"database"`
+	Name             string     `json:"name"`
+	Kind             ObjectKind `json:"kind"`
+	Dialect          string     `json:"dialect"`
+	Definition       string     `json:"definition"`
+	Truncated        bool       `json:"truncated"`
 }
 
 // MarshalJSON preserves the OpenAPI required-array invariant: columns, indexes,

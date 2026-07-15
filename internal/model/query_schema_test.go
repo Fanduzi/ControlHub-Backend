@@ -1,6 +1,6 @@
 // Package model provides tests for query schema domain types.
 // input: reflect, testing
-// output: TestDatabaseListResponse_*, TestObjectListResponse_*, TestObjectDetailResponse_*, TestObjectKind_*, TestTruncationFlags_*, TestNoCredentialFields_*
+// output: TestDatabaseListResponse_*, TestObjectListResponse_*, TestObjectDetailResponse_*, TestTableDefinitionResponse_*, TestObjectKind_*, TestTruncationFlags_*, TestNoCredentialFields_*
 // pos: Unit tests for schema metadata response shape contracts and credential leak prevention
 // note: if this file changes, update header and README.md
 package model
@@ -69,6 +69,63 @@ func TestObjectDetailResponse_RequiresAllTopLevelFields(t *testing.T) {
 	} {
 		if _, ok := typ.FieldByName(name); !ok {
 			t.Fatalf("ObjectDetailResponse must have %s field", name)
+		}
+	}
+}
+
+// TestTableDefinitionResponse_JSONShape verifies the governed table-definition
+// response exposes exactly the seven fields required by the wire contract.
+func TestTableDefinitionResponse_JSONShape(t *testing.T) {
+	t.Parallel()
+	// Given
+	resp := TableDefinitionResponse{
+		TargetResourceID: 22,
+		Database:         "sandbox",
+		Name:             "plain_table",
+		Kind:             ObjectKindTable,
+		Dialect:          "mysql",
+		Definition:       "CREATE TABLE `plain_table` (...)\n",
+		Truncated:        true,
+	}
+
+	// When
+	raw, err := json.Marshal(resp)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	var body map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &body); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+
+	// Then
+	for _, name := range []string{
+		"targetResourceId", "database", "name", "kind", "dialect", "definition", "truncated",
+	} {
+		if _, ok := body[name]; !ok {
+			t.Errorf("JSON response is missing field %q: %s", name, raw)
+		}
+	}
+}
+
+// TestTableDefinitionResponse_NoSensitiveFields verifies JSON tags do not
+// expose connection, identity, or raw/error details in the response.
+func TestTableDefinitionResponse_NoSensitiveFields(t *testing.T) {
+	t.Parallel()
+	// Given
+	typ := reflect.TypeOf(TableDefinitionResponse{})
+	forbidden := []string{
+		"dsn", "password", "secret", "host", "port", "credential", "actor", "user", "raw", "error",
+	}
+
+	// When / Then
+	for i := 0; i < typ.NumField(); i++ {
+		field := typ.Field(i)
+		jsonName := strings.ToLower(strings.Split(field.Tag.Get("json"), ",")[0])
+		for _, bad := range forbidden {
+			if strings.Contains(jsonName, bad) {
+				t.Errorf("%s.%s has sensitive JSON field name %q", typ.Name(), field.Name, jsonName)
+			}
 		}
 	}
 }
