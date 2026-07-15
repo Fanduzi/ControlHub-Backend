@@ -202,25 +202,25 @@ func handleGetTableDefinition(svc querySchemaAPI) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		targetID, err := parseUint64IDParam(chi.URLParam(r, "id"), "target id")
 		if err != nil {
-			writeJSONError(w, http.StatusBadRequest, "validation_failed", err.Error())
+			writeJSONError(w, http.StatusBadRequest, "schema_validation_failed", err.Error())
 			return
 		}
 		database := r.URL.Query().Get("database")
 		if database == "" {
-			writeJSONError(w, http.StatusBadRequest, "validation_failed", "database is required")
+			writeJSONError(w, http.StatusBadRequest, "schema_validation_failed", "database is required")
 			return
 		}
 		if len(database) > schemaDatabaseMax {
-			writeJSONError(w, http.StatusBadRequest, "validation_failed", "database exceeds maximum length")
+			writeJSONError(w, http.StatusBadRequest, "schema_validation_failed", "database exceeds maximum length")
 			return
 		}
 		name := r.URL.Query().Get("name")
 		if name == "" {
-			writeJSONError(w, http.StatusBadRequest, "validation_failed", "name is required")
+			writeJSONError(w, http.StatusBadRequest, "schema_validation_failed", "name is required")
 			return
 		}
 		if len(name) > schemaNameMaxLen {
-			writeJSONError(w, http.StatusBadRequest, "validation_failed", "name exceeds maximum length")
+			writeJSONError(w, http.StatusBadRequest, "schema_validation_failed", "name exceeds maximum length")
 			return
 		}
 		actorUserID, ok := actorUserIDFromContext(r.Context())

@@ -274,7 +274,7 @@ func (s *QuerySchemaService) GetTableDefinition(
 
 	// 4. Write audit for successful attempt.
 	if aErr := s.audit.InsertAuditEvent(ctx, actorID, targetID, auditSchemaTableDefinitionRead, "success"); aErr != nil {
-		return model.TableDefinitionResponse{}, fmt.Errorf("%w: %v", ErrSchemaBackendError, aErr)
+		return model.TableDefinitionResponse{}, ErrSchemaBackendError
 	}
 
 	// 5. Build response.

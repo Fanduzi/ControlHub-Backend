@@ -740,3 +740,46 @@ func TestQuerySchemaService_TableDefinition_AuditFixedEvent(t *testing.T) {
 		t.Fatal("audit must not contain definition text")
 	}
 }
+
+// TestQuerySchemaService_TableDefinition_AuditErrorNeverExposesDriverText
+// proves that when the audit repository fails on a successful table-definition
+// read, the service returns only the controlled ErrSchemaBackendError sentinel.
+// The raw audit/driver error text must not leak into the service error.
+// WHY: the handler maps ErrSchemaBackendError to HTTP 502 with a fixed safe
+// message; wrapping or appending the raw audit error would expose driver text.
+func TestQuerySchemaService_TableDefinition_AuditErrorNeverExposesDriverText(t *testing.T) {
+	t.Parallel()
+	const auditMarker = "AUDIT_DRIVER_FAILURE_7f3a9b2c"
+	audit := &fakeExecRepo{
+		credentials: map[uint64]model.QueryCredentialMetadata{
+			9001: enabledCred(model.QueryEnvPolicyNonProdOnly),
+		},
+		insertAuditErr: errors.New(auditMarker),
+	}
+	inspector := &fakeSchemaInspector{
+		tableDef: &TableDefinition{Definition: "CREATE TABLE t (id INT)", Truncated: false},
+	}
+	clock := &fakeClock{t: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)}
+	cache := NewQuerySchemaCache(100, clock)
+
+	svc := NewQuerySchemaService(
+		NewTargetAccessResolver(
+			fakeTargetRepo{targets: []model.QueryTarget{mysqlTarget("Staging")}},
+			audit,
+			&fakeResolver{dsn: testResolverDSN},
+		),
+		inspector,
+		cache,
+		audit,
+		clock,
+	)
+
+	_, err := svc.GetTableDefinition(context.Background(), 1, 9001, "db", "tbl")
+	if !errors.Is(err, ErrSchemaBackendError) {
+		t.Fatalf("error = %v, want ErrSchemaBackendError", err)
+	}
+	// The raw audit marker must NOT appear in the error text.
+	if strings.Contains(err.Error(), auditMarker) {
+		t.Fatalf("error text contains raw audit marker: %v", err)
+	}
+}

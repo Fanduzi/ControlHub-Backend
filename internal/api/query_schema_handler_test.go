@@ -611,8 +611,8 @@ func TestQuerySchema_TableDefinitionInvalidTargetID(t *testing.T) {
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d, want 400", rec.Code)
 	}
-	if !strings.Contains(rec.Body.String(), "validation_failed") {
-		t.Fatalf("body = %s, want validation_failed", rec.Body.String())
+	if !strings.Contains(rec.Body.String(), "schema_validation_failed") {
+		t.Fatalf("body = %s, want schema_validation_failed", rec.Body.String())
 	}
 }
 
@@ -769,6 +769,25 @@ func TestQuerySchema_TableDefinitionErrorNoSecrets(t *testing.T) {
 	for _, forbidden := range []string{"dsn", "password", "secret", "host", "port"} {
 		if strings.Contains(strings.ToLower(body), forbidden) {
 			t.Fatalf("error response contains forbidden field %q: %s", forbidden, body)
+		}
+	}
+}
+
+func TestQuerySchema_TableDefinitionAuditErrorNoDriverText(t *testing.T) {
+	stub := &stubQuerySchema{tableDefErr: service.ErrSchemaBackendError}
+	router := newSchemaRouter(stub)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, schemaRequest(http.MethodGet, "/query-targets/22/schema/table-definition?database=testdb&name=users", schemaToken(t)))
+	if rec.Code != http.StatusBadGateway {
+		t.Fatalf("status = %d, want 502; body=%s", rec.Code, rec.Body.String())
+	}
+	body := rec.Body.String()
+	if !strings.Contains(body, "schema_backend_error") {
+		t.Fatalf("body = %s, want schema_backend_error", body)
+	}
+	for _, marker := range []string{"AUDIT_DRIVER", "driver", "mysql", "tcp("} {
+		if strings.Contains(strings.ToLower(body), strings.ToLower(marker)) {
+			t.Fatalf("response body contains driver marker %q: %s", marker, body)
 		}
 	}
 }
