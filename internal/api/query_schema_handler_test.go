@@ -7,6 +7,7 @@ package api
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -624,8 +625,12 @@ func TestQuerySchema_TableDefinitionDatabaseRequired(t *testing.T) {
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d, want 400", rec.Code)
 	}
-	if !strings.Contains(rec.Body.String(), "database is required") {
-		t.Fatalf("body = %s, want database required", rec.Body.String())
+	body := rec.Body.String()
+	if !strings.Contains(body, "schema_validation_failed") {
+		t.Fatalf("body = %s, want schema_validation_failed", body)
+	}
+	if !strings.Contains(body, "database is required") {
+		t.Fatalf("body = %s, want database required", body)
 	}
 }
 
@@ -637,8 +642,12 @@ func TestQuerySchema_TableDefinitionNameRequired(t *testing.T) {
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d, want 400", rec.Code)
 	}
-	if !strings.Contains(rec.Body.String(), "name is required") {
-		t.Fatalf("body = %s, want name required", rec.Body.String())
+	body := rec.Body.String()
+	if !strings.Contains(body, "schema_validation_failed") {
+		t.Fatalf("body = %s, want schema_validation_failed", body)
+	}
+	if !strings.Contains(body, "name is required") {
+		t.Fatalf("body = %s, want name required", body)
 	}
 }
 
@@ -651,6 +660,10 @@ func TestQuerySchema_TableDefinitionDatabaseMaxLength(t *testing.T) {
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("long database: status = %d, want 400", rec.Code)
 	}
+	body := rec.Body.String()
+	if !strings.Contains(body, "schema_validation_failed") {
+		t.Fatalf("body = %s, want schema_validation_failed", body)
+	}
 }
 
 func TestQuerySchema_TableDefinitionNameMaxLength(t *testing.T) {
@@ -661,6 +674,10 @@ func TestQuerySchema_TableDefinitionNameMaxLength(t *testing.T) {
 	router.ServeHTTP(rec, schemaRequest(http.MethodGet, "/query-targets/22/schema/table-definition?database=testdb&name="+url.QueryEscape(longName), token))
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("long name: status = %d, want 400", rec.Code)
+	}
+	body := rec.Body.String()
+	if !strings.Contains(body, "schema_validation_failed") {
+		t.Fatalf("body = %s, want schema_validation_failed", body)
 	}
 }
 
@@ -760,6 +777,87 @@ func TestQuerySchema_TableDefinitionSentinelMapping(t *testing.T) {
 	}
 }
 
+type auditFailingTargetRepo struct{}
+
+func (auditFailingTargetRepo) ListQueryTargets(_ context.Context, q model.QueryTargetListQuery) ([]model.QueryTarget, int, error) {
+	target := model.QueryTarget{
+		ResourceID: 22,
+		ConnectionContext: model.QueryTargetConnectionContext{
+			Engine:      "mysql",
+			Host:        "db.internal",
+			Port:        3306,
+			Environment: "Staging",
+		},
+	}
+	if q.TargetID == 0 || q.TargetID == 22 {
+		return []model.QueryTarget{target}, 1, nil
+	}
+	return nil, 0, nil
+}
+
+type auditFailingCredReader struct{}
+
+func (auditFailingCredReader) GetCredentialByResourceID(_ context.Context, _ uint64) (model.QueryCredentialMetadata, error) {
+	return model.QueryCredentialMetadata{
+		Enabled:           true,
+		Engine:            "mysql",
+		EnvironmentPolicy: model.QueryEnvPolicyNonProdOnly,
+		CredentialRef:     "AUDIT_FAIL_TARGET",
+	}, nil
+}
+
+type auditFailingCredResolver struct{}
+
+func (auditFailingCredResolver) Resolve(_ context.Context, _ string) (string, error) {
+	return "rouser:pass@tcp(db.internal:3306)/sandbox", nil
+}
+
+type auditFailingInspector struct{}
+
+func (auditFailingInspector) ListDatabases(_ context.Context, _, _ string, _ bool, _, _ int) ([]service.DatabaseSummary, model.PageInfo, error) {
+	return nil, model.PageInfo{}, nil
+}
+func (auditFailingInspector) ListObjects(_ context.Context, _, _, _, _ string, _, _ int) ([]service.ObjectSummary, model.PageInfo, error) {
+	return nil, model.PageInfo{}, nil
+}
+func (auditFailingInspector) GetObjectDetails(_ context.Context, _, _, _, _ string) (*service.ObjectDetail, error) {
+	return &service.ObjectDetail{}, nil
+}
+func (auditFailingInspector) GetTableDefinition(_ context.Context, _, _, _ string) (*service.TableDefinition, error) {
+	return &service.TableDefinition{Definition: "CREATE TABLE t (id INT)", Truncated: false}, nil
+}
+
+type auditFailingExecRepo struct {
+	marker string
+}
+
+func (auditFailingExecRepo) GetCredentialByResourceID(_ context.Context, _ uint64) (model.QueryCredentialMetadata, error) {
+	return model.QueryCredentialMetadata{}, nil
+}
+func (auditFailingExecRepo) InsertExecution(_ context.Context, _ model.QueryExecutionRecord) (uint64, error) {
+	return 0, nil
+}
+func (auditFailingExecRepo) ListExecutions(_ context.Context, _ model.QueryExecutionListQuery) ([]model.QueryExecutionRecord, int, error) {
+	return nil, 0, nil
+}
+func (r auditFailingExecRepo) InsertAuditEvent(_ context.Context, _, _ uint64, _, _ string) error {
+	return errors.New(r.marker)
+}
+
+type auditFailingClock struct{}
+
+func (auditFailingClock) Now() time.Time { return schemaTestNow }
+
+func newAuditFailingSchemaService(marker string) querySchemaAPI {
+	audit := auditFailingExecRepo{marker: marker}
+	access := service.NewTargetAccessResolver(
+		auditFailingTargetRepo{},
+		auditFailingCredReader{},
+		auditFailingCredResolver{},
+	)
+	return service.NewQuerySchemaService(access, auditFailingInspector{}, service.NewQuerySchemaCache(100, auditFailingClock{}), audit, auditFailingClock{})
+}
+
 func TestQuerySchema_TableDefinitionErrorNoSecrets(t *testing.T) {
 	stub := &stubQuerySchema{tableDefErr: service.ErrSchemaBackendError}
 	router := newSchemaRouter(stub)
@@ -774,8 +872,10 @@ func TestQuerySchema_TableDefinitionErrorNoSecrets(t *testing.T) {
 }
 
 func TestQuerySchema_TableDefinitionAuditErrorNoDriverText(t *testing.T) {
-	stub := &stubQuerySchema{tableDefErr: service.ErrSchemaBackendError}
-	router := newSchemaRouter(stub)
+	const auditMarker = "AUDIT_DRIVER_FAILURE_7f3a9b2c"
+
+	svc := newAuditFailingSchemaService(auditMarker)
+	router := newSchemaRouter(svc)
 	rec := httptest.NewRecorder()
 	router.ServeHTTP(rec, schemaRequest(http.MethodGet, "/query-targets/22/schema/table-definition?database=testdb&name=users", schemaToken(t)))
 	if rec.Code != http.StatusBadGateway {
@@ -785,8 +885,11 @@ func TestQuerySchema_TableDefinitionAuditErrorNoDriverText(t *testing.T) {
 	if !strings.Contains(body, "schema_backend_error") {
 		t.Fatalf("body = %s, want schema_backend_error", body)
 	}
-	for _, marker := range []string{"AUDIT_DRIVER", "driver", "mysql", "tcp("} {
-		if strings.Contains(strings.ToLower(body), strings.ToLower(marker)) {
+	if strings.Contains(body, auditMarker) {
+		t.Fatalf("response body contains raw audit marker: %s", body)
+	}
+	for _, marker := range []string{"AUDIT_DRIVER", "tcp(", "db.internal"} {
+		if strings.Contains(body, marker) {
 			t.Fatalf("response body contains driver marker %q: %s", marker, body)
 		}
 	}
