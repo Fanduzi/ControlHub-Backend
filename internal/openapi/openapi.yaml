@@ -944,6 +944,102 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/ErrorResponse"
+  /query-targets/{id}/schema/table-definition:
+    get:
+      summary: Get MySQL table definition for a verified base table
+      operationId: getQueryTargetTableDefinition
+      description: >
+        Phase 38K Delivery B. Returns a governed MySQL SHOW CREATE TABLE
+        result for a single verified base table. The server first verifies
+        the requested database/name pair is a BASE TABLE via parameterized
+        information_schema.TABLES lookup, then executes SHOW CREATE TABLE
+        with server-side quoted identifiers. Definition text is capped at
+        64 KiB UTF-8 with an explicit truncated flag. The endpoint never
+        caches, persists, or logs definition text. Views and non-table
+        objects are rejected. Requires a fresh Bearer token.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+            format: int64
+            minimum: 1
+          description: Query target resource ID.
+        - name: database
+          in: query
+          required: true
+          schema:
+            type: string
+            minLength: 1
+            maxLength: 128
+          description: Database name.
+        - name: name
+          in: query
+          required: true
+          schema:
+            type: string
+            minLength: 1
+            maxLength: 128
+          description: Table name.
+      responses:
+        "200":
+          description: >
+            MySQL table definition. The definition field contains the
+            engine-produced SHOW CREATE TABLE output, bounded to 64 KiB
+            UTF-8. If truncated is true, the definition is incomplete.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TableDefinitionResponse"
+              example:
+                targetResourceId: 42
+                database: "orders"
+                name: "order_items"
+                kind: "table"
+                dialect: "mysql"
+                definition: "CREATE TABLE `order_items` (`id` bigint unsigned NOT NULL)"
+                truncated: false
+        "400":
+          description: >
+            Invalid parameters (missing database/name, bad id, or object
+            is a view/unsupported type).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "401":
+          description: Missing or invalid Bearer token
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "403":
+          description: Target access denied by policy
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "404":
+          description: Query target or table not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "408":
+          description: Request timed out
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "502":
+          description: Backend database error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
   /resources:
     get:
       summary: List resources
@@ -2376,6 +2472,48 @@ components:
             $ref: "#/components/schemas/ForeignKeyDetail"
         truncated:
           $ref: "#/components/schemas/TruncationFlags"
+    TableDefinitionResponse:
+      type: object
+      required:
+        - targetResourceId
+        - database
+        - name
+        - kind
+        - dialect
+        - definition
+        - truncated
+      properties:
+        targetResourceId:
+          type: integer
+          format: int64
+          description: Owning query target resource ID.
+        database:
+          type: string
+          description: Database name.
+        name:
+          type: string
+          description: Table name.
+        kind:
+          type: string
+          enum:
+            - table
+          description: Object kind (always "table" for this endpoint).
+        dialect:
+          type: string
+          enum:
+            - mysql
+          description: Database dialect (always "mysql" for this endpoint).
+        definition:
+          type: string
+          description: >
+            Engine-produced SHOW CREATE TABLE output. Bounded to 64 KiB
+            UTF-8. If truncated is true, this is a valid UTF-8 prefix
+            and the full definition is incomplete.
+        truncated:
+          type: boolean
+          description: >
+            True if the definition was capped at 64 KiB. Consumers must
+            label the definition incomplete when this flag is set.
     PageInfo:
       type: object
       required: [page, pageSize, totalItems, totalPages, hasNextPage, hasPreviousPage]
