@@ -10,6 +10,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"strconv"
 
 	"github.com/fan/controlhub/internal/model"
 )
@@ -179,13 +180,19 @@ func (r *QueryExecutionRepository) DeleteCredentialByResourceID(ctx context.Cont
 
 // InsertExecution persists one execution attempt's metadata and returns its id.
 // It stores a digest and short preview only — never full result rows.
+// When rec.CreatedAt is zero, the database default (CURRENT_TIMESTAMP) is used.
 func (r *QueryExecutionRepository) InsertExecution(ctx context.Context, rec model.QueryExecutionRecord) (uint64, error) {
+	var createdAt any
+	if !rec.CreatedAt.IsZero() {
+		createdAt = rec.CreatedAt.UTC()
+	}
 	const q = `insert into query_executions
-	           (target_resource_id, actor_user_id, engine, statement_digest, statement_preview, status, row_count, duration_ms, error_code, error_message)
-	           values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+	           (target_resource_id, actor_user_id, engine, statement_digest, statement_preview, status, row_count, duration_ms, error_code, error_message, created_at)
+	           values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, COALESCE(?, CURRENT_TIMESTAMP(6)))`
 	res, err := r.db.ExecContext(ctx, q,
 		rec.TargetResourceID, rec.ActorUserID, rec.Engine, rec.StatementDigest, rec.StatementPreview,
 		string(rec.Status), rec.RowCount, rec.DurationMs, rec.ErrorCode, rec.ErrorMessage,
+		createdAt,
 	)
 	if err != nil {
 		return 0, fmt.Errorf("insert query execution: %w", err)
@@ -202,31 +209,76 @@ func (r *QueryExecutionRepository) InsertExecution(ctx context.Context, rec mode
 // When q.ActorUserID is non-nil, only that actor's rows are included (non-admin
 // scope). Actor display names come from a parameterized LEFT JOIN on users;
 // missing users project as "Unknown user".
+//
+// Pagination mode is selected by q.Mode (set explicitly by the service layer):
+//   - PaginationModeCursor: keyset pagination over (created_at, id). The first
+//     page (Cursor == nil) has no boundary predicate and starts from the newest
+//     row. Continuation pages (Cursor != nil) add a strictly-older-than
+//     predicate on (created_at, id). Cursor mode never runs COUNT and never
+//     uses OFFSET. The caller requests PageSize+1 rows and trims the sentinel.
+//     The returned total is always 0 in this mode.
+//   - PaginationModeOffset: legacy offset pagination with COUNT and OFFSET.
 func (r *QueryExecutionRepository) ListExecutions(ctx context.Context, q model.QueryExecutionListQuery) ([]model.QueryExecutionRecord, int, error) {
 	where := `qe.target_resource_id = ?`
 	args := []any{q.TargetResourceID}
+
 	if q.ActorUserID != nil {
-		where += ` and qe.actor_user_id = ?`
+		where += ` AND qe.actor_user_id = ?`
 		args = append(args, *q.ActorUserID)
 	}
-
-	var total int
-	countSQL := `select count(*) from query_executions qe where ` + where
-	if err := r.db.QueryRowContext(ctx, countSQL, args...).Scan(&total); err != nil {
-		return nil, 0, fmt.Errorf("count query executions: %w", err)
+	if q.Status != nil {
+		where += ` AND qe.status = ?`
+		args = append(args, string(*q.Status))
+	}
+	if q.From != nil {
+		where += ` AND qe.created_at >= ?`
+		args = append(args, q.From.UTC())
+	}
+	if q.To != nil {
+		where += ` AND qe.created_at < ?`
+		args = append(args, q.To.UTC())
 	}
 
-	offset := (q.Page - 1) * q.PageSize
-	listSQL := `select qe.id, qe.target_resource_id, qe.actor_user_id, qe.engine, qe.statement_digest, qe.statement_preview,
+	cursorMode := q.Mode == model.PaginationModeCursor
+	var total int
+
+	if !cursorMode {
+		countSQL := `SELECT count(*) FROM query_executions qe WHERE ` + where
+		if err := r.db.QueryRowContext(ctx, countSQL, args...).Scan(&total); err != nil {
+			return nil, 0, fmt.Errorf("count query executions: %w", err)
+		}
+	} else if q.Cursor != nil {
+		payload, err := model.DecodeCursor(*q.Cursor)
+		if err != nil {
+			return nil, 0, fmt.Errorf("invalid cursor: %w", err)
+		}
+		cursorID, err := strconv.ParseUint(payload.ID, 10, 64)
+		if err != nil {
+			return nil, 0, fmt.Errorf("invalid cursor id: %w", err)
+		}
+		where += ` AND (qe.created_at < ? OR (qe.created_at = ? AND qe.id < ?))`
+		args = append(args, payload.CreatedAt, payload.CreatedAt, cursorID)
+	}
+
+	listSQL := `SELECT qe.id, qe.target_resource_id, qe.actor_user_id, qe.engine, qe.statement_digest, qe.statement_preview,
 		 qe.status, qe.row_count, qe.duration_ms, qe.error_code, qe.error_message, qe.created_at,
-		 coalesce(nullif(trim(u.display_name), ''), ?) as actor_display_name
-		 from query_executions qe
-		 left join users u on u.id = qe.actor_user_id
-		 where ` + where + ` order by qe.created_at desc limit ? offset ?`
-	listArgs := make([]any, 0, len(args)+3)
+		 COALESCE(NULLIF(TRIM(u.display_name), ''), ?) AS actor_display_name
+		 FROM query_executions qe
+		 LEFT JOIN users u ON u.id = qe.actor_user_id
+		 WHERE ` + where + ` ORDER BY qe.created_at DESC, qe.id DESC LIMIT ?`
+
+	listArgs := make([]any, 0, len(args)+2)
 	listArgs = append(listArgs, model.UnknownHistoryActorDisplayName)
 	listArgs = append(listArgs, args...)
-	listArgs = append(listArgs, q.PageSize, offset)
+
+	if cursorMode {
+		listArgs = append(listArgs, q.PageSize)
+	} else {
+		offset := (q.Page - 1) * q.PageSize
+		listArgs = append(listArgs, q.PageSize, offset)
+		listSQL += ` OFFSET ?`
+	}
+
 	rows, err := r.db.QueryContext(ctx, listSQL, listArgs...)
 	if err != nil {
 		return nil, 0, fmt.Errorf("list query executions: %w", err)

@@ -28,7 +28,6 @@ type stubQueryExec struct {
 	executeResp   model.QueryExecuteResponse
 	executeErr    error
 	listItems     []model.QueryExecutionRecord
-	listPageInfo  *model.PageInfo
 	listErr       error
 	navResp       model.RelatedRecordNavigationResponse
 	navErr        error
@@ -37,6 +36,7 @@ type stubQueryExec struct {
 	gotTargetID   uint64
 	gotMaxRows    int
 	gotNavRequest model.RelatedRecordNavigationRequest
+	gotQuery      model.QueryExecutionListQuery
 	executeCalled bool
 	navCalled     bool
 }
@@ -49,11 +49,21 @@ func (s *stubQueryExec) Execute(_ context.Context, actorUserID uint64, targetID 
 	return s.executeResp, s.executeErr
 }
 
-func (s *stubQueryExec) ListHistory(_ context.Context, actorUserID uint64, actorRole string, targetID uint64, _ model.QueryExecutionListQuery) ([]model.QueryExecutionRecord, *model.PageInfo, error) {
+func (s *stubQueryExec) ListHistory(_ context.Context, actorUserID uint64, actorRole string, targetID uint64, q model.QueryExecutionListQuery) (*model.QueryExecutionCursorPage, error) {
 	s.gotActor = actorUserID
 	s.gotTargetID = targetID
 	s.gotRole = actorRole
-	return s.listItems, s.listPageInfo, s.listErr
+	s.gotQuery = q
+	if s.listErr != nil {
+		return nil, s.listErr
+	}
+	page := &model.QueryExecutionCursorPage{Items: s.listItems}
+	if q.Page > 0 {
+		p, ps := model.NormalizePagination(q.Page, q.PageSize)
+		info := model.NewPageInfo(p, ps, len(s.listItems))
+		page.PageInfo = &info
+	}
+	return page, nil
 }
 
 func (s *stubQueryExec) NavigateRelatedRecords(_ context.Context, actorUserID uint64, targetID uint64, req model.RelatedRecordNavigationRequest) (model.RelatedRecordNavigationResponse, error) {
@@ -220,8 +230,7 @@ func TestQueryExecution_ListHistory(t *testing.T) {
 			Status: model.QueryExecutionRejected, CreatedAt: qeTestNow,
 		},
 	}
-	pageInfo := &model.PageInfo{Page: 1, PageSize: 20, TotalItems: 2, TotalPages: 1}
-	stub := &stubQueryExec{listItems: items, listPageInfo: pageInfo}
+	stub := &stubQueryExec{listItems: items}
 	router := newQueryExecRouter(stub)
 	token := mintToken(t, "qe-test-secret", 42, "admin", qeTestNow)
 
@@ -238,8 +247,12 @@ func TestQueryExecution_ListHistory(t *testing.T) {
 		t.Fatalf("role passed to ListHistory = %q, want admin", stub.gotRole)
 	}
 	body := rec.Body.String()
+	// WHY: explicit ?page= triggers offset mode → response carries pageInfo and nextCursor:null.
 	if !strings.Contains(body, `"items"`) || !strings.Contains(body, `"pageInfo"`) {
 		t.Fatalf("response missing items/pageInfo: %s", body)
+	}
+	if !strings.Contains(body, `"nextCursor":null`) {
+		t.Fatalf("offset mode response must include nextCursor:null: %s", body)
 	}
 	// WHY: history must carry metadata only, never full result rows.
 	if strings.Contains(body, `"rows"`) {
@@ -251,13 +264,6 @@ func TestQueryExecution_ListHistory(t *testing.T) {
 	}
 	if !strings.Contains(body, `"displayName":"ControlHub Admin"`) {
 		t.Fatalf("history missing actor.displayName: %s", body)
-	}
-	// WHY: hasNextPage/hasPreviousPage must be present in the serialized response.
-	if !strings.Contains(body, `"hasNextPage"`) {
-		t.Fatalf("response missing hasNextPage: %s", body)
-	}
-	if !strings.Contains(body, `"hasPreviousPage"`) {
-		t.Fatalf("response missing hasPreviousPage: %s", body)
 	}
 }
 
@@ -277,7 +283,7 @@ func TestQueryExecution_ListHistory_UnknownTarget(t *testing.T) {
 }
 
 func TestQueryExecution_ListHistory_PassesNonAdminRole(t *testing.T) {
-	stub := &stubQueryExec{listItems: []model.QueryExecutionRecord{}, listPageInfo: &model.PageInfo{Page: 1, PageSize: 20}}
+	stub := &stubQueryExec{listItems: []model.QueryExecutionRecord{}}
 	router := newQueryExecRouter(stub)
 	token := mintToken(t, "qe-test-secret", 7, "editor", qeTestNow)
 
@@ -300,5 +306,287 @@ func TestQueryExecution_ListHistory_MissingBearer(t *testing.T) {
 
 	if rec.Code != http.StatusUnauthorized {
 		t.Fatalf("status = %d, want 401", rec.Code)
+	}
+}
+
+// --- cursor-based pagination filter tests ---
+
+func TestQueryExecution_ListHistory_ValidFiltersParsed(t *testing.T) {
+	stub := &stubQueryExec{listItems: []model.QueryExecutionRecord{}}
+	router := newQueryExecRouter(stub)
+	token := mintToken(t, "qe-test-secret", 42, "admin", qeTestNow)
+
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, qeRequest(http.MethodGet,
+		"/query-targets/22/executions?status=success&from=2025-01-01T00:00:00Z&to=2025-06-01T00:00:00Z", "", token))
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", rec.Code, rec.Body.String())
+	}
+	if stub.gotQuery.Status == nil || *stub.gotQuery.Status != model.QueryExecutionSuccess {
+		t.Fatalf("status filter not passed: got %v, want success", stub.gotQuery.Status)
+	}
+	if stub.gotQuery.From == nil {
+		t.Fatal("from filter not passed")
+	}
+	if stub.gotQuery.To == nil {
+		t.Fatal("to filter not passed")
+	}
+}
+
+func TestQueryExecution_ListHistory_InvalidStatusReturns400(t *testing.T) {
+	router := newQueryExecRouter(&stubQueryExec{})
+	token := mintToken(t, "qe-test-secret", 42, "admin", qeTestNow)
+
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, qeRequest(http.MethodGet,
+		"/query-targets/22/executions?status=INVALID", "", token))
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400; body=%s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "validation_failed") {
+		t.Fatalf("body = %s, want validation_failed", rec.Body.String())
+	}
+}
+
+func TestQueryExecution_ListHistory_InvalidTimestampReturns400(t *testing.T) {
+	router := newQueryExecRouter(&stubQueryExec{})
+	token := mintToken(t, "qe-test-secret", 42, "admin", qeTestNow)
+
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, qeRequest(http.MethodGet,
+		"/query-targets/22/executions?from=not-a-date", "", token))
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400; body=%s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "validation_failed") {
+		t.Fatalf("body = %s, want validation_failed", rec.Body.String())
+	}
+}
+
+func TestQueryExecution_ListHistory_InvertedTimeWindowReturns400(t *testing.T) {
+	router := newQueryExecRouter(&stubQueryExec{})
+	token := mintToken(t, "qe-test-secret", 42, "admin", qeTestNow)
+
+	// WHY: from must be before to; an inverted window (from > to) is rejected
+	// to prevent confusing empty result sets that look like bugs.
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, qeRequest(http.MethodGet,
+		"/query-targets/22/executions?from=2025-06-01T00:00:00Z&to=2025-01-01T00:00:00Z", "", token))
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400; body=%s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "validation_failed") {
+		t.Fatalf("body = %s, want validation_failed", rec.Body.String())
+	}
+}
+
+func TestQueryExecution_ListHistory_PageAndCursorReturns400(t *testing.T) {
+	router := newQueryExecRouter(&stubQueryExec{})
+	token := mintToken(t, "qe-test-secret", 42, "admin", qeTestNow)
+
+	// WHY: page (offset) and cursor (keyset) are mutually exclusive pagination
+	// modes. Accepting both would produce ambiguous query semantics.
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, qeRequest(http.MethodGet,
+		"/query-targets/22/executions?page=1&cursor=abc123", "", token))
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400; body=%s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "validation_failed") {
+		t.Fatalf("body = %s, want validation_failed", rec.Body.String())
+	}
+}
+
+func TestQueryExecution_ListHistory_CursorPassedToService(t *testing.T) {
+	cursorVal := "test-cursor-value"
+	stub := &stubQueryExec{listItems: []model.QueryExecutionRecord{}}
+	router := newQueryExecRouter(stub)
+	token := mintToken(t, "qe-test-secret", 42, "admin", qeTestNow)
+
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, qeRequest(http.MethodGet,
+		"/query-targets/22/executions?cursor="+cursorVal, "", token))
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", rec.Code, rec.Body.String())
+	}
+	if stub.gotQuery.Cursor == nil || *stub.gotQuery.Cursor != cursorVal {
+		t.Fatalf("cursor not passed: got %v, want %q", stub.gotQuery.Cursor, cursorVal)
+	}
+}
+
+func TestQueryExecution_ListHistory_DefaultPaginationUsed(t *testing.T) {
+	stub := &stubQueryExec{listItems: []model.QueryExecutionRecord{}}
+	router := newQueryExecRouter(stub)
+	token := mintToken(t, "qe-test-secret", 42, "admin", qeTestNow)
+
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, qeRequest(http.MethodGet,
+		"/query-targets/22/executions", "", token))
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", rec.Code, rec.Body.String())
+	}
+	// WHY: no ?page= param → cursor-initial mode (Page=0, PageSize=20).
+	if stub.gotQuery.Page != 0 || stub.gotQuery.PageSize != 20 {
+		t.Fatalf("default pagination = page:%d pageSize:%d, want 0/20", stub.gotQuery.Page, stub.gotQuery.PageSize)
+	}
+	body := rec.Body.String()
+	// WHY: no ?page= param → cursor mode, so pageInfo must be absent.
+	if strings.Contains(body, `"pageInfo"`) {
+		t.Fatalf("cursor-initial response must not include pageInfo: %s", body)
+	}
+}
+
+// --- P2: reject explicitly supplied empty filters ---
+// WHY: `status=`, `from=`, `to=`, and `cursor=` with empty values are
+// ambiguous requests, not absent filters. Treating them as absent would
+// silently change the query semantics. They must produce a controlled 400.
+
+func TestQueryExecution_ListHistory_EmptyStatusReturns400(t *testing.T) {
+	router := newQueryExecRouter(&stubQueryExec{})
+	token := mintToken(t, "qe-test-secret", 42, "admin", qeTestNow)
+
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, qeRequest(http.MethodGet,
+		"/query-targets/22/executions?status=", "", token))
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400; body=%s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "validation_failed") {
+		t.Fatalf("body = %s, want validation_failed", rec.Body.String())
+	}
+}
+
+func TestQueryExecution_ListHistory_EmptyFromReturns400(t *testing.T) {
+	router := newQueryExecRouter(&stubQueryExec{})
+	token := mintToken(t, "qe-test-secret", 42, "admin", qeTestNow)
+
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, qeRequest(http.MethodGet,
+		"/query-targets/22/executions?from=", "", token))
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400; body=%s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "validation_failed") {
+		t.Fatalf("body = %s, want validation_failed", rec.Body.String())
+	}
+}
+
+func TestQueryExecution_ListHistory_EmptyToReturns400(t *testing.T) {
+	router := newQueryExecRouter(&stubQueryExec{})
+	token := mintToken(t, "qe-test-secret", 42, "admin", qeTestNow)
+
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, qeRequest(http.MethodGet,
+		"/query-targets/22/executions?to=", "", token))
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400; body=%s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "validation_failed") {
+		t.Fatalf("body = %s, want validation_failed", rec.Body.String())
+	}
+}
+
+func TestQueryExecution_ListHistory_EmptyCursorReturns400(t *testing.T) {
+	router := newQueryExecRouter(&stubQueryExec{})
+	token := mintToken(t, "qe-test-secret", 42, "admin", qeTestNow)
+
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, qeRequest(http.MethodGet,
+		"/query-targets/22/executions?cursor=", "", token))
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400; body=%s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "validation_failed") {
+		t.Fatalf("body = %s, want validation_failed", rec.Body.String())
+	}
+}
+
+func TestQueryExecution_ListHistory_EqualTimeWindowReturns400(t *testing.T) {
+	router := newQueryExecRouter(&stubQueryExec{})
+	token := mintToken(t, "qe-test-secret", 42, "admin", qeTestNow)
+
+	// WHY: from == to is a zero-width window and must be rejected — it
+	// would produce an empty result that looks like a bug rather than a
+	// validation error.
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, qeRequest(http.MethodGet,
+		"/query-targets/22/executions?from=2025-06-01T00:00:00Z&to=2025-06-01T00:00:00Z", "", token))
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400; body=%s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "validation_failed") {
+		t.Fatalf("body = %s, want validation_failed", rec.Body.String())
+	}
+}
+
+// --- P2: envelope consistency ---
+
+// TestQueryExecution_ListHistory_CursorEnvelopeShape proves the response
+// envelope is internally consistent: cursor mode always includes nextCursor
+// (null when no more pages) and never includes pageInfo.
+func TestQueryExecution_ListHistory_CursorEnvelopeShape(t *testing.T) {
+	items := []model.QueryExecutionRecord{
+		{ID: 1, TargetResourceID: 22, ActorUserID: 42, Actor: model.QueryExecutionActor{DisplayName: "Admin"}, Engine: "mysql", StatementDigest: "select 1", StatementPreview: "select 1", Status: model.QueryExecutionSuccess, CreatedAt: qeTestNow},
+	}
+	stub := &stubQueryExec{listItems: items}
+	router := newQueryExecRouter(stub)
+	token := mintToken(t, "qe-test-secret", 42, "admin", qeTestNow)
+
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, qeRequest(http.MethodGet,
+		"/query-targets/22/executions", "", token))
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", rec.Code, rec.Body.String())
+	}
+	body := rec.Body.String()
+	// WHY: nextCursor must always be present in cursor mode, even when null.
+	if !strings.Contains(body, `"nextCursor"`) {
+		t.Fatalf("cursor mode response must include nextCursor: %s", body)
+	}
+	// WHY: pageInfo must be absent in cursor mode.
+	if strings.Contains(body, `"pageInfo"`) {
+		t.Fatalf("cursor mode response must not include pageInfo: %s", body)
+	}
+}
+
+// TestQueryExecution_ListHistory_OffsetEnvelopeShape proves the response
+// envelope is internally consistent: offset mode always includes nextCursor
+// (null) and pageInfo.
+func TestQueryExecution_ListHistory_OffsetEnvelopeShape(t *testing.T) {
+	items := []model.QueryExecutionRecord{
+		{ID: 1, TargetResourceID: 22, ActorUserID: 42, Actor: model.QueryExecutionActor{DisplayName: "Admin"}, Engine: "mysql", StatementDigest: "select 1", StatementPreview: "select 1", Status: model.QueryExecutionSuccess, CreatedAt: qeTestNow},
+	}
+	stub := &stubQueryExec{listItems: items}
+	router := newQueryExecRouter(stub)
+	token := mintToken(t, "qe-test-secret", 42, "admin", qeTestNow)
+
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, qeRequest(http.MethodGet,
+		"/query-targets/22/executions?page=1", "", token))
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", rec.Code, rec.Body.String())
+	}
+	body := rec.Body.String()
+	// WHY: nextCursor must always be present, even in offset mode (null).
+	if !strings.Contains(body, `"nextCursor":null`) {
+		t.Fatalf("offset mode response must include nextCursor:null: %s", body)
+	}
+	// WHY: pageInfo must be present in offset mode.
+	if !strings.Contains(body, `"pageInfo"`) {
+		t.Fatalf("offset mode response must include pageInfo: %s", body)
 	}
 }

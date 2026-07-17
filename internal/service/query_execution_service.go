@@ -246,32 +246,123 @@ func (s *QueryExecutionService) reject(ctx context.Context, target model.QueryTa
 }
 
 // ListHistory returns execution history (metadata only) for a target with
-// pagination metadata. actorRole "admin" sees all target rows; other roles see
-// only their own. History is readable without credential readiness — it is an
-// audit record. Unknown targets return ErrQueryTargetNotFound (404).
-func (s *QueryExecutionService) ListHistory(ctx context.Context, actorUserID uint64, actorRole string, targetID uint64, q model.QueryExecutionListQuery) ([]model.QueryExecutionRecord, *model.PageInfo, error) {
+// cursor-based pagination. actorRole "admin" sees all target rows; other roles
+// see only their own. History is readable without credential readiness — it is
+// an audit record. Unknown targets return ErrQueryTargetNotFound (404).
+//
+// Mode selection is explicit and unambiguous:
+//   - No ?page= supplied (Page == 0): cursor mode. The first page has no
+//     boundary predicate (Cursor == nil) and starts from the newest row.
+//     Continuation pages (Cursor != nil) add a strictly-older-than predicate on
+//     (created_at, id). Cursor mode never runs COUNT, never uses OFFSET, and
+//     requests PageSize+1 rows to detect whether a next page exists.
+//   - ?page= supplied (Page > 0): legacy offset mode with COUNT and OFFSET.
+//     NextCursor is nil; PageInfo is populated.
+//
+// The handler rejects page+cursor together with a 400 validation_failed, so the
+// service never sees both.
+func (s *QueryExecutionService) ListHistory(ctx context.Context, actorUserID uint64, actorRole string, targetID uint64, q model.QueryExecutionListQuery) (*model.QueryExecutionCursorPage, error) {
 	if _, err := s.findTarget(ctx, targetID); err != nil {
-		return nil, nil, err
+		return nil, err
 	}
-	page, pageSize := model.NormalizePagination(q.Page, q.PageSize)
+
+	scope := "all"
+	if actorRole != "admin" {
+		scope = fmt.Sprintf("user:%d", actorUserID)
+	}
+	queryHash := model.ComputeQueryHash(targetID, q.Status, q.From, q.To, scope)
+
+	if q.Page > 0 {
+		return s.listHistoryOffset(ctx, actorUserID, actorRole, targetID, q)
+	}
+	return s.listHistoryCursor(ctx, actorUserID, actorRole, targetID, q, queryHash)
+}
+
+func (s *QueryExecutionService) listHistoryCursor(ctx context.Context, actorUserID uint64, actorRole string, targetID uint64, q model.QueryExecutionListQuery, queryHash string) (*model.QueryExecutionCursorPage, error) {
+	if q.Cursor != nil {
+		if err := model.ValidateCursor(*q.Cursor, queryHash); err != nil {
+			return nil, fmt.Errorf("%w: invalid cursor: %v", ErrQueryValidationFailed, err)
+		}
+	}
+
+	_, pageSize := model.NormalizePagination(0, q.PageSize)
+	originalPageSize := pageSize
+	pageSize++ // sentinel: request one extra to detect next page
+
 	listQ := model.QueryExecutionListQuery{
-		TargetResourceID: targetID, Page: page, PageSize: pageSize,
+		TargetResourceID: targetID,
+		PageSize:         pageSize,
+		Status:           q.Status,
+		From:             q.From,
+		To:               q.To,
+		Mode:             model.PaginationModeCursor,
+		Cursor:           q.Cursor,
 	}
 	if actorRole != "admin" {
 		id := actorUserID
 		listQ.ActorUserID = &id
 	}
-	items, total, err := s.executions.ListExecutions(ctx, listQ)
+
+	items, _, err := s.executions.ListExecutions(ctx, listQ)
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
+
 	for i := range items {
 		if items[i].Actor.DisplayName == "" {
 			items[i].Actor.DisplayName = model.UnknownHistoryActorDisplayName
 		}
 	}
+
+	var nextCursor *string
+	if len(items) > originalPageSize {
+		items = items[:originalPageSize]
+		last := items[len(items)-1]
+		cs, encErr := model.EncodeCursor(last.CreatedAt, last.ID, queryHash)
+		if encErr != nil {
+			return nil, fmt.Errorf("%w: encode cursor: %v", ErrQueryBackendFailure, encErr)
+		}
+		nextCursor = &cs
+	}
+
+	return &model.QueryExecutionCursorPage{
+		Items:      items,
+		NextCursor: nextCursor,
+	}, nil
+}
+
+func (s *QueryExecutionService) listHistoryOffset(ctx context.Context, actorUserID uint64, actorRole string, targetID uint64, q model.QueryExecutionListQuery) (*model.QueryExecutionCursorPage, error) {
+	page, pageSize := model.NormalizePagination(q.Page, q.PageSize)
+	listQ := model.QueryExecutionListQuery{
+		TargetResourceID: targetID,
+		Page:             page,
+		PageSize:         pageSize,
+		Status:           q.Status,
+		From:             q.From,
+		To:               q.To,
+		Mode:             model.PaginationModeOffset,
+	}
+	if actorRole != "admin" {
+		id := actorUserID
+		listQ.ActorUserID = &id
+	}
+
+	items, total, err := s.executions.ListExecutions(ctx, listQ)
+	if err != nil {
+		return nil, err
+	}
+
+	for i := range items {
+		if items[i].Actor.DisplayName == "" {
+			items[i].Actor.DisplayName = model.UnknownHistoryActorDisplayName
+		}
+	}
+
 	pageInfo := model.NewPageInfo(page, pageSize, total)
-	return items, &pageInfo, nil
+	return &model.QueryExecutionCursorPage{
+		Items:    items,
+		PageInfo: &pageInfo,
+	}, nil
 }
 
 func (s *QueryExecutionService) findTarget(ctx context.Context, targetID uint64) (model.QueryTarget, error) {

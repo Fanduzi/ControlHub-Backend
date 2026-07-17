@@ -8,8 +8,11 @@ package service
 import (
 	"context"
 	"database/sql"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"sort"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -57,6 +60,8 @@ type fakeExecRepo struct {
 	// Failure injection for the audit/history guarantee tests.
 	insertExecErr  error
 	insertAuditErr error
+	// Captures the last ListExecutions query for mode-dispatch assertions.
+	lastQuery model.QueryExecutionListQuery
 }
 
 func (f *fakeExecRepo) GetCredentialByResourceID(_ context.Context, resourceID uint64) (model.QueryCredentialMetadata, error) {
@@ -80,6 +85,7 @@ func (f *fakeExecRepo) InsertExecution(_ context.Context, rec model.QueryExecuti
 }
 
 func (f *fakeExecRepo) ListExecutions(_ context.Context, q model.QueryExecutionListQuery) ([]model.QueryExecutionRecord, int, error) {
+	f.lastQuery = q
 	items := make([]model.QueryExecutionRecord, 0, len(f.insertedAttempts))
 	for _, rec := range f.insertedAttempts {
 		if rec.TargetResourceID != q.TargetResourceID && q.TargetResourceID != 0 {
@@ -91,7 +97,48 @@ func (f *fakeExecRepo) ListExecutions(_ context.Context, q model.QueryExecutionL
 		if q.TargetResourceID != 0 && rec.TargetResourceID != q.TargetResourceID {
 			continue
 		}
+		if q.Status != nil && rec.Status != *q.Status {
+			continue
+		}
+		if q.From != nil && rec.CreatedAt.Before(*q.From) {
+			continue
+		}
+		if q.To != nil && !rec.CreatedAt.Before(*q.To) {
+			continue
+		}
 		items = append(items, rec)
+	}
+
+	if q.Cursor != nil {
+		payload, err := model.DecodeCursor(*q.Cursor)
+		if err != nil {
+			return nil, 0, err
+		}
+		cursorID, _ := strconv.ParseUint(payload.ID, 10, 64)
+		filtered := make([]model.QueryExecutionRecord, 0, len(items))
+		for _, rec := range items {
+			if rec.CreatedAt.Before(payload.CreatedAt) || (rec.CreatedAt.Equal(payload.CreatedAt) && rec.ID < cursorID) {
+				filtered = append(filtered, rec)
+			}
+		}
+		items = filtered
+	}
+
+	sort.Slice(items, func(i, j int) bool {
+		if items[i].CreatedAt.Equal(items[j].CreatedAt) {
+			return items[i].ID > items[j].ID
+		}
+		return items[i].CreatedAt.After(items[j].CreatedAt)
+	})
+
+	if q.PageSize > 0 && len(items) > q.PageSize {
+		items = items[:q.PageSize]
+	}
+
+	// WHY: match the real repository's contract — cursor mode skips COUNT
+	// (total=0), offset mode returns the unfiltered count for PageInfo.
+	if q.Mode == model.PaginationModeCursor {
+		return items, 0, nil
 	}
 	return items, len(items), nil
 }
@@ -745,15 +792,18 @@ func TestListHistory_AdminSeesAllActors(t *testing.T) {
 		},
 	}
 	svc := NewQueryExecutionService(fakeTargetRepo{targets: []model.QueryTarget{target}}, repo, &fakeResolver{}, &fakeExecutor{}, NewQueryGuard(QueryGuardConfig{DefaultMaxRows: 100, HardMaxRows: 500}), &fakeClock{t: time.Date(2026, 6, 22, 8, 0, 0, 0, time.UTC)}, nil)
-	items, page, err := svc.ListHistory(context.Background(), 1, "admin", 22, model.QueryExecutionListQuery{Page: 1, PageSize: 20})
+	result, err := svc.ListHistory(context.Background(), 1, "admin", 22, model.QueryExecutionListQuery{Page: 1, PageSize: 20})
 	if err != nil {
 		t.Fatalf("ListHistory: %v", err)
 	}
-	if len(items) != 2 {
-		t.Fatalf("admin items = %d, want 2", len(items))
+	if len(result.Items) != 2 {
+		t.Fatalf("admin items = %d, want 2", len(result.Items))
 	}
-	if page.TotalItems != 2 {
-		t.Fatalf("total = %d, want 2", page.TotalItems)
+	if result.NextCursor != nil {
+		t.Fatalf("offset mode nextCursor = %v, want nil", result.NextCursor)
+	}
+	if result.PageInfo == nil {
+		t.Fatal("offset mode pageInfo = nil, want non-nil")
 	}
 }
 
@@ -767,21 +817,24 @@ func TestListHistory_NonAdminSeesOwnOnly(t *testing.T) {
 		},
 	}
 	svc := NewQueryExecutionService(fakeTargetRepo{targets: []model.QueryTarget{target}}, repo, &fakeResolver{}, &fakeExecutor{}, NewQueryGuard(QueryGuardConfig{DefaultMaxRows: 100, HardMaxRows: 500}), &fakeClock{t: time.Date(2026, 6, 22, 8, 0, 0, 0, time.UTC)}, nil)
-	items, page, err := svc.ListHistory(context.Background(), 7, "editor", 22, model.QueryExecutionListQuery{Page: 1, PageSize: 20})
+	result, err := svc.ListHistory(context.Background(), 7, "editor", 22, model.QueryExecutionListQuery{Page: 1, PageSize: 20})
 	if err != nil {
 		t.Fatalf("ListHistory: %v", err)
 	}
-	if len(items) != 1 || items[0].ActorUserID != 7 {
-		t.Fatalf("non-admin items = %+v, want only actor 7", items)
+	if len(result.Items) != 1 || result.Items[0].ActorUserID != 7 {
+		t.Fatalf("non-admin items = %+v, want only actor 7", result.Items)
 	}
-	if page.TotalItems != 1 {
-		t.Fatalf("total = %d, want 1", page.TotalItems)
+	if result.NextCursor != nil {
+		t.Fatalf("offset mode nextCursor = %v, want nil", result.NextCursor)
+	}
+	if result.PageInfo == nil {
+		t.Fatal("offset mode pageInfo = nil, want non-nil")
 	}
 }
 
 func TestListHistory_UnknownTarget404(t *testing.T) {
 	svc := NewQueryExecutionService(fakeTargetRepo{targets: nil}, &fakeExecRepo{}, &fakeResolver{}, &fakeExecutor{}, NewQueryGuard(QueryGuardConfig{DefaultMaxRows: 100, HardMaxRows: 500}), &fakeClock{t: time.Date(2026, 6, 22, 8, 0, 0, 0, time.UTC)}, nil)
-	_, _, err := svc.ListHistory(context.Background(), 1, "admin", 999, model.QueryExecutionListQuery{Page: 1, PageSize: 20})
+	_, err := svc.ListHistory(context.Background(), 1, "admin", 999, model.QueryExecutionListQuery{Page: 1, PageSize: 20})
 	if !errors.Is(err, ErrQueryTargetNotFound) {
 		t.Fatalf("err = %v, want ErrQueryTargetNotFound", err)
 	}
@@ -796,18 +849,278 @@ func TestListHistory_UnknownActorFallback(t *testing.T) {
 		},
 	}
 	svc := NewQueryExecutionService(fakeTargetRepo{targets: []model.QueryTarget{target}}, repo, &fakeResolver{}, &fakeExecutor{}, NewQueryGuard(QueryGuardConfig{DefaultMaxRows: 100, HardMaxRows: 500}), &fakeClock{t: time.Date(2026, 6, 22, 8, 0, 0, 0, time.UTC)}, nil)
-	items, _, err := svc.ListHistory(context.Background(), 1, "admin", 22, model.QueryExecutionListQuery{Page: 1, PageSize: 20})
+	result, err := svc.ListHistory(context.Background(), 1, "admin", 22, model.QueryExecutionListQuery{Page: 1, PageSize: 20})
 	if err != nil {
 		t.Fatalf("ListHistory: %v", err)
 	}
-	if items[0].Actor.DisplayName != model.UnknownHistoryActorDisplayName {
-		t.Fatalf("displayName = %q, want Unknown user", items[0].Actor.DisplayName)
+	if result.Items[0].Actor.DisplayName != model.UnknownHistoryActorDisplayName {
+		t.Fatalf("displayName = %q, want Unknown user", result.Items[0].Actor.DisplayName)
 	}
-	raw, _ := json.Marshal(items[0])
+	raw, _ := json.Marshal(result.Items[0])
 	if strings.Contains(string(raw), "actorUserId") {
 		t.Fatalf("public JSON must not include actorUserId: %s", raw)
 	}
 	if !strings.Contains(string(raw), `"displayName":"Unknown user"`) {
 		t.Fatalf("public JSON missing actor.displayName: %s", raw)
+	}
+}
+
+// --- cursor-based pagination service tests ---
+
+func TestListHistory_Cursor_AdminSeesAll(t *testing.T) {
+	t.Parallel()
+	target := mysqlTarget("Staging")
+	target.ResourceID = 22
+	now := time.Date(2026, 6, 22, 8, 0, 0, 0, time.UTC)
+	repo := &fakeExecRepo{
+		insertedAttempts: []model.QueryExecutionRecord{
+			{ID: 1, TargetResourceID: 22, ActorUserID: 1, Actor: model.QueryExecutionActor{DisplayName: "Admin"}, Status: model.QueryExecutionSuccess, CreatedAt: now},
+			{ID: 2, TargetResourceID: 22, ActorUserID: 7, Actor: model.QueryExecutionActor{DisplayName: "Editor"}, Status: model.QueryExecutionSuccess, CreatedAt: now.Add(-time.Second)},
+		},
+	}
+	svc := NewQueryExecutionService(fakeTargetRepo{targets: []model.QueryTarget{target}}, repo, &fakeResolver{}, &fakeExecutor{}, NewQueryGuard(QueryGuardConfig{DefaultMaxRows: 100, HardMaxRows: 500}), &fakeClock{t: now}, nil)
+	result, err := svc.ListHistory(context.Background(), 1, "admin", 22, model.QueryExecutionListQuery{PageSize: 20})
+	if err != nil {
+		t.Fatalf("ListHistory: %v", err)
+	}
+	if len(result.Items) != 2 {
+		t.Fatalf("admin cursor items = %d, want 2", len(result.Items))
+	}
+}
+
+func TestListHistory_Cursor_NonAdminSeesOwnOnly(t *testing.T) {
+	t.Parallel()
+	target := mysqlTarget("Staging")
+	target.ResourceID = 22
+	now := time.Date(2026, 6, 22, 8, 0, 0, 0, time.UTC)
+	repo := &fakeExecRepo{
+		insertedAttempts: []model.QueryExecutionRecord{
+			{ID: 1, TargetResourceID: 22, ActorUserID: 1, Actor: model.QueryExecutionActor{DisplayName: "Admin"}, Status: model.QueryExecutionSuccess, CreatedAt: now},
+			{ID: 2, TargetResourceID: 22, ActorUserID: 7, Actor: model.QueryExecutionActor{DisplayName: "Editor"}, Status: model.QueryExecutionSuccess, CreatedAt: now.Add(-time.Second)},
+		},
+	}
+	svc := NewQueryExecutionService(fakeTargetRepo{targets: []model.QueryTarget{target}}, repo, &fakeResolver{}, &fakeExecutor{}, NewQueryGuard(QueryGuardConfig{DefaultMaxRows: 100, HardMaxRows: 500}), &fakeClock{t: now}, nil)
+	result, err := svc.ListHistory(context.Background(), 7, "editor", 22, model.QueryExecutionListQuery{PageSize: 20})
+	if err != nil {
+		t.Fatalf("ListHistory: %v", err)
+	}
+	if len(result.Items) != 1 || result.Items[0].ActorUserID != 7 {
+		t.Fatalf("non-admin cursor items = %+v, want only actor 7", result.Items)
+	}
+}
+
+func TestListHistory_Cursor_StatusFilter(t *testing.T) {
+	t.Parallel()
+	target := mysqlTarget("Staging")
+	target.ResourceID = 22
+	now := time.Date(2026, 6, 22, 8, 0, 0, 0, time.UTC)
+	repo := &fakeExecRepo{
+		insertedAttempts: []model.QueryExecutionRecord{
+			{ID: 1, TargetResourceID: 22, ActorUserID: 1, Status: model.QueryExecutionSuccess, CreatedAt: now},
+			{ID: 2, TargetResourceID: 22, ActorUserID: 1, Status: model.QueryExecutionRejected, CreatedAt: now.Add(-time.Second)},
+		},
+	}
+	svc := NewQueryExecutionService(fakeTargetRepo{targets: []model.QueryTarget{target}}, repo, &fakeResolver{}, &fakeExecutor{}, NewQueryGuard(QueryGuardConfig{DefaultMaxRows: 100, HardMaxRows: 500}), &fakeClock{t: now}, nil)
+	status := model.QueryExecutionSuccess
+	result, err := svc.ListHistory(context.Background(), 1, "admin", 22, model.QueryExecutionListQuery{PageSize: 20, Status: &status})
+	if err != nil {
+		t.Fatalf("ListHistory: %v", err)
+	}
+	if len(result.Items) != 1 || result.Items[0].Status != model.QueryExecutionSuccess {
+		t.Fatalf("status filter items = %+v, want only success", result.Items)
+	}
+}
+
+func TestListHistory_Cursor_TimeFilter(t *testing.T) {
+	t.Parallel()
+	target := mysqlTarget("Staging")
+	target.ResourceID = 22
+	t1 := time.Date(2026, 6, 1, 0, 0, 0, 0, time.UTC)
+	t2 := time.Date(2026, 6, 15, 0, 0, 0, 0, time.UTC)
+	t3 := time.Date(2026, 6, 22, 0, 0, 0, 0, time.UTC)
+	repo := &fakeExecRepo{
+		insertedAttempts: []model.QueryExecutionRecord{
+			{ID: 1, TargetResourceID: 22, ActorUserID: 1, Status: model.QueryExecutionSuccess, CreatedAt: t1},
+			{ID: 2, TargetResourceID: 22, ActorUserID: 1, Status: model.QueryExecutionSuccess, CreatedAt: t2},
+			{ID: 3, TargetResourceID: 22, ActorUserID: 1, Status: model.QueryExecutionSuccess, CreatedAt: t3},
+		},
+	}
+	svc := NewQueryExecutionService(fakeTargetRepo{targets: []model.QueryTarget{target}}, repo, &fakeResolver{}, &fakeExecutor{}, NewQueryGuard(QueryGuardConfig{DefaultMaxRows: 100, HardMaxRows: 500}), &fakeClock{t: t3}, nil)
+	from := time.Date(2026, 6, 10, 0, 0, 0, 0, time.UTC)
+	to := time.Date(2026, 6, 20, 0, 0, 0, 0, time.UTC)
+	result, err := svc.ListHistory(context.Background(), 1, "admin", 22, model.QueryExecutionListQuery{PageSize: 20, From: &from, To: &to})
+	if err != nil {
+		t.Fatalf("ListHistory: %v", err)
+	}
+	if len(result.Items) != 1 || result.Items[0].ID != 2 {
+		t.Fatalf("time filter items = %+v, want only ID=2", result.Items)
+	}
+}
+
+func TestListHistory_Cursor_Continuation(t *testing.T) {
+	t.Parallel()
+	target := mysqlTarget("Staging")
+	target.ResourceID = 22
+	now := time.Date(2026, 6, 22, 8, 0, 0, 0, time.UTC)
+	repo := &fakeExecRepo{
+		insertedAttempts: []model.QueryExecutionRecord{
+			{ID: 1, TargetResourceID: 22, ActorUserID: 1, Status: model.QueryExecutionSuccess, CreatedAt: now},
+			{ID: 2, TargetResourceID: 22, ActorUserID: 1, Status: model.QueryExecutionSuccess, CreatedAt: now.Add(-time.Second)},
+			{ID: 3, TargetResourceID: 22, ActorUserID: 1, Status: model.QueryExecutionSuccess, CreatedAt: now.Add(-2 * time.Second)},
+		},
+	}
+	svc := NewQueryExecutionService(fakeTargetRepo{targets: []model.QueryTarget{target}}, repo, &fakeResolver{}, &fakeExecutor{}, NewQueryGuard(QueryGuardConfig{DefaultMaxRows: 100, HardMaxRows: 500}), &fakeClock{t: now}, nil)
+
+	// Build an initial cursor pointing past the newest item so all 3 are "before" it.
+	queryHash := model.ComputeQueryHash(22, nil, nil, nil, "all")
+	initialCursor, err := model.EncodeCursor(now.Add(time.Second), 9999, queryHash)
+	if err != nil {
+		t.Fatalf("encode initial cursor: %v", err)
+	}
+
+	page1, err := svc.ListHistory(context.Background(), 1, "admin", 22, model.QueryExecutionListQuery{PageSize: 2, Cursor: &initialCursor})
+	if err != nil {
+		t.Fatalf("page1: %v", err)
+	}
+	if len(page1.Items) != 2 {
+		t.Fatalf("page1 items = %d, want 2", len(page1.Items))
+	}
+	if page1.NextCursor == nil {
+		t.Fatal("page1 NextCursor = nil, want non-nil (more pages exist)")
+	}
+
+	page2, err := svc.ListHistory(context.Background(), 1, "admin", 22, model.QueryExecutionListQuery{PageSize: 2, Cursor: page1.NextCursor})
+	if err != nil {
+		t.Fatalf("page2: %v", err)
+	}
+	if len(page2.Items) != 1 {
+		t.Fatalf("page2 items = %d, want 1", len(page2.Items))
+	}
+	if page2.NextCursor != nil {
+		t.Fatalf("page2 NextCursor = %v, want nil (no more pages)", *page2.NextCursor)
+	}
+}
+
+func TestListHistory_Cursor_InvalidCursorReturnsValidation(t *testing.T) {
+	t.Parallel()
+	target := mysqlTarget("Staging")
+	target.ResourceID = 22
+	now := time.Date(2026, 6, 22, 8, 0, 0, 0, time.UTC)
+	svc := NewQueryExecutionService(fakeTargetRepo{targets: []model.QueryTarget{target}}, &fakeExecRepo{}, &fakeResolver{}, &fakeExecutor{}, NewQueryGuard(QueryGuardConfig{DefaultMaxRows: 100, HardMaxRows: 500}), &fakeClock{t: now}, nil)
+	badCursor := "not-a-valid-cursor"
+	_, err := svc.ListHistory(context.Background(), 1, "admin", 22, model.QueryExecutionListQuery{PageSize: 20, Cursor: &badCursor})
+	if !errors.Is(err, ErrQueryValidationFailed) {
+		t.Fatalf("err = %v, want ErrQueryValidationFailed", err)
+	}
+}
+
+// TestListHistory_Cursor_TamperedIDReturnsValidation proves Oracle Finding 2
+// is fixed: a cursor with a structurally valid envelope but tampered (non-
+// uint64) ID field is rejected at the service boundary with
+// ErrQueryValidationFailed (400), not a 500 from strconv.ParseUint in the repo.
+func TestListHistory_Cursor_TamperedIDReturnsValidation(t *testing.T) {
+	t.Parallel()
+	target := mysqlTarget("Staging")
+	target.ResourceID = 22
+	now := time.Date(2026, 6, 22, 8, 0, 0, 0, time.UTC)
+	svc := NewQueryExecutionService(fakeTargetRepo{targets: []model.QueryTarget{target}}, &fakeExecRepo{}, &fakeResolver{}, &fakeExecutor{}, NewQueryGuard(QueryGuardConfig{DefaultMaxRows: 100, HardMaxRows: 500}), &fakeClock{t: now}, nil)
+
+	// Build a cursor with a valid hash, then tamper the ID to "abc".
+	queryHash := model.ComputeQueryHash(22, nil, nil, nil, "all")
+	validCursor, err := model.EncodeCursor(now, 1, queryHash)
+	if err != nil {
+		t.Fatalf("encode cursor: %v", err)
+	}
+	b, _ := base64.RawURLEncoding.DecodeString(validCursor)
+	tampered := strings.Replace(string(b), `"id":"1"`, `"id":"abc"`, 1)
+	tamperedCursor := base64.RawURLEncoding.EncodeToString([]byte(tampered))
+
+	_, err = svc.ListHistory(context.Background(), 1, "admin", 22, model.QueryExecutionListQuery{PageSize: 20, Cursor: &tamperedCursor})
+	if !errors.Is(err, ErrQueryValidationFailed) {
+		t.Fatalf("err = %v, want ErrQueryValidationFailed (tampered cursor ID must not cause 500)", err)
+	}
+}
+
+func TestListHistory_Cursor_UnknownTarget404(t *testing.T) {
+	t.Parallel()
+	svc := NewQueryExecutionService(fakeTargetRepo{targets: nil}, &fakeExecRepo{}, &fakeResolver{}, &fakeExecutor{}, NewQueryGuard(QueryGuardConfig{DefaultMaxRows: 100, HardMaxRows: 500}), &fakeClock{t: time.Date(2026, 6, 22, 8, 0, 0, 0, time.UTC)}, nil)
+	_, err := svc.ListHistory(context.Background(), 1, "admin", 999, model.QueryExecutionListQuery{PageSize: 20})
+	if !errors.Is(err, ErrQueryTargetNotFound) {
+		t.Fatalf("err = %v, want ErrQueryTargetNotFound", err)
+	}
+}
+
+// TestListHistory_CursorInitial_SetsExplicitCursorMode proves P1: when no
+// ?page= is supplied (Page==0), the service dispatches to cursor mode and
+// passes Mode=PaginationModeCursor to the repository. The first cursor page
+// has Cursor==nil (no boundary predicate) and never sets Page (which would
+// force offset mode at the repo level). This test FAILS on the old candidate
+// which set Page=1 for cursor-initial, causing the repo to use offset mode.
+func TestListHistory_CursorInitial_SetsExplicitCursorMode(t *testing.T) {
+	t.Parallel()
+	target := mysqlTarget("Staging")
+	target.ResourceID = 22
+	now := time.Date(2026, 6, 22, 8, 0, 0, 0, time.UTC)
+	repo := &fakeExecRepo{
+		insertedAttempts: []model.QueryExecutionRecord{
+			{ID: 1, TargetResourceID: 22, ActorUserID: 1, Status: model.QueryExecutionSuccess, CreatedAt: now},
+		},
+	}
+	svc := NewQueryExecutionService(fakeTargetRepo{targets: []model.QueryTarget{target}}, repo, &fakeResolver{}, &fakeExecutor{}, NewQueryGuard(QueryGuardConfig{DefaultMaxRows: 100, HardMaxRows: 500}), &fakeClock{t: now}, nil)
+
+	_, err := svc.ListHistory(context.Background(), 1, "admin", 22, model.QueryExecutionListQuery{PageSize: 20})
+	if err != nil {
+		t.Fatalf("ListHistory: %v", err)
+	}
+
+	// WHY: cursor-initial must set Mode=PaginationModeCursor explicitly.
+	if repo.lastQuery.Mode != model.PaginationModeCursor {
+		t.Fatalf("cursor-initial Mode = %v, want PaginationModeCursor", repo.lastQuery.Mode)
+	}
+	// WHY: cursor-initial must NOT set Page (which would trigger offset mode
+	// at the repo level if Mode were ever ignored or defaulted incorrectly).
+	if repo.lastQuery.Page != 0 {
+		t.Fatalf("cursor-initial Page = %d, want 0 (must not fall back to offset)", repo.lastQuery.Page)
+	}
+	// WHY: cursor-initial must have Cursor==nil (no boundary predicate).
+	if repo.lastQuery.Cursor != nil {
+		t.Fatalf("cursor-initial Cursor = %v, want nil (no boundary predicate)", repo.lastQuery.Cursor)
+	}
+	// WHY: cursor mode requests PageSize+1 to detect a next page via sentinel.
+	if repo.lastQuery.PageSize != 21 {
+		t.Fatalf("cursor-initial PageSize = %d, want 21 (pageSize+1 sentinel)", repo.lastQuery.PageSize)
+	}
+}
+
+// TestListHistory_Offset_SetsExplicitOffsetMode proves P1: when ?page= is
+// supplied (Page>0), the service dispatches to offset mode and passes
+// Mode=PaginationModeOffset to the repository with COUNT and OFFSET.
+func TestListHistory_Offset_SetsExplicitOffsetMode(t *testing.T) {
+	t.Parallel()
+	target := mysqlTarget("Staging")
+	target.ResourceID = 22
+	now := time.Date(2026, 6, 22, 8, 0, 0, 0, time.UTC)
+	repo := &fakeExecRepo{
+		insertedAttempts: []model.QueryExecutionRecord{
+			{ID: 1, TargetResourceID: 22, ActorUserID: 1, Status: model.QueryExecutionSuccess, CreatedAt: now},
+		},
+	}
+	svc := NewQueryExecutionService(fakeTargetRepo{targets: []model.QueryTarget{target}}, repo, &fakeResolver{}, &fakeExecutor{}, NewQueryGuard(QueryGuardConfig{DefaultMaxRows: 100, HardMaxRows: 500}), &fakeClock{t: now}, nil)
+
+	_, err := svc.ListHistory(context.Background(), 1, "admin", 22, model.QueryExecutionListQuery{Page: 1, PageSize: 20})
+	if err != nil {
+		t.Fatalf("ListHistory: %v", err)
+	}
+
+	// WHY: offset mode must set Mode=PaginationModeOffset explicitly.
+	if repo.lastQuery.Mode != model.PaginationModeOffset {
+		t.Fatalf("offset Mode = %v, want PaginationModeOffset", repo.lastQuery.Mode)
+	}
+	if repo.lastQuery.Page != 1 {
+		t.Fatalf("offset Page = %d, want 1", repo.lastQuery.Page)
+	}
+	// WHY: offset mode must NOT request the sentinel (no pageSize+1).
+	if repo.lastQuery.PageSize != 20 {
+		t.Fatalf("offset PageSize = %d, want 20 (no sentinel)", repo.lastQuery.PageSize)
 	}
 }

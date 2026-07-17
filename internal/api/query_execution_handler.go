@@ -8,9 +8,11 @@ package api
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 
@@ -24,7 +26,7 @@ import (
 // accepted from the request body — it is read from the auth middleware context.
 type queryExecutionAPI interface {
 	Execute(ctx context.Context, actorUserID uint64, targetID uint64, req model.QueryExecuteRequest) (model.QueryExecuteResponse, error)
-	ListHistory(ctx context.Context, actorUserID uint64, actorRole string, targetID uint64, q model.QueryExecutionListQuery) ([]model.QueryExecutionRecord, *model.PageInfo, error)
+	ListHistory(ctx context.Context, actorUserID uint64, actorRole string, targetID uint64, q model.QueryExecutionListQuery) (*model.QueryExecutionCursorPage, error)
 	NavigateRelatedRecords(ctx context.Context, actorUserID uint64, targetID uint64, req model.RelatedRecordNavigationRequest) (model.RelatedRecordNavigationResponse, error)
 }
 
@@ -72,15 +74,79 @@ func handleListQueryExecutions(svc queryExecutionAPI) http.HandlerFunc {
 		}
 		actorRole, _ := actorRoleFromContext(r.Context())
 		page, pageSize := parseExecutionPagination(r)
-		items, pageInfo, err := svc.ListHistory(r.Context(), actorUserID, actorRole, targetID, model.QueryExecutionListQuery{
+		status, from, to, cursor, err := parseExecutionFilters(r)
+		if err != nil {
+			writeJSONError(w, http.StatusBadRequest, "validation_failed", err.Error())
+			return
+		}
+		result, err := svc.ListHistory(r.Context(), actorUserID, actorRole, targetID, model.QueryExecutionListQuery{
 			TargetResourceID: targetID, Page: page, PageSize: pageSize,
+			Status: status, From: from, To: to, Cursor: cursor,
 		})
 		if err != nil {
 			writeQueryExecutionError(w, err)
 			return
 		}
-		writeJSON(w, http.StatusOK, model.QueryExecutionListResponse{Items: items, PageInfo: pageInfo})
+		writeJSON(w, http.StatusOK, result)
 	}
+}
+
+func parseExecutionFilters(r *http.Request) (status *model.QueryExecutionStatus, from, to *time.Time, cursor *string, err error) {
+	q := r.URL.Query()
+
+	if q.Has("page") && q.Has("cursor") {
+		return nil, nil, nil, nil, fmt.Errorf("cannot use both page and cursor parameters")
+	}
+
+	if q.Has("status") {
+		raw := q.Get("status")
+		if raw == "" {
+			return nil, nil, nil, nil, fmt.Errorf("status parameter must not be empty")
+		}
+		if err := model.ValidateStatus(raw); err != nil {
+			return nil, nil, nil, nil, err
+		}
+		s := model.QueryExecutionStatus(raw)
+		status = &s
+	}
+
+	if q.Has("from") {
+		raw := q.Get("from")
+		if raw == "" {
+			return nil, nil, nil, nil, fmt.Errorf("from parameter must not be empty")
+		}
+		t, err := model.ParseTimestamp(raw)
+		if err != nil {
+			return nil, nil, nil, nil, err
+		}
+		from = &t
+	}
+
+	if q.Has("to") {
+		raw := q.Get("to")
+		if raw == "" {
+			return nil, nil, nil, nil, fmt.Errorf("to parameter must not be empty")
+		}
+		t, err := model.ParseTimestamp(raw)
+		if err != nil {
+			return nil, nil, nil, nil, err
+		}
+		to = &t
+	}
+
+	if err := model.ValidateTimeWindow(from, to); err != nil {
+		return nil, nil, nil, nil, err
+	}
+
+	if q.Has("cursor") {
+		raw := q.Get("cursor")
+		if raw == "" {
+			return nil, nil, nil, nil, fmt.Errorf("cursor parameter must not be empty")
+		}
+		cursor = &raw
+	}
+
+	return status, from, to, cursor, nil
 }
 
 // writeQueryExecutionError maps a service sentinel to a controlled HTTP response.
@@ -103,7 +169,7 @@ func writeQueryExecutionError(w http.ResponseWriter, err error) {
 }
 
 func parseExecutionPagination(r *http.Request) (int, int) {
-	page := 1
+	var page int // 0 = not explicitly set → cursor-initial mode
 	if raw := r.URL.Query().Get("page"); raw != "" {
 		if v, err := strconv.Atoi(raw); err == nil && v > 0 {
 			page = v

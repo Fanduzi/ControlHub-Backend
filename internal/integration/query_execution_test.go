@@ -14,6 +14,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	mysqldriver "github.com/go-sql-driver/mysql"
 
@@ -85,7 +86,7 @@ func TestQueryExecutionRepository_InsertAndListByTarget(t *testing.T) {
 		}
 	}
 
-	items, total, err := repo.ListExecutions(ctx, model.QueryExecutionListQuery{TargetResourceID: targetID, Page: 1, PageSize: 20})
+	items, total, err := repo.ListExecutions(ctx, model.QueryExecutionListQuery{TargetResourceID: targetID, Page: 1, PageSize: 20, Mode: model.PaginationModeOffset})
 	if err != nil {
 		t.Fatalf("list executions: %v", err)
 	}
@@ -431,7 +432,7 @@ func TestQueryExecution_HistoryWrittenForSuccessAndRejection(t *testing.T) {
 		t.Fatal("expected rejection for write statement")
 	}
 
-	items, total, err := repo.ListExecutions(context.Background(), model.QueryExecutionListQuery{TargetResourceID: targetID, Page: 1, PageSize: 20})
+	items, total, err := repo.ListExecutions(context.Background(), model.QueryExecutionListQuery{TargetResourceID: targetID, Page: 1, PageSize: 20, Mode: model.PaginationModeOffset})
 	if err != nil {
 		t.Fatalf("list executions: %v", err)
 	}
@@ -830,7 +831,7 @@ func TestQueryExecutionRepository_ActorProjectionAndScope(t *testing.T) {
 		t.Fatalf("insert orphan: %v", err)
 	}
 
-	all, total, err := repo.ListExecutions(ctx, model.QueryExecutionListQuery{TargetResourceID: targetID, Page: 1, PageSize: 20})
+	all, total, err := repo.ListExecutions(ctx, model.QueryExecutionListQuery{TargetResourceID: targetID, Page: 1, PageSize: 20, Mode: model.PaginationModeOffset})
 	if err != nil {
 		t.Fatalf("list all: %v", err)
 	}
@@ -859,11 +860,467 @@ func TestQueryExecutionRepository_ActorProjectionAndScope(t *testing.T) {
 
 	own, ownTotal, err := repo.ListExecutions(ctx, model.QueryExecutionListQuery{
 		TargetResourceID: targetID, Page: 1, PageSize: 20, ActorUserID: &adminID,
+		Mode: model.PaginationModeOffset,
 	})
 	if err != nil {
 		t.Fatalf("list own: %v", err)
 	}
 	if ownTotal != 1 || len(own) != 1 || own[0].ActorUserID != adminID {
 		t.Fatalf("own scope = total=%d items=%+v, want only admin", ownTotal, own)
+	}
+}
+
+// --- cursor-based pagination integration tests ---
+
+func TestQueryExecutionRepository_CursorPagination(t *testing.T) {
+	db := setupTestDB(t)
+	repo := mysql.NewQueryExecutionRepository(db)
+	ctx := context.Background()
+	targetID := createQueryTargetResource(t, db, "cursor-page-target")
+
+	baseTime := time.Date(2026, 6, 22, 8, 0, 0, 0, time.UTC)
+	for i := 0; i < 5; i++ {
+		if _, err := repo.InsertExecution(ctx, model.QueryExecutionRecord{
+			TargetResourceID: targetID,
+			ActorUserID:      ownerDBA,
+			Engine:           "mysql",
+			StatementDigest:  fmt.Sprintf("select %d", i),
+			StatementPreview: fmt.Sprintf("select %d", i),
+			Status:           model.QueryExecutionSuccess,
+			RowCount:         i,
+			CreatedAt:        baseTime.Add(time.Duration(i) * time.Second),
+		}); err != nil {
+			t.Fatalf("insert execution %d: %v", i, err)
+		}
+	}
+
+	// First page: explicit offset mode (Page=1) for legacy callers.
+	page1, total, err := repo.ListExecutions(ctx, model.QueryExecutionListQuery{
+		TargetResourceID: targetID, Page: 1, PageSize: 2,
+		Mode: model.PaginationModeOffset,
+	})
+	if err != nil {
+		t.Fatalf("page1: %v", err)
+	}
+	if total != 5 {
+		t.Fatalf("total = %d, want 5", total)
+	}
+	if len(page1) != 2 {
+		t.Fatalf("page1 items = %d, want 2", len(page1))
+	}
+
+	// Encode cursor from last item in page1.
+	last := page1[len(page1)-1]
+	cursor, err := model.EncodeCursor(last.CreatedAt, last.ID, "test-hash")
+	if err != nil {
+		t.Fatalf("encode cursor: %v", err)
+	}
+
+	// Second page: cursor mode (keyset), skip COUNT.
+	page2, cursorTotal, err := repo.ListExecutions(ctx, model.QueryExecutionListQuery{
+		TargetResourceID: targetID, PageSize: 2, Cursor: &cursor,
+		Mode: model.PaginationModeCursor,
+	})
+	if err != nil {
+		t.Fatalf("page2: %v", err)
+	}
+	if cursorTotal != 0 {
+		t.Fatalf("cursor mode total = %d, want 0 (COUNT skipped)", cursorTotal)
+	}
+	if len(page2) != 2 {
+		t.Fatalf("page2 items = %d, want 2", len(page2))
+	}
+
+	// Ensure no overlap between page1 and page2.
+	page1IDs := map[uint64]bool{}
+	for _, item := range page1 {
+		page1IDs[item.ID] = true
+	}
+	for _, item := range page2 {
+		if page1IDs[item.ID] {
+			t.Fatalf("page2 item ID=%d overlaps with page1", item.ID)
+		}
+	}
+}
+
+// TestQueryExecutionRepository_CursorInitial_NoPageNoCursor proves P1: the
+// first cursor page (no Page, no Cursor) uses keyset mode with no boundary
+// predicate, fetches PageSize+1, never COUNT, never OFFSET, and returns the
+// newest rows in (created_at DESC, id DESC) order with a nextCursor when more
+// rows exist. This test FAILS on the old candidate which set Page=1 and fell
+// back to offset mode.
+func TestQueryExecutionRepository_CursorInitial_NoPageNoCursor(t *testing.T) {
+	db := setupTestDB(t)
+	repo := mysql.NewQueryExecutionRepository(db)
+	ctx := context.Background()
+	targetID := createQueryTargetResource(t, db, "cursor-initial-target")
+
+	baseTime := time.Date(2026, 6, 22, 8, 0, 0, 0, time.UTC)
+	for i := 0; i < 5; i++ {
+		if _, err := repo.InsertExecution(ctx, model.QueryExecutionRecord{
+			TargetResourceID: targetID,
+			ActorUserID:      ownerDBA,
+			Engine:           "mysql",
+			StatementDigest:  fmt.Sprintf("select %d", i),
+			StatementPreview: fmt.Sprintf("select %d", i),
+			Status:           model.QueryExecutionSuccess,
+			RowCount:         i,
+			CreatedAt:        baseTime.Add(time.Duration(i) * time.Second),
+		}); err != nil {
+			t.Fatalf("insert execution %d: %v", i, err)
+		}
+	}
+
+	// WHY: cursor-initial must use keyset mode (Mode=Cursor) with no boundary
+	// predicate. Requesting PageSize+1 lets the caller (service) detect a next
+	// page without running COUNT.
+	items, total, err := repo.ListExecutions(ctx, model.QueryExecutionListQuery{
+		TargetResourceID: targetID,
+		PageSize:         3, // request 3 (service would request pageSize+1=3 for pageSize=2)
+		Mode:             model.PaginationModeCursor,
+		// Cursor intentionally nil: first page has no boundary predicate.
+	})
+	if err != nil {
+		t.Fatalf("cursor-initial: %v", err)
+	}
+
+	// WHY: cursor mode must never run COUNT — total stays 0.
+	if total != 0 {
+		t.Fatalf("cursor-initial total = %d, want 0 (COUNT must be skipped)", total)
+	}
+
+	// We requested 3 rows and 5 exist, so we must get all 3.
+	if len(items) != 3 {
+		t.Fatalf("cursor-initial items = %d, want 3", len(items))
+	}
+
+	// WHY: ordering must be created_at DESC, id DESC so the keyset cursor
+	// (created_at, id) is deterministic and the newest row comes first.
+	for i := 1; i < len(items); i++ {
+		if items[i].CreatedAt.After(items[i-1].CreatedAt) {
+			t.Fatalf("cursor-initial not ordered DESC by created_at: items[%d]=%v > items[%d]=%v",
+				i, items[i].CreatedAt, i-1, items[i-1].CreatedAt)
+		}
+		if items[i].CreatedAt.Equal(items[i-1].CreatedAt) && items[i].ID >= items[i-1].ID {
+			t.Fatalf("cursor-initial same-ts not ordered DESC by id: items[%d].ID=%d >= items[%d].ID=%d",
+				i, items[i].ID, i-1, items[i-1].ID)
+		}
+	}
+
+	// The newest row must be the one with the latest created_at (i=4).
+	if items[0].CreatedAt != baseTime.Add(4*time.Second) {
+		t.Fatalf("cursor-initial first item = %v, want newest %v", items[0].CreatedAt, baseTime.Add(4*time.Second))
+	}
+}
+
+// TestQueryExecutionRepository_CursorContinuation proves P1: a continuation
+// page uses the strictly-older (created_at, id) predicate and returns the next
+// batch of rows with no overlap with page 1.
+func TestQueryExecutionRepository_CursorContinuation(t *testing.T) {
+	db := setupTestDB(t)
+	repo := mysql.NewQueryExecutionRepository(db)
+	ctx := context.Background()
+	targetID := createQueryTargetResource(t, db, "cursor-cont-target")
+
+	baseTime := time.Date(2026, 6, 22, 8, 0, 0, 0, time.UTC)
+	for i := 0; i < 5; i++ {
+		if _, err := repo.InsertExecution(ctx, model.QueryExecutionRecord{
+			TargetResourceID: targetID,
+			ActorUserID:      ownerDBA,
+			Engine:           "mysql",
+			StatementDigest:  fmt.Sprintf("select %d", i),
+			StatementPreview: fmt.Sprintf("select %d", i),
+			Status:           model.QueryExecutionSuccess,
+			RowCount:         i,
+			CreatedAt:        baseTime.Add(time.Duration(i) * time.Second),
+		}); err != nil {
+			t.Fatalf("insert execution %d: %v", i, err)
+		}
+	}
+
+	// Page 1: cursor-initial, fetch 2 rows.
+	page1, _, err := repo.ListExecutions(ctx, model.QueryExecutionListQuery{
+		TargetResourceID: targetID, PageSize: 2, Mode: model.PaginationModeCursor,
+	})
+	if err != nil {
+		t.Fatalf("page1: %v", err)
+	}
+	if len(page1) != 2 {
+		t.Fatalf("page1 items = %d, want 2", len(page1))
+	}
+
+	// Encode cursor from last row of page 1.
+	last := page1[len(page1)-1]
+	cursor, err := model.EncodeCursor(last.CreatedAt, last.ID, "test-hash")
+	if err != nil {
+		t.Fatalf("encode cursor: %v", err)
+	}
+
+	// Page 2: continuation using strictly-older predicate.
+	page2, total2, err := repo.ListExecutions(ctx, model.QueryExecutionListQuery{
+		TargetResourceID: targetID, PageSize: 2, Cursor: &cursor,
+		Mode: model.PaginationModeCursor,
+	})
+	if err != nil {
+		t.Fatalf("page2: %v", err)
+	}
+	if total2 != 0 {
+		t.Fatalf("page2 total = %d, want 0 (COUNT skipped)", total2)
+	}
+	if len(page2) != 2 {
+		t.Fatalf("page2 items = %d, want 2", len(page2))
+	}
+
+	// WHY: every page2 row must be strictly older than the cursor (last row of
+	// page1) in the (created_at, id) keyset ordering.
+	for _, item := range page2 {
+		if item.CreatedAt.After(last.CreatedAt) {
+			t.Fatalf("page2 item %d is newer than cursor in created_at", item.ID)
+		}
+		if item.CreatedAt.Equal(last.CreatedAt) && item.ID >= last.ID {
+			t.Fatalf("page2 item %d is not strictly older than cursor in id", item.ID)
+		}
+	}
+
+	// No overlap between page1 and page2.
+	page1IDs := map[uint64]bool{}
+	for _, item := range page1 {
+		page1IDs[item.ID] = true
+	}
+	for _, item := range page2 {
+		if page1IDs[item.ID] {
+			t.Fatalf("page2 item ID=%d overlaps with page1", item.ID)
+		}
+	}
+}
+
+// TestQueryExecutionRepository_CursorNewerInsertBetweenPages proves P1: if a
+// newer row is inserted between fetching page1 and page2, cursor continuation
+// still returns the correct older rows (keyset is stable under inserts newer
+// than the cursor). The newer row is NOT pulled into page2.
+func TestQueryExecutionRepository_CursorNewerInsertBetweenPages(t *testing.T) {
+	db := setupTestDB(t)
+	repo := mysql.NewQueryExecutionRepository(db)
+	ctx := context.Background()
+	targetID := createQueryTargetResource(t, db, "cursor-newer-insert-target")
+
+	baseTime := time.Date(2026, 6, 22, 8, 0, 0, 0, time.UTC)
+	for i := 0; i < 4; i++ {
+		if _, err := repo.InsertExecution(ctx, model.QueryExecutionRecord{
+			TargetResourceID: targetID,
+			ActorUserID:      ownerDBA,
+			Engine:           "mysql",
+			StatementDigest:  fmt.Sprintf("select %d", i),
+			StatementPreview: fmt.Sprintf("select %d", i),
+			Status:           model.QueryExecutionSuccess,
+			RowCount:         i,
+			CreatedAt:        baseTime.Add(time.Duration(i) * time.Second),
+		}); err != nil {
+			t.Fatalf("insert execution %d: %v", i, err)
+		}
+	}
+
+	// Page 1: fetch 2 rows (the two newest).
+	page1, _, err := repo.ListExecutions(ctx, model.QueryExecutionListQuery{
+		TargetResourceID: targetID, PageSize: 2, Mode: model.PaginationModeCursor,
+	})
+	if err != nil {
+		t.Fatalf("page1: %v", err)
+	}
+	if len(page1) != 2 {
+		t.Fatalf("page1 items = %d, want 2", len(page1))
+	}
+
+	// Insert a newer row AFTER page1 was fetched.
+	newerTime := baseTime.Add(10 * time.Second)
+	if _, err := repo.InsertExecution(ctx, model.QueryExecutionRecord{
+		TargetResourceID: targetID,
+		ActorUserID:      ownerDBA,
+		Engine:           "mysql",
+		StatementDigest:  "select newer",
+		StatementPreview: "select newer",
+		Status:           model.QueryExecutionSuccess,
+		RowCount:         99,
+		CreatedAt:        newerTime,
+	}); err != nil {
+		t.Fatalf("insert newer execution: %v", err)
+	}
+
+	// Page 2: continuation using cursor from page1's last row.
+	last := page1[len(page1)-1]
+	cursor, err := model.EncodeCursor(last.CreatedAt, last.ID, "test-hash")
+	if err != nil {
+		t.Fatalf("encode cursor: %v", err)
+	}
+	page2, _, err := repo.ListExecutions(ctx, model.QueryExecutionListQuery{
+		TargetResourceID: targetID, PageSize: 2, Cursor: &cursor,
+		Mode: model.PaginationModeCursor,
+	})
+	if err != nil {
+		t.Fatalf("page2: %v", err)
+	}
+
+	// WHY: the newer insert must NOT appear in page2 — keyset continuation
+	// returns rows strictly older than the cursor, regardless of newer inserts.
+	for _, item := range page2 {
+		if item.CreatedAt.After(last.CreatedAt) {
+			t.Fatalf("page2 contains newer insert (id=%d, created_at=%v) that should not be returned",
+				item.ID, item.CreatedAt)
+		}
+		if item.CreatedAt.Equal(newerTime) {
+			t.Fatalf("page2 contains the newer insert row (id=%d)", item.ID)
+		}
+	}
+
+	// page2 must contain the remaining 2 original rows (i=0, i=1).
+	if len(page2) != 2 {
+		t.Fatalf("page2 items = %d, want 2", len(page2))
+	}
+}
+
+func TestQueryExecutionRepository_CursorStatusFilter(t *testing.T) {
+	db := setupTestDB(t)
+	repo := mysql.NewQueryExecutionRepository(db)
+	ctx := context.Background()
+	targetID := createQueryTargetResource(t, db, "cursor-status-target")
+
+	baseTime := time.Date(2026, 6, 22, 8, 0, 0, 0, time.UTC)
+	for i, status := range []model.QueryExecutionStatus{
+		model.QueryExecutionSuccess,
+		model.QueryExecutionRejected,
+		model.QueryExecutionSuccess,
+	} {
+		if _, err := repo.InsertExecution(ctx, model.QueryExecutionRecord{
+			TargetResourceID: targetID,
+			ActorUserID:      ownerDBA,
+			Engine:           "mysql",
+			StatementDigest:  fmt.Sprintf("select %d", i),
+			StatementPreview: fmt.Sprintf("select %d", i),
+			Status:           status,
+			CreatedAt:        baseTime.Add(time.Duration(i) * time.Second),
+		}); err != nil {
+			t.Fatalf("insert %d: %v", i, err)
+		}
+	}
+
+	successStatus := model.QueryExecutionSuccess
+	items, _, err := repo.ListExecutions(ctx, model.QueryExecutionListQuery{
+		TargetResourceID: targetID, Page: 1, PageSize: 20, Status: &successStatus,
+		Mode: model.PaginationModeOffset,
+	})
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	if len(items) != 2 {
+		t.Fatalf("success items = %d, want 2", len(items))
+	}
+	for _, item := range items {
+		if item.Status != model.QueryExecutionSuccess {
+			t.Fatalf("item status = %q, want success", item.Status)
+		}
+	}
+}
+
+func TestQueryExecutionRepository_CursorTimeFilter(t *testing.T) {
+	db := setupTestDB(t)
+	repo := mysql.NewQueryExecutionRepository(db)
+	ctx := context.Background()
+	targetID := createQueryTargetResource(t, db, "cursor-time-target")
+
+	t1 := time.Date(2026, 6, 1, 0, 0, 0, 0, time.UTC)
+	t2 := time.Date(2026, 6, 15, 0, 0, 0, 0, time.UTC)
+	t3 := time.Date(2026, 6, 22, 0, 0, 0, 0, time.UTC)
+	for i, ts := range []time.Time{t1, t2, t3} {
+		if _, err := repo.InsertExecution(ctx, model.QueryExecutionRecord{
+			TargetResourceID: targetID,
+			ActorUserID:      ownerDBA,
+			Engine:           "mysql",
+			StatementDigest:  fmt.Sprintf("select %d", i),
+			StatementPreview: fmt.Sprintf("select %d", i),
+			Status:           model.QueryExecutionSuccess,
+			CreatedAt:        ts,
+		}); err != nil {
+			t.Fatalf("insert %d: %v", i, err)
+		}
+	}
+
+	from := time.Date(2026, 6, 10, 0, 0, 0, 0, time.UTC)
+	to := time.Date(2026, 6, 20, 0, 0, 0, 0, time.UTC)
+	items, _, err := repo.ListExecutions(ctx, model.QueryExecutionListQuery{
+		TargetResourceID: targetID, Page: 1, PageSize: 20, From: &from, To: &to,
+		Mode: model.PaginationModeOffset,
+	})
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	if len(items) != 1 {
+		t.Fatalf("time-filtered items = %d, want 1", len(items))
+	}
+}
+
+func TestQueryExecutionRepository_IdenticalTimestampsOrderedByID(t *testing.T) {
+	db := setupTestDB(t)
+	repo := mysql.NewQueryExecutionRepository(db)
+	ctx := context.Background()
+	targetID := createQueryTargetResource(t, db, "cursor-same-ts-target")
+
+	sameTime := time.Date(2026, 6, 22, 8, 0, 0, 0, time.UTC)
+	ids := make([]uint64, 3)
+	for i := 0; i < 3; i++ {
+		id, err := repo.InsertExecution(ctx, model.QueryExecutionRecord{
+			TargetResourceID: targetID,
+			ActorUserID:      ownerDBA,
+			Engine:           "mysql",
+			StatementDigest:  fmt.Sprintf("select %d", i),
+			StatementPreview: fmt.Sprintf("select %d", i),
+			Status:           model.QueryExecutionSuccess,
+			CreatedAt:        sameTime,
+		})
+		if err != nil {
+			t.Fatalf("insert %d: %v", i, err)
+		}
+		ids[i] = id
+	}
+
+	items, _, err := repo.ListExecutions(ctx, model.QueryExecutionListQuery{
+		TargetResourceID: targetID, Page: 1, PageSize: 20,
+		Mode: model.PaginationModeOffset,
+	})
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	if len(items) != 3 {
+		t.Fatalf("items = %d, want 3", len(items))
+	}
+
+	// WHY: when timestamps are identical, rows must be ordered by ID descending
+	// so cursor pagination (created_at, id) keyset is deterministic.
+	for i := 1; i < len(items); i++ {
+		if items[i].CreatedAt.Equal(items[i-1].CreatedAt) && items[i].ID >= items[i-1].ID {
+			t.Fatalf("same-timestamp items not ordered by ID desc: items[%d].ID=%d >= items[%d].ID=%d",
+				i, items[i].ID, i-1, items[i-1].ID)
+		}
+	}
+
+	// Cursor pagination with same timestamps must use ID tiebreaker.
+	last := items[0]
+	cursor, err := model.EncodeCursor(last.CreatedAt, last.ID, "test-hash")
+	if err != nil {
+		t.Fatalf("encode cursor: %v", err)
+	}
+	page2, _, err := repo.ListExecutions(ctx, model.QueryExecutionListQuery{
+		TargetResourceID: targetID, PageSize: 2, Cursor: &cursor,
+		Mode: model.PaginationModeCursor,
+	})
+	if err != nil {
+		t.Fatalf("page2: %v", err)
+	}
+	if len(page2) != 2 {
+		t.Fatalf("page2 items = %d, want 2", len(page2))
+	}
+	for _, item := range page2 {
+		if item.ID >= last.ID {
+			t.Fatalf("page2 item ID=%d should be < cursor ID=%d", item.ID, last.ID)
+		}
 	}
 }

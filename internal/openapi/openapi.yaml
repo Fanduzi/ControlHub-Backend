@@ -638,23 +638,51 @@ paths:
             minimum: 1
         - name: page
           in: query
+          description: >
+            Legacy offset mode page number (1-based). Omit to use cursor mode
+            (default): the first page starts from the newest row, and
+            `nextCursor` is returned for continuation. Supply `page` explicitly
+            to use offset mode with `pageInfo` (COUNT + OFFSET). `page` and
+            `cursor` are mutually exclusive.
           schema:
             type: integer
             minimum: 1
-            default: 1
         - name: pageSize
           in: query
           schema:
             type: integer
             minimum: 1
             default: 20
+        - name: status
+          in: query
+          description: Filter by execution status.
+          schema:
+            type: string
+            enum: [success, rejected, failed, timeout]
+        - name: from
+          in: query
+          description: Inclusive start (RFC3339).
+          schema:
+            type: string
+            format: date-time
+        - name: to
+          in: query
+          description: Exclusive end (RFC3339).
+          schema:
+            type: string
+            format: date-time
+        - name: cursor
+          in: query
+          description: Opaque continuation token (cursor mode only).
+          schema:
+            type: string
       responses:
         "200":
-          description: Paginated execution history
+          description: Cursor-paginated execution history
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/QueryExecutionListResponse"
+                $ref: "#/components/schemas/QueryExecutionCursorPage"
               examples:
                 history:
                   value:
@@ -672,19 +700,63 @@ paths:
                         errorCode: ""
                         errorMessage: ""
                         createdAt: "2026-06-22T08:30:00Z"
-                    pageInfo:
-                      page: 1
-                      pageSize: 20
-                      totalItems: 1
-                      totalPages: 1
-                      hasNextPage: false
-                      hasPreviousPage: false
+                    nextCursor: null
+                cursor:
+                  value:
+                    items:
+                      - id: 1002
+                        targetResourceId: 22
+                        actor:
+                          displayName: "ControlHub Admin"
+                        engine: mysql
+                        statementDigest: "select id, name from resources where resource_type = ? limit ?"
+                        statementPreview: "select id, name from resources where resource_type = 'service' limit 20"
+                        status: success
+                        rowCount: 5
+                        durationMs: 42
+                        errorCode: ""
+                        errorMessage: ""
+                        createdAt: "2026-06-22T09:15:00Z"
+                    nextCursor: "eyJpZCI6MTAwMn0="
+        "400":
+          description: >
+            Validation failed: invalid status enum, invalid RFC3339 timestamp,
+            inverted time window (from >= to), or page+cursor mutual exclusion
+            conflict.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              examples:
+                invalidStatus:
+                  value:
+                    error: validation_failed
+                    message: "invalid status: must be one of success, rejected, failed, timeout"
+                invalidTimestamp:
+                  value:
+                    error: validation_failed
+                    message: "from parameter must be a valid RFC3339 timestamp"
+                pageCursorConflict:
+                  value:
+                    error: validation_failed
+                    message: "cannot use both page and cursor parameters"
         "401":
           description: Missing or invalid Bearer token (or token older than the TTL)
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/ErrorResponse"
+        "404":
+          description: Query target not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              examples:
+                targetNotFound:
+                  value:
+                    error: query_target_not_found
+                    message: "query target does not exist"
   /query-targets/{id}/schema/databases:
     get:
       summary: List databases for a query target
@@ -3292,16 +3364,21 @@ components:
         createdAt:
           type: string
           format: date-time
-    QueryExecutionListResponse:
+    QueryExecutionCursorPage:
       type: object
-      required: [items, pageInfo]
+      required: [items, nextCursor]
       properties:
         items:
           type: array
           items:
             $ref: "#/components/schemas/QueryExecutionRecord"
+        nextCursor:
+          type: string
+          nullable: true
+          description: Continuation token for cursor mode. Null when no more rows or in offset mode.
         pageInfo:
           $ref: "#/components/schemas/PageInfo"
+          description: Pagination metadata for offset mode (when ?page= is provided). Omitted in cursor mode.
     TopologyResponse:
       type: object
       required: [rootResourceId, depth, direction, nodes, edges, groups, isDatabaseTopology]

@@ -150,7 +150,7 @@ func TestQueryDevTargetFixture_UnsafeSQLRejectedAndRecorded(t *testing.T) {
 	if _, err := newExecutionService(db).Execute(ctx, ownerDBA, targetID, model.QueryExecuteRequest{Statement: "delete from qe_sandbox_fixtures", MaxRows: 10}); err == nil {
 		t.Fatal("unsafe statement must be rejected, got nil error")
 	}
-	items, _, err := mysql.NewQueryExecutionRepository(db).ListExecutions(ctx, model.QueryExecutionListQuery{TargetResourceID: targetID, Page: 1, PageSize: 20})
+	items, _, err := mysql.NewQueryExecutionRepository(db).ListExecutions(ctx, model.QueryExecutionListQuery{TargetResourceID: targetID, Page: 1, PageSize: 20, Mode: model.PaginationModeOffset})
 	if err != nil {
 		t.Fatalf("list executions: %v", err)
 	}
@@ -178,7 +178,7 @@ func TestQueryDevTargetFixture_HistoryRecordsSuccessAndRejection(t *testing.T) {
 	if _, err := newExecutionService(db).Execute(ctx, ownerDBA, targetID, model.QueryExecuteRequest{Statement: "delete from qe_sandbox_fixtures", MaxRows: 10}); err == nil {
 		t.Fatal("unsafe statement must be rejected")
 	}
-	items, _, err := mysql.NewQueryExecutionRepository(db).ListExecutions(ctx, model.QueryExecutionListQuery{TargetResourceID: targetID, Page: 1, PageSize: 20})
+	items, _, err := mysql.NewQueryExecutionRepository(db).ListExecutions(ctx, model.QueryExecutionListQuery{TargetResourceID: targetID, Page: 1, PageSize: 20, Mode: model.PaginationModeOffset})
 	if err != nil {
 		t.Fatalf("list executions: %v", err)
 	}

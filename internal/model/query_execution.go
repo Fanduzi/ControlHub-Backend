@@ -6,8 +6,13 @@
 package model
 
 import (
+	"crypto/sha256"
+	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"strconv"
+	"strings"
 	"time"
 )
 
@@ -81,21 +86,186 @@ type QueryExecutionRecord struct {
 	CreatedAt        time.Time            `json:"createdAt"`
 }
 
+// PaginationMode controls how ListExecutions selects a page.
+//
+// PaginationModeCursor uses keyset pagination over (created_at, id):
+//   - The first cursor page (Cursor == nil) has no boundary predicate and
+//     starts from the newest row.
+//   - Continuation pages (Cursor != nil) add a strictly-older-than predicate
+//     on (created_at, id).
+//   - Cursor mode never runs a COUNT query and never uses OFFSET. It requests
+//     PageSize+1 rows to detect whether a next page exists.
+//
+// PaginationModeOffset preserves the legacy page/pageSize/offset behaviour,
+// runs COUNT, and returns PageInfo. It is selected only when the caller
+// explicitly supplies ?page=.
+type PaginationMode int
+
+const (
+	// PaginationModeCursor is the default keyset mode for history listing.
+	PaginationModeCursor PaginationMode = iota
+	// PaginationModeOffset is the legacy offset mode, retained for backward
+	// compatibility with callers that explicitly request ?page=.
+	PaginationModeOffset
+)
+
 // QueryExecutionListQuery carries pagination and optional actor visibility scope
 // for execution history. When ActorUserID is non-nil, only that actor's rows for
 // the target are returned (non-admin). Nil means all actors for the target (admin).
+//
+// Mode must be set explicitly by the service layer; the repository does not
+// infer it from whether Cursor is nil. In cursor mode the first page has
+// Cursor == nil and no boundary predicate; continuation pages have Cursor
+// pointing at the last row of the previous page.
 type QueryExecutionListQuery struct {
 	TargetResourceID uint64
 	Page             int
 	PageSize         int
 	ActorUserID      *uint64
+	Status           *QueryExecutionStatus
+	From             *time.Time
+	To               *time.Time
+	Cursor           *string
+	Mode             PaginationMode
 }
 
-// QueryExecutionListResponse is the { items: [...] } envelope for execution
-// history, carrying metadata only — never result rows.
-type QueryExecutionListResponse struct {
-	Items    []QueryExecutionRecord `json:"items"`
-	PageInfo *PageInfo              `json:"pageInfo"`
+// QueryExecutionCursorPage is the envelope for cursor-based execution history.
+// When PageInfo is set (offset mode via explicit ?page=), NextCursor is nil.
+// When NextCursor is set (cursor mode), PageInfo is nil.
+type QueryExecutionCursorPage struct {
+	Items      []QueryExecutionRecord `json:"items"`
+	NextCursor *string                `json:"nextCursor"`
+	PageInfo   *PageInfo              `json:"pageInfo,omitempty"`
+}
+
+// CursorVersion is the current cursor wire format version.
+const CursorVersion = 1
+
+// CursorPayload is the decoded cursor wire format.
+type CursorPayload struct {
+	Version   int       `json:"v"`
+	CreatedAt time.Time `json:"t"`
+	ID        string    `json:"id"`
+	QueryHash string    `json:"q"`
+}
+
+const maxCursorBytes = 1024
+
+// EncodeCursor produces a base64url-encoded cursor from execution metadata.
+func EncodeCursor(createdAt time.Time, id uint64, queryHash string) (string, error) {
+	payload := CursorPayload{
+		Version:   CursorVersion,
+		CreatedAt: createdAt.UTC(),
+		ID:        strconv.FormatUint(id, 10),
+		QueryHash: queryHash,
+	}
+	raw, err := json.Marshal(payload)
+	if err != nil {
+		return "", fmt.Errorf("encode cursor: %w", err)
+	}
+	return base64.RawURLEncoding.EncodeToString(raw), nil
+}
+
+// DecodeCursor decodes a base64url cursor, validates version, size, and that
+// the ID field is a canonical positive uint64 string. This prevents a
+// structurally valid but tampered cursor from reaching the repository and
+// causing a strconv.ParseUint failure (which would surface as HTTP 500).
+func DecodeCursor(raw string) (CursorPayload, error) {
+	if len(raw) > base64.RawURLEncoding.EncodedLen(maxCursorBytes) {
+		return CursorPayload{}, fmt.Errorf("cursor exceeds maximum size")
+	}
+	b, err := base64.RawURLEncoding.DecodeString(raw)
+	if err != nil {
+		return CursorPayload{}, fmt.Errorf("decode cursor: %w", err)
+	}
+	if len(b) > maxCursorBytes {
+		return CursorPayload{}, fmt.Errorf("cursor exceeds maximum size")
+	}
+	var p CursorPayload
+	if err := json.Unmarshal(b, &p); err != nil {
+		return CursorPayload{}, fmt.Errorf("decode cursor payload: %w", err)
+	}
+	if p.Version != CursorVersion {
+		return CursorPayload{}, fmt.Errorf("unsupported cursor version: %d", p.Version)
+	}
+	if p.CreatedAt.IsZero() {
+		return CursorPayload{}, fmt.Errorf("cursor missing created_at")
+	}
+	if _, err := strconv.ParseUint(p.ID, 10, 64); err != nil {
+		return CursorPayload{}, fmt.Errorf("cursor id is not a valid uint64: %w", err)
+	}
+	return p, nil
+}
+
+// NormalizeFilters produces a canonical string for hash computation.
+// Uses RFC3339Nano to preserve fractional seconds so that two timestamps in
+// the same second but with different fractional parts produce different hashes.
+func NormalizeFilters(status *QueryExecutionStatus, from, to *time.Time) string {
+	var sb strings.Builder
+	if status != nil {
+		sb.WriteString(string(*status))
+	}
+	sb.WriteByte('|')
+	if from != nil {
+		sb.WriteString(from.UTC().Format(time.RFC3339Nano))
+	}
+	sb.WriteByte('|')
+	if to != nil {
+		sb.WriteString(to.UTC().Format(time.RFC3339Nano))
+	}
+	return sb.String()
+}
+
+// ComputeQueryHash returns a SHA256 hex digest of the canonical filter string.
+func ComputeQueryHash(targetID uint64, status *QueryExecutionStatus, from, to *time.Time, scope string) string {
+	canonical := strconv.FormatUint(targetID, 10) + "|" +
+		NormalizeFilters(status, from, to) + "|" +
+		scope
+	h := sha256.Sum256([]byte(canonical))
+	return fmt.Sprintf("%x", h)
+}
+
+// ValidateStatus accepts exactly the four known execution status strings.
+func ValidateStatus(s string) error {
+	switch QueryExecutionStatus(s) {
+	case QueryExecutionSuccess, QueryExecutionRejected, QueryExecutionFailed, QueryExecutionTimeout:
+		return nil
+	}
+	return fmt.Errorf("invalid status: %s", s)
+}
+
+// ParseTimestamp parses an RFC3339 or RFC3339Nano timestamp.
+// Both formats require a timezone suffix (Z or ±hh:mm), so date-only and
+// timezone-less strings are rejected by the parser itself.
+func ParseTimestamp(s string) (time.Time, error) {
+	t, err := time.Parse(time.RFC3339Nano, s)
+	if err != nil {
+		t, err = time.Parse(time.RFC3339, s)
+		if err != nil {
+			return time.Time{}, fmt.Errorf("invalid timestamp %q: must be RFC3339 with timezone", s)
+		}
+	}
+	return t, nil
+}
+
+// ValidateTimeWindow rejects from >= to.
+func ValidateTimeWindow(from, to *time.Time) error {
+	if from != nil && to != nil && !from.Before(*to) {
+		return fmt.Errorf("invalid time window: from (%v) must be before to (%v)", from.Format(time.RFC3339), to.Format(time.RFC3339))
+	}
+	return nil
+}
+
+// ValidateCursor decodes a cursor and verifies its query hash matches.
+func ValidateCursor(raw string, expectedQueryHash string) error {
+	p, err := DecodeCursor(raw)
+	if err != nil {
+		return err
+	}
+	if p.QueryHash != expectedQueryHash {
+		return fmt.Errorf("cursor query hash mismatch")
+	}
+	return nil
 }
 
 // QueryEnvironmentPolicy controls which environments a credential may execute
