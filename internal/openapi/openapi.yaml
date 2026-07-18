@@ -644,14 +644,26 @@ paths:
             `nextCursor` is returned for continuation. Supply `page` explicitly
             to use offset mode with `pageInfo` (COUNT + OFFSET). `page` and
             `cursor` are mutually exclusive.
+
+            An explicitly supplied but invalid `page` (empty, zero, negative,
+            non-integer, or repeated) returns `400 validation_failed` and does
+            not invoke the history service; only an absent `page` selects
+            cursor-initial mode.
           schema:
             type: integer
             minimum: 1
         - name: pageSize
           in: query
+          description: >
+            Items per page. Defaults to 20 when omitted. Must be an integer in
+            `1..500` when supplied; an explicitly supplied but invalid `pageSize`
+            (empty, zero, negative, non-integer, greater than 500, or repeated)
+            returns `400 validation_failed` and does not invoke the history
+            service. Applies identically to cursor and offset modes.
           schema:
             type: integer
             minimum: 1
+            maximum: 500
             default: 20
         - name: status
           in: query
@@ -673,7 +685,12 @@ paths:
             format: date-time
         - name: cursor
           in: query
-          description: Opaque continuation token (cursor mode only).
+          description: >
+            Opaque continuation token (cursor mode only). The example value
+            below is illustrative and must not be reused as an authorization
+            artifact; the `q` field is an unkeyed query-context digest, not a
+            signature. A cursor is only valid for the exact filter context and
+            actor scope that produced it.
           schema:
             type: string
       responses:
@@ -717,12 +734,14 @@ paths:
                         errorCode: ""
                         errorMessage: ""
                         createdAt: "2026-06-22T09:15:00Z"
-                    nextCursor: "eyJpZCI6MTAwMn0="
+                    nextCursor: "eyJ2IjoxLCJ0IjoiMjAyNi0wNi0yMlQwOToxNTowMFoiLCJpZCI6IjEwMDIiLCJxIjoiNjQwODcyNjU3MWM5ZTIzZDA5YjEwMzk4YjQyYWU3NDRiNmJiMDljMWMwODMxNGEyMDNlNGJjNjU2OTc2NTBiMiJ9"
         "400":
           description: >
             Validation failed: invalid status enum, invalid RFC3339 timestamp,
-            inverted time window (from >= to), or page+cursor mutual exclusion
-            conflict.
+            inverted time window (from >= to), page+cursor mutual exclusion
+            conflict, invalid explicit `page` (empty, zero, negative,
+            non-integer, or repeated), or invalid explicit `pageSize` (empty,
+            zero, negative, non-integer, greater than 500, or repeated).
           content:
             application/json:
               schema:
@@ -740,6 +759,14 @@ paths:
                   value:
                     error: validation_failed
                     message: "cannot use both page and cursor parameters"
+                invalidPage:
+                  value:
+                    error: validation_failed
+                    message: "page parameter must be a positive integer"
+                invalidPageSize:
+                  value:
+                    error: validation_failed
+                    message: "pageSize parameter must be an integer in 1..500"
         "401":
           description: Missing or invalid Bearer token (or token older than the TTL)
           content:

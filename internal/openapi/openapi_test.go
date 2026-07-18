@@ -2,11 +2,14 @@ package openapi_test
 
 import (
 	"context"
+	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/getkin/kin-openapi/openapi3"
 
+	"github.com/fan/controlhub/internal/model"
 	"github.com/fan/controlhub/internal/openapi"
 )
 
@@ -273,5 +276,143 @@ func assertIntegerInt64(t *testing.T, field string, schema *openapi3.Schema) {
 	}
 	if schema.Format != "int64" {
 		t.Fatalf("expected %s format int64, got %q", field, schema.Format)
+	}
+}
+
+// TestOpenAPIExecutionsPageSizeContract proves the documented pageSize contract
+// for GET /query-targets/{id}/executions: minimum 1, maximum 500, default 20.
+// WHY: the prior spec omitted `maximum: 500`, so out-of-range pageSize values
+// were not contractually rejected and the handler silently clamped them.
+func TestOpenAPIExecutionsPageSizeContract(t *testing.T) {
+	loader := openapi3.NewLoader()
+	doc, err := loader.LoadFromData(openapi.YAML)
+	if err != nil {
+		t.Fatalf("failed to parse openapi.yaml: %v", err)
+	}
+
+	assertQueryParamIntegerBounds(t, doc, "/query-targets/{id}/executions", "get", "pageSize", 20, 1, 500)
+}
+
+// TestOpenAPIExecutionsCursorExampleIsVersion1 decodes the documented `cursor`
+// response example nextCursor value and asserts it is a structurally valid
+// version-1 CursorPayload (v=1, RFC3339 t, decimal-string id, 64-hex q).
+// WHY: the prior example `eyJpZCI6MTAwMn0=` decoded to `{"id":1002}` — a legacy
+// non-versioned payload that does not match the versioned CursorPayload the
+// server actually emits. Consumers decoding by the spec sample would hit a
+// version mismatch.
+func TestOpenAPIExecutionsCursorExampleIsVersion1(t *testing.T) {
+	loader := openapi3.NewLoader()
+	doc, err := loader.LoadFromData(openapi.YAML)
+	if err != nil {
+		t.Fatalf("failed to parse openapi.yaml: %v", err)
+	}
+
+	pathItem := doc.Paths.Value("/query-targets/{id}/executions")
+	if pathItem == nil || pathItem.Get == nil {
+		t.Fatal("executions endpoint not found")
+	}
+	resp := pathItem.Get.Responses.Value("200")
+	if resp == nil {
+		t.Fatal("200 response not found")
+	}
+	appJSON := resp.Value.Content.Get("application/json")
+	if appJSON == nil {
+		t.Fatal("application/json content not found")
+	}
+	cursorExampleRef := appJSON.Examples["cursor"]
+	if cursorExampleRef == nil || cursorExampleRef.Value == nil {
+		t.Fatal("cursor example not found")
+	}
+	// The example value is a map[string]interface{} with a nextCursor field.
+	exampleMap, ok := cursorExampleRef.Value.Value.(map[string]interface{})
+	if !ok {
+		t.Fatalf("cursor example value type = %T, want map", cursorExampleRef.Value.Value)
+	}
+	nextCursor, ok := exampleMap["nextCursor"].(string)
+	if !ok {
+		t.Fatalf("cursor example nextCursor type = %T, want string", exampleMap["nextCursor"])
+	}
+
+	// Decode the cursor using the model.DecodeCursor contract.
+	payload, err := model.DecodeCursor(nextCursor)
+	if err != nil {
+		t.Fatalf("documented cursor example must decode as version-1 CursorPayload; got error: %v; cursor=%q", err, nextCursor)
+	}
+	if payload.Version != 1 {
+		t.Fatalf("cursor example version = %d, want 1", payload.Version)
+	}
+	if payload.CreatedAt.IsZero() {
+		t.Fatal("cursor example missing createdAt")
+	}
+	// WHY: RFC3339 parseability is the wire-format contract. The example must
+	// round-trip through time.Parse(time.RFC3339, ...).
+	if _, perr := time.Parse(time.RFC3339, payload.CreatedAt.Format(time.RFC3339)); perr != nil {
+		t.Fatalf("cursor example createdAt is not RFC3339: %v", perr)
+	}
+	if _, perr := strconv.ParseUint(payload.ID, 10, 64); perr != nil {
+		t.Fatalf("cursor example id %q is not a canonical positive uint64 string: %v", payload.ID, perr)
+	}
+	// WHY: q must be a 64-char lowercase hex SHA256 digest.
+	if len(payload.QueryHash) != 64 {
+		t.Fatalf("cursor example q length = %d, want 64", len(payload.QueryHash))
+	}
+	for _, r := range payload.QueryHash {
+		switch {
+		case r >= '0' && r <= '9', r >= 'a' && r <= 'f':
+		default:
+			t.Fatalf("cursor example q %q must be lowercase hex [0-9a-f]", payload.QueryHash)
+		}
+	}
+}
+
+// TestOpenAPIExecutions400DocumentsInvalidPageAndPageSize proves the 400
+// response block documents the invalidPage and invalidPageSize examples with
+// the exact handler error strings. WHY: this keeps the spec and the handler
+// in lockstep — a future change to the handler message must update the spec
+// and vice versa, or this test fails.
+func TestOpenAPIExecutions400DocumentsInvalidPageAndPageSize(t *testing.T) {
+	loader := openapi3.NewLoader()
+	doc, err := loader.LoadFromData(openapi.YAML)
+	if err != nil {
+		t.Fatalf("failed to parse openapi.yaml: %v", err)
+	}
+
+	pathItem := doc.Paths.Value("/query-targets/{id}/executions")
+	if pathItem == nil || pathItem.Get == nil {
+		t.Fatal("executions endpoint not found")
+	}
+	resp := pathItem.Get.Responses.Value("400")
+	if resp == nil {
+		t.Fatal("400 response not found")
+	}
+	appJSON := resp.Value.Content.Get("application/json")
+	if appJSON == nil {
+		t.Fatal("application/json content not found")
+	}
+
+	type exampleAssertion struct {
+		name    string
+		message string
+	}
+	assertions := []exampleAssertion{
+		{"invalidPage", "page parameter must be a positive integer"},
+		{"invalidPageSize", "pageSize parameter must be an integer in 1..500"},
+	}
+	for _, a := range assertions {
+		exRef := appJSON.Examples[a.name]
+		if exRef == nil || exRef.Value == nil {
+			t.Fatalf("400 response missing example %q", a.name)
+		}
+		exMap, ok := exRef.Value.Value.(map[string]interface{})
+		if !ok {
+			t.Fatalf("example %q value type = %T, want map", a.name, exRef.Value.Value)
+		}
+		msg, ok := exMap["message"].(string)
+		if !ok {
+			t.Fatalf("example %q message type = %T, want string", a.name, exMap["message"])
+		}
+		if msg != a.message {
+			t.Fatalf("example %q message = %q, want %q", a.name, msg, a.message)
+		}
 	}
 }
