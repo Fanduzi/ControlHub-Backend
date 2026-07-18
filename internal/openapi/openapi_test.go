@@ -365,12 +365,11 @@ func TestOpenAPIExecutionsCursorExampleIsVersion1(t *testing.T) {
 	}
 }
 
-// TestOpenAPIExecutions400DocumentsInvalidPageAndPageSize proves the 400
-// response block documents the invalidPage and invalidPageSize examples with
-// the exact handler error strings. WHY: this keeps the spec and the handler
-// in lockstep — a future change to the handler message must update the spec
-// and vice versa, or this test fails.
-func TestOpenAPIExecutions400DocumentsInvalidPageAndPageSize(t *testing.T) {
+// TestOpenAPIExecutions400DocumentsValidationExamples proves the 400 response
+// block documents all execution-history validation examples with the exact
+// handler error strings. WHY: this keeps the spec and handler in lockstep — a
+// future change to any validation message must update the spec and vice versa.
+func TestOpenAPIExecutions400DocumentsValidationExamples(t *testing.T) {
 	loader := openapi3.NewLoader()
 	doc, err := loader.LoadFromData(openapi.YAML)
 	if err != nil {
@@ -395,6 +394,8 @@ func TestOpenAPIExecutions400DocumentsInvalidPageAndPageSize(t *testing.T) {
 		message string
 	}
 	assertions := []exampleAssertion{
+		{"invalidStatus", "invalid status: INVALID"},
+		{"invalidTimestamp", `invalid timestamp "not-a-date": must be RFC3339 with timezone`},
 		{"invalidPage", "page parameter must be a positive integer"},
 		{"invalidPageSize", "pageSize parameter must be an integer in 1..500"},
 	}

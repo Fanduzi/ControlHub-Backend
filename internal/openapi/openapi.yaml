@@ -750,11 +750,11 @@ paths:
                 invalidStatus:
                   value:
                     error: validation_failed
-                    message: "invalid status: must be one of success, rejected, failed, timeout"
+                    message: "invalid status: INVALID"
                 invalidTimestamp:
                   value:
                     error: validation_failed
-                    message: "from parameter must be a valid RFC3339 timestamp"
+                    message: 'invalid timestamp "not-a-date": must be RFC3339 with timezone'
                 pageCursorConflict:
                   value:
                     error: validation_failed
