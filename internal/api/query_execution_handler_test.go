@@ -38,6 +38,7 @@ type stubQueryExec struct {
 	gotNavRequest model.RelatedRecordNavigationRequest
 	gotQuery      model.QueryExecutionListQuery
 	executeCalled bool
+	listCalled    bool
 	navCalled     bool
 }
 
@@ -50,6 +51,7 @@ func (s *stubQueryExec) Execute(_ context.Context, actorUserID uint64, targetID 
 }
 
 func (s *stubQueryExec) ListHistory(_ context.Context, actorUserID uint64, actorRole string, targetID uint64, q model.QueryExecutionListQuery) (*model.QueryExecutionCursorPage, error) {
+	s.listCalled = true
 	s.gotActor = actorUserID
 	s.gotTargetID = targetID
 	s.gotRole = actorRole
@@ -588,5 +590,211 @@ func TestQueryExecution_ListHistory_OffsetEnvelopeShape(t *testing.T) {
 	// WHY: pageInfo must be present in offset mode.
 	if !strings.Contains(body, `"pageInfo"`) {
 		t.Fatalf("offset mode response must include pageInfo: %s", body)
+	}
+}
+
+// --- P1: explicit invalid page/pageSize must return 400 and never call the service ---
+//
+// WHY: the prior parser used r.URL.Query().Get(), which collapses "?page=" (present
+// but empty) and "?page=0"/"?page=-1"/"?page=abc" (present but invalid) into the
+// "absent" branch, silently selecting cursor-initial mode and dropping pageInfo
+// from the response. The public baseline for explicit ?page= was offset pagination
+// with pageInfo, so silently switching to cursor mode is a response-shape
+// regression. Explicit invalid values must be rejected with a controlled 400 and
+// must not reach ListHistory.
+
+func TestQueryExecution_ListHistory_InvalidPageReturns400(t *testing.T) {
+	cases := []struct {
+		name string
+		url  string
+	}{
+		{"empty", "/query-targets/22/executions?page="},
+		{"zero", "/query-targets/22/executions?page=0"},
+		{"negative", "/query-targets/22/executions?page=-1"},
+		{"non-numeric", "/query-targets/22/executions?page=abc"},
+		{"non-integer", "/query-targets/22/executions?page=1.5"},
+		{"repeated", "/query-targets/22/executions?page=1&page=2"},
+		{"repeated-with-empty", "/query-targets/22/executions?page=1&page="},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			stub := &stubQueryExec{listItems: []model.QueryExecutionRecord{}}
+			router := newQueryExecRouter(stub)
+			token := mintToken(t, "qe-test-secret", 42, "admin", qeTestNow)
+
+			rec := httptest.NewRecorder()
+			router.ServeHTTP(rec, qeRequest(http.MethodGet, tc.url, "", token))
+
+			if rec.Code != http.StatusBadRequest {
+				t.Fatalf("status = %d, want 400; body=%s", rec.Code, rec.Body.String())
+			}
+			if !strings.Contains(rec.Body.String(), "validation_failed") {
+				t.Fatalf("body = %s, want validation_failed", rec.Body.String())
+			}
+			// WHY: an invalid explicit page must not invoke the service. If it did,
+			// the silent cursor-initial fallback would re-emerge and pageInfo would
+			// disappear from a request that explicitly asked for offset pagination.
+			if stub.listCalled {
+				t.Fatalf("ListHistory must not be called for invalid page; gotQuery=%#v", stub.gotQuery)
+			}
+		})
+	}
+}
+
+func TestQueryExecution_ListHistory_InvalidPageSizeReturns400(t *testing.T) {
+	cases := []struct {
+		name string
+		url  string
+	}{
+		{"empty", "/query-targets/22/executions?pageSize="},
+		{"zero", "/query-targets/22/executions?pageSize=0"},
+		{"negative", "/query-targets/22/executions?pageSize=-1"},
+		{"non-numeric", "/query-targets/22/executions?pageSize=abc"},
+		{"over-max", "/query-targets/22/executions?pageSize=501"},
+		{"non-integer", "/query-targets/22/executions?pageSize=1.5"},
+		{"repeated", "/query-targets/22/executions?pageSize=20&pageSize=501"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			stub := &stubQueryExec{listItems: []model.QueryExecutionRecord{}}
+			router := newQueryExecRouter(stub)
+			token := mintToken(t, "qe-test-secret", 42, "admin", qeTestNow)
+
+			rec := httptest.NewRecorder()
+			router.ServeHTTP(rec, qeRequest(http.MethodGet, tc.url, "", token))
+
+			if rec.Code != http.StatusBadRequest {
+				t.Fatalf("status = %d, want 400; body=%s", rec.Code, rec.Body.String())
+			}
+			if !strings.Contains(rec.Body.String(), "validation_failed") {
+				t.Fatalf("body = %s, want validation_failed", rec.Body.String())
+			}
+			// WHY: pageSize validation must apply in both cursor and offset modes.
+			// The service must not see an out-of-range value that NormalizePagination
+			// would silently clamp, hiding the client error.
+			if stub.listCalled {
+				t.Fatalf("ListHistory must not be called for invalid pageSize; gotQuery=%#v", stub.gotQuery)
+			}
+		})
+	}
+}
+
+// TestQueryExecution_ListHistory_PageAndCursorConflictPrecedence proves the
+// page+cursor conflict message wins over page-value validation: the conflict
+// is a more specific diagnosis and keeps the existing 400 contract stable for
+// clients that already special-case the "cannot use both" message.
+func TestQueryExecution_ListHistory_PageAndCursorConflictPrecedence(t *testing.T) {
+	cases := []struct {
+		name        string
+		url         string
+		wantMessage string
+	}{
+		{"valid-page-plus-cursor", "/query-targets/22/executions?page=1&cursor=abc123", "cannot use both page and cursor parameters"},
+		{"invalid-page-plus-cursor", "/query-targets/22/executions?page=abc&cursor=xyz", "cannot use both page and cursor parameters"},
+		{"empty-page-plus-cursor", "/query-targets/22/executions?page=&cursor=xyz", "cannot use both page and cursor parameters"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			stub := &stubQueryExec{listItems: []model.QueryExecutionRecord{}}
+			router := newQueryExecRouter(stub)
+			token := mintToken(t, "qe-test-secret", 42, "admin", qeTestNow)
+
+			rec := httptest.NewRecorder()
+			router.ServeHTTP(rec, qeRequest(http.MethodGet, tc.url, "", token))
+
+			if rec.Code != http.StatusBadRequest {
+				t.Fatalf("status = %d, want 400; body=%s", rec.Code, rec.Body.String())
+			}
+			body := rec.Body.String()
+			if !strings.Contains(body, "validation_failed") {
+				t.Fatalf("body = %s, want validation_failed", body)
+			}
+			if !strings.Contains(body, tc.wantMessage) {
+				t.Fatalf("body = %s, want message %q (conflict must take precedence over page-value validation)", body, tc.wantMessage)
+			}
+			if stub.listCalled {
+				t.Fatalf("ListHistory must not be called when page+cursor conflict; gotQuery=%#v", stub.gotQuery)
+			}
+		})
+	}
+}
+
+// TestQueryExecution_ListHistory_ValidPageStaysOffset proves that a valid
+// explicit ?page=N keeps the legacy offset contract (pageInfo present,
+// nextCursor null) — the regression being fixed is that invalid pages were
+// silently dropping this shape, but valid pages must continue to work.
+func TestQueryExecution_ListHistory_ValidPageStaysOffset(t *testing.T) {
+	cases := []struct {
+		name string
+		url  string
+		page int
+	}{
+		{"page-1", "/query-targets/22/executions?page=1", 1},
+		{"page-2", "/query-targets/22/executions?page=2", 2},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			items := []model.QueryExecutionRecord{
+				{ID: 1, TargetResourceID: 22, ActorUserID: 42, Actor: model.QueryExecutionActor{DisplayName: "Admin"}, Status: model.QueryExecutionSuccess, CreatedAt: qeTestNow},
+			}
+			stub := &stubQueryExec{listItems: items}
+			router := newQueryExecRouter(stub)
+			token := mintToken(t, "qe-test-secret", 42, "admin", qeTestNow)
+
+			rec := httptest.NewRecorder()
+			router.ServeHTTP(rec, qeRequest(http.MethodGet, tc.url, "", token))
+
+			if rec.Code != http.StatusOK {
+				t.Fatalf("status = %d, want 200; body=%s", rec.Code, rec.Body.String())
+			}
+			if !stub.listCalled {
+				t.Fatal("ListHistory must be called for valid page")
+			}
+			if stub.gotQuery.Page != tc.page {
+				t.Fatalf("service received Page = %d, want %d", stub.gotQuery.Page, tc.page)
+			}
+			body := rec.Body.String()
+			if !strings.Contains(body, `"pageInfo"`) {
+				t.Fatalf("offset mode response must include pageInfo: %s", body)
+			}
+			if !strings.Contains(body, `"nextCursor":null`) {
+				t.Fatalf("offset mode response must include nextCursor:null: %s", body)
+			}
+		})
+	}
+}
+
+// TestQueryExecution_ListHistory_ValidPageSizeAccepted proves that valid
+// pageSize values in [1, MaxPageSize] are passed through verbatim to the
+// service, in both cursor and offset modes.
+func TestQueryExecution_ListHistory_ValidPageSizeAccepted(t *testing.T) {
+	cases := []struct {
+		name     string
+		url      string
+		wantSize int
+	}{
+		{"cursor-pageSize-1", "/query-targets/22/executions?pageSize=1", 1},
+		{"cursor-pageSize-500", "/query-targets/22/executions?pageSize=500", 500},
+		{"offset-pageSize-50", "/query-targets/22/executions?page=1&pageSize=50", 50},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			stub := &stubQueryExec{listItems: []model.QueryExecutionRecord{}}
+			router := newQueryExecRouter(stub)
+			token := mintToken(t, "qe-test-secret", 42, "admin", qeTestNow)
+
+			rec := httptest.NewRecorder()
+			router.ServeHTTP(rec, qeRequest(http.MethodGet, tc.url, "", token))
+
+			if rec.Code != http.StatusOK {
+				t.Fatalf("status = %d, want 200; body=%s", rec.Code, rec.Body.String())
+			}
+			if !stub.listCalled {
+				t.Fatal("ListHistory must be called for valid pageSize")
+			}
+			if stub.gotQuery.PageSize != tc.wantSize {
+				t.Fatalf("service received PageSize = %d, want %d", stub.gotQuery.PageSize, tc.wantSize)
+			}
+		})
 	}
 }

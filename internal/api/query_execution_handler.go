@@ -73,14 +73,22 @@ func handleListQueryExecutions(svc queryExecutionAPI) http.HandlerFunc {
 			return
 		}
 		actorRole, _ := actorRoleFromContext(r.Context())
-		page, pageSize := parseExecutionPagination(r)
 		status, from, to, cursor, err := parseExecutionFilters(r)
 		if err != nil {
 			writeJSONError(w, http.StatusBadRequest, "validation_failed", err.Error())
 			return
 		}
+		// WHY: parseExecutionFilters is parsed first so the page+cursor conflict
+		// message takes precedence over page-value validation — the conflict is a
+		// more specific diagnosis than "page is not a positive integer" and keeps
+		// the existing 400 contract stable for clients that already special-case it.
+		pg, err := parseExecutionPagination(r)
+		if err != nil {
+			writeJSONError(w, http.StatusBadRequest, "validation_failed", err.Error())
+			return
+		}
 		result, err := svc.ListHistory(r.Context(), actorUserID, actorRole, targetID, model.QueryExecutionListQuery{
-			TargetResourceID: targetID, Page: page, PageSize: pageSize,
+			TargetResourceID: targetID, Page: pg.Page, PageSize: pg.PageSize,
 			Status: status, From: from, To: to, Cursor: cursor,
 		})
 		if err != nil {
@@ -168,20 +176,65 @@ func writeQueryExecutionError(w http.ResponseWriter, err error) {
 	}
 }
 
-func parseExecutionPagination(r *http.Request) (int, int) {
-	var page int // 0 = not explicitly set → cursor-initial mode
-	if raw := r.URL.Query().Get("page"); raw != "" {
-		if v, err := strconv.Atoi(raw); err == nil && v > 0 {
-			page = v
+// executionPagination is the validated pagination boundary for the history
+// list endpoint. Page == 0 means "page parameter absent" → cursor-initial mode.
+// PageSize is always in [1, MaxPageSize] when this struct is returned without
+// error; an absent pageSize parameter resolves to DefaultPageSize.
+type executionPagination struct {
+	Page     int
+	PageSize int
+}
+
+// parseExecutionPagination is the single HTTP contract parser for the page and
+// pageSize query parameters on GET /query-targets/{id}/executions. It
+// distinguishes "parameter absent" from "parameter supplied but invalid":
+//
+//   - absent page        → cursor-initial mode (Page == 0)
+//   - valid page (>=1)   → legacy offset mode (Page == N)
+//   - invalid page       → 400 validation_failed (empty, zero, negative,
+//     non-integer, >1 value, or out of int range)
+//   - absent pageSize    → DefaultPageSize (20)
+//   - valid pageSize     → clamped to [1, MaxPageSize]
+//   - invalid pageSize   → 400 validation_failed (empty, zero, negative,
+//     non-integer, >1 value, >MaxPageSize, or out of int
+//     range)
+//
+// Repeated query parameters (?page=1&page=2) are rejected because the choice
+// between two valid values is ambiguous and not part of the public contract.
+// The service-layer NormalizePagination remains as defense-in-depth for any
+// internal caller that bypasses this handler, but it is no longer the HTTP
+// contract parser.
+func parseExecutionPagination(r *http.Request) (executionPagination, error) {
+	q := r.URL.Query()
+	var pg executionPagination
+	pg.PageSize = model.DefaultPageSize
+
+	if raw, present := q["page"]; present {
+		// q["page"] returns []string{} for "?page=" and a single-element slice
+		// for "?page=N". Get() collapses both to "", which would silently treat
+		// an explicit empty value as absent — that is the regression being fixed.
+		if len(raw) != 1 || raw[0] == "" {
+			return executionPagination{}, fmt.Errorf("page parameter must be a positive integer")
 		}
-	}
-	pageSize := 20
-	if raw := r.URL.Query().Get("pageSize"); raw != "" {
-		if v, err := strconv.Atoi(raw); err == nil && v > 0 {
-			pageSize = v
+		n, err := strconv.Atoi(raw[0])
+		if err != nil || n < 1 {
+			return executionPagination{}, fmt.Errorf("page parameter must be a positive integer")
 		}
+		pg.Page = n
 	}
-	return page, pageSize
+
+	if raw, present := q["pageSize"]; present {
+		if len(raw) != 1 || raw[0] == "" {
+			return executionPagination{}, fmt.Errorf("pageSize parameter must be an integer in 1..500")
+		}
+		n, err := strconv.Atoi(raw[0])
+		if err != nil || n < 1 || n > model.MaxPageSize {
+			return executionPagination{}, fmt.Errorf("pageSize parameter must be an integer in 1..500")
+		}
+		pg.PageSize = n
+	}
+
+	return pg, nil
 }
 
 // handleNavigateRelatedRecords handles POST /query-targets/{id}/related-records.
