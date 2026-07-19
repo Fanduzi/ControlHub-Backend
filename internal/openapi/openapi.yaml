@@ -280,6 +280,125 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/ErrorResponse"
+  /query-targets/{id}/explain:
+    post:
+      summary: Explain a read-only SELECT against a query target
+      operationId: explainQueryTarget
+      description: >
+        Phase 38N governed Explain. Runs EXPLAIN FORMAT=JSON against a
+        parser-approved bare SELECT under the same governed target access,
+        credential binding, timeout, and read-only transaction as execution.
+        The browser sends only the worksheet statement; it never constructs
+        EXPLAIN, engine-specific syntax, or actor/credential fields. The
+        backend owns wrapping the guarded SELECT in the engine Explain
+        syntax and normalizing the raw plan into a bounded, versioned, leak-
+        free response. Explain never executes the underlying bare SELECT and
+        never creates a query_executions row.
+        MySQL is the only supported engine in v1; TiDB rejects EXPLAIN
+        FORMAT=JSON and returns query_explain_not_supported. Requires a fresh
+        Bearer token (bounded TTL). The actor is derived from the verified
+        token and is never accepted in the request body.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+            format: int64
+            minimum: 1
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ExplainRequest"
+            examples:
+              acceptedSelect:
+                value:
+                  statement: "select * from big"
+              rejectedTypedExplain:
+                value:
+                  statement: "explain select 1"
+      responses:
+        "200":
+          description: Normalized Explain plan with backend-derived risks
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ExplainResponse"
+              examples:
+                fullScanWithRisks:
+                  value:
+                    targetResourceId: 616
+                    engine: mysql
+                    formatVersion: 1
+                    nodes:
+                      - id: "0"
+                        parentId: null
+                        operation: table_access
+                        access: full_scan
+                        estimatedRows: 120000
+                        usesIndex: false
+                    risks:
+                      - code: full_table_scan
+                        severity: warning
+                      - code: high_estimated_rows
+                        severity: warning
+                    truncated: false
+        "400":
+          description: Validation failed (bad request, blocked statement, typed EXPLAIN, DML/DDL)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              examples:
+                blockedStatement:
+                  value:
+                    error: validation_failed
+                    message: statement is not a permitted read-only SELECT
+        "401":
+          description: Missing or invalid Bearer token (or token older than the TTL)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "403":
+          description: Target not enabled or environment disallows execution
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "404":
+          description: Query target not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "408":
+          description: Explain exceeded the timeout
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "409":
+          description: Engine does not support the v1 Explain normalizer (e.g. TiDB)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              examples:
+                unsupportedEngine:
+                  value:
+                    error: query_explain_not_supported
+                    message: explain is not supported for this target engine
+        "502":
+          description: Target database rejected or connection failed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
   /query-targets/{id}/related-records:
     post:
       summary: Navigate to referenced records via a governed foreign key
@@ -3227,6 +3346,100 @@ components:
         executedAt:
           type: string
           format: date-time
+    ExplainRequest:
+      type: object
+      additionalProperties: false
+      required: [statement]
+      description: >
+        The body of POST /query-targets/{id}/explain. Only the worksheet
+        statement is accepted; the actor is derived from the verified token
+        and the engine/governance context from target resolution. The browser
+        must never construct EXPLAIN, engine-specific syntax, or send
+        actor/role/credential/DSN fields.
+      properties:
+        statement:
+          type: string
+          description: A single bare parser-approved SELECT. Typed EXPLAIN, SHOW, DESCRIBE, DML, DDL, multi-statement, and unsafe functions are rejected.
+    ExplainNode:
+      type: object
+      additionalProperties: false
+      required: [id, operation, access]
+      description: >
+        One normalized plan node. No free-form engine strings, relation
+        names, index names, predicates, or literals leave the normalizer.
+      properties:
+        id:
+          type: string
+          description: Monotonic depth-first ID ("0", "1", ...).
+        parentId:
+          type: string
+          nullable: true
+          description: The enclosing node's ID, or null for the root.
+        operation:
+          type: string
+          enum: [table_access, index_access, nested_loop, sort, aggregate, temporary_table, unknown]
+        access:
+          type: string
+          enum: [full_scan, index, unique_row, range, unknown]
+        estimatedRows:
+          type: integer
+          format: int64
+          minimum: 0
+          nullable: true
+          description: Non-negative estimate, or omitted when the engine does not report it or when the value would exceed Number.MAX_SAFE_INTEGER (2^53-1).
+        usesIndex:
+          type: boolean
+          nullable: true
+    ExplainRisk:
+      type: object
+      additionalProperties: false
+      required: [code, severity]
+      description: >
+        One backend-derived risk signal with a finite severity. The frontend
+        only localizes the supplied enum and severity; it does not infer risks.
+      properties:
+        code:
+          type: string
+          enum: [full_table_scan, filesort, temporary_table, high_estimated_rows, unknown_plan_shape]
+        severity:
+          type: string
+          enum: [info, warning, critical]
+          description: >
+            The critical severity is declared for forward-compatibility; the
+            v1 normalizer never derives it.
+    ExplainResponse:
+      type: object
+      additionalProperties: false
+      required: [targetResourceId, engine, formatVersion, nodes, risks, truncated]
+      description: >
+        The versioned, normalized, leak-free Explain output. It carries only
+        finite enums, bounded scalars, and the target resource ID. No raw plan
+        JSON, table names, index names, predicates, literals, DSNs,
+        credentials, actor IDs, or raw driver errors ever reach this struct.
+      properties:
+        targetResourceId:
+          type: integer
+          format: int64
+        engine:
+          type: string
+          enum: [mysql]
+          description: v1 supports MySQL only. TiDB fails closed because it rejects EXPLAIN FORMAT=JSON.
+        formatVersion:
+          type: integer
+          description: Always 1 in v1. Unknown future versions fail closed.
+        nodes:
+          type: array
+          maxItems: 64
+          items:
+            $ref: "#/components/schemas/ExplainNode"
+        risks:
+          type: array
+          maxItems: 16
+          items:
+            $ref: "#/components/schemas/ExplainRisk"
+        truncated:
+          type: boolean
+          description: true when the backend safety cap removed normalized nodes or signals.
     RelatedRecordNavigationSource:
       type: object
       required: [database, object, kind, foreignKey]
