@@ -62,6 +62,9 @@ func NewQueryGuard(config QueryGuardConfig) *QueryGuard {
 // TABLES, SHOW COLUMNS, DESCRIBE/DESC, EXPLAIN SELECT), rejects side-effecting
 // /resource/locking constructs via AST walk, and injects a backend-owned LIMIT
 // for SELECT.
+// Guard is the execute-route entry point. It accepts SELECT, SHOW, typed
+// EXPLAIN, and DESCRIBE/DESC. Do NOT call it from the Explain route — use
+// GuardExplainSelect instead, which accepts a bare SELECT only.
 func (g *QueryGuard) Guard(statement string, requestedMaxRows int) (GuardedQuery, error) {
 	trimmed := strings.TrimSpace(statement)
 	if trimmed == "" {
@@ -99,6 +102,57 @@ func (g *QueryGuard) Guard(statement string, requestedMaxRows int) (GuardedQuery
 	default:
 		return GuardedQuery{}, ErrQueryStatementNotAllowed
 	}
+}
+
+// GuardExplainSelect is the narrow Explain-route entry point. It accepts a
+// bare parser-approved SELECT only — never user-typed EXPLAIN, SHOW,
+// DESCRIBE/DESC, DML, DDL, multi-statement, or unsafe functions. It reuses
+// the same parser, multi-statement splitter, and rejectForbiddenNodes AST
+// walker as Guard, but does NOT call guardShow / guardExplain /
+// guardExplainTab (those are execute-route helpers that accept
+// user-typed EXPLAIN/SHOW/DESCRIBE). It does NOT inject LIMIT — Explain
+// must reflect the user's actual plan shape, and LIMIT would mask
+// high_estimated_rows. The returned GuardedQuery.ExecutableSQL is the bare
+// parser-approved SELECT; the executor owns prepending EXPLAIN FORMAT=JSON.
+// This structural seam prevents the executor from ever seeing arbitrary SQL.
+func (g *QueryGuard) GuardExplainSelect(statement string) (GuardedQuery, error) {
+	trimmed := strings.TrimSpace(statement)
+	if trimmed == "" {
+		return GuardedQuery{}, ErrQueryStatementEmpty
+	}
+	if multi, err := g.isMultiStatement(trimmed); err != nil {
+		return GuardedQuery{}, fmt.Errorf("%w: %v", ErrQueryStatementNotAllowed, err)
+	} else if multi {
+		return GuardedQuery{}, ErrQueryStatementNotAllowed
+	}
+	stmt, err := g.parser.Parse(trimmed)
+	if err != nil {
+		return GuardedQuery{}, fmt.Errorf("%w: %v", ErrQueryStatementNotAllowed, err)
+	}
+	sel, ok := stmt.(*sqlparser.Select)
+	if !ok {
+		return GuardedQuery{}, ErrQueryStatementNotAllowed
+	}
+	if sel.Into != nil {
+		return GuardedQuery{}, ErrQueryStatementNotAllowed
+	}
+	if sel.Lock != sqlparser.NoLock {
+		return GuardedQuery{}, ErrQueryStatementNotAllowed
+	}
+	if err := g.rejectForbiddenNodes(sel); err != nil {
+		return GuardedQuery{}, err
+	}
+	preview := trimmed
+	if len(preview) > statementPreviewMax {
+		preview = preview[:statementPreviewMax]
+	}
+	return GuardedQuery{
+		OriginalStatement: trimmed,
+		ExecutableSQL:     sqlparser.String(sel),
+		LimitApplied:      0,
+		StatementDigest:   g.digest(trimmed),
+		StatementPreview:  preview,
+	}, nil
 }
 
 // guardSelect validates a SELECT statement: rejects INTO, locking clauses, and

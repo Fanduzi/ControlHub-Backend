@@ -493,3 +493,209 @@ func TestQueryGuardAllowsDescQualifiedTable(t *testing.T) {
 		t.Fatal("ExecutableSQL must not be empty for DESC <db>.<table>")
 	}
 }
+
+// TestGuardExplainSelectAcceptsSimpleSelect proves the narrow Explain guard
+// entry accepts a bare parser-approved SELECT. WHY: the Explain route must
+// accept only a bare SELECT — never user-typed EXPLAIN/SHOW/DESCRIBE.
+func TestGuardExplainSelectAcceptsSimpleSelect(t *testing.T) {
+	t.Parallel()
+	g := newTestGuard()
+	got, err := g.GuardExplainSelect("select 1 as value")
+	if err != nil {
+		t.Fatalf("GuardExplainSelect error: %v", err)
+	}
+	if got.ExecutableSQL == "" {
+		t.Fatal("ExecutableSQL must not be empty")
+	}
+	if !strings.Contains(strings.ToLower(got.ExecutableSQL), "select") {
+		t.Fatalf("ExecutableSQL must contain the select: %q", got.ExecutableSQL)
+	}
+	// WHY: Explain must reflect the user's actual plan shape. LIMIT injection
+	// would mask high_estimated_rows. The narrow entry must NOT inject LIMIT.
+	if strings.Contains(strings.ToLower(got.ExecutableSQL), "limit") {
+		t.Fatalf("Explain guard must NOT inject LIMIT (would mask plan shape): %q", got.ExecutableSQL)
+	}
+	if got.LimitApplied != 0 {
+		t.Fatalf("LimitApplied = %d, want 0 (Explain never injects LIMIT)", got.LimitApplied)
+	}
+}
+
+// TestGuardExplainSelectRejectsEmptyStatement mirrors the execute guard's
+// empty-statement rejection.
+func TestGuardExplainSelectRejectsEmptyStatement(t *testing.T) {
+	t.Parallel()
+	g := newTestGuard()
+	for _, stmt := range []string{"", "   ", "\n\t"} {
+		_, err := g.GuardExplainSelect(stmt)
+		if !errors.Is(err, ErrQueryStatementEmpty) {
+			t.Errorf("GuardExplainSelect(%q) error = %v, want ErrQueryStatementEmpty", stmt, err)
+		}
+	}
+}
+
+// TestGuardExplainSelectRejectsTypedExplain proves user-typed EXPLAIN is
+// rejected on the Explain route. WHY: the spec forbids the browser from
+// constructing EXPLAIN; the backend owns the wrapper. The execute route
+// accepts typed EXPLAIN for historical reasons, but that must NOT authorize
+// the same syntax on the Explain route.
+func TestGuardExplainSelectRejectsTypedExplain(t *testing.T) {
+	t.Parallel()
+	g := newTestGuard()
+	for _, stmt := range []string{
+		"explain select 1",
+		"explain format = json select 1",
+		"EXPLAIN SELECT * FROM t",
+	} {
+		_, err := g.GuardExplainSelect(stmt)
+		if !errors.Is(err, ErrQueryStatementNotAllowed) {
+			t.Errorf("GuardExplainSelect(%q) error = %v, want ErrQueryStatementNotAllowed", stmt, err)
+		}
+	}
+}
+
+// TestGuardExplainSelectRejectsShowAndDescribe proves SHOW and DESCRIBE are
+// rejected on the Explain route. WHY: the execute route accepts these as
+// metadata commands, but Explain is SELECT-only by spec.
+func TestGuardExplainSelectRejectsShowAndDescribe(t *testing.T) {
+	t.Parallel()
+	g := newTestGuard()
+	for _, stmt := range []string{
+		"show databases",
+		"show tables",
+		"show columns from t",
+		"describe t",
+		"desc t",
+	} {
+		_, err := g.GuardExplainSelect(stmt)
+		if !errors.Is(err, ErrQueryStatementNotAllowed) {
+			t.Errorf("GuardExplainSelect(%q) error = %v, want ErrQueryStatementNotAllowed", stmt, err)
+		}
+	}
+}
+
+// TestGuardExplainSelectRejectsWriteStatements proves DML/DDL/admin statements
+// are rejected.
+func TestGuardExplainSelectRejectsWriteStatements(t *testing.T) {
+	t.Parallel()
+	g := newTestGuard()
+	for _, stmt := range []string{
+		"insert into t values (1)",
+		"update t set a = 1",
+		"delete from t",
+		"create table t (id int)",
+		"drop table t",
+		"alter table t add column c int",
+		"truncate table t",
+		"rename table t to u",
+		"grant select on *.* to 'x'@'%'",
+		"revoke all from 'x'@'%'",
+		"set @x = 1",
+		"call proc()",
+	} {
+		_, err := g.GuardExplainSelect(stmt)
+		if !errors.Is(err, ErrQueryStatementNotAllowed) {
+			t.Errorf("GuardExplainSelect(%q) error = %v, want ErrQueryStatementNotAllowed", stmt, err)
+		}
+	}
+}
+
+// TestGuardExplainSelectRejectsMultiStatement proves multi-statement input is
+// rejected before parsing. WHY: the classic "; drop table" amplifier must
+// never reach the executor.
+func TestGuardExplainSelectRejectsMultiStatement(t *testing.T) {
+	t.Parallel()
+	g := newTestGuard()
+	for _, stmt := range []string{
+		"select 1; drop table t",
+		"select 1; select 2",
+		"select 1 -- comment\ndrop table t",
+	} {
+		_, err := g.GuardExplainSelect(stmt)
+		if !errors.Is(err, ErrQueryStatementNotAllowed) {
+			t.Errorf("GuardExplainSelect(%q) error = %v, want ErrQueryStatementNotAllowed", stmt, err)
+		}
+	}
+}
+
+// TestGuardExplainSelectRejectsUnsafeFunctions proves the AST walker catches
+// SLEEP, BENCHMARK, LOAD_FILE, named-lock functions, and user-variable
+// assignment. WHY: these are resource/file/lock side-effects that break the
+// read-only contract even inside a SELECT.
+func TestGuardExplainSelectRejectsUnsafeFunctions(t *testing.T) {
+	t.Parallel()
+	g := newTestGuard()
+	for _, stmt := range []string{
+		"select sleep(1)",
+		"select benchmark(1000, md5('x'))",
+		"select load_file('/etc/passwd')",
+		"select get_lock('x', 1)",
+		"select @x := 1",
+	} {
+		_, err := g.GuardExplainSelect(stmt)
+		if !errors.Is(err, ErrQueryStatementNotAllowed) {
+			t.Errorf("GuardExplainSelect(%q) error = %v, want ErrQueryStatementNotAllowed", stmt, err)
+		}
+	}
+}
+
+// TestGuardExplainSelectRejectsIntoAndLocking proves INTO OUTFILE/DUMPFILE and
+// FOR UPDATE / LOCK IN SHARE MODE are rejected. WHY: these write server-side
+// files or acquire locks, breaking read-only.
+func TestGuardExplainSelectRejectsIntoAndLocking(t *testing.T) {
+	t.Parallel()
+	g := newTestGuard()
+	for _, stmt := range []string{
+		"select * from t into outfile '/tmp/x'",
+		"select * from t into dumpfile '/tmp/x'",
+		"select * from t for update",
+		"select * from t lock in share mode",
+	} {
+		_, err := g.GuardExplainSelect(stmt)
+		if !errors.Is(err, ErrQueryStatementNotAllowed) {
+			t.Errorf("GuardExplainSelect(%q) error = %v, want ErrQueryStatementNotAllowed", stmt, err)
+		}
+	}
+}
+
+// TestGuardExplainSelectRejectsMalformedSQL proves a parse error maps to
+// ErrQueryStatementNotAllowed, not a 500.
+func TestGuardExplainSelectRejectsMalformedSQL(t *testing.T) {
+	t.Parallel()
+	g := newTestGuard()
+	for _, stmt := range []string{
+		"select from",
+		"select * from",
+		"select )(",
+		"select 1 where",
+	} {
+		_, err := g.GuardExplainSelect(stmt)
+		if !errors.Is(err, ErrQueryStatementNotAllowed) {
+			t.Errorf("GuardExplainSelect(%q) error = %v, want ErrQueryStatementNotAllowed", stmt, err)
+		}
+	}
+}
+
+// TestGuardExplainSelectPreservesUserPlan proves the guarded ExecutableSQL is
+// the bare SELECT (not prefixed with EXPLAIN). WHY: the executor owns
+// prepending EXPLAIN FORMAT=JSON; the guard returns only the parser-approved
+// SELECT. This is the structural seam that prevents the executor from ever
+// seeing arbitrary SQL.
+func TestGuardExplainSelectPreservesUserPlan(t *testing.T) {
+	t.Parallel()
+	g := newTestGuard()
+	got, err := g.GuardExplainSelect("select * from t where id = 1")
+	if err != nil {
+		t.Fatalf("GuardExplainSelect error: %v", err)
+	}
+	lower := strings.ToLower(got.ExecutableSQL)
+	if !strings.HasPrefix(lower, "select") {
+		t.Fatalf("ExecutableSQL must start with select (no EXPLAIN prefix): %q", got.ExecutableSQL)
+	}
+	if strings.Contains(lower, "explain") {
+		t.Fatalf("ExecutableSQL must NOT contain explain (executor owns the prefix): %q", got.ExecutableSQL)
+	}
+	// The digest masks the literal 1.
+	if !strings.Contains(got.StatementDigest, "?") {
+		t.Fatalf("digest %q should mask the literal 1", got.StatementDigest)
+	}
+}
