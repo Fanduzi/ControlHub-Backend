@@ -348,6 +348,9 @@ func TestCompleteQueryTargetWithRuntime_ReadyOnlyOnSecretResolved(t *testing.T) 
 	if !got.AvailableActions.Run || !got.Governance.ExecutionEnabled {
 		t.Fatal("secret_resolved must enable run + execution")
 	}
+	if !got.AvailableActions.Explain {
+		t.Fatal("secret_resolved mysql target must enable explain (isExplainEngine=true for mysql)")
+	}
 	if got.Governance.CredentialState != "secret_resolved" {
 		t.Fatalf("credentialState = %q, want secret_resolved", got.Governance.CredentialState)
 	}
@@ -360,6 +363,9 @@ func TestCompleteQueryTargetWithRuntime_ReadyOnlyOnSecretResolved(t *testing.T) 
 	if locked.AvailableActions.Run || locked.Governance.ExecutionEnabled {
 		t.Fatal("secret_missing must not enable run/execution")
 	}
+	if locked.AvailableActions.Explain {
+		t.Fatal("secret_missing must not enable explain")
+	}
 	if locked.Governance.CredentialState != "secret_missing" {
 		t.Fatalf("credentialState = %q, want secret_missing", locked.Governance.CredentialState)
 	}
@@ -371,6 +377,54 @@ func TestCompleteQueryTargetWithRuntime_ReadyOnlyOnSecretResolved(t *testing.T) 
 	}
 	if bm.Governance.CredentialState != "binding_mismatch" {
 		t.Fatalf("credentialState = %q, want binding_mismatch", bm.Governance.CredentialState)
+	}
+}
+
+// TestCompleteQueryTargetWithRuntime_TiDBExplainDisabled proves a ready TiDB
+// target enables Run but NOT Explain. WHY: TiDB v8.5 rejects
+// EXPLAIN FORMAT=JSON; isExplainEngine is strictly narrower than
+// isExecutableEngine (which includes TiDB).
+func TestCompleteQueryTargetWithRuntime_TiDBExplainDisabled(t *testing.T) {
+	t.Parallel()
+	in := model.QueryTarget{ResourceID: 23, ConnectionContext: model.QueryTargetConnectionContext{
+		Environment: "Staging", Engine: "tidb", Host: "db.internal", Port: 3306,
+	}}
+	cred := &model.QueryCredentialMetadata{
+		ResourceID: 23, Engine: "tidb", CredentialRef: "ORDER_TIDB_RO",
+		Enabled: true, EnvironmentPolicy: model.QueryEnvPolicyNonProdOnly,
+	}
+	got := completeQueryTargetWithRuntime(in, cred, model.QueryCredentialRuntimeSecretResolved)
+	if got.Readiness != model.ReadinessReady {
+		t.Fatalf("tidb secret_resolved readiness = %q, want ready", got.Readiness)
+	}
+	if !got.AvailableActions.Run {
+		t.Fatal("tidb secret_resolved must enable run (isExecutableEngine includes tidb)")
+	}
+	if got.AvailableActions.Explain {
+		t.Fatal("tidb must NOT enable explain (isExplainEngine is mysql-only)")
+	}
+}
+
+// TestCompleteQueryTarget_MySQLExplainEnabled proves a ready MySQL target
+// enables both Run and Explain.
+func TestCompleteQueryTarget_MySQLExplainEnabled(t *testing.T) {
+	t.Parallel()
+	in := model.QueryTarget{ResourceID: 24, ConnectionContext: model.QueryTargetConnectionContext{
+		Environment: "Staging", Engine: "mysql", Host: "db.internal", Port: 3306,
+	}}
+	cred := &model.QueryCredentialMetadata{
+		ResourceID: 24, Engine: "mysql", CredentialRef: "ORDER_MYSQL_RO",
+		Enabled: true, EnvironmentPolicy: model.QueryEnvPolicyNonProdOnly,
+	}
+	got := completeQueryTarget(in, cred)
+	if got.Readiness != model.ReadinessReady {
+		t.Fatalf("readiness = %q, want ready", got.Readiness)
+	}
+	if !got.AvailableActions.Run {
+		t.Fatal("mysql ready must enable run")
+	}
+	if !got.AvailableActions.Explain {
+		t.Fatal("mysql ready must enable explain (isExplainEngine=true for mysql)")
 	}
 }
 

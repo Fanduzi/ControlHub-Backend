@@ -238,6 +238,9 @@ func completeQueryTarget(in model.QueryTarget, cred *model.QueryCredentialMetada
 		credentialState = "configured_readonly_credential"
 		executionEnabled = true
 		out.AvailableActions.Run = true
+		if isExplainEngine(in.ConnectionContext.Engine) {
+			out.AvailableActions.Explain = true
+		}
 	case cred != nil:
 		// Credential present but disabled or environment policy disallows -> locked.
 		readiness = model.ReadinessDisabled
@@ -283,6 +286,9 @@ func completeQueryTargetWithRuntime(in model.QueryTarget, cred *model.QueryCrede
 		safety = model.SafetyStateReadonlySandboxEnabled
 		executionEnabled = true
 		out.AvailableActions.Run = true
+		if isExplainEngine(in.ConnectionContext.Engine) {
+			out.AvailableActions.Explain = true
+		}
 	case model.QueryCredentialRuntimeUnsupportedTarget:
 		readiness = model.ReadinessUnsupportedEngine
 		safety = model.SafetyStateUnsupportedEngine
