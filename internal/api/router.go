@@ -43,6 +43,12 @@ type Dependencies struct {
 	// the handlers depend on; the concrete *service.QuerySchemaService satisfies
 	// it. All three routes require a fresh bearer token.
 	QuerySchemaService querySchemaAPI
+	// Query explain (Phase 38N). queryExplainAPI is the thin interface the
+	// handlers depend on; the concrete *service.QueryExplainService satisfies
+	// it. The route requires a fresh bearer token (same freshness policy as
+	// query execution). Explain is a distinct governed operation: it never
+	// executes the bare SELECT and never creates a query_executions row.
+	QueryExplainService queryExplainAPI
 }
 
 func corsLocalDev(next http.Handler) http.Handler {
@@ -98,12 +104,21 @@ func NewRouter(deps Dependencies) *chi.Mux {
 	// requireFreshQueryActor (base signature/structure check + bounded TTL). The
 	// base requireAuthenticatedActor is NOT mounted here because it does not
 	// enforce token freshness. Existing read/list routes are unchanged.
-	if deps.QueryExecutionService != nil {
+	//
+	// The group is created when EITHER the execute or explain service is
+	// configured, so Explain does not accidentally depend on the execute
+	// service being wired (Oracle P2.9).
+	if deps.QueryExecutionService != nil || deps.QueryExplainService != nil {
 		router.Group(func(r chi.Router) {
 			r.Use(requireFreshQueryActor(deps.AuthService, deps.QueryExecutionAuth))
-			r.Post("/query-targets/{id}/execute", handleExecuteQuery(deps.QueryExecutionService))
-			r.Get("/query-targets/{id}/executions", handleListQueryExecutions(deps.QueryExecutionService))
-			r.Post("/query-targets/{id}/related-records", handleNavigateRelatedRecords(deps.QueryExecutionService))
+			if deps.QueryExecutionService != nil {
+				r.Post("/query-targets/{id}/execute", handleExecuteQuery(deps.QueryExecutionService))
+				r.Get("/query-targets/{id}/executions", handleListQueryExecutions(deps.QueryExecutionService))
+				r.Post("/query-targets/{id}/related-records", handleNavigateRelatedRecords(deps.QueryExecutionService))
+			}
+			if deps.QueryExplainService != nil {
+				r.Post("/query-targets/{id}/explain", handleExplainQuery(deps.QueryExplainService))
+			}
 		})
 	}
 	// Query credential metadata routes (Phase 38A). All three require a fresh

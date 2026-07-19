@@ -80,6 +80,18 @@ func buildDependencies(db *sql.DB, cfg config.Config) api.Dependencies {
 		realClock{},
 	)
 
+	// Query explain service (Phase 38N) — a distinct governed operation that
+	// never executes the bare SELECT and never creates a query_executions
+	// row. It reuses the shared guard, access resolver, and audit repo.
+	queryExplainSvc := service.NewQueryExplainService(
+		service.NewQueryGuard(service.QueryGuardConfig{DefaultMaxRows: 100, HardMaxRows: 500}),
+		accessResolver,
+		service.NewMySQLExplainExecutor(),
+		service.NewExplainNormalizer(),
+		realClock{},
+		service.NewExplainAuditRecorder(queryExecutionRepo),
+	)
+
 	return api.Dependencies{
 		ResourceService:        service.NewResourceService(resourceRepo, profileSvc),
 		RelationService:        service.NewRelationService(relationRepo),
@@ -99,6 +111,7 @@ func buildDependencies(db *sql.DB, cfg config.Config) api.Dependencies {
 		QueryCredentialService: queryCredentialSvc,
 		QueryExecutionService:  queryExecutionSvc,
 		QuerySchemaService:     querySchemaSvc,
+		QueryExplainService:    queryExplainSvc,
 		QueryExecutionAuth: api.QueryExecutionAuthConfig{
 			TokenMaxAge: cfg.QueryExecutionTokenMaxAge,
 			Clock:       time.Now,
