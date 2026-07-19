@@ -62,6 +62,16 @@ func TestOpenAPIFuzz(t *testing.T) {
 	)
 	queryCredentialSvc := service.NewQueryCredentialService(queryTargetRepo, queryExecutionRepo, credentialResolver)
 
+	accessResolver := service.NewTargetAccessResolver(queryTargetRepo, queryExecutionRepo, credentialResolver)
+	queryExplainSvc := service.NewQueryExplainService(
+		service.NewQueryGuard(service.QueryGuardConfig{DefaultMaxRows: 100, HardMaxRows: 500}),
+		accessResolver,
+		service.NewMySQLExplainExecutor(),
+		service.NewExplainNormalizer(),
+		wallClock{},
+		service.NewExplainAuditRecorder(queryExecutionRepo),
+	)
+
 	deps := api.Dependencies{
 		ResourceService:        service.NewResourceService(resourceRepo, profileSvc),
 		RelationService:        service.NewRelationService(relationRepo),
@@ -80,7 +90,8 @@ func TestOpenAPIFuzz(t *testing.T) {
 		QueryTargetService:     service.NewQueryTargetService(queryTargetRepo).WithCredentialReader(queryExecutionRepo).WithCredentialResolver(credentialResolver),
 		QueryCredentialService: queryCredentialSvc,
 		QueryExecutionService:  queryExecutionSvc,
-		QuerySchemaService:     service.NewQuerySchemaService(service.NewTargetAccessResolver(queryTargetRepo, queryExecutionRepo, credentialResolver), service.NewMySQLSchemaInspector(), service.NewQuerySchemaCache(256, wallClock{}), queryExecutionRepo, wallClock{}),
+		QueryExplainService:   queryExplainSvc,
+		QuerySchemaService:     service.NewQuerySchemaService(accessResolver, service.NewMySQLSchemaInspector(), service.NewQuerySchemaCache(256, wallClock{}), queryExecutionRepo, wallClock{}),
 		QueryExecutionAuth: api.QueryExecutionAuthConfig{
 			TokenMaxAge: 8 * time.Hour,
 			Clock:       time.Now,
