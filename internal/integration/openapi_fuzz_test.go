@@ -3,6 +3,7 @@
 package integration
 
 import (
+	"database/sql"
 	"fmt"
 	"net"
 	"net/http"
@@ -31,7 +32,15 @@ import (
 // The database is disposable — write endpoints are exercised freely.
 // The daily local controlhub database is never touched.
 func TestOpenAPIFuzz(t *testing.T) {
-	db := setupTestDB(t)
+	// Isolate the fuzz database from the shared globalEnv seed DB.
+	// Schemathesis exercises write endpoints (PUT/POST/DELETE on resources,
+	// profiles, relations, query credentials) freely; if those writes landed on
+	// globalEnv they would corrupt the seed rows that later read-only assertions
+	// (e.g. TestResourceRepository_DatabaseClusterOperationalSummary) depend on,
+	// producing order-dependent flakes like ReplicaMemberCount dropping from 2 to
+	// 1. The fuzz server therefore runs against a dedicated, fully-migrated
+	// database that is dropped on cleanup.
+	db := setupFuzzDB(t)
 
 	// Pick a random available port.
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
@@ -173,3 +182,20 @@ func resolveScript(t *testing.T, name string) string {
 type wallClock struct{}
 
 func (wallClock) Now() time.Time { return time.Now() }
+
+// setupFuzzDB provisions a dedicated, fully-migrated database on the shared
+// Testcontainers MySQL instance for the OpenAPI fuzz server. It mirrors the
+// shared globalEnv schema+seed without sharing globalEnv's tables, so the free
+// writes Schemathesis performs can never contaminate the seed rows other
+// integration tests assert against. The database is dropped on cleanup.
+func setupFuzzDB(t *testing.T) *sql.DB {
+	t.Helper()
+	dbName := uniqueImportDBName("fuzz")
+	adminDB := setupTestDB(t)
+	createDatabase(t, adminDB, dbName)
+	t.Cleanup(func() { dropDatabase(t, adminDB, dbName) })
+
+	fuzzDB := openNamedTestDB(t, dbName)
+	applyMigrations(t, fuzzDB)
+	return fuzzDB
+}
