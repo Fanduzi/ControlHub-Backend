@@ -105,11 +105,13 @@ func (c *normCtx) walk(block map[string]interface{}, parentID string, depth int)
 	}
 	if nl, ok := block["nested_loop"]; ok {
 		c.emitNestedLoopNode(parentID)
+		// Capture nested_loop id immediately so every sibling child points at
+		// this node, not at a preceding sibling's last emitted id.
+		nestedLoopID := c.lastID()
 		if arr, ok := nl.([]interface{}); ok {
 			for _, child := range arr {
 				if m, ok := child.(map[string]interface{}); ok {
-					id := c.lastID()
-					c.walk(m, id, depth+1)
+					c.walk(m, nestedLoopID, depth+1)
 				}
 			}
 		}
@@ -118,9 +120,7 @@ func (c *normCtx) walk(block map[string]interface{}, parentID string, depth int)
 		if using, ok := ord["using_filesort"].(bool); ok && using {
 			c.addRisk(model.ExplainRiskFilesort, model.ExplainSeverityWarning)
 		}
-		id := c.lastID()
 		c.walk(ord, parentID, depth+1)
-		_ = id
 	}
 	if grp, ok := block["grouping_operation"].(map[string]interface{}); ok {
 		if using, ok := grp["using_temporary_table"].(bool); ok && using {

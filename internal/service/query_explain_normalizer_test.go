@@ -224,7 +224,9 @@ func TestNormalizeEstimatedRowsSafeIntegerBoundary(t *testing.T) {
 }
 
 // TestNormalizeNestedLoop proves a nested_loop block emits a nested_loop
-// node and its children get the correct parentId.
+// node and EVERY sibling child points at that nested_loop id as parentId
+// (not at a preceding sibling). WHY: recomputing lastID() per child after
+// walking the previous sibling distorts the plan tree.
 func TestNormalizeNestedLoop(t *testing.T) {
 	t.Parallel()
 	raw := mustRaw(t, `{"query_block": {"nested_loop": [{"table": {"access_type": "ALL", "rows_examined_per_scan": 4}}, {"table": {"access_type": "ref", "key": "idx", "rows_examined_per_scan": 2}}]}}`)
@@ -233,18 +235,29 @@ func TestNormalizeNestedLoop(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Normalize error: %v", err)
 	}
-	foundNestedLoop := false
-	for _, node := range got.Nodes {
-		if node.Operation == model.ExplainOpNestedLoop {
-			foundNestedLoop = true
-		}
-	}
-	if !foundNestedLoop {
-		t.Errorf("expected a nested_loop node, got %v", got.Nodes)
-	}
+	var nestedLoopID string
+	var tableNodes []model.ExplainNode
 	for _, node := range got.Nodes {
 		if node.ParentID != nil && *node.ParentID == node.ID {
 			t.Errorf("node %s has parentId equal to its own id (cycle)", node.ID)
+		}
+		switch node.Operation {
+		case model.ExplainOpNestedLoop:
+			nestedLoopID = node.ID
+		case model.ExplainOpTableAccess, model.ExplainOpIndexAccess:
+			tableNodes = append(tableNodes, node)
+		}
+	}
+	if nestedLoopID == "" {
+		t.Fatalf("expected a nested_loop node, got %v", got.Nodes)
+	}
+	if len(tableNodes) != 2 {
+		t.Fatalf("expected 2 table/index children, got %d: %v", len(tableNodes), got.Nodes)
+	}
+	for _, child := range tableNodes {
+		if child.ParentID == nil || *child.ParentID != nestedLoopID {
+			t.Errorf("child %s parentId=%v, want nested_loop id %q (siblings must share the nested_loop parent, not each other)",
+				child.ID, child.ParentID, nestedLoopID)
 		}
 	}
 }
