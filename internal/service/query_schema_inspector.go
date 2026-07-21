@@ -398,10 +398,33 @@ func (s *MySQLSchemaInspector) GetTableDefinition(ctx context.Context, dsn strin
 	}, nil
 }
 
+// constraintIdentity holds the key fields that identify one FK constraint
+// (without column-level detail).
+type constraintIdentity struct {
+	constraintName string
+	srcSchema     string
+	srcTable      string
+	refSchema     string
+	refTable      string
+}
+
+// constraintColumn holds one column mapping fetched for a selected constraint.
+type constraintColumn struct {
+	constraintName string
+	column         string
+	refColumn      string
+	ordinal        int
+	updateRule     string
+	deleteRule     string
+}
+
 // GetRelationshipMap returns inbound and outbound foreign-key relationships
 // for one base table. Nodes and edges are capped at model.RelationshipMapMaxNodes
 // and model.RelationshipMapMaxEdges respectively; Truncated=true when any
 // candidate is omitted.
+//
+// The algorithm caps on distinct constraints (not KCU rows) so that composite
+// FKs are never split across the limit boundary.
 func (s *MySQLSchemaInspector) GetRelationshipMap(ctx context.Context, dsn string, database, name string) (*RelationshipMapResult, error) {
 	db, err := sql.Open("mysql", dsn)
 	if err != nil {
@@ -431,154 +454,92 @@ func (s *MySQLSchemaInspector) GetRelationshipMap(ctx context.Context, dsn strin
 		return nil, ErrSchemaDefinitionNotSupported
 	}
 
-	limit := model.RelationshipMapMaxEdges + 1
+	// maxConstraints caps the number of distinct FK constraints fetched per
+	// direction. Using MaxEdges+1 lets us detect overflow without truncating
+	// a composite FK mid-constraint.
+	maxConstraints := model.RelationshipMapMaxEdges + 1
 
-	type rawRow struct {
-		constraintName string
-		column         string
-		sourceSchema   string
-		sourceTable    string
-		refSchema      string
-		refTable       string
-		refColumn      string
-		updateRule     string
-		deleteRule     string
-	}
-
-	outboundRows, err := tx.QueryContext(ctx,
-		`SELECT kcu.CONSTRAINT_NAME, kcu.COLUMN_NAME, kcu.REFERENCED_TABLE_SCHEMA,
-		        kcu.REFERENCED_TABLE_NAME, kcu.REFERENCED_COLUMN_NAME,
-		        rc.UPDATE_RULE, rc.DELETE_RULE, kcu.ORDINAL_POSITION
-		 FROM information_schema.KEY_COLUMN_USAGE kcu
-		 JOIN information_schema.REFERENTIAL_CONSTRAINTS rc
-		   ON kcu.CONSTRAINT_NAME = rc.CONSTRAINT_NAME
-		  AND kcu.TABLE_SCHEMA = rc.CONSTRAINT_SCHEMA
-		 WHERE kcu.TABLE_SCHEMA = ? AND kcu.TABLE_NAME = ?
-		   AND kcu.REFERENCED_TABLE_NAME IS NOT NULL
-		 ORDER BY kcu.REFERENCED_TABLE_SCHEMA, kcu.REFERENCED_TABLE_NAME,
-		          kcu.CONSTRAINT_NAME, kcu.ORDINAL_POSITION
-		 LIMIT ?`,
-		database, name, limit,
-	)
+	// Step 1: Query distinct outbound constraint identities.
+	outConstraints, outOverflow, err := queryDistinctConstraints(ctx, tx, database, name, "outbound", maxConstraints)
 	if err != nil {
 		return nil, err
 	}
 
-	type outRow struct {
-		rawRow
-		ordinal int
-	}
-	var outRows []outRow
-	for outboundRows.Next() {
-		var r outRow
-		if err := outboundRows.Scan(
-			&r.constraintName, &r.column, &r.refSchema, &r.refTable,
-			&r.refColumn, &r.updateRule, &r.deleteRule, &r.ordinal,
-		); err != nil {
-			outboundRows.Close()
-			return nil, err
-		}
-		r.sourceSchema = database
-		r.sourceTable = name
-		outRows = append(outRows, r)
-	}
-	if err := outboundRows.Err(); err != nil {
-		outboundRows.Close()
-		return nil, err
-	}
-	outboundRows.Close()
-
-	inboundRows, err := tx.QueryContext(ctx,
-		`SELECT kcu.CONSTRAINT_NAME, kcu.COLUMN_NAME, kcu.TABLE_SCHEMA,
-		        kcu.TABLE_NAME, kcu.REFERENCED_COLUMN_NAME,
-		        rc.UPDATE_RULE, rc.DELETE_RULE, kcu.ORDINAL_POSITION
-		 FROM information_schema.KEY_COLUMN_USAGE kcu
-		 JOIN information_schema.REFERENTIAL_CONSTRAINTS rc
-		   ON kcu.CONSTRAINT_NAME = rc.CONSTRAINT_NAME
-		  AND kcu.TABLE_SCHEMA = rc.CONSTRAINT_SCHEMA
-		 WHERE kcu.REFERENCED_TABLE_SCHEMA = ? AND kcu.REFERENCED_TABLE_NAME = ?
-		 ORDER BY kcu.TABLE_SCHEMA, kcu.TABLE_NAME,
-		          kcu.CONSTRAINT_NAME, kcu.ORDINAL_POSITION
-		 LIMIT ?`,
-		database, name, limit,
-	)
+	// Step 2: Query distinct inbound constraint identities.
+	inConstraints, inOverflow, err := queryDistinctConstraints(ctx, tx, database, name, "inbound", maxConstraints)
 	if err != nil {
 		return nil, err
 	}
 
-	var inRows []outRow
-	for inboundRows.Next() {
-		var r outRow
-		if err := inboundRows.Scan(
-			&r.constraintName, &r.column, &r.sourceSchema, &r.sourceTable,
-			&r.refColumn, &r.updateRule, &r.deleteRule, &r.ordinal,
-		); err != nil {
-			inboundRows.Close()
-			return nil, err
-		}
-		r.refSchema = database
-		r.refTable = name
-		inRows = append(inRows, r)
-	}
-	if err := inboundRows.Err(); err != nil {
-		inboundRows.Close()
+	// Step 3: Fetch all columns for the selected constraints.
+	outCols, err := fetchConstraintColumns(ctx, tx, database, name, "outbound", outConstraints)
+	if err != nil {
 		return nil, err
 	}
-	inboundRows.Close()
 
+	inCols, err := fetchConstraintColumns(ctx, tx, database, name, "inbound", inConstraints)
+	if err != nil {
+		return nil, err
+	}
+
+	// Step 4: Group columns by constraint identity, producing one fkGroup per FK.
 	type fkGroup struct {
-		direction string
-		conName   string
-		srcSchema string
-		srcTable  string
-		refSchema string
-		refTable  string
+		direction  string
+		conName    string
+		srcSchema  string
+		srcTable   string
+		refSchema  string
+		refTable   string
 		updateRule string
 		deleteRule string
 		columns    []string
 		refColumns []string
 	}
 
-	groupOut := make(map[string]*fkGroup)
-	for _, r := range outRows {
-		key := "out|" + r.constraintName + "|" + r.sourceSchema + "|" + r.sourceTable + "|" + r.refSchema + "|" + r.refTable
-		g, ok := groupOut[key]
-		if !ok {
-			g = &fkGroup{
-				direction:  "outbound",
-				conName:    r.constraintName,
-				srcSchema:  r.sourceSchema,
-				srcTable:   r.sourceTable,
-				refSchema:  r.refSchema,
-				refTable:   r.refTable,
-				updateRule: r.updateRule,
-				deleteRule: r.deleteRule,
-			}
-			groupOut[key] = g
+	outByName := make(map[string]*fkGroup, len(outConstraints))
+	for _, ci := range outConstraints {
+		g := &fkGroup{
+			direction: "outbound",
+			conName:   ci.constraintName,
+			srcSchema: ci.srcSchema,
+			srcTable:  ci.srcTable,
+			refSchema: ci.refSchema,
+			refTable:  ci.refTable,
 		}
-		g.columns = append(g.columns, r.column)
-		g.refColumns = append(g.refColumns, r.refColumn)
+		outByName[ci.constraintName] = g
+	}
+	for _, c := range outCols {
+		if g, ok := outByName[c.constraintName]; ok {
+			g.columns = append(g.columns, c.column)
+			g.refColumns = append(g.refColumns, c.refColumn)
+			if g.updateRule == "" {
+				g.updateRule = c.updateRule
+				g.deleteRule = c.deleteRule
+			}
+		}
 	}
 
-	groupIn := make(map[string]*fkGroup)
-	for _, r := range inRows {
-		key := "in|" + r.constraintName + "|" + r.sourceSchema + "|" + r.sourceTable + "|" + r.refSchema + "|" + r.refTable
-		g, ok := groupIn[key]
-		if !ok {
-			g = &fkGroup{
-				direction:  "inbound",
-				conName:    r.constraintName,
-				srcSchema:  r.sourceSchema,
-				srcTable:   r.sourceTable,
-				refSchema:  r.refSchema,
-				refTable:   r.refTable,
-				updateRule: r.updateRule,
-				deleteRule: r.deleteRule,
-			}
-			groupIn[key] = g
+	inByName := make(map[string]*fkGroup, len(inConstraints))
+	for _, ci := range inConstraints {
+		g := &fkGroup{
+			direction: "inbound",
+			conName:   ci.constraintName,
+			srcSchema: ci.srcSchema,
+			srcTable:  ci.srcTable,
+			refSchema: ci.refSchema,
+			refTable:  ci.refTable,
 		}
-		g.columns = append(g.columns, r.column)
-		g.refColumns = append(g.refColumns, r.refColumn)
+		inByName[ci.constraintName] = g
+	}
+	for _, c := range inCols {
+		if g, ok := inByName[c.constraintName]; ok {
+			g.columns = append(g.columns, c.column)
+			g.refColumns = append(g.refColumns, c.refColumn)
+			if g.updateRule == "" {
+				g.updateRule = c.updateRule
+				g.deleteRule = c.deleteRule
+			}
+		}
 	}
 
 	type sortedGroup struct {
@@ -597,7 +558,7 @@ func (s *MySQLSchemaInspector) GetRelationshipMap(ctx context.Context, dsn strin
 	}
 
 	var allGroups []sortedGroup
-	for _, g := range groupOut {
+	for _, g := range outByName {
 		allGroups = append(allGroups, sortedGroup{
 			direction:  g.direction,
 			relSchema:  g.refSchema,
@@ -613,7 +574,7 @@ func (s *MySQLSchemaInspector) GetRelationshipMap(ctx context.Context, dsn strin
 			refColumns: g.refColumns,
 		})
 	}
-	for _, g := range groupIn {
+	for _, g := range inByName {
 		allGroups = append(allGroups, sortedGroup{
 			direction:  g.direction,
 			relSchema:  g.srcSchema,
@@ -654,7 +615,7 @@ func (s *MySQLSchemaInspector) GetRelationshipMap(ctx context.Context, dsn strin
 		Role:     "root",
 	}}
 	nextNodeID := 1
-	truncated := false
+	truncated := outOverflow || inOverflow
 
 	var edges []RelationshipMapEdgeResult
 	nextEdgeID := 0
@@ -722,6 +683,137 @@ func (s *MySQLSchemaInspector) GetRelationshipMap(ctx context.Context, dsn strin
 		Truncated: truncated,
 	}, nil
 }
+
+// queryDistinctConstraints fetches distinct FK constraint identities for one
+// direction. It returns the constraint list and whether more constraints exist
+// beyond the limit (overflow).
+func queryDistinctConstraints(ctx context.Context, tx *sql.Tx, database, tableName, direction string, limit int) ([]constraintIdentity, bool, error) {
+	var rows *sql.Rows
+	var err error
+
+	switch direction {
+	case "outbound":
+		rows, err = tx.QueryContext(ctx,
+			`SELECT DISTINCT kcu.CONSTRAINT_NAME, kcu.TABLE_SCHEMA, kcu.TABLE_NAME,
+			        kcu.REFERENCED_TABLE_SCHEMA, kcu.REFERENCED_TABLE_NAME
+			 FROM information_schema.KEY_COLUMN_USAGE kcu
+			 WHERE kcu.TABLE_SCHEMA = ? AND kcu.TABLE_NAME = ?
+			   AND kcu.REFERENCED_TABLE_NAME IS NOT NULL
+			 ORDER BY kcu.REFERENCED_TABLE_SCHEMA, kcu.REFERENCED_TABLE_NAME,
+			          kcu.CONSTRAINT_NAME
+			 LIMIT ?`,
+			database, tableName, limit,
+		)
+	case "inbound":
+		rows, err = tx.QueryContext(ctx,
+			`SELECT DISTINCT kcu.CONSTRAINT_NAME, kcu.TABLE_SCHEMA, kcu.TABLE_NAME,
+			        kcu.REFERENCED_TABLE_SCHEMA, kcu.REFERENCED_TABLE_NAME
+			 FROM information_schema.KEY_COLUMN_USAGE kcu
+			 WHERE kcu.REFERENCED_TABLE_SCHEMA = ? AND kcu.REFERENCED_TABLE_NAME = ?
+			 ORDER BY kcu.TABLE_SCHEMA, kcu.TABLE_NAME,
+			          kcu.CONSTRAINT_NAME
+			 LIMIT ?`,
+			database, tableName, limit,
+		)
+	default:
+		return nil, false, fmt.Errorf("unknown direction: %s", direction)
+	}
+	if err != nil {
+		return nil, false, err
+	}
+	defer rows.Close()
+
+	var constraints []constraintIdentity
+	for rows.Next() {
+		var ci constraintIdentity
+		if err := rows.Scan(&ci.constraintName, &ci.srcSchema, &ci.srcTable, &ci.refSchema, &ci.refTable); err != nil {
+			return nil, false, err
+		}
+		constraints = append(constraints, ci)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, false, err
+	}
+
+	// If we fetched exactly `limit` rows, there may be more — signal overflow.
+	overflow := len(constraints) >= limit
+	if overflow {
+		// Drop the sentinel row; we only needed it for overflow detection.
+		constraints = constraints[:len(constraints)-1]
+	}
+
+	return constraints, overflow, nil
+}
+
+// fetchConstraintColumns fetches all column mappings for the given constraint
+// identities, joined with REFERENTIAL_CONSTRAINTS for update/delete rules.
+func fetchConstraintColumns(ctx context.Context, tx *sql.Tx, database, tableName, direction string, constraints []constraintIdentity) ([]constraintColumn, error) {
+	if len(constraints) == 0 {
+		return nil, nil
+	}
+
+	names := make([]any, 0, len(constraints))
+	placeholders := make([]string, 0, len(constraints))
+	for _, ci := range constraints {
+		names = append(names, ci.constraintName)
+		placeholders = append(placeholders, "?")
+	}
+	inClause := strings.Join(placeholders, ",")
+
+	var query string
+	var args []any
+
+	switch direction {
+	case "outbound":
+		query = fmt.Sprintf(
+			`SELECT kcu.CONSTRAINT_NAME, kcu.COLUMN_NAME, kcu.REFERENCED_COLUMN_NAME,
+			        kcu.ORDINAL_POSITION, rc.UPDATE_RULE, rc.DELETE_RULE
+			 FROM information_schema.KEY_COLUMN_USAGE kcu
+			 JOIN information_schema.REFERENTIAL_CONSTRAINTS rc
+			   ON kcu.CONSTRAINT_NAME = rc.CONSTRAINT_NAME
+			  AND kcu.TABLE_SCHEMA = rc.CONSTRAINT_SCHEMA
+			 WHERE kcu.TABLE_SCHEMA = ? AND kcu.TABLE_NAME = ?
+			   AND kcu.CONSTRAINT_NAME IN (%s)
+			 ORDER BY kcu.CONSTRAINT_NAME, kcu.ORDINAL_POSITION`, inClause,
+		)
+		args = append([]any{database, tableName}, names...)
+
+	case "inbound":
+		query = fmt.Sprintf(
+			`SELECT kcu.CONSTRAINT_NAME, kcu.COLUMN_NAME, kcu.REFERENCED_COLUMN_NAME,
+			        kcu.ORDINAL_POSITION, rc.UPDATE_RULE, rc.DELETE_RULE
+			 FROM information_schema.KEY_COLUMN_USAGE kcu
+			 JOIN information_schema.REFERENTIAL_CONSTRAINTS rc
+			   ON kcu.CONSTRAINT_NAME = rc.CONSTRAINT_NAME
+			  AND kcu.TABLE_SCHEMA = rc.CONSTRAINT_SCHEMA
+			 WHERE kcu.REFERENCED_TABLE_SCHEMA = ? AND kcu.REFERENCED_TABLE_NAME = ?
+			   AND kcu.CONSTRAINT_NAME IN (%s)
+			 ORDER BY kcu.CONSTRAINT_NAME, kcu.ORDINAL_POSITION`, inClause,
+		)
+		args = append([]any{database, tableName}, names...)
+	}
+
+	rows, err := tx.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var cols []constraintColumn
+	for rows.Next() {
+		var c constraintColumn
+		if err := rows.Scan(&c.constraintName, &c.column, &c.refColumn, &c.ordinal, &c.updateRule, &c.deleteRule); err != nil {
+			return nil, err
+		}
+		cols = append(cols, c)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	return cols, nil
+}
+
 
 // loadColumns queries COLUMNS for the given table, capped at schemaMaxColumns.
 func (s *MySQLSchemaInspector) loadColumns(ctx context.Context, tx *sql.Tx, database, name string, detail *ObjectDetail) error {

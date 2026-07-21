@@ -11,6 +11,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/fan/controlhub/internal/model"
 )
@@ -263,14 +264,20 @@ func (s *QuerySchemaService) GetRelationshipMap(
 		return model.RelationshipMapResponse{}, ErrSchemaValidationFailed
 	}
 
+	// 2b. Gate by engine: only MySQL is supported for relationship maps.
+	if !strings.EqualFold(bound.Target.ConnectionContext.Engine, "mysql") {
+		_ = s.audit.InsertAuditEvent(ctx, actorID, targetID, auditSchemaRelationshipMapRead, "failed")
+		return model.RelationshipMapResponse{}, ErrSchemaRelationshipNotSupported
+	}
+
 	// 3. Check cache (unless refresh).
 	key := cacheKey("relationship_map", targetID, bound.Credential.CredentialRef, database, name, "", 0, 0, false)
 	if !refresh {
 		if cached, ok := s.cache.Get(key); ok {
-			if aErr := s.audit.InsertAuditEvent(ctx, actorID, targetID, auditSchemaRelationshipMapRead, "success"); aErr != nil {
-				return model.RelationshipMapResponse{}, fmt.Errorf("%w: %v", ErrSchemaBackendError, aErr)
-			}
-			return cached.(model.RelationshipMapResponse), nil
+		if aErr := s.audit.InsertAuditEvent(ctx, actorID, targetID, auditSchemaRelationshipMapRead, "success"); aErr != nil {
+			return model.RelationshipMapResponse{}, ErrSchemaBackendError
+		}
+		return cached.(model.RelationshipMapResponse), nil
 		}
 	}
 
@@ -294,7 +301,7 @@ func (s *QuerySchemaService) GetRelationshipMap(
 
 	// 6. Write audit.
 	if aErr := s.audit.InsertAuditEvent(ctx, actorID, targetID, auditSchemaRelationshipMapRead, "success"); aErr != nil {
-		return model.RelationshipMapResponse{}, fmt.Errorf("%w: %v", ErrSchemaBackendError, aErr)
+		return model.RelationshipMapResponse{}, ErrSchemaBackendError
 	}
 
 	return resp, nil
