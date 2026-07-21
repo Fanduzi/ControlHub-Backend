@@ -12,6 +12,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -105,6 +106,35 @@ type FKColumn struct {
 	ReferencedColumn string `json:"referencedColumn"`
 }
 
+// RelationshipMapResult holds the inbound and outbound foreign-key
+// relationships for one base table.
+type RelationshipMapResult struct {
+	Nodes     []RelationshipMapNodeResult
+	Edges     []RelationshipMapEdgeResult
+	Truncated bool
+}
+
+// RelationshipMapNodeResult is one table node in the relationship map.
+type RelationshipMapNodeResult struct {
+	ID       string
+	Database string
+	Name     string
+	Kind     string
+	Role     string
+}
+
+// RelationshipMapEdgeResult is one foreign-key edge in the relationship map.
+type RelationshipMapEdgeResult struct {
+	ID                string
+	Direction         string
+	SourceID          string
+	TargetID          string
+	Columns           []string
+	ReferencedColumns []string
+	OnUpdate          string
+	OnDelete          string
+}
+
 // QuerySchemaInspector inspects MySQL/TiDB schema metadata using parameterized
 // information_schema queries.
 type QuerySchemaInspector interface {
@@ -112,6 +142,7 @@ type QuerySchemaInspector interface {
 	ListObjects(ctx context.Context, dsn string, database, kind, q string, page, pageSize int) ([]ObjectSummary, model.PageInfo, error)
 	GetObjectDetails(ctx context.Context, dsn string, database, name, kind string) (*ObjectDetail, error)
 	GetTableDefinition(ctx context.Context, dsn string, database, name string) (*TableDefinition, error)
+	GetRelationshipMap(ctx context.Context, dsn string, database, name string) (*RelationshipMapResult, error)
 }
 
 // MySQLSchemaInspector implements QuerySchemaInspector using parameterized
@@ -364,6 +395,331 @@ func (s *MySQLSchemaInspector) GetTableDefinition(ctx context.Context, dsn strin
 	return &TableDefinition{
 		Definition: definition,
 		Truncated:  truncated,
+	}, nil
+}
+
+// GetRelationshipMap returns inbound and outbound foreign-key relationships
+// for one base table. Nodes and edges are capped at model.RelationshipMapMaxNodes
+// and model.RelationshipMapMaxEdges respectively; Truncated=true when any
+// candidate is omitted.
+func (s *MySQLSchemaInspector) GetRelationshipMap(ctx context.Context, dsn string, database, name string) (*RelationshipMapResult, error) {
+	db, err := sql.Open("mysql", dsn)
+	if err != nil {
+		return nil, fmt.Errorf("open target database: %w", err)
+	}
+	defer db.Close()
+	db.SetMaxOpenConns(1)
+
+	tx, err := db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback()
+
+	var tableType string
+	err = tx.QueryRowContext(ctx,
+		"SELECT TABLE_TYPE FROM information_schema.TABLES WHERE TABLE_SCHEMA = ? AND TABLE_NAME = ?",
+		database, name,
+	).Scan(&tableType)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return nil, ErrSchemaObjectNotFound
+		}
+		return nil, err
+	}
+	if strings.ToUpper(strings.TrimSpace(tableType)) != "BASE TABLE" {
+		return nil, ErrSchemaDefinitionNotSupported
+	}
+
+	limit := model.RelationshipMapMaxEdges + 1
+
+	type rawRow struct {
+		constraintName string
+		column         string
+		sourceSchema   string
+		sourceTable    string
+		refSchema      string
+		refTable       string
+		refColumn      string
+		updateRule     string
+		deleteRule     string
+	}
+
+	outboundRows, err := tx.QueryContext(ctx,
+		`SELECT kcu.CONSTRAINT_NAME, kcu.COLUMN_NAME, kcu.REFERENCED_TABLE_SCHEMA,
+		        kcu.REFERENCED_TABLE_NAME, kcu.REFERENCED_COLUMN_NAME,
+		        rc.UPDATE_RULE, rc.DELETE_RULE, kcu.ORDINAL_POSITION
+		 FROM information_schema.KEY_COLUMN_USAGE kcu
+		 JOIN information_schema.REFERENTIAL_CONSTRAINTS rc
+		   ON kcu.CONSTRAINT_NAME = rc.CONSTRAINT_NAME
+		  AND kcu.TABLE_SCHEMA = rc.CONSTRAINT_SCHEMA
+		 WHERE kcu.TABLE_SCHEMA = ? AND kcu.TABLE_NAME = ?
+		   AND kcu.REFERENCED_TABLE_NAME IS NOT NULL
+		 ORDER BY kcu.REFERENCED_TABLE_SCHEMA, kcu.REFERENCED_TABLE_NAME,
+		          kcu.CONSTRAINT_NAME, kcu.ORDINAL_POSITION
+		 LIMIT ?`,
+		database, name, limit,
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	type outRow struct {
+		rawRow
+		ordinal int
+	}
+	var outRows []outRow
+	for outboundRows.Next() {
+		var r outRow
+		if err := outboundRows.Scan(
+			&r.constraintName, &r.column, &r.refSchema, &r.refTable,
+			&r.refColumn, &r.updateRule, &r.deleteRule, &r.ordinal,
+		); err != nil {
+			outboundRows.Close()
+			return nil, err
+		}
+		r.sourceSchema = database
+		r.sourceTable = name
+		outRows = append(outRows, r)
+	}
+	if err := outboundRows.Err(); err != nil {
+		outboundRows.Close()
+		return nil, err
+	}
+	outboundRows.Close()
+
+	inboundRows, err := tx.QueryContext(ctx,
+		`SELECT kcu.CONSTRAINT_NAME, kcu.COLUMN_NAME, kcu.TABLE_SCHEMA,
+		        kcu.TABLE_NAME, kcu.REFERENCED_COLUMN_NAME,
+		        rc.UPDATE_RULE, rc.DELETE_RULE, kcu.ORDINAL_POSITION
+		 FROM information_schema.KEY_COLUMN_USAGE kcu
+		 JOIN information_schema.REFERENTIAL_CONSTRAINTS rc
+		   ON kcu.CONSTRAINT_NAME = rc.CONSTRAINT_NAME
+		  AND kcu.TABLE_SCHEMA = rc.CONSTRAINT_SCHEMA
+		 WHERE kcu.REFERENCED_TABLE_SCHEMA = ? AND kcu.REFERENCED_TABLE_NAME = ?
+		 ORDER BY kcu.TABLE_SCHEMA, kcu.TABLE_NAME,
+		          kcu.CONSTRAINT_NAME, kcu.ORDINAL_POSITION
+		 LIMIT ?`,
+		database, name, limit,
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	var inRows []outRow
+	for inboundRows.Next() {
+		var r outRow
+		if err := inboundRows.Scan(
+			&r.constraintName, &r.column, &r.sourceSchema, &r.sourceTable,
+			&r.refColumn, &r.updateRule, &r.deleteRule, &r.ordinal,
+		); err != nil {
+			inboundRows.Close()
+			return nil, err
+		}
+		r.refSchema = database
+		r.refTable = name
+		inRows = append(inRows, r)
+	}
+	if err := inboundRows.Err(); err != nil {
+		inboundRows.Close()
+		return nil, err
+	}
+	inboundRows.Close()
+
+	type fkGroup struct {
+		direction string
+		conName   string
+		srcSchema string
+		srcTable  string
+		refSchema string
+		refTable  string
+		updateRule string
+		deleteRule string
+		columns    []string
+		refColumns []string
+	}
+
+	groupOut := make(map[string]*fkGroup)
+	for _, r := range outRows {
+		key := "out|" + r.constraintName + "|" + r.sourceSchema + "|" + r.sourceTable + "|" + r.refSchema + "|" + r.refTable
+		g, ok := groupOut[key]
+		if !ok {
+			g = &fkGroup{
+				direction:  "outbound",
+				conName:    r.constraintName,
+				srcSchema:  r.sourceSchema,
+				srcTable:   r.sourceTable,
+				refSchema:  r.refSchema,
+				refTable:   r.refTable,
+				updateRule: r.updateRule,
+				deleteRule: r.deleteRule,
+			}
+			groupOut[key] = g
+		}
+		g.columns = append(g.columns, r.column)
+		g.refColumns = append(g.refColumns, r.refColumn)
+	}
+
+	groupIn := make(map[string]*fkGroup)
+	for _, r := range inRows {
+		key := "in|" + r.constraintName + "|" + r.sourceSchema + "|" + r.sourceTable + "|" + r.refSchema + "|" + r.refTable
+		g, ok := groupIn[key]
+		if !ok {
+			g = &fkGroup{
+				direction:  "inbound",
+				conName:    r.constraintName,
+				srcSchema:  r.sourceSchema,
+				srcTable:   r.sourceTable,
+				refSchema:  r.refSchema,
+				refTable:   r.refTable,
+				updateRule: r.updateRule,
+				deleteRule: r.deleteRule,
+			}
+			groupIn[key] = g
+		}
+		g.columns = append(g.columns, r.column)
+		g.refColumns = append(g.refColumns, r.refColumn)
+	}
+
+	type sortedGroup struct {
+		direction  string
+		relSchema  string
+		relTable   string
+		conName    string
+		srcSchema  string
+		srcTable   string
+		refSchema  string
+		refTable   string
+		updateRule string
+		deleteRule string
+		columns    []string
+		refColumns []string
+	}
+
+	var allGroups []sortedGroup
+	for _, g := range groupOut {
+		allGroups = append(allGroups, sortedGroup{
+			direction:  g.direction,
+			relSchema:  g.refSchema,
+			relTable:   g.refTable,
+			conName:    g.conName,
+			srcSchema:  g.srcSchema,
+			srcTable:   g.srcTable,
+			refSchema:  g.refSchema,
+			refTable:   g.refTable,
+			updateRule: g.updateRule,
+			deleteRule: g.deleteRule,
+			columns:    g.columns,
+			refColumns: g.refColumns,
+		})
+	}
+	for _, g := range groupIn {
+		allGroups = append(allGroups, sortedGroup{
+			direction:  g.direction,
+			relSchema:  g.srcSchema,
+			relTable:   g.srcTable,
+			conName:    g.conName,
+			srcSchema:  g.srcSchema,
+			srcTable:   g.srcTable,
+			refSchema:  g.refSchema,
+			refTable:   g.refTable,
+			updateRule: g.updateRule,
+			deleteRule: g.deleteRule,
+			columns:    g.columns,
+			refColumns: g.refColumns,
+		})
+	}
+
+	sort.Slice(allGroups, func(i, j int) bool {
+		if allGroups[i].direction != allGroups[j].direction {
+			return allGroups[i].direction < allGroups[j].direction
+		}
+		if allGroups[i].relSchema != allGroups[j].relSchema {
+			return allGroups[i].relSchema < allGroups[j].relSchema
+		}
+		if allGroups[i].relTable != allGroups[j].relTable {
+			return allGroups[i].relTable < allGroups[j].relTable
+		}
+		return allGroups[i].conName < allGroups[j].conName
+	})
+
+	nodeIDMap := map[string]string{
+		database + "." + name: "n0",
+	}
+	nodes := []RelationshipMapNodeResult{{
+		ID:       "n0",
+		Database: database,
+		Name:     name,
+		Kind:     "table",
+		Role:     "root",
+	}}
+	nextNodeID := 1
+	truncated := false
+
+	var edges []RelationshipMapEdgeResult
+	nextEdgeID := 0
+
+	for _, g := range allGroups {
+		var relatedSchema, relatedTable string
+		if g.direction == "outbound" {
+			relatedSchema = g.refSchema
+			relatedTable = g.refTable
+		} else {
+			relatedSchema = g.srcSchema
+			relatedTable = g.srcTable
+		}
+
+		relKey := relatedSchema + "." + relatedTable
+		relatedNodeID, exists := nodeIDMap[relKey]
+		if !exists {
+			if len(nodes) >= model.RelationshipMapMaxNodes {
+				truncated = true
+				continue
+			}
+			relatedNodeID = fmt.Sprintf("n%d", nextNodeID)
+			nextNodeID++
+			nodeIDMap[relKey] = relatedNodeID
+			nodes = append(nodes, RelationshipMapNodeResult{
+				ID:       relatedNodeID,
+				Database: relatedSchema,
+				Name:     relatedTable,
+				Kind:     "table",
+				Role:     "related",
+			})
+		}
+
+		if len(edges) >= model.RelationshipMapMaxEdges {
+			truncated = true
+			continue
+		}
+
+		var sourceID, targetID string
+		if g.direction == "outbound" {
+			sourceID = "n0"
+			targetID = relatedNodeID
+		} else {
+			sourceID = relatedNodeID
+			targetID = "n0"
+		}
+
+		edgeID := fmt.Sprintf("e%d", nextEdgeID)
+		nextEdgeID++
+		edges = append(edges, RelationshipMapEdgeResult{
+			ID:                edgeID,
+			Direction:         g.direction,
+			SourceID:          sourceID,
+			TargetID:          targetID,
+			Columns:           g.columns,
+			ReferencedColumns: g.refColumns,
+			OnUpdate:          g.updateRule,
+			OnDelete:          g.deleteRule,
+		})
+	}
+
+	return &RelationshipMapResult{
+		Nodes:     nodes,
+		Edges:     edges,
+		Truncated: truncated,
 	}, nil
 }
 

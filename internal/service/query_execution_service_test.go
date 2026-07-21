@@ -253,6 +253,10 @@ func (f *fakeNavSchemaInspector) GetTableDefinition(_ context.Context, _, _, _ s
 	return &TableDefinition{}, nil
 }
 
+func (f *fakeNavSchemaInspector) GetRelationshipMap(_ context.Context, _, _, _ string) (*RelationshipMapResult, error) {
+	return &RelationshipMapResult{}, nil
+}
+
 // --- fixtures ---
 
 func mysqlTarget(environment string) model.QueryTarget {

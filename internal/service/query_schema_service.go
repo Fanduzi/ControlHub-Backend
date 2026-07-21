@@ -22,8 +22,9 @@ var (
 	ErrSchemaNotAllowed             = errors.New("schema access not allowed")
 	ErrSchemaTargetNotFound         = errors.New("schema target not found")
 	ErrSchemaObjectNotFound         = errors.New("schema object not found")
-	ErrSchemaDefinitionNotSupported = errors.New("schema definition not supported")
-	ErrSchemaTimeout                = errors.New("schema query timed out")
+	ErrSchemaDefinitionNotSupported    = errors.New("schema definition not supported")
+	ErrSchemaRelationshipNotSupported = errors.New("relationship map not supported for this object type")
+	ErrSchemaTimeout                   = errors.New("schema query timed out")
 	ErrSchemaBackendError           = errors.New("schema backend error")
 )
 
@@ -33,6 +34,7 @@ const (
 	auditSchemaObjectsListed       = "query.schema.objects.listed"
 	auditSchemaObjectRead          = "query.schema.object.read"
 	auditSchemaTableDefinitionRead = "query.schema.table_definition.read"
+	auditSchemaRelationshipMapRead = "query.schema.relationship_map.read"
 )
 
 // QuerySchemaService orchestrates schema metadata introspection. It resolves
@@ -242,6 +244,62 @@ func (s *QuerySchemaService) GetObjectDetails(
 	return resp, nil
 }
 
+// GetRelationshipMap returns direct inbound and outbound foreign-key
+// relationships for one base table.
+func (s *QuerySchemaService) GetRelationshipMap(
+	ctx context.Context,
+	actorID, targetID uint64,
+	database, name string,
+	refresh bool,
+) (model.RelationshipMapResponse, error) {
+	// 1. Resolve target access.
+	bound, err := s.access.Resolve(ctx, actorID, targetID)
+	if err != nil {
+		return model.RelationshipMapResponse{}, s.mapAccessError(err)
+	}
+
+	// 2. Validate required parameters.
+	if database == "" || name == "" {
+		return model.RelationshipMapResponse{}, ErrSchemaValidationFailed
+	}
+
+	// 3. Check cache (unless refresh).
+	key := cacheKey("relationship_map", targetID, bound.Credential.CredentialRef, database, name, "", 0, 0, false)
+	if !refresh {
+		if cached, ok := s.cache.Get(key); ok {
+			if aErr := s.audit.InsertAuditEvent(ctx, actorID, targetID, auditSchemaRelationshipMapRead, "success"); aErr != nil {
+				return model.RelationshipMapResponse{}, fmt.Errorf("%w: %v", ErrSchemaBackendError, aErr)
+			}
+			return cached.(model.RelationshipMapResponse), nil
+		}
+	}
+
+	// 4. Call inspector (with singleflight coalescing).
+	var resp model.RelationshipMapResponse
+	val, sfErr, _ := s.cache.Do(key, func() (any, error) {
+		result, iErr := s.inspector.GetRelationshipMap(ctx, bound.dsn, database, name)
+		if iErr != nil {
+			return nil, iErr
+		}
+		return s.toModelRelationshipMap(int64(targetID), result), nil
+	})
+	if sfErr != nil {
+		_ = s.audit.InsertAuditEvent(ctx, actorID, targetID, auditSchemaRelationshipMapRead, "failed")
+		return model.RelationshipMapResponse{}, s.mapRelationshipMapError(sfErr)
+	}
+	resp = val.(model.RelationshipMapResponse)
+
+	// 5. Cache the result.
+	s.cache.Set(key, resp)
+
+	// 6. Write audit.
+	if aErr := s.audit.InsertAuditEvent(ctx, actorID, targetID, auditSchemaRelationshipMapRead, "success"); aErr != nil {
+		return model.RelationshipMapResponse{}, fmt.Errorf("%w: %v", ErrSchemaBackendError, aErr)
+	}
+
+	return resp, nil
+}
+
 // GetTableDefinition returns a governed, bounded MySQL SHOW CREATE TABLE
 // result for a single verified base table. It resolves target access, verifies
 // the object is a BASE TABLE via parameterized information_schema lookup, then
@@ -316,6 +374,21 @@ func (s *QuerySchemaService) mapTableDefinitionError(err error) error {
 	}
 	if errors.Is(err, ErrSchemaDefinitionNotSupported) {
 		return ErrSchemaDefinitionNotSupported
+	}
+	if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
+		return ErrSchemaTimeout
+	}
+	return ErrSchemaBackendError
+}
+
+// mapRelationshipMapError maps a raw inspector error from GetRelationshipMap
+// to a controlled schema sentinel.
+func (s *QuerySchemaService) mapRelationshipMapError(err error) error {
+	if errors.Is(err, ErrSchemaDefinitionNotSupported) {
+		return ErrSchemaRelationshipNotSupported
+	}
+	if errors.Is(err, ErrSchemaObjectNotFound) {
+		return ErrSchemaObjectNotFound
 	}
 	if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
 		return ErrSchemaTimeout
@@ -402,6 +475,45 @@ func (s *QuerySchemaService) toModelObjectDetail(targetID uint64, database strin
 			Indexes:     len(detail.Indexes) >= schemaMaxIndexColumns,
 			ForeignKeys: len(detail.ForeignKeys) >= schemaMaxFKColumnPairs,
 		}
+	}
+	resp.EnsureNonNilCollections()
+	return resp
+}
+
+func (s *QuerySchemaService) toModelRelationshipMap(targetID int64, result *RelationshipMapResult) model.RelationshipMapResponse {
+	nodes := make([]model.RelationshipMapNode, len(result.Nodes))
+	for i, n := range result.Nodes {
+		nodes[i] = model.RelationshipMapNode{
+			ID:       n.ID,
+			Database: n.Database,
+			Name:     n.Name,
+			Kind:     model.ObjectKind(n.Kind),
+			Role:     model.RelationshipMapRole(n.Role),
+		}
+	}
+	edges := make([]model.RelationshipMapEdge, len(result.Edges))
+	for i, e := range result.Edges {
+		cols := make([]string, len(e.Columns))
+		copy(cols, e.Columns)
+		refCols := make([]string, len(e.ReferencedColumns))
+		copy(refCols, e.ReferencedColumns)
+		edges[i] = model.RelationshipMapEdge{
+			ID:                e.ID,
+			Direction:         model.RelationshipMapDirection(e.Direction),
+			SourceID:          e.SourceID,
+			TargetID:          e.TargetID,
+			Columns:           cols,
+			ReferencedColumns: refCols,
+			OnUpdate:          e.OnUpdate,
+			OnDelete:          e.OnDelete,
+		}
+	}
+	resp := model.RelationshipMapResponse{
+		TargetResourceID: targetID,
+		Root:             nodes[0],
+		Nodes:            nodes,
+		Edges:            edges,
+		Truncated:        result.Truncated,
 	}
 	resp.EnsureNonNilCollections()
 	return resp

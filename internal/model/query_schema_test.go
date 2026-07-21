@@ -278,3 +278,297 @@ func TestObjectDetailResponse_EmptyCollectionsSerializeAsEmptyArrays(t *testing.
 		t.Fatalf("expected foreignKeys array: %s", body)
 	}
 }
+
+// TestRelationshipMapRoleValidation verifies that RelationshipMapRole.Validate()
+// accepts only "root" and "related". This is a fail-closed enum: unknown roles
+// must be rejected so the frontend never renders an unclassified node.
+func TestRelationshipMapRoleValidation(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		role RelationshipMapRole
+		want bool // true = expect nil error
+	}{
+		{RelationshipMapRoleRoot, true},
+		{RelationshipMapRoleRelated, true},
+		{"", false},
+		{"parent", false},
+		{"child", false},
+		{"ROOT", false},
+		{"RELATED", false},
+		{"root ", false},
+	} {
+		t.Run(string(tc.role), func(t *testing.T) {
+			err := tc.role.Validate()
+			if tc.want && err != nil {
+				t.Errorf("Validate(%q) = %v, want nil", tc.role, err)
+			}
+			if !tc.want && err == nil {
+				t.Errorf("Validate(%q) = nil, want error (fail closed)", tc.role)
+			}
+		})
+	}
+}
+
+// TestRelationshipMapDirectionValidation verifies that
+// RelationshipMapDirection.Validate() accepts only "inbound" and "outbound".
+// This is a fail-closed enum: unknown directions must be rejected so the
+// frontend never renders an edge with ambiguous directionality.
+func TestRelationshipMapDirectionValidation(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		dir  RelationshipMapDirection
+		want bool
+	}{
+		{RelationshipMapDirectionInbound, true},
+		{RelationshipMapDirectionOutbound, true},
+		{"", false},
+		{"both", false},
+		{"bidirectional", false},
+		{"INBOUND", false},
+		{"OUTBOUND", false},
+		{"inbound ", false},
+	} {
+		t.Run(string(tc.dir), func(t *testing.T) {
+			err := tc.dir.Validate()
+			if tc.want && err != nil {
+				t.Errorf("Validate(%q) = %v, want nil", tc.dir, err)
+			}
+			if !tc.want && err == nil {
+				t.Errorf("Validate(%q) = nil, want error (fail closed)", tc.dir)
+			}
+		})
+	}
+}
+
+// TestRelationshipMapResponseValidate verifies that Validate() enforces all
+// structural invariants: non-empty nodes, exactly one root, unique IDs, valid
+// edge endpoints, correct direction targeting, non-empty columns, and matching
+// columns/referencedColumns lengths.
+func TestRelationshipMapResponseValidate(t *testing.T) {
+	t.Parallel()
+
+	// validNode is a reusable related node for building test cases.
+	validNode := RelationshipMapNode{ID: "n1", Database: "db", Name: "other", Kind: ObjectKindTable, Role: RelationshipMapRoleRelated}
+	// validRoot is the standard root node.
+	validRoot := RelationshipMapNode{ID: "n0", Database: "db", Name: "t1", Kind: ObjectKindTable, Role: RelationshipMapRoleRoot}
+	// validEdge is an inbound edge from related to root.
+	validEdge := RelationshipMapEdge{ID: "e0", Direction: RelationshipMapDirectionInbound, SourceID: "n1", TargetID: "n0", Columns: []string{"fk_col"}, ReferencedColumns: []string{"id"}}
+
+	// buildValid returns a valid response; callers can mutate for negative cases.
+	buildValid := func() RelationshipMapResponse {
+		return RelationshipMapResponse{
+			TargetResourceID: 22,
+			Root:             validRoot,
+			Nodes:            []RelationshipMapNode{validRoot, validNode},
+			Edges:            []RelationshipMapEdge{validEdge},
+		}
+	}
+
+	t.Run("valid response passes", func(t *testing.T) {
+		if err := buildValid().Validate(); err != nil {
+			t.Errorf("Validate() = %v, want nil", err)
+		}
+	})
+
+	t.Run("empty nodes", func(t *testing.T) {
+		r := buildValid()
+		r.Nodes = nil
+		if err := r.Validate(); err == nil {
+			t.Error("Validate() = nil, want error for empty nodes")
+		}
+	})
+
+	t.Run("no root node", func(t *testing.T) {
+		r := buildValid()
+		r.Nodes = []RelationshipMapNode{
+			{ID: "n0", Database: "db", Name: "t1", Kind: ObjectKindTable, Role: RelationshipMapRoleRelated},
+			validNode,
+		}
+		if err := r.Validate(); err == nil {
+			t.Error("Validate() = nil, want error for no root node")
+		}
+	})
+
+	t.Run("multiple root nodes", func(t *testing.T) {
+		r := buildValid()
+		r.Nodes = []RelationshipMapNode{
+			validRoot,
+			{ID: "n1", Database: "db", Name: "other", Kind: ObjectKindTable, Role: RelationshipMapRoleRoot},
+		}
+		r.Edges = nil
+		if err := r.Validate(); err == nil {
+			t.Error("Validate() = nil, want error for multiple root nodes")
+		}
+	})
+
+	t.Run("duplicate node IDs", func(t *testing.T) {
+		r := buildValid()
+		r.Nodes = []RelationshipMapNode{
+			validRoot,
+			{ID: "n0", Database: "db", Name: "dup", Kind: ObjectKindTable, Role: RelationshipMapRoleRelated},
+		}
+		r.Edges = nil
+		if err := r.Validate(); err == nil {
+			t.Error("Validate() = nil, want error for duplicate node IDs")
+		}
+	})
+
+	t.Run("duplicate edge IDs", func(t *testing.T) {
+		r := buildValid()
+		r.Edges = []RelationshipMapEdge{validEdge, validEdge}
+		if err := r.Validate(); err == nil {
+			t.Error("Validate() = nil, want error for duplicate edge IDs")
+		}
+	})
+
+	t.Run("edge referencing missing source node", func(t *testing.T) {
+		r := buildValid()
+		r.Edges = []RelationshipMapEdge{
+			{ID: "e0", Direction: RelationshipMapDirectionInbound, SourceID: "missing", TargetID: "n0", Columns: []string{"c"}, ReferencedColumns: []string{"id"}},
+		}
+		if err := r.Validate(); err == nil {
+			t.Error("Validate() = nil, want error for missing source node")
+		}
+	})
+
+	t.Run("edge referencing missing target node", func(t *testing.T) {
+		r := buildValid()
+		r.Edges = []RelationshipMapEdge{
+			{ID: "e0", Direction: RelationshipMapDirectionInbound, SourceID: "n1", TargetID: "missing", Columns: []string{"c"}, ReferencedColumns: []string{"id"}},
+		}
+		if err := r.Validate(); err == nil {
+			t.Error("Validate() = nil, want error for missing target node")
+		}
+	})
+
+	t.Run("inbound edge with wrong target", func(t *testing.T) {
+		r := buildValid()
+		// Inbound edge should target root, but targets n1 instead.
+		r.Edges = []RelationshipMapEdge{
+			{ID: "e0", Direction: RelationshipMapDirectionInbound, SourceID: "n0", TargetID: "n1", Columns: []string{"c"}, ReferencedColumns: []string{"id"}},
+		}
+		if err := r.Validate(); err == nil {
+			t.Error("Validate() = nil, want error for inbound edge not targeting root")
+		}
+	})
+
+	t.Run("outbound edge with wrong source", func(t *testing.T) {
+		r := buildValid()
+		// Outbound edge should source from root, but sources from n1 instead.
+		r.Edges = []RelationshipMapEdge{
+			{ID: "e0", Direction: RelationshipMapDirectionOutbound, SourceID: "n1", TargetID: "n0", Columns: []string{"c"}, ReferencedColumns: []string{"id"}},
+		}
+		if err := r.Validate(); err == nil {
+			t.Error("Validate() = nil, want error for outbound edge not sourcing from root")
+		}
+	})
+
+	t.Run("empty columns", func(t *testing.T) {
+		r := buildValid()
+		r.Edges = []RelationshipMapEdge{
+			{ID: "e0", Direction: RelationshipMapDirectionInbound, SourceID: "n1", TargetID: "n0", Columns: nil, ReferencedColumns: []string{"id"}},
+		}
+		if err := r.Validate(); err == nil {
+			t.Error("Validate() = nil, want error for empty columns")
+		}
+	})
+
+	t.Run("mismatched columns/referencedColumns length", func(t *testing.T) {
+		r := buildValid()
+		r.Edges = []RelationshipMapEdge{
+			{ID: "e0", Direction: RelationshipMapDirectionInbound, SourceID: "n1", TargetID: "n0", Columns: []string{"a", "b"}, ReferencedColumns: []string{"id"}},
+		}
+		if err := r.Validate(); err == nil {
+			t.Error("Validate() = nil, want error for mismatched columns/referencedColumns length")
+		}
+	})
+}
+
+// TestRelationshipMapResponseMarshalJSON verifies that MarshalJSON produces
+// non-nil JSON arrays for nodes, edges, and edge column lists. The frontend
+// calls .length on these; null crashes the relationship map renderer.
+func TestRelationshipMapResponseMarshalJSON(t *testing.T) {
+	t.Parallel()
+	resp := RelationshipMapResponse{
+		TargetResourceID: 22,
+		Root: RelationshipMapNode{ID: "n0", Database: "db", Name: "t1", Kind: ObjectKindTable, Role: RelationshipMapRoleRoot},
+		// Intentionally leave Nodes/Edges as nil to test MarshalJSON defaults.
+	}
+	raw, err := json.Marshal(resp)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	body := string(raw)
+
+	for _, forbidden := range []string{
+		`"nodes":null`,
+		`"edges":null`,
+	} {
+		if strings.Contains(body, forbidden) {
+			t.Fatalf("body contains %s (must be []): %s", forbidden, body)
+		}
+	}
+	if !strings.Contains(body, `"nodes":[]`) {
+		t.Fatalf("expected nodes:[], got: %s", body)
+	}
+	if !strings.Contains(body, `"edges":[]`) {
+		t.Fatalf("expected edges:[], got: %s", body)
+	}
+
+	// Now test with edges that have nil column arrays.
+	resp.Edges = []RelationshipMapEdge{
+		{ID: "e0", Direction: RelationshipMapDirectionInbound, SourceID: "n0", TargetID: "n0", Columns: nil, ReferencedColumns: nil},
+	}
+	raw2, err := json.Marshal(resp)
+	if err != nil {
+		t.Fatalf("marshal with edges: %v", err)
+	}
+	body2 := string(raw2)
+	if strings.Contains(body2, `"columns":null`) {
+		t.Fatalf("edge columns must be [], got: %s", body2)
+	}
+	if strings.Contains(body2, `"referencedColumns":null`) {
+		t.Fatalf("edge referencedColumns must be [], got: %s", body2)
+	}
+	if !strings.Contains(body2, `"columns":[]`) {
+		t.Fatalf("expected columns:[], got: %s", body2)
+	}
+	if !strings.Contains(body2, `"referencedColumns":[]`) {
+		t.Fatalf("expected referencedColumns:[], got: %s", body2)
+	}
+}
+
+// TestRelationshipMapResponseEnsureNonNilCollections verifies that
+// EnsureNonNilCollections makes all collection fields non-nil empty slices.
+// This is the service-boundary normalization so cached/shared responses never
+// carry nil arrays.
+func TestRelationshipMapResponseEnsureNonNilCollections(t *testing.T) {
+	t.Parallel()
+	resp := RelationshipMapResponse{
+		TargetResourceID: 22,
+		Root:             RelationshipMapNode{ID: "n0", Database: "db", Name: "t1", Kind: ObjectKindTable, Role: RelationshipMapRoleRoot},
+		Edges: []RelationshipMapEdge{
+			{ID: "e0", Direction: RelationshipMapDirectionInbound, SourceID: "n0", TargetID: "n0"},
+			// Columns and ReferencedColumns left nil
+		},
+		// Nodes left nil
+	}
+
+	resp.EnsureNonNilCollections()
+
+	if resp.Nodes == nil {
+		t.Error("Nodes is nil after EnsureNonNilCollections")
+	}
+	if len(resp.Nodes) != 0 {
+		t.Errorf("Nodes length = %d, want 0", len(resp.Nodes))
+	}
+	if resp.Edges == nil {
+		t.Error("Edges is nil after EnsureNonNilCollections")
+	}
+	if resp.Edges[0].Columns == nil {
+		t.Error("edge Columns is nil after EnsureNonNilCollections")
+	}
+	if resp.Edges[0].ReferencedColumns == nil {
+		t.Error("edge ReferencedColumns is nil after EnsureNonNilCollections")
+	}
+}

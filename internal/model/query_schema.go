@@ -191,3 +191,193 @@ func (r *ObjectDetailResponse) EnsureNonNilCollections() {
 		}
 	}
 }
+
+// Relationship map constants define the v1 caps for the relationship map response.
+const (
+	RelationshipMapMaxNodes = 40
+	RelationshipMapMaxEdges = 80
+)
+
+// RelationshipMapRole classifies a node in the relationship map.
+type RelationshipMapRole string
+
+const (
+	RelationshipMapRoleRoot    RelationshipMapRole = "root"
+	RelationshipMapRoleRelated RelationshipMapRole = "related"
+)
+
+// Validate returns nil only for a known role.
+func (r RelationshipMapRole) Validate() error {
+	switch r {
+	case RelationshipMapRoleRoot, RelationshipMapRoleRelated:
+		return nil
+	}
+	return fmt.Errorf("invalid relationship map role: %s", r)
+}
+
+// RelationshipMapDirection classifies an edge direction in the relationship map.
+type RelationshipMapDirection string
+
+const (
+	RelationshipMapDirectionInbound  RelationshipMapDirection = "inbound"
+	RelationshipMapDirectionOutbound RelationshipMapDirection = "outbound"
+)
+
+// Validate returns nil only for a known direction.
+func (d RelationshipMapDirection) Validate() error {
+	switch d {
+	case RelationshipMapDirectionInbound, RelationshipMapDirectionOutbound:
+		return nil
+	}
+	return fmt.Errorf("invalid relationship map direction: %s", d)
+}
+
+// RelationshipMapNode describes one table node in the relationship map.
+// ID is an opaque request-local token (n0, n1, ...), not parseable by clients.
+type RelationshipMapNode struct {
+	ID       string              `json:"id"`
+	Database string              `json:"database"`
+	Name     string              `json:"name"`
+	Kind     ObjectKind          `json:"kind"`
+	Role     RelationshipMapRole `json:"role"`
+}
+
+// RelationshipMapEdge describes one foreign-key edge in the relationship map.
+// ID is an opaque request-local token (e0, e1, ...), not parseable by clients.
+// SourceID and TargetID must reference existing node IDs in the same response.
+type RelationshipMapEdge struct {
+	ID                string                  `json:"id"`
+	Direction         RelationshipMapDirection `json:"direction"`
+	SourceID          string                  `json:"sourceId"`
+	TargetID          string                  `json:"targetId"`
+	Columns           []string                `json:"columns"`
+	ReferencedColumns []string                `json:"referencedColumns"`
+	OnUpdate          string                  `json:"onUpdate"`
+	OnDelete          string                  `json:"onDelete"`
+}
+
+// RelationshipMapResponse is the envelope for
+// GET /query-targets/{id}/schema/relationship-map. It returns the direct
+// inbound and outbound foreign-key relationships for one base table.
+// Nodes and edges are always JSON arrays (never null).
+type RelationshipMapResponse struct {
+	TargetResourceID int64                  `json:"targetResourceId"`
+	Root             RelationshipMapNode    `json:"root"`
+	Nodes            []RelationshipMapNode  `json:"nodes"`
+	Edges            []RelationshipMapEdge  `json:"edges"`
+	Truncated        bool                   `json:"truncated"`
+}
+
+// Validate checks structural invariants of the relationship map response.
+// It ensures: nodes contains exactly one root matching the Root field,
+// all node/edge IDs are unique, every edge endpoint references an existing node,
+// inbound edges point related→root, outbound edges point root→related,
+// and column arrays are non-empty and same length.
+func (r RelationshipMapResponse) Validate() error {
+	if len(r.Nodes) == 0 {
+		return fmt.Errorf("nodes must not be empty")
+	}
+
+	rootCount := 0
+	rootIdx := -1
+	nodeIDs := make(map[string]bool, len(r.Nodes))
+	for i, n := range r.Nodes {
+		if n.Role == RelationshipMapRoleRoot {
+			rootCount++
+			rootIdx = i
+		}
+		if nodeIDs[n.ID] {
+			return fmt.Errorf("duplicate node ID: %s", n.ID)
+		}
+		nodeIDs[n.ID] = true
+	}
+	if rootCount != 1 {
+		return fmt.Errorf("expected exactly one root node, got %d", rootCount)
+	}
+	if rootIdx < 0 {
+		return fmt.Errorf("root node not found")
+	}
+
+	root := r.Nodes[rootIdx]
+	if root.Database != r.Root.Database || root.Name != r.Root.Name || root.Kind != r.Root.Kind {
+		return fmt.Errorf("root node does not match Root field")
+	}
+
+	edgeIDs := make(map[string]bool, len(r.Edges))
+	for _, e := range r.Edges {
+		if edgeIDs[e.ID] {
+			return fmt.Errorf("duplicate edge ID: %s", e.ID)
+		}
+		edgeIDs[e.ID] = true
+
+		if !nodeIDs[e.SourceID] {
+			return fmt.Errorf("edge %s references missing source node: %s", e.ID, e.SourceID)
+		}
+		if !nodeIDs[e.TargetID] {
+			return fmt.Errorf("edge %s references missing target node: %s", e.ID, e.TargetID)
+		}
+
+		switch e.Direction {
+		case RelationshipMapDirectionInbound:
+			if e.TargetID != root.ID {
+				return fmt.Errorf("inbound edge %s target must be root", e.ID)
+			}
+		case RelationshipMapDirectionOutbound:
+			if e.SourceID != root.ID {
+				return fmt.Errorf("outbound edge %s source must be root", e.ID)
+			}
+		default:
+			return fmt.Errorf("edge %s has invalid direction: %s", e.ID, e.Direction)
+		}
+
+		if len(e.Columns) == 0 {
+			return fmt.Errorf("edge %s columns must not be empty", e.ID)
+		}
+		if len(e.Columns) != len(e.ReferencedColumns) {
+			return fmt.Errorf("edge %s columns/referencedColumns length mismatch", e.ID)
+		}
+	}
+	return nil
+}
+
+// MarshalJSON preserves the OpenAPI required-array invariant: nodes, edges,
+// and edge column lists are always JSON arrays (never null).
+func (r RelationshipMapResponse) MarshalJSON() ([]byte, error) {
+	type alias RelationshipMapResponse
+	out := alias(r)
+	if out.Nodes == nil {
+		out.Nodes = []RelationshipMapNode{}
+	}
+	if out.Edges == nil {
+		out.Edges = []RelationshipMapEdge{}
+	} else {
+		for i := range out.Edges {
+			if out.Edges[i].Columns == nil {
+				out.Edges[i].Columns = []string{}
+			}
+			if out.Edges[i].ReferencedColumns == nil {
+				out.Edges[i].ReferencedColumns = []string{}
+			}
+		}
+	}
+	return json.Marshal(out)
+}
+
+// EnsureNonNilCollections mutates r so all declared collection fields are
+// non-nil empty slices. Call at the service boundary before caching/returning.
+func (r *RelationshipMapResponse) EnsureNonNilCollections() {
+	if r.Nodes == nil {
+		r.Nodes = []RelationshipMapNode{}
+	}
+	if r.Edges == nil {
+		r.Edges = []RelationshipMapEdge{}
+	}
+	for i := range r.Edges {
+		if r.Edges[i].Columns == nil {
+			r.Edges[i].Columns = []string{}
+		}
+		if r.Edges[i].ReferencedColumns == nil {
+			r.Edges[i].ReferencedColumns = []string{}
+		}
+	}
+}

@@ -713,6 +713,28 @@ func (f *fakeQuerySchema) GetTableDefinition(_ context.Context, _, targetID uint
 	}, nil
 }
 
+func (f *fakeQuerySchema) GetRelationshipMap(_ context.Context, _, targetID uint64, database, name string, _ bool) (model.RelationshipMapResponse, error) {
+	return model.RelationshipMapResponse{
+		TargetResourceID: int64(targetID),
+		Root: model.RelationshipMapNode{
+			ID:       "n0",
+			Database: database,
+			Name:     name,
+			Kind:     model.ObjectKindTable,
+			Role:     model.RelationshipMapRoleRoot,
+		},
+		Nodes: []model.RelationshipMapNode{{
+			ID:       "n0",
+			Database: database,
+			Name:     name,
+			Kind:     model.ObjectKindTable,
+			Role:     model.RelationshipMapRoleRoot,
+		}},
+		Edges:     []model.RelationshipMapEdge{},
+		Truncated: false,
+	}, nil
+}
+
 func NewTestServer() *TestServer {
 	archivedAt := time.Date(2026, 4, 11, 22, 0, 0, 0, time.UTC)
 	archiveReason := "retired"

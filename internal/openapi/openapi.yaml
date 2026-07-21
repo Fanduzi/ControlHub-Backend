@@ -1258,6 +1258,129 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/ErrorResponse"
+  /query-targets/{id}/schema/relationship-map:
+    get:
+      summary: Get table relationship map
+      operationId: getQueryTargetRelationshipMap
+      description: >
+        Phase 38O. Returns direct inbound and outbound foreign-key
+        relationships for one base table. Bounded to 40 nodes and 80
+        edges with explicit truncation flag. Requires a fresh Bearer
+        token. Never returns credentials, DSNs, raw information-schema
+        rows, SQL, or driver errors.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+            format: int64
+            minimum: 1
+          description: Query target resource ID.
+        - name: database
+          in: query
+          required: true
+          schema:
+            type: string
+            minLength: 1
+            maxLength: 128
+          description: Database name.
+        - name: name
+          in: query
+          required: true
+          schema:
+            type: string
+            minLength: 1
+            maxLength: 128
+          description: Table name (must be a base table).
+        - name: refresh
+          in: query
+          required: false
+          schema:
+            type: boolean
+            default: false
+          description: Bypass cache and re-fetch from source.
+      responses:
+        "200":
+          description: >
+            Relationship map with nodes and edges.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RelationshipMapResponse"
+              example:
+                targetResourceId: 616
+                root:
+                  id: "n0"
+                  database: "query_e2e_aux"
+                  name: "schema_parent"
+                  kind: "table"
+                  role: "root"
+                nodes:
+                  - id: "n0"
+                    database: "query_e2e_aux"
+                    name: "schema_parent"
+                    kind: "table"
+                    role: "root"
+                  - id: "n1"
+                    database: "query_e2e_aux"
+                    name: "schema_child"
+                    kind: "table"
+                    role: "related"
+                edges:
+                  - id: "e0"
+                    direction: "inbound"
+                    sourceId: "n1"
+                    targetId: "n0"
+                    columns: ["parent_id"]
+                    referencedColumns: ["id"]
+                    onUpdate: "RESTRICT"
+                    onDelete: "RESTRICT"
+                truncated: false
+        "400":
+          description: Invalid parameters
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "401":
+          description: Missing or invalid Bearer token
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "403":
+          description: Target access denied by policy
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "404":
+          description: Query target or table not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "408":
+          description: Request timed out
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "409":
+          description: Relationship map not supported for this engine
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "502":
+          description: Backend database error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
   /resources:
     get:
       summary: List resources
@@ -2732,6 +2855,70 @@ components:
           description: >
             True if the definition was capped at 64 KiB. Consumers must
             label the definition incomplete when this flag is set.
+    RelationshipMapNode:
+      type: object
+      required: [id, database, name, kind, role]
+      properties:
+        id:
+          type: string
+        database:
+          type: string
+        name:
+          type: string
+        kind:
+          type: string
+          enum: [table]
+        role:
+          type: string
+          enum: [root, related]
+
+    RelationshipMapEdge:
+      type: object
+      required: [id, direction, sourceId, targetId, columns, referencedColumns, onUpdate, onDelete]
+      properties:
+        id:
+          type: string
+        direction:
+          type: string
+          enum: [inbound, outbound]
+        sourceId:
+          type: string
+        targetId:
+          type: string
+        columns:
+          type: array
+          items:
+            type: string
+          minItems: 1
+        referencedColumns:
+          type: array
+          items:
+            type: string
+          minItems: 1
+        onUpdate:
+          type: string
+        onDelete:
+          type: string
+
+    RelationshipMapResponse:
+      type: object
+      required: [targetResourceId, root, nodes, edges, truncated]
+      properties:
+        targetResourceId:
+          type: integer
+          format: int64
+        root:
+          $ref: "#/components/schemas/RelationshipMapNode"
+        nodes:
+          type: array
+          items:
+            $ref: "#/components/schemas/RelationshipMapNode"
+        edges:
+          type: array
+          items:
+            $ref: "#/components/schemas/RelationshipMapEdge"
+        truncated:
+          type: boolean
     PageInfo:
       type: object
       required: [page, pageSize, totalItems, totalPages, hasNextPage, hasPreviousPage]

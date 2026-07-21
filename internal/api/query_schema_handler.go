@@ -1,6 +1,6 @@
 // Package api provides HTTP handlers and routing for the ControlHub REST API.
 // input: context, errors, net/http, strconv, chi, internal/model, internal/service
-// output: querySchemaAPI interface, handleListSchemaDatabases, handleListSchemaObjects, handleGetObjectDetails, handleGetTableDefinition, writeQuerySchemaError
+// output: querySchemaAPI interface, handleListSchemaDatabases, handleListSchemaObjects, handleGetObjectDetails, handleGetTableDefinition, handleGetRelationshipMap, writeQuerySchemaError
 // pos: HTTP handlers for GET /query-targets/{id}/schema/databases, /schema/objects, /schema/object-details, /schema/table-definition (Phase 38I schema metadata)
 // note: if this file changes, update header and README.md
 package api
@@ -27,6 +27,7 @@ type querySchemaAPI interface {
 	ListObjects(ctx context.Context, actorID, targetID uint64, database, kind, q string, page, pageSize int, refresh bool) (model.ObjectListResponse, error)
 	GetObjectDetails(ctx context.Context, actorID, targetID uint64, database, name, kind string, refresh bool) (model.ObjectDetailResponse, error)
 	GetTableDefinition(ctx context.Context, actorID, targetID uint64, database, name string) (model.TableDefinitionResponse, error)
+	GetRelationshipMap(ctx context.Context, actorID, targetID uint64, database, name string, refresh bool) (model.RelationshipMapResponse, error)
 }
 
 // Schema query parameter length caps. Exceeding these is a 400.
@@ -237,6 +238,53 @@ func handleGetTableDefinition(svc querySchemaAPI) http.HandlerFunc {
 	}
 }
 
+// handleGetRelationshipMap handles GET /query-targets/{id}/schema/relationship-map.
+// It parses query params (database, name, refresh), extracts the actor from the
+// verified token, and delegates to the service.
+func handleGetRelationshipMap(svc querySchemaAPI) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		targetID, err := parseUint64IDParam(chi.URLParam(r, "id"), "target id")
+		if err != nil {
+			writeJSONError(w, http.StatusBadRequest, "validation_failed", err.Error())
+			return
+		}
+		database := r.URL.Query().Get("database")
+		if database == "" {
+			writeJSONError(w, http.StatusBadRequest, "validation_failed", "database is required")
+			return
+		}
+		if len(database) > schemaDatabaseMax {
+			writeJSONError(w, http.StatusBadRequest, "validation_failed", "database exceeds maximum length")
+			return
+		}
+		name := r.URL.Query().Get("name")
+		if name == "" {
+			writeJSONError(w, http.StatusBadRequest, "validation_failed", "name is required")
+			return
+		}
+		if len(name) > schemaNameMaxLen {
+			writeJSONError(w, http.StatusBadRequest, "validation_failed", "name exceeds maximum length")
+			return
+		}
+		refresh, err := parseBoolParam(r, "refresh")
+		if err != nil {
+			writeJSONError(w, http.StatusBadRequest, "validation_failed", err.Error())
+			return
+		}
+		actorUserID, ok := actorUserIDFromContext(r.Context())
+		if !ok {
+			writeJSONError(w, http.StatusInternalServerError, "internal_error", "authenticated actor missing")
+			return
+		}
+		resp, err := svc.GetRelationshipMap(r.Context(), actorUserID, targetID, database, name, refresh)
+		if err != nil {
+			writeQuerySchemaError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, resp)
+	}
+}
+
 // writeQuerySchemaError maps a service sentinel to a controlled HTTP response.
 func writeQuerySchemaError(w http.ResponseWriter, err error) {
 	switch {
@@ -248,6 +296,8 @@ func writeQuerySchemaError(w http.ResponseWriter, err error) {
 		writeJSONError(w, http.StatusNotFound, "schema_target_not_found", err.Error())
 	case errors.Is(err, service.ErrSchemaDefinitionNotSupported):
 		writeJSONError(w, http.StatusBadRequest, "schema_definition_not_supported", err.Error())
+	case errors.Is(err, service.ErrSchemaRelationshipNotSupported):
+		writeJSONError(w, http.StatusConflict, "relationship_map_not_supported", err.Error())
 	case errors.Is(err, service.ErrSchemaObjectNotFound):
 		writeJSONError(w, http.StatusNotFound, "schema_object_not_found", err.Error())
 	case errors.Is(err, service.ErrSchemaTimeout):

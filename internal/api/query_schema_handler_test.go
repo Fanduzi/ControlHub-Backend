@@ -34,6 +34,8 @@ type stubQuerySchema struct {
 	detailErr           error
 	tableDefResp        model.TableDefinitionResponse
 	tableDefErr         error
+	relMapResp          model.RelationshipMapResponse
+	relMapErr           error
 	gotActor            uint64
 	gotTargetID         uint64
 	gotQ                string
@@ -50,6 +52,7 @@ type stubQuerySchema struct {
 	databasesCalled     bool
 	objectsCalled       bool
 	detailCalled        bool
+	relMapCalled        bool
 }
 
 func (s *stubQuerySchema) ListDatabases(_ context.Context, actorID, targetID uint64, q string, page, pageSize int, includeSystem, refresh bool) (model.DatabaseListResponse, error) {
@@ -95,6 +98,16 @@ func (s *stubQuerySchema) GetTableDefinition(_ context.Context, actorID, targetI
 	s.gotTableDefDatabase = database
 	s.gotTableDefName = name
 	return s.tableDefResp, s.tableDefErr
+}
+
+func (s *stubQuerySchema) GetRelationshipMap(_ context.Context, actorID, targetID uint64, database, name string, refresh bool) (model.RelationshipMapResponse, error) {
+	s.relMapCalled = true
+	s.gotActor = actorID
+	s.gotTargetID = targetID
+	s.gotDatabase = database
+	s.gotName = name
+	s.gotRefresh = refresh
+	return s.relMapResp, s.relMapErr
 }
 
 func newSchemaRouter(stub querySchemaAPI) *chi.Mux {
@@ -777,6 +790,231 @@ func TestQuerySchema_TableDefinitionSentinelMapping(t *testing.T) {
 	}
 }
 
+// --- handleGetRelationshipMap tests ---
+
+func TestGetRelationshipMap_Auth(t *testing.T) {
+	router := newSchemaRouter(&stubQuerySchema{})
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, schemaRequest(http.MethodGet, "/query-targets/22/schema/relationship-map", ""))
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("GET relationship-map without bearer = %d, want 401", rec.Code)
+	}
+	rec = httptest.NewRecorder()
+	router.ServeHTTP(rec, schemaRequest(http.MethodGet, "/query-targets/22/schema/relationship-map", "not-a-valid-token"))
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("GET relationship-map with invalid bearer = %d, want 401", rec.Code)
+	}
+}
+
+func TestGetRelationshipMap_ActorFromToken(t *testing.T) {
+	stub := &stubQuerySchema{
+		relMapResp: model.RelationshipMapResponse{
+			TargetResourceID: 22,
+			Root:             model.RelationshipMapNode{ID: "t1", Database: "mydb", Name: "orders", Kind: model.ObjectKindTable, Role: model.RelationshipMapRoleRoot},
+			Nodes:            []model.RelationshipMapNode{{ID: "t1", Database: "mydb", Name: "orders", Kind: model.ObjectKindTable, Role: model.RelationshipMapRoleRoot}},
+			Edges:            []model.RelationshipMapEdge{},
+		},
+	}
+	router := newSchemaRouter(stub)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, schemaRequest(http.MethodGet, "/query-targets/22/schema/relationship-map?database=mydb&name=orders", schemaToken(t)))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", rec.Code, rec.Body.String())
+	}
+	if !stub.relMapCalled {
+		t.Fatal("GetRelationshipMap was not called")
+	}
+	if stub.gotActor != 42 {
+		t.Fatalf("actor = %d, want 42 (from token)", stub.gotActor)
+	}
+	if stub.gotTargetID != 22 {
+		t.Fatalf("target = %d, want 22", stub.gotTargetID)
+	}
+}
+
+func TestGetRelationshipMap_MissingDatabase(t *testing.T) {
+	router := newSchemaRouter(&stubQuerySchema{})
+	token := schemaToken(t)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, schemaRequest(http.MethodGet, "/query-targets/22/schema/relationship-map?name=orders", token))
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("missing database: status = %d, want 400", rec.Code)
+	}
+	body := rec.Body.String()
+	if !strings.Contains(body, "validation_failed") {
+		t.Fatalf("body = %s, want validation_failed", body)
+	}
+	if !strings.Contains(body, "database is required") {
+		t.Fatalf("body = %s, want database required", body)
+	}
+}
+
+func TestGetRelationshipMap_MissingName(t *testing.T) {
+	router := newSchemaRouter(&stubQuerySchema{})
+	token := schemaToken(t)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, schemaRequest(http.MethodGet, "/query-targets/22/schema/relationship-map?database=testdb", token))
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("missing name: status = %d, want 400", rec.Code)
+	}
+	body := rec.Body.String()
+	if !strings.Contains(body, "validation_failed") {
+		t.Fatalf("body = %s, want validation_failed", body)
+	}
+	if !strings.Contains(body, "name is required") {
+		t.Fatalf("body = %s, want name required", body)
+	}
+}
+
+func TestGetRelationshipMap_DatabaseTooLong(t *testing.T) {
+	router := newSchemaRouter(&stubQuerySchema{})
+	token := schemaToken(t)
+	longDB := strings.Repeat("a", 129)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, schemaRequest(http.MethodGet, "/query-targets/22/schema/relationship-map?database="+url.QueryEscape(longDB)+"&name=orders", token))
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("long database: status = %d, want 400", rec.Code)
+	}
+	body := rec.Body.String()
+	if !strings.Contains(body, "validation_failed") {
+		t.Fatalf("body = %s, want validation_failed", body)
+	}
+}
+
+func TestGetRelationshipMap_NameTooLong(t *testing.T) {
+	router := newSchemaRouter(&stubQuerySchema{})
+	token := schemaToken(t)
+	longName := strings.Repeat("a", 129)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, schemaRequest(http.MethodGet, "/query-targets/22/schema/relationship-map?database=testdb&name="+url.QueryEscape(longName), token))
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("long name: status = %d, want 400", rec.Code)
+	}
+	body := rec.Body.String()
+	if !strings.Contains(body, "validation_failed") {
+		t.Fatalf("body = %s, want validation_failed", body)
+	}
+}
+
+func TestGetRelationshipMap_InvalidRefresh(t *testing.T) {
+	router := newSchemaRouter(&stubQuerySchema{})
+	token := schemaToken(t)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, schemaRequest(http.MethodGet, "/query-targets/22/schema/relationship-map?database=testdb&name=orders&refresh=maybe", token))
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("invalid refresh: status = %d, want 400", rec.Code)
+	}
+	body := rec.Body.String()
+	if !strings.Contains(body, "validation_failed") {
+		t.Fatalf("body = %s, want validation_failed", body)
+	}
+}
+
+func TestGetRelationshipMap_ValidRequest(t *testing.T) {
+	stub := &stubQuerySchema{
+		relMapResp: model.RelationshipMapResponse{
+			TargetResourceID: 22,
+			Root:             model.RelationshipMapNode{ID: "t1", Database: "mydb", Name: "orders", Kind: model.ObjectKindTable, Role: model.RelationshipMapRoleRoot},
+			Nodes: []model.RelationshipMapNode{
+				{ID: "t1", Database: "mydb", Name: "orders", Kind: model.ObjectKindTable, Role: model.RelationshipMapRoleRoot},
+				{ID: "t2", Database: "mydb", Name: "customers", Kind: model.ObjectKindTable, Role: model.RelationshipMapRoleRelated},
+			},
+			Edges: []model.RelationshipMapEdge{
+				{ID: "e1", SourceID: "t1", TargetID: "t2", Direction: model.RelationshipMapDirectionOutbound, Columns: []string{"customer_id"}, ReferencedColumns: []string{"id"}, OnUpdate: "CASCADE", OnDelete: "SET NULL"},
+			},
+			Truncated: false,
+		},
+	}
+	router := newSchemaRouter(stub)
+	token := schemaToken(t)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, schemaRequest(http.MethodGet, "/query-targets/22/schema/relationship-map?database=mydb&name=orders&refresh=true", token))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", rec.Code, rec.Body.String())
+	}
+	if !stub.relMapCalled {
+		t.Fatal("GetRelationshipMap was not called")
+	}
+	if stub.gotDatabase != "mydb" {
+		t.Fatalf("database = %q, want mydb", stub.gotDatabase)
+	}
+	if stub.gotName != "orders" {
+		t.Fatalf("name = %q, want orders", stub.gotName)
+	}
+	if !stub.gotRefresh {
+		t.Fatal("refresh = false, want true")
+	}
+}
+
+func TestGetRelationshipMap_SentinelMapping(t *testing.T) {
+	cases := []struct {
+		name       string
+		svcErr     error
+		wantStatus int
+		wantCode   string
+	}{
+		{"ErrSchemaValidationFailed", service.ErrSchemaValidationFailed, http.StatusBadRequest, "schema_validation_failed"},
+		{"ErrSchemaNotAllowed", service.ErrSchemaNotAllowed, http.StatusForbidden, "schema_not_allowed"},
+		{"ErrSchemaTargetNotFound", service.ErrSchemaTargetNotFound, http.StatusNotFound, "schema_target_not_found"},
+		{"ErrSchemaObjectNotFound", service.ErrSchemaObjectNotFound, http.StatusNotFound, "schema_object_not_found"},
+		{"ErrSchemaRelationshipNotSupported", service.ErrSchemaRelationshipNotSupported, http.StatusConflict, "relationship_map_not_supported"},
+		{"ErrSchemaTimeout", service.ErrSchemaTimeout, http.StatusRequestTimeout, "schema_timeout"},
+		{"ErrSchemaBackendError", service.ErrSchemaBackendError, http.StatusBadGateway, "schema_backend_error"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			stub := &stubQuerySchema{relMapErr: tc.svcErr}
+			router := newSchemaRouter(stub)
+			rec := httptest.NewRecorder()
+			router.ServeHTTP(rec, schemaRequest(http.MethodGet, "/query-targets/22/schema/relationship-map?database=testdb&name=orders", schemaToken(t)))
+			if rec.Code != tc.wantStatus {
+				t.Fatalf("status = %d, want %d; body=%s", rec.Code, tc.wantStatus, rec.Body.String())
+			}
+			if !strings.Contains(rec.Body.String(), tc.wantCode) {
+				t.Fatalf("body = %s, want code %s", rec.Body.String(), tc.wantCode)
+			}
+		})
+	}
+}
+
+func TestGetRelationshipMap_NoSecretFields(t *testing.T) {
+	stub := &stubQuerySchema{
+		relMapResp: model.RelationshipMapResponse{
+			TargetResourceID: 22,
+			Root:             model.RelationshipMapNode{ID: "t1", Database: "mydb", Name: "orders", Kind: model.ObjectKindTable, Role: model.RelationshipMapRoleRoot},
+			Nodes: []model.RelationshipMapNode{
+				{ID: "t1", Database: "mydb", Name: "orders", Kind: model.ObjectKindTable, Role: model.RelationshipMapRoleRoot},
+			},
+			Edges: []model.RelationshipMapEdge{},
+		},
+	}
+	router := newSchemaRouter(stub)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, schemaRequest(http.MethodGet, "/query-targets/22/schema/relationship-map?database=mydb&name=orders", schemaToken(t)))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rec.Code)
+	}
+	body := rec.Body.String()
+	for _, forbidden := range []string{"dsn", "password", "secret", "host", "port", "credentialRef", "actor"} {
+		if strings.Contains(strings.ToLower(body), forbidden) {
+			t.Fatalf("response contains forbidden field %q: %s", forbidden, body)
+		}
+	}
+}
+
+func TestGetRelationshipMap_ErrorNoSecrets(t *testing.T) {
+	stub := &stubQuerySchema{relMapErr: service.ErrSchemaBackendError}
+	router := newSchemaRouter(stub)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, schemaRequest(http.MethodGet, "/query-targets/22/schema/relationship-map?database=testdb&name=orders", schemaToken(t)))
+	body := rec.Body.String()
+	for _, forbidden := range []string{"dsn", "password", "secret", "host", "port"} {
+		if strings.Contains(strings.ToLower(body), forbidden) {
+			t.Fatalf("error response contains forbidden field %q: %s", forbidden, body)
+		}
+	}
+}
+
 type auditFailingTargetRepo struct{}
 
 func (auditFailingTargetRepo) ListQueryTargets(_ context.Context, q model.QueryTargetListQuery) ([]model.QueryTarget, int, error) {
@@ -825,6 +1063,9 @@ func (auditFailingInspector) GetObjectDetails(_ context.Context, _, _, _, _ stri
 }
 func (auditFailingInspector) GetTableDefinition(_ context.Context, _, _, _ string) (*service.TableDefinition, error) {
 	return &service.TableDefinition{Definition: "CREATE TABLE t (id INT)", Truncated: false}, nil
+}
+func (auditFailingInspector) GetRelationshipMap(_ context.Context, _, _, _ string) (*service.RelationshipMapResult, error) {
+	return &service.RelationshipMapResult{}, nil
 }
 
 type auditFailingExecRepo struct {
