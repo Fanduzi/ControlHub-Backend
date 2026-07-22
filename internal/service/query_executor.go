@@ -128,7 +128,7 @@ func (e *MySQLQueryExecutor) scanBoundedRows(rows *sql.Rows, limit int) (QueryDa
 		}
 	}
 
-	result := QueryDatabaseResult{Columns: columns}
+	result := QueryDatabaseResult{Columns: columns, Rows: make([][]any, 0)}
 	responseBytes := 0
 
 	for rows.Next() {

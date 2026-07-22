@@ -536,6 +536,36 @@ func TestQueryExecution_CastNullAsSignedIsNil(t *testing.T) {
 	}
 }
 
+// --- zero-row contract: rows must be [] not null ---
+
+func TestQueryExecution_ZeroRowsReturnsEmptyArray(t *testing.T) {
+	svc, targetID, _ := setupQuerySandboxTarget(t)
+
+	// WHY: a valid SELECT that matches zero rows must return rows:[] (empty
+	// JSON array), not rows:null. The frontend contract depends on this to
+	// safely call .length on the rows array without null checks.
+	resp, err := svc.Execute(context.Background(), ownerDBA, targetID, model.QueryExecuteRequest{
+		Statement: "select id, name from qe_sandbox_fixtures where 1 = 0",
+		MaxRows:   10,
+	})
+	if err != nil {
+		t.Fatalf("Execute error: %v", err)
+	}
+	if resp.Status != model.QueryExecutionSuccess {
+		t.Fatalf("status = %q, want success", resp.Status)
+	}
+	if resp.RowCount != 0 {
+		t.Fatalf("rowCount = %d, want 0", resp.RowCount)
+	}
+	// WHY: a nil slice serializes as JSON null; the contract requires [].
+	if resp.Rows == nil {
+		t.Fatal("rows = nil, want non-nil empty slice (JSON [] not null)")
+	}
+	if len(resp.Rows) != 0 {
+		t.Fatalf("len(rows) = %d, want 0", len(resp.Rows))
+	}
+}
+
 // --- Phase 38C: read-only metadata statement execution tests ---
 
 func TestQueryExecution_ShowTablesSucceeds(t *testing.T) {
