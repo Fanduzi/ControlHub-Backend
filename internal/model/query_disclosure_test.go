@@ -88,7 +88,7 @@ func TestResultDisclosurePolicyUpsertRequest_EmptyIdentifiersRejected(t *testing
 		Mode:             ResultDisclosureRawCopyAllowed,
 	}
 	tests := []struct {
-		name string
+		name   string
 		mutate func(*ResultDisclosurePolicyUpsertRequest)
 	}{
 		{"empty_database_name", func(r *ResultDisclosurePolicyUpsertRequest) { r.DatabaseName = "" }},
@@ -120,7 +120,7 @@ func TestResultDisclosurePolicyUpsertRequest_IdentifierTooLongRejected(t *testin
 		Mode:             ResultDisclosureRawCopyAllowed,
 	}
 	tests := []struct {
-		name string
+		name   string
 		mutate func(*ResultDisclosurePolicyUpsertRequest)
 	}{
 		{"long_database_name", func(r *ResultDisclosurePolicyUpsertRequest) { r.DatabaseName = long }},
@@ -151,7 +151,7 @@ func TestResultDisclosurePolicyUpsertRequest_InvalidIdentifierCharsRejected(t *t
 		Mode:             ResultDisclosureRawCopyAllowed,
 	}
 	tests := []struct {
-		name string
+		name   string
 		mutate func(*ResultDisclosurePolicyUpsertRequest)
 	}{
 		{"space_in_database", func(r *ResultDisclosurePolicyUpsertRequest) { r.DatabaseName = "my db" }},
