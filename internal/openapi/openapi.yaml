@@ -231,7 +231,7 @@ paths:
                     targetResourceId: 22
                     engine: mysql
                     columns:
-                      - {name: value, databaseType: BIGINT, nullable: false}
+                      - {name: value, databaseType: BIGINT, nullable: false, displayMode: raw_copy_allowed, copyAllowed: true}
                     rows:
                       - [1]
                     rowCount: 1
@@ -467,8 +467,8 @@ paths:
                     targetResourceId: 22
                     engine: mysql
                     columns:
-                      - {name: id, databaseType: BIGINT, nullable: false}
-                      - {name: name, databaseType: VARCHAR, nullable: true}
+                      - {name: id, databaseType: BIGINT, nullable: false, displayMode: raw_copy_allowed, copyAllowed: true}
+                      - {name: name, databaseType: VARCHAR, nullable: true, displayMode: raw_copy_allowed, copyAllowed: true}
                     rows:
                       - [100, "Widget"]
                     rowCount: 1
