@@ -3834,7 +3834,7 @@ components:
             hard maximum (tighter for production).
     QueryResultColumn:
       type: object
-      required: [name, databaseType, nullable]
+      required: [name, databaseType, nullable, displayMode, copyAllowed]
       properties:
         name:
           type: string
@@ -3842,6 +3842,18 @@ components:
           type: string
         nullable:
           type: boolean
+        displayMode:
+          type: string
+          description: >
+            Server-owned disclosure decision for this column. "blocked" is the
+            fail-closed default when no matching policy row exists.
+          enum:
+            - raw_copy_allowed
+            - masked_no_copy
+            - blocked
+        copyAllowed:
+          type: boolean
+          description: Whether the cell value may be copied to the clipboard.
     QueryExecuteResponse:
       type: object
       required: [executionId, status, targetResourceId, engine, columns, rows, rowCount, truncated, durationMs, limitApplied, executedAt]
