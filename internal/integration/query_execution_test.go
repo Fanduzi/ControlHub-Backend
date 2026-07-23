@@ -305,6 +305,10 @@ func setupQuerySandboxTarget(t *testing.T) (*service.QueryExecutionService, uint
 	}
 	t.Cleanup(func() { _ = os.Unsetenv("CONTROLHUB_QUERY_CREDENTIAL_" + sandboxCredentialRef) })
 
+	// Seed disclosure policies for the fixture table so the Phase 38Q
+	// fail-closed check allows queries against it.
+	seedDisclosurePolicies(t, db, res.ID, dsnCfg.DBName, "qe_sandbox_fixtures", "id", "name")
+
 	svc := service.NewQueryExecutionService(
 		mysql.NewQueryTargetRepository(db),
 		mysql.NewQueryExecutionRepository(db),
@@ -327,6 +331,37 @@ func mustExec(t *testing.T, db *sql.DB, query string, args ...any) {
 	t.Helper()
 	if _, err := db.Exec(query, args...); err != nil {
 		t.Fatalf("exec %q: %v", query, err)
+	}
+}
+
+// testDBName returns the database name parsed from the shared test DSN.
+func testDBName(t *testing.T) string {
+	t.Helper()
+	cfg, err := mysqldriver.ParseDSN(globalEnv.dsn)
+	if err != nil {
+		t.Fatalf("parse test dsn for db name: %v", err)
+	}
+	return cfg.DBName
+}
+
+// seedDisclosurePolicies inserts raw_copy_allowed disclosure policies for the
+// given table columns. Required by the Phase 38Q fail-closed disclosure check:
+// any query projection without an exact policy row is blocked before SQL executes.
+func seedDisclosurePolicies(t *testing.T, db *sql.DB, targetResourceID uint64, database, object string, columns ...string) {
+	t.Helper()
+	repo := mysql.NewQueryDisclosureRepository(db)
+	ctx := context.Background()
+	for _, col := range columns {
+		_, err := repo.Insert(ctx, model.ResultDisclosurePolicyUpsertRequest{
+			TargetResourceID: targetResourceID,
+			DatabaseName:     database,
+			ObjectName:       object,
+			ColumnName:       col,
+			Mode:             model.ResultDisclosureRawCopyAllowed,
+		})
+		if err != nil {
+			t.Fatalf("seed disclosure policy for %s.%s.%s: %v", database, object, col, err)
+		}
 	}
 }
 
@@ -431,7 +466,7 @@ func TestQueryExecution_HistoryWrittenForSuccessAndRejection(t *testing.T) {
 	svc, targetID, db := setupQuerySandboxTarget(t)
 	repo := mysql.NewQueryExecutionRepository(db)
 
-	if _, err := svc.Execute(context.Background(), ownerDBA, targetID, model.QueryExecuteRequest{Statement: "select 1", MaxRows: 10}); err != nil {
+	if _, err := svc.Execute(context.Background(), ownerDBA, targetID, model.QueryExecuteRequest{Statement: "select id from qe_sandbox_fixtures limit 1", MaxRows: 10}); err != nil {
 		t.Fatalf("success Execute: %v", err)
 	}
 	if _, err := svc.Execute(context.Background(), ownerDBA, targetID, model.QueryExecuteRequest{Statement: "delete from qe_sandbox_fixtures", MaxRows: 10}); err == nil {
@@ -459,7 +494,7 @@ func TestQueryExecution_HistoryWrittenForSuccessAndRejection(t *testing.T) {
 func TestQueryExecution_AuditEventWrittenForSuccessAndRejection(t *testing.T) {
 	svc, targetID, db := setupQuerySandboxTarget(t)
 
-	if _, err := svc.Execute(context.Background(), ownerDBA, targetID, model.QueryExecuteRequest{Statement: "select 1", MaxRows: 10}); err != nil {
+	if _, err := svc.Execute(context.Background(), ownerDBA, targetID, model.QueryExecuteRequest{Statement: "select id from qe_sandbox_fixtures limit 1", MaxRows: 10}); err != nil {
 		t.Fatalf("success Execute: %v", err)
 	}
 	if _, err := svc.Execute(context.Background(), ownerDBA, targetID, model.QueryExecuteRequest{Statement: "delete from qe_sandbox_fixtures", MaxRows: 10}); err == nil {
@@ -494,6 +529,7 @@ func TestQueryExecution_NullPreservedAsJSONNull(t *testing.T) {
 	mustExec(t, db, `drop table if exists qe_null_fixtures`)
 	mustExec(t, db, `create table qe_null_fixtures (id bigint unsigned not null primary key, n bigint null, label varchar(64) null)`)
 	mustExec(t, db, `insert into qe_null_fixtures (id, n, label) values (1, NULL, NULL), (2, 42, 'real')`)
+	seedDisclosurePolicies(t, db, targetID, testDBName(t), "qe_null_fixtures", "id", "n", "label")
 
 	resp, err := svc.Execute(context.Background(), ownerDBA, targetID, model.QueryExecuteRequest{
 		Statement: "select n, label from qe_null_fixtures order by id",
@@ -525,10 +561,17 @@ func TestQueryExecution_NullPreservedAsJSONNull(t *testing.T) {
 }
 
 func TestQueryExecution_CastNullAsSignedIsNil(t *testing.T) {
-	svc, targetID, _ := setupQuerySandboxTarget(t)
+	svc, targetID, db := setupQuerySandboxTarget(t)
+
+	// Use a nullable column from a seeded table instead of a bare expression
+	// (expressions are correctly blocked by the fail-closed disclosure policy).
+	mustExec(t, db, `drop table if exists qe_null_fixtures`)
+	mustExec(t, db, `create table qe_null_fixtures (id bigint unsigned not null primary key, n bigint null, label varchar(64) null)`)
+	mustExec(t, db, `insert into qe_null_fixtures (id, n, label) values (1, NULL, NULL)`)
+	seedDisclosurePolicies(t, db, targetID, testDBName(t), "qe_null_fixtures", "id", "n", "label")
 
 	resp, err := svc.Execute(context.Background(), ownerDBA, targetID, model.QueryExecuteRequest{
-		Statement: "select cast(NULL as signed) as v",
+		Statement: "select n from qe_null_fixtures where id = 1",
 		MaxRows:   10,
 	})
 	if err != nil {
@@ -538,7 +581,7 @@ func TestQueryExecution_CastNullAsSignedIsNil(t *testing.T) {
 		t.Fatalf("expected 1 row x 1 col, got rowCount=%d row0=%v", resp.RowCount, resp.Rows)
 	}
 	if got := resp.Rows[0][0]; got != nil {
-		t.Fatalf("cast(NULL as signed) = %v (%T), want nil", got, got)
+		t.Fatalf("NULL bigint column = %v (%T), want nil", got, got)
 	}
 }
 

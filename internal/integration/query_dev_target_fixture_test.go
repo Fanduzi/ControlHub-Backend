@@ -128,9 +128,15 @@ func TestQueryDevTargetFixture_SelectOneExecutes(t *testing.T) {
 	if err := seedFixtureCredential(t, db, targetID, globalEnv.dsn); err != nil {
 		t.Fatalf("seed: %v", err)
 	}
-	resp, err := newExecutionService(db).Execute(ctx, ownerDBA, targetID, model.QueryExecuteRequest{Statement: "select 1", MaxRows: 10})
+	// Create fixture table and seed disclosure policies for the governed query.
+	mustExec(t, db, `drop table if exists qe_sandbox_fixtures`)
+	mustExec(t, db, `create table qe_sandbox_fixtures (id bigint unsigned not null primary key, name varchar(64) not null)`)
+	mustExec(t, db, `insert into qe_sandbox_fixtures (id, name) values (1,'alpha')`)
+	seedDisclosurePolicies(t, db, targetID, testDBName(t), "qe_sandbox_fixtures", "id", "name")
+
+	resp, err := newExecutionService(db).Execute(ctx, ownerDBA, targetID, model.QueryExecuteRequest{Statement: "select id from qe_sandbox_fixtures limit 1", MaxRows: 10})
 	if err != nil {
-		t.Fatalf("execute select 1: %v", err)
+		t.Fatalf("execute select: %v", err)
 	}
 	if resp.Status != model.QueryExecutionSuccess {
 		t.Fatalf("status = %q, want success", resp.Status)
@@ -172,8 +178,14 @@ func TestQueryDevTargetFixture_HistoryRecordsSuccessAndRejection(t *testing.T) {
 	if err := seedFixtureCredential(t, db, targetID, globalEnv.dsn); err != nil {
 		t.Fatalf("seed: %v", err)
 	}
-	if _, err := newExecutionService(db).Execute(ctx, ownerDBA, targetID, model.QueryExecuteRequest{Statement: "select 1", MaxRows: 10}); err != nil {
-		t.Fatalf("select 1: %v", err)
+	// Create fixture table and seed disclosure policies for the governed query.
+	mustExec(t, db, `drop table if exists qe_sandbox_fixtures`)
+	mustExec(t, db, `create table qe_sandbox_fixtures (id bigint unsigned not null primary key, name varchar(64) not null)`)
+	mustExec(t, db, `insert into qe_sandbox_fixtures (id, name) values (1,'alpha')`)
+	seedDisclosurePolicies(t, db, targetID, testDBName(t), "qe_sandbox_fixtures", "id", "name")
+
+	if _, err := newExecutionService(db).Execute(ctx, ownerDBA, targetID, model.QueryExecuteRequest{Statement: "select id from qe_sandbox_fixtures limit 1", MaxRows: 10}); err != nil {
+		t.Fatalf("select: %v", err)
 	}
 	if _, err := newExecutionService(db).Execute(ctx, ownerDBA, targetID, model.QueryExecuteRequest{Statement: "delete from qe_sandbox_fixtures", MaxRows: 10}); err == nil {
 		t.Fatal("unsafe statement must be rejected")
@@ -247,7 +259,7 @@ func TestQueryDevTargetFixture_FailClosed_OnBadBindingStaysLocked(t *testing.T) 
 	if target.AvailableActions.Run {
 		t.Fatal("target must not expose run=true after a failed seed")
 	}
-	if _, err := newExecutionService(db).Execute(ctx, ownerDBA, targetID, model.QueryExecuteRequest{Statement: "select 1", MaxRows: 10}); err == nil {
+	if _, err := newExecutionService(db).Execute(ctx, ownerDBA, targetID, model.QueryExecuteRequest{Statement: "select id from qe_sandbox_fixtures limit 1", MaxRows: 10}); err == nil {
 		t.Fatal("execute must be rejected for a locked target")
 	}
 }

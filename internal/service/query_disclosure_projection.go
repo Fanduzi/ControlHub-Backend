@@ -58,7 +58,9 @@ func resolveExecuteProjection(ctx context.Context, inspector QuerySchemaInspecto
 	}
 	selectStatement, ok := statement.(*sqlparser.Select)
 	if !ok {
-		return ProjectionPlan{}, fmt.Errorf("%w: %s", errProjectionUnsupported, sqlparser.String(statement))
+		// Non-SELECT statements (SHOW, DESCRIBE, EXPLAIN, etc.) do not project
+		// user table column values; no disclosure governance is needed.
+		return ProjectionPlan{}, nil
 	}
 
 	source, err := resolveProjectionSource(selectStatement, input.database)

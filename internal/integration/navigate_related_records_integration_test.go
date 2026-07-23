@@ -86,6 +86,10 @@ func setupNavigateFixture(t *testing.T) (string, uint64, *sql.DB) {
 	seedCredentialRow(t, db, res.ID, "mysql", navCredentialRef, true, string(model.QueryEnvPolicyNonProdOnly))
 	t.Setenv("CONTROLHUB_QUERY_CREDENTIAL_"+navCredentialRef, globalEnv.dsn)
 
+	// Seed disclosure policies for the referenced table so the Phase 38Q
+	// fail-closed check allows the FK navigation query.
+	seedDisclosurePolicies(t, db, res.ID, "query_e2e_aux", "schema_parent", "id", "parent_code", "label", "created_at")
+
 	// Wire the full HTTP server.
 	queryTargetRepo := mysql.NewQueryTargetRepository(db)
 	queryExecutionRepo := mysql.NewQueryExecutionRepository(db)

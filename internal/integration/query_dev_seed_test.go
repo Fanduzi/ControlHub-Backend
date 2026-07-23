@@ -81,6 +81,10 @@ func newDevSeedTarget(t *testing.T, matchDSN bool) (uint64, *sql.DB, string) {
 	}
 	mustExec(t, db, `insert into resource_profiles_database_instance (resource_id, engine, version, host, port, role, spec) values (?, 'mysql', '8.0', ?, ?, 'primary', '{}')`, res.ID, host, port)
 
+	// Seed disclosure policies for the fixture table so the Phase 38Q
+	// fail-closed check allows queries against it.
+	seedDisclosurePolicies(t, db, res.ID, dsnCfg.DBName, "qe_sandbox_fixtures", "id", "name")
+
 	return res.ID, db, globalEnv.dsn
 }
 
@@ -164,8 +168,8 @@ func TestQueryDevSeed_MakesTargetReadyAndExecutesSelectOne(t *testing.T) {
 		t.Fatalf("governance.safetyState = %q, want readonly_sandbox_enabled", target.Governance.SafetyState)
 	}
 
-	// 2. Execute `select 1` through the real execution service.
-	resp, err := newExecutionService(db).Execute(ctx, ownerDBA, targetID, model.QueryExecuteRequest{Statement: "select 1", MaxRows: 10})
+	// 2. Execute a real SELECT through the real execution service.
+	resp, err := newExecutionService(db).Execute(ctx, ownerDBA, targetID, model.QueryExecuteRequest{Statement: "select id from qe_sandbox_fixtures limit 1", MaxRows: 10})
 	if err != nil {
 		t.Fatalf("Execute select 1: %v", err)
 	}
@@ -213,7 +217,7 @@ func TestQueryDevSeed_RejectsMismatchedCredentialAndStaysLocked(t *testing.T) {
 	}
 
 	// Execution is rejected for the non-runnable target.
-	if _, err := newExecutionService(db).Execute(ctx, ownerDBA, targetID, model.QueryExecuteRequest{Statement: "select 1", MaxRows: 10}); err == nil {
+	if _, err := newExecutionService(db).Execute(ctx, ownerDBA, targetID, model.QueryExecuteRequest{Statement: "select id from qe_sandbox_fixtures limit 1", MaxRows: 10}); err == nil {
 		t.Fatal("Execute expected to be rejected for a non-runnable target, got nil")
 	}
 }

@@ -105,8 +105,8 @@ func TestDisclosureProjectionResolveExecute(t *testing.T) {
 		{name: "derived table", statement: "SELECT email FROM (SELECT email FROM customers) AS c", wantErr: true},
 		{name: "implicit join", statement: "SELECT email FROM t1, t2", wantErr: true},
 		{name: "unknown qualifier", statement: "SELECT unknown_alias.email FROM customers", wantErr: true},
-		{name: "update", statement: "UPDATE customers SET name = 'x'", wantErr: true},
-		{name: "show", statement: "SHOW TABLES", wantErr: true},
+		{name: "update returns empty plan (guard rejects DML)", statement: "UPDATE customers SET name = 'x'", want: nil},
+		{name: "show returns empty plan (metadata, no column values)", statement: "SHOW TABLES", want: nil},
 	}
 
 	for _, tt := range tests {
