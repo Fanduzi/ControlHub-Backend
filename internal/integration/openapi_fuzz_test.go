@@ -107,6 +107,12 @@ func TestOpenAPIFuzz(t *testing.T) {
 		QueryExecutionService:  queryExecutionSvc,
 		QueryExplainService:    queryExplainSvc,
 		QuerySchemaService:     service.NewQuerySchemaService(accessResolver, service.NewMySQLSchemaInspector(), service.NewQuerySchemaCache(256, wallClock{}), queryExecutionRepo, wallClock{}),
+		QueryDisclosureService: service.NewQueryDisclosureService(
+			mysql.NewQueryDisclosureRepository(db),
+			mysql.NewQueryDisclosureRepository(db),
+			service.NewMySQLSchemaInspector(),
+			queryTargetRepo,
+		),
 		QueryExecutionAuth: api.QueryExecutionAuthConfig{
 			TokenMaxAge: 8 * time.Hour,
 			Clock:       time.Now,
