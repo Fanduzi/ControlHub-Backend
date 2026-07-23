@@ -9,9 +9,9 @@
 CREATE TABLE query_result_disclosure_policies (
   id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
   target_resource_id BIGINT UNSIGNED NOT NULL,
-  database_name VARCHAR(128) NOT NULL,
-  object_name VARCHAR(128) NOT NULL,
-  column_name VARCHAR(128) NOT NULL,
+  database_name VARCHAR(128) NOT NULL COLLATE utf8mb4_bin,
+  object_name VARCHAR(128) NOT NULL COLLATE utf8mb4_bin,
+  column_name VARCHAR(128) NOT NULL COLLATE utf8mb4_bin,
   mode VARCHAR(32) NOT NULL,
   created_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
   updated_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6),

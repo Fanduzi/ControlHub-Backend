@@ -115,7 +115,7 @@ type Clock interface {
 type QueryDisclosurePlanner interface {
 	Preflight(ctx context.Context, dsn string, targetResourceID uint64, guarded GuardedQuery) (DisclosurePlan, error)
 	PreflightRelatedRecords(ctx context.Context, dsn string, targetResourceID uint64, referencedDatabase string, referencedTable string) (DisclosurePlan, error)
-	Apply(plan DisclosurePlan, columns []model.QueryResultColumn, rows [][]any) ([]model.QueryResultColumn, [][]any)
+	Apply(plan DisclosurePlan, columns []model.QueryResultColumn, rows [][]any) ([]model.QueryResultColumn, [][]any, error)
 }
 
 // QueryExecutionService orchestrates guarded read-only SELECT execution: it
@@ -236,7 +236,14 @@ func (s *QueryExecutionService) Execute(ctx context.Context, actorUserID uint64,
 		return model.QueryExecuteResponse{}, fmt.Errorf("%w: %s", sentinel, safeMsg)
 	}
 
-	columns, rows := s.disclosure.Apply(plan, result.Columns, result.Rows)
+	columns, rows, applyErr := s.disclosure.Apply(plan, result.Columns, result.Rows)
+	if applyErr != nil {
+		status, sentinel, code, safeMsg := classifyExecutorError(applyErr)
+		if _, perr := s.persistAttempt(ctx, target, actorUserID, &guarded, status, 0, code, safeMsg, start); perr != nil {
+			return model.QueryExecuteResponse{}, errPersistAttempt
+		}
+		return model.QueryExecuteResponse{}, fmt.Errorf("%w: %s", sentinel, safeMsg)
+	}
 	result.Columns = columns
 	result.Rows = rows
 
@@ -530,7 +537,14 @@ func (s *QueryExecutionService) NavigateRelatedRecords(ctx context.Context, acto
 		return model.RelatedRecordNavigationResponse{}, fmt.Errorf("%w: %s", sentinel, safeMsg)
 	}
 
-	columns, rows := s.disclosure.Apply(plan, result.Columns, result.Rows)
+	columns, rows, applyErr := s.disclosure.Apply(plan, result.Columns, result.Rows)
+	if applyErr != nil {
+		status, sentinel, code, safeMsg := classifyExecutorError(applyErr)
+		if _, perr := s.persistNavigationAttempt(ctx, target, actorUserID, matchedFK, status, 0, code, safeMsg, start); perr != nil {
+			return model.RelatedRecordNavigationResponse{}, errPersistAttempt
+		}
+		return model.RelatedRecordNavigationResponse{}, fmt.Errorf("%w: %s", sentinel, safeMsg)
+	}
 	result.Columns = columns
 	result.Rows = rows
 

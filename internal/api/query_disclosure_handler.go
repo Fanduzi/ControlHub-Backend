@@ -26,10 +26,19 @@ type queryDisclosureAPI interface {
 }
 
 // handleListPolicies handles GET /query-disclosure-policies. It returns all
-// disclosure policies for a given query target. Any authenticated actor with a
-// fresh bearer token may read.
+// disclosure policies for a given query target. Admin-only — policy scope
+// and mode metadata is governance-sensitive.
 func handleListPolicies(svc queryDisclosureAPI) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		actor, ok := actorFromContext(r.Context())
+		if !ok {
+			writeJSONError(w, http.StatusInternalServerError, "internal_error", "authenticated actor missing")
+			return
+		}
+		if actor.Role != adminRoleName {
+			writeJSONError(w, http.StatusForbidden, "forbidden", "admin role required to manage disclosure policies")
+			return
+		}
 		targetResourceID, err := parseUint64QueryParam(r, "targetResourceId")
 		if err != nil {
 			writeJSONError(w, http.StatusBadRequest, "validation_failed", err.Error())

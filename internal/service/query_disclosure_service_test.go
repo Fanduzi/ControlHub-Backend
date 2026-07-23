@@ -400,7 +400,10 @@ func TestApply_TransformsRows(t *testing.T) {
 			svc := &QueryDisclosureService{}
 
 			// When: Apply transforms the result set.
-			gotColumns, gotRows := svc.Apply(tt.plan, tt.columns, tt.rows)
+			gotColumns, gotRows, applyErr := svc.Apply(tt.plan, tt.columns, tt.rows)
+			if applyErr != nil {
+				t.Fatalf("Apply() returned unexpected error: %v", applyErr)
+			}
 
 			// Then: column metadata is updated and row values are transformed.
 			for i, want := range tt.wantModes {
@@ -436,7 +439,10 @@ func TestApply_EmptyPlanPreservesOriginal(t *testing.T) {
 	rows := [][]any{{42}}
 
 	// When: Apply is called with an empty plan.
-	gotColumns, gotRows := svc.Apply(DisclosurePlan{}, columns, rows)
+	gotColumns, gotRows, applyErr := svc.Apply(DisclosurePlan{}, columns, rows)
+	if applyErr != nil {
+		t.Fatalf("Apply() returned unexpected error: %v", applyErr)
+	}
 
 	// Then: columns and rows are returned unchanged.
 	if len(gotColumns) != 1 || gotColumns[0].Name != "id" {

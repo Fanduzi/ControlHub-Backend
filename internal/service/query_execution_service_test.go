@@ -243,8 +243,8 @@ func (f *fakeDisclosureService) PreflightRelatedRecords(_ context.Context, _ str
 	return DisclosurePlan{}, nil
 }
 
-func (f *fakeDisclosureService) Apply(_ DisclosurePlan, columns []model.QueryResultColumn, rows [][]any) ([]model.QueryResultColumn, [][]any) {
-	return columns, rows
+func (f *fakeDisclosureService) Apply(_ DisclosurePlan, columns []model.QueryResultColumn, rows [][]any) ([]model.QueryResultColumn, [][]any, error) {
+	return columns, rows, nil
 }
 
 // fakeNavSchemaInspector implements QuerySchemaInspector for navigation tests.

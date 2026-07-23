@@ -170,39 +170,46 @@ func (s *QueryDisclosureService) PreflightRelatedRecords(
 // masked_no_copy columns, non-null values are replaced with "[MASKED]". For
 // raw_copy_allowed columns, values pass through unchanged. Returns transformed
 // rows and updated column metadata with DisplayMode/CopyAllowed.
+//
+// Returns an error if the plan column count doesn't match the result column
+// count — this catches schema drift between preflight and execution that could
+// otherwise leak unplanned raw values.
 func (s *QueryDisclosureService) Apply(
 	plan DisclosurePlan,
 	columns []model.QueryResultColumn,
 	rows [][]any,
-) ([]model.QueryResultColumn, [][]any) {
+) ([]model.QueryResultColumn, [][]any, error) {
 	if len(plan.Columns) == 0 {
-		return columns, rows
+		return columns, rows, nil
+	}
+
+	if len(plan.Columns) != len(columns) {
+		return nil, nil, fmt.Errorf("%w: plan has %d columns but result has %d", ErrQueryDisclosureBlocked, len(plan.Columns), len(columns))
 	}
 
 	// Update column metadata with disclosure decisions.
 	outColumns := make([]model.QueryResultColumn, len(columns))
 	copy(outColumns, columns)
 	for i, cd := range plan.Columns {
-		if i < len(outColumns) {
-			outColumns[i].DisplayMode = cd.Mode
-			outColumns[i].CopyAllowed = cd.CopyAllowed
-		}
+		outColumns[i].DisplayMode = cd.Mode
+		outColumns[i].CopyAllowed = cd.CopyAllowed
 	}
 
 	// Transform row values for masked columns.
 	outRows := make([][]any, len(rows))
 	for r, row := range rows {
+		if len(row) != len(columns) {
+			return nil, nil, fmt.Errorf("%w: row %d has %d cells but expected %d", ErrQueryDisclosureBlocked, r, len(row), len(columns))
+		}
 		outRow := make([]any, len(row))
 		copy(outRow, row)
 		for c, cd := range plan.Columns {
-			if c < len(outRow) {
-				outRow[c] = applyDisclosureMask(outRow[c], cd.Mode)
-			}
+			outRow[c] = applyDisclosureMask(outRow[c], cd.Mode)
 		}
 		outRows[r] = outRow
 	}
 
-	return outColumns, outRows
+	return outColumns, outRows, nil
 }
 
 // buildDisclosurePlan looks up policies for each projected column and assembles
