@@ -98,7 +98,7 @@ func TestDisclosureProjectionResolveExecute(t *testing.T) {
 			statement: "SELECT db.customers.email FROM db.customers",
 			want:      []ColumnProvenance{{OutputName: "email", SourceDatabase: "db", SourceObject: "customers", SourceColumn: "email"}},
 		},
-		{name: "constant", statement: "SELECT 1", wantErr: true},
+		{name: "constant returns empty plan (no table columns)", statement: "SELECT 1", want: nil},
 		{name: "aggregate", statement: "SELECT COUNT(*) FROM customers", wantErr: true},
 		{name: "expression", statement: "SELECT email || name FROM customers", wantErr: true},
 		{name: "join", statement: "SELECT email FROM t1 JOIN t2 ON t1.id = t2.id", wantErr: true},

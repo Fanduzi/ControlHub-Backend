@@ -62,6 +62,12 @@ func resolveExecuteProjection(ctx context.Context, inspector QuerySchemaInspecto
 		// user table column values; no disclosure governance is needed.
 		return ProjectionPlan{}, nil
 	}
+	if isNoTableProjection(selectStatement) {
+		// SELECT without a real table (e.g., SELECT 1, which the parser models
+		// with the "dual" pseudo-table) projects no table column values, so
+		// there is nothing to govern for disclosure.
+		return ProjectionPlan{}, nil
+	}
 
 	source, err := resolveProjectionSource(selectStatement, input.database)
 	if err != nil {
@@ -133,6 +139,28 @@ func resolveRelatedRecordProjection(ctx context.Context, inspector QuerySchemaIn
 		})
 	}
 	return plan, nil
+}
+
+// isNoTableProjection reports whether the SELECT projects no real table
+// column values — either it has no FROM clause or its only source is the
+// "dual" pseudo-table the parser synthesizes for FROM-less SELECTs (e.g.
+// SELECT 1). Such statements carry no table data to govern for disclosure.
+func isNoTableProjection(statement *sqlparser.Select) bool {
+	if len(statement.From) == 0 {
+		return true
+	}
+	if len(statement.From) != 1 {
+		return false
+	}
+	tableExpression, ok := statement.From[0].(*sqlparser.AliasedTableExpr)
+	if !ok {
+		return false
+	}
+	table, ok := tableExpression.Expr.(sqlparser.TableName)
+	if !ok {
+		return false
+	}
+	return table.Qualifier.IsEmpty() && strings.EqualFold(table.Name.String(), "dual")
 }
 
 func resolveProjectionSource(statement *sqlparser.Select, defaultDatabase string) (projectionSource, error) {

@@ -69,6 +69,15 @@ func main() {
 		log.Fatalf("seed query credential metadata: %v", err)
 	}
 
+	// In fixture mode, seed raw_copy_allowed disclosure policies for the E2E
+	// fixture tables so the fail-closed disclosure policy does not block
+	// governed queries against non-sensitive test data.
+	if allowFixture, _ := parseBoolEnv("QUERY_DEV_ALLOW_TARGET_FIXTURE"); allowFixture {
+		if err := seedFixtureDisclosurePolicies(context.Background(), db, meta.ResourceID); err != nil {
+			log.Fatalf("seed fixture disclosure policies: %v", err)
+		}
+	}
+
 	// Re-derive readiness through the real read model so the printed readiness
 	// is the same truth the Query Workbench API reports — not an assumption.
 	readiness, runEnabled := deriveReadiness(context.Background(), targetRepo, execRepo, meta.ResourceID)
@@ -259,4 +268,40 @@ func parseBoolEnv(key string) (bool, error) {
 		return false, fmt.Errorf("%s %q is not a valid boolean: %w", key, raw, err)
 	}
 	return v, nil
+}
+
+func seedFixtureDisclosurePolicies(ctx context.Context, db *sql.DB, targetResourceID uint64) error {
+	repo := mysql.NewQueryDisclosureRepository(db)
+	policies := []model.ResultDisclosurePolicyUpsertRequest{
+		// query_e2e.query_e2e_items
+		{TargetResourceID: targetResourceID, DatabaseName: "query_e2e", ObjectName: "query_e2e_items", ColumnName: "id", Mode: model.ResultDisclosureRawCopyAllowed},
+		{TargetResourceID: targetResourceID, DatabaseName: "query_e2e", ObjectName: "query_e2e_items", ColumnName: "name", Mode: model.ResultDisclosureRawCopyAllowed},
+		{TargetResourceID: targetResourceID, DatabaseName: "query_e2e", ObjectName: "query_e2e_items", ColumnName: "category", Mode: model.ResultDisclosureRawCopyAllowed},
+		{TargetResourceID: targetResourceID, DatabaseName: "query_e2e", ObjectName: "query_e2e_items", ColumnName: "created_at", Mode: model.ResultDisclosureRawCopyAllowed},
+		// query_e2e.qe_explain_big
+		{TargetResourceID: targetResourceID, DatabaseName: "query_e2e", ObjectName: "qe_explain_big", ColumnName: "id", Mode: model.ResultDisclosureRawCopyAllowed},
+		{TargetResourceID: targetResourceID, DatabaseName: "query_e2e", ObjectName: "qe_explain_big", ColumnName: "payload", Mode: model.ResultDisclosureRawCopyAllowed},
+		{TargetResourceID: targetResourceID, DatabaseName: "query_e2e", ObjectName: "qe_explain_big", ColumnName: "created_at", Mode: model.ResultDisclosureRawCopyAllowed},
+		// query_e2e_aux.schema_child
+		{TargetResourceID: targetResourceID, DatabaseName: "query_e2e_aux", ObjectName: "schema_child", ColumnName: "id", Mode: model.ResultDisclosureRawCopyAllowed},
+		{TargetResourceID: targetResourceID, DatabaseName: "query_e2e_aux", ObjectName: "schema_child", ColumnName: "parent_id", Mode: model.ResultDisclosureRawCopyAllowed},
+		{TargetResourceID: targetResourceID, DatabaseName: "query_e2e_aux", ObjectName: "schema_child", ColumnName: "child_name", Mode: model.ResultDisclosureRawCopyAllowed},
+		{TargetResourceID: targetResourceID, DatabaseName: "query_e2e_aux", ObjectName: "schema_child", ColumnName: "sort_order", Mode: model.ResultDisclosureRawCopyAllowed},
+		// query_e2e_aux.schema_parent
+		{TargetResourceID: targetResourceID, DatabaseName: "query_e2e_aux", ObjectName: "schema_parent", ColumnName: "id", Mode: model.ResultDisclosureRawCopyAllowed},
+		{TargetResourceID: targetResourceID, DatabaseName: "query_e2e_aux", ObjectName: "schema_parent", ColumnName: "parent_code", Mode: model.ResultDisclosureRawCopyAllowed},
+		{TargetResourceID: targetResourceID, DatabaseName: "query_e2e_aux", ObjectName: "schema_parent", ColumnName: "label", Mode: model.ResultDisclosureRawCopyAllowed},
+		{TargetResourceID: targetResourceID, DatabaseName: "query_e2e_aux", ObjectName: "schema_parent", ColumnName: "created_at", Mode: model.ResultDisclosureRawCopyAllowed},
+	}
+	for _, p := range policies {
+		// Delete-then-insert keeps the dev seed idempotent: Insert is a plain
+		// INSERT that would fail the unique scope constraint on a re-run.
+		if err := repo.Delete(ctx, p.TargetResourceID, p.DatabaseName, p.ObjectName, p.ColumnName); err != nil {
+			return fmt.Errorf("clear policy for %s.%s.%s: %w", p.DatabaseName, p.ObjectName, p.ColumnName, err)
+		}
+		if _, err := repo.Insert(ctx, p); err != nil {
+			return fmt.Errorf("insert policy for %s.%s.%s: %w", p.DatabaseName, p.ObjectName, p.ColumnName, err)
+		}
+	}
+	return nil
 }
