@@ -735,6 +735,24 @@ func (f *fakeQuerySchema) GetRelationshipMap(_ context.Context, _, targetID uint
 	}, nil
 }
 
+type fakeQueryDisclosure struct{}
+
+func (f *fakeQueryDisclosure) ListPolicies(_ context.Context, _ uint64) ([]model.ResultDisclosurePolicy, error) {
+	return []model.ResultDisclosurePolicy{}, nil
+}
+
+func (f *fakeQueryDisclosure) CreatePolicy(_ context.Context, _ model.ResultDisclosurePolicyUpsertRequest) (uint64, error) {
+	return 1, nil
+}
+
+func (f *fakeQueryDisclosure) UpdatePolicy(_ context.Context, _ model.ResultDisclosurePolicyUpsertRequest) error {
+	return nil
+}
+
+func (f *fakeQueryDisclosure) DeletePolicy(_ context.Context, _ uint64, _, _, _ string) error {
+	return nil
+}
+
 func NewTestServer() *TestServer {
 	archivedAt := time.Date(2026, 4, 11, 22, 0, 0, 0, time.UTC)
 	archiveReason := "retired"
@@ -795,6 +813,7 @@ func NewTestServer() *TestServer {
 		QueryTargetService:     service.NewQueryTargetService(queryTargetRepo),
 		QueryCredentialService: service.NewQueryCredentialService(queryTargetRepo, credentialStore, service.NewEnvCredentialResolver()),
 		QuerySchemaService:     &fakeQuerySchema{},
+		QueryDisclosureService: &fakeQueryDisclosure{},
 	}
 
 	return &TestServer{Router: NewRouter(deps)}

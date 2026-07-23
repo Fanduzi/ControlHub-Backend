@@ -49,6 +49,12 @@ type Dependencies struct {
 	// query execution). Explain is a distinct governed operation: it never
 	// executes the bare SELECT and never creates a query_executions row.
 	QueryExplainService queryExplainAPI
+	// Query disclosure policies (Phase 38Q). queryDisclosureAPI is the thin
+	// interface the handlers depend on; the concrete
+	// *service.QueryDisclosureService satisfies it. All four routes require a
+	// fresh bearer token; POST/PUT/DELETE additionally require the admin role
+	// (enforced in the handler).
+	QueryDisclosureService queryDisclosureAPI
 }
 
 func corsLocalDev(next http.Handler) http.Handler {
@@ -143,6 +149,19 @@ func NewRouter(deps Dependencies) *chi.Mux {
 			r.Get("/query-targets/{id}/schema/object-details", handleGetObjectDetails(deps.QuerySchemaService))
 			r.Get("/query-targets/{id}/schema/table-definition", handleGetTableDefinition(deps.QuerySchemaService))
 			r.Get("/query-targets/{id}/schema/relationship-map", handleGetRelationshipMap(deps.QuerySchemaService))
+		})
+	}
+	// Query disclosure policy routes (Phase 38Q). All four require a fresh
+	// bearer token (same freshness policy as query execution). POST/PUT/DELETE
+	// enforce the admin role inside the handler; GET is available to any
+	// authenticated actor.
+	if deps.QueryDisclosureService != nil {
+		router.Group(func(r chi.Router) {
+			r.Use(requireFreshQueryActor(deps.AuthService, deps.QueryExecutionAuth))
+			r.Get("/query-disclosure-policies", handleListPolicies(deps.QueryDisclosureService))
+			r.Post("/query-disclosure-policies", handleCreatePolicy(deps.QueryDisclosureService))
+			r.Put("/query-disclosure-policies", handleUpdatePolicy(deps.QueryDisclosureService))
+			r.Delete("/query-disclosure-policies", handleDeletePolicy(deps.QueryDisclosureService))
 		})
 	}
 	return router

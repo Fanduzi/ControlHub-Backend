@@ -225,6 +225,28 @@ type fakeClock struct{ t time.Time }
 
 func (c *fakeClock) Now() time.Time { return c.t }
 
+type fakeDisclosureService struct {
+	blockErr error
+}
+
+func (f *fakeDisclosureService) Preflight(_ context.Context, _ string, _ uint64, _ GuardedQuery) (DisclosurePlan, error) {
+	if f.blockErr != nil {
+		return DisclosurePlan{}, f.blockErr
+	}
+	return DisclosurePlan{}, nil
+}
+
+func (f *fakeDisclosureService) PreflightRelatedRecords(_ context.Context, _ string, _ uint64, _, _ string) (DisclosurePlan, error) {
+	if f.blockErr != nil {
+		return DisclosurePlan{}, f.blockErr
+	}
+	return DisclosurePlan{}, nil
+}
+
+func (f *fakeDisclosureService) Apply(_ DisclosurePlan, columns []model.QueryResultColumn, rows [][]any) ([]model.QueryResultColumn, [][]any) {
+	return columns, rows
+}
+
 // fakeNavSchemaInspector implements QuerySchemaInspector for navigation tests.
 type fakeNavSchemaInspector struct {
 	detail *ObjectDetail
@@ -301,6 +323,7 @@ func executionTestScaffold(t *testing.T) (*QueryExecutionService, *fakeExecRepo,
 		NewQueryGuard(QueryGuardConfig{DefaultMaxRows: 100, HardMaxRows: 500}),
 		&fakeClock{t: time.Date(2026, 6, 21, 8, 0, 0, 0, time.UTC)},
 		&fakeNavSchemaInspector{},
+		&fakeDisclosureService{},
 	)
 	return svc, repo, resolver, executor
 }
@@ -316,7 +339,7 @@ func TestExecute_RejectsUnsupportedTarget(t *testing.T) {
 		&fakeExecRepo{}, &fakeResolver{}, &fakeExecutor{},
 		NewQueryGuard(QueryGuardConfig{DefaultMaxRows: 100, HardMaxRows: 500}),
 		&fakeClock{t: time.Now()},
-		nil,
+		nil, &fakeDisclosureService{},
 	)
 
 	_, err := svc.Execute(context.Background(), 1, 9001, model.QueryExecuteRequest{Statement: "select 1", MaxRows: 10})
@@ -333,7 +356,7 @@ func TestExecute_RejectsMissingCredential(t *testing.T) {
 		&fakeResolver{}, &fakeExecutor{},
 		NewQueryGuard(QueryGuardConfig{DefaultMaxRows: 100, HardMaxRows: 500}),
 		&fakeClock{t: time.Now()},
-		nil,
+		nil, &fakeDisclosureService{},
 	)
 
 	_, err := svc.Execute(context.Background(), 1, 9001, model.QueryExecuteRequest{Statement: "select 1", MaxRows: 10})
@@ -352,7 +375,7 @@ func TestExecute_TargetLookupUsesTargetIDFilter(t *testing.T) {
 		&fakeExecutor{result: QueryDatabaseResult{Columns: []model.QueryResultColumn{{Name: "value", DatabaseType: "BIGINT"}}, Rows: [][]any{{int64(1)}}, RowCount: 1}},
 		NewQueryGuard(QueryGuardConfig{DefaultMaxRows: 100, HardMaxRows: 500}),
 		&fakeClock{t: time.Now()},
-		nil,
+		nil, &fakeDisclosureService{},
 	)
 
 	_, err := svc.Execute(context.Background(), 1, 9001, model.QueryExecuteRequest{Statement: "select 1", MaxRows: 10})
@@ -447,7 +470,7 @@ func TestExecute_MapsTimeoutToQueryTimeout(t *testing.T) {
 		&fakeResolver{dsn: testResolverDSN}, executor,
 		NewQueryGuard(QueryGuardConfig{DefaultMaxRows: 100, HardMaxRows: 500}),
 		&fakeClock{t: time.Now()},
-		nil,
+		nil, &fakeDisclosureService{},
 	)
 
 	_, err := svc2.Execute(context.Background(), 1, 9001, model.QueryExecuteRequest{Statement: "select 1", MaxRows: 10})
@@ -550,7 +573,33 @@ func TestExecute_RejectedAttempt_PersistFailure_ReturnsBackendError(t *testing.T
 	}
 }
 
-// --- Finding 2: credential must bind to the selected target ---
+func TestExecute_DisclosureBlocked_Rejected(t *testing.T) {
+	t.Parallel()
+	repo := &fakeExecRepo{
+		credentials: map[uint64]model.QueryCredentialMetadata{
+			9001: enabledCred(model.QueryEnvPolicyNonProdOnly),
+		},
+	}
+	executor := &fakeExecutor{result: QueryDatabaseResult{RowCount: 1}}
+	svc := NewQueryExecutionService(
+		fakeTargetRepo{targets: []model.QueryTarget{mysqlTarget("Staging")}},
+		repo, &fakeResolver{dsn: testResolverDSN}, executor,
+		NewQueryGuard(QueryGuardConfig{DefaultMaxRows: 100, HardMaxRows: 500}),
+		&fakeClock{t: time.Now()},
+		nil, &fakeDisclosureService{blockErr: ErrQueryDisclosureBlocked},
+	)
+
+	_, err := svc.Execute(context.Background(), 7, 9001, model.QueryExecuteRequest{Statement: "select 1", MaxRows: 10})
+	if !errors.Is(err, ErrQueryNotAllowed) {
+		t.Fatalf("error = %v, want ErrQueryNotAllowed (wrapping ErrQueryDisclosureBlocked)", err)
+	}
+	if executor.called {
+		t.Fatal("executor must not be reached when disclosure blocks the query")
+	}
+	if len(repo.insertedAttempts) != 1 || repo.insertedAttempts[0].Status != model.QueryExecutionRejected {
+		t.Fatalf("disclosure-blocked attempt must be recorded as rejected: %+v", repo.insertedAttempts)
+	}
+}
 
 func TestExecute_CredentialEngineMismatch_Rejected(t *testing.T) {
 	t.Parallel()
@@ -676,7 +725,7 @@ func TestCredentialResolver_NotCalledWhenCredentialRefInvalid(t *testing.T) {
 		repo, resolver, &fakeExecutor{},
 		NewQueryGuard(QueryGuardConfig{DefaultMaxRows: 100, HardMaxRows: 500}),
 		&fakeClock{t: time.Now()},
-		nil,
+		nil, &fakeDisclosureService{},
 	)
 
 	_, err := svc.Execute(context.Background(), 1, 9001, model.QueryExecuteRequest{Statement: "select 1", MaxRows: 10})
@@ -795,7 +844,7 @@ func TestListHistory_AdminSeesAllActors(t *testing.T) {
 			{ID: 2, TargetResourceID: 22, ActorUserID: 7, Actor: model.QueryExecutionActor{DisplayName: "Editor"}, Status: model.QueryExecutionSuccess},
 		},
 	}
-	svc := NewQueryExecutionService(fakeTargetRepo{targets: []model.QueryTarget{target}}, repo, &fakeResolver{}, &fakeExecutor{}, NewQueryGuard(QueryGuardConfig{DefaultMaxRows: 100, HardMaxRows: 500}), &fakeClock{t: time.Date(2026, 6, 22, 8, 0, 0, 0, time.UTC)}, nil)
+	svc := NewQueryExecutionService(fakeTargetRepo{targets: []model.QueryTarget{target}}, repo, &fakeResolver{}, &fakeExecutor{}, NewQueryGuard(QueryGuardConfig{DefaultMaxRows: 100, HardMaxRows: 500}), &fakeClock{t: time.Date(2026, 6, 22, 8, 0, 0, 0, time.UTC)}, nil, &fakeDisclosureService{})
 	result, err := svc.ListHistory(context.Background(), 1, "admin", 22, model.QueryExecutionListQuery{Page: 1, PageSize: 20})
 	if err != nil {
 		t.Fatalf("ListHistory: %v", err)
@@ -820,7 +869,7 @@ func TestListHistory_NonAdminSeesOwnOnly(t *testing.T) {
 			{ID: 2, TargetResourceID: 22, ActorUserID: 7, Actor: model.QueryExecutionActor{DisplayName: "Editor"}, Status: model.QueryExecutionSuccess},
 		},
 	}
-	svc := NewQueryExecutionService(fakeTargetRepo{targets: []model.QueryTarget{target}}, repo, &fakeResolver{}, &fakeExecutor{}, NewQueryGuard(QueryGuardConfig{DefaultMaxRows: 100, HardMaxRows: 500}), &fakeClock{t: time.Date(2026, 6, 22, 8, 0, 0, 0, time.UTC)}, nil)
+	svc := NewQueryExecutionService(fakeTargetRepo{targets: []model.QueryTarget{target}}, repo, &fakeResolver{}, &fakeExecutor{}, NewQueryGuard(QueryGuardConfig{DefaultMaxRows: 100, HardMaxRows: 500}), &fakeClock{t: time.Date(2026, 6, 22, 8, 0, 0, 0, time.UTC)}, nil, &fakeDisclosureService{})
 	result, err := svc.ListHistory(context.Background(), 7, "editor", 22, model.QueryExecutionListQuery{Page: 1, PageSize: 20})
 	if err != nil {
 		t.Fatalf("ListHistory: %v", err)
@@ -837,7 +886,7 @@ func TestListHistory_NonAdminSeesOwnOnly(t *testing.T) {
 }
 
 func TestListHistory_UnknownTarget404(t *testing.T) {
-	svc := NewQueryExecutionService(fakeTargetRepo{targets: nil}, &fakeExecRepo{}, &fakeResolver{}, &fakeExecutor{}, NewQueryGuard(QueryGuardConfig{DefaultMaxRows: 100, HardMaxRows: 500}), &fakeClock{t: time.Date(2026, 6, 22, 8, 0, 0, 0, time.UTC)}, nil)
+	svc := NewQueryExecutionService(fakeTargetRepo{targets: nil}, &fakeExecRepo{}, &fakeResolver{}, &fakeExecutor{}, NewQueryGuard(QueryGuardConfig{DefaultMaxRows: 100, HardMaxRows: 500}), &fakeClock{t: time.Date(2026, 6, 22, 8, 0, 0, 0, time.UTC)}, nil, &fakeDisclosureService{})
 	_, err := svc.ListHistory(context.Background(), 1, "admin", 999, model.QueryExecutionListQuery{Page: 1, PageSize: 20})
 	if !errors.Is(err, ErrQueryTargetNotFound) {
 		t.Fatalf("err = %v, want ErrQueryTargetNotFound", err)
@@ -852,7 +901,7 @@ func TestListHistory_UnknownActorFallback(t *testing.T) {
 			{ID: 1, TargetResourceID: 22, ActorUserID: 99, Actor: model.QueryExecutionActor{DisplayName: ""}, Status: model.QueryExecutionSuccess},
 		},
 	}
-	svc := NewQueryExecutionService(fakeTargetRepo{targets: []model.QueryTarget{target}}, repo, &fakeResolver{}, &fakeExecutor{}, NewQueryGuard(QueryGuardConfig{DefaultMaxRows: 100, HardMaxRows: 500}), &fakeClock{t: time.Date(2026, 6, 22, 8, 0, 0, 0, time.UTC)}, nil)
+	svc := NewQueryExecutionService(fakeTargetRepo{targets: []model.QueryTarget{target}}, repo, &fakeResolver{}, &fakeExecutor{}, NewQueryGuard(QueryGuardConfig{DefaultMaxRows: 100, HardMaxRows: 500}), &fakeClock{t: time.Date(2026, 6, 22, 8, 0, 0, 0, time.UTC)}, nil, &fakeDisclosureService{})
 	result, err := svc.ListHistory(context.Background(), 1, "admin", 22, model.QueryExecutionListQuery{Page: 1, PageSize: 20})
 	if err != nil {
 		t.Fatalf("ListHistory: %v", err)
@@ -882,7 +931,7 @@ func TestListHistory_Cursor_AdminSeesAll(t *testing.T) {
 			{ID: 2, TargetResourceID: 22, ActorUserID: 7, Actor: model.QueryExecutionActor{DisplayName: "Editor"}, Status: model.QueryExecutionSuccess, CreatedAt: now.Add(-time.Second)},
 		},
 	}
-	svc := NewQueryExecutionService(fakeTargetRepo{targets: []model.QueryTarget{target}}, repo, &fakeResolver{}, &fakeExecutor{}, NewQueryGuard(QueryGuardConfig{DefaultMaxRows: 100, HardMaxRows: 500}), &fakeClock{t: now}, nil)
+	svc := NewQueryExecutionService(fakeTargetRepo{targets: []model.QueryTarget{target}}, repo, &fakeResolver{}, &fakeExecutor{}, NewQueryGuard(QueryGuardConfig{DefaultMaxRows: 100, HardMaxRows: 500}), &fakeClock{t: now}, nil, &fakeDisclosureService{})
 	result, err := svc.ListHistory(context.Background(), 1, "admin", 22, model.QueryExecutionListQuery{PageSize: 20})
 	if err != nil {
 		t.Fatalf("ListHistory: %v", err)
@@ -903,7 +952,7 @@ func TestListHistory_Cursor_NonAdminSeesOwnOnly(t *testing.T) {
 			{ID: 2, TargetResourceID: 22, ActorUserID: 7, Actor: model.QueryExecutionActor{DisplayName: "Editor"}, Status: model.QueryExecutionSuccess, CreatedAt: now.Add(-time.Second)},
 		},
 	}
-	svc := NewQueryExecutionService(fakeTargetRepo{targets: []model.QueryTarget{target}}, repo, &fakeResolver{}, &fakeExecutor{}, NewQueryGuard(QueryGuardConfig{DefaultMaxRows: 100, HardMaxRows: 500}), &fakeClock{t: now}, nil)
+	svc := NewQueryExecutionService(fakeTargetRepo{targets: []model.QueryTarget{target}}, repo, &fakeResolver{}, &fakeExecutor{}, NewQueryGuard(QueryGuardConfig{DefaultMaxRows: 100, HardMaxRows: 500}), &fakeClock{t: now}, nil, &fakeDisclosureService{})
 	result, err := svc.ListHistory(context.Background(), 7, "editor", 22, model.QueryExecutionListQuery{PageSize: 20})
 	if err != nil {
 		t.Fatalf("ListHistory: %v", err)
@@ -924,7 +973,7 @@ func TestListHistory_Cursor_StatusFilter(t *testing.T) {
 			{ID: 2, TargetResourceID: 22, ActorUserID: 1, Status: model.QueryExecutionRejected, CreatedAt: now.Add(-time.Second)},
 		},
 	}
-	svc := NewQueryExecutionService(fakeTargetRepo{targets: []model.QueryTarget{target}}, repo, &fakeResolver{}, &fakeExecutor{}, NewQueryGuard(QueryGuardConfig{DefaultMaxRows: 100, HardMaxRows: 500}), &fakeClock{t: now}, nil)
+	svc := NewQueryExecutionService(fakeTargetRepo{targets: []model.QueryTarget{target}}, repo, &fakeResolver{}, &fakeExecutor{}, NewQueryGuard(QueryGuardConfig{DefaultMaxRows: 100, HardMaxRows: 500}), &fakeClock{t: now}, nil, &fakeDisclosureService{})
 	status := model.QueryExecutionSuccess
 	result, err := svc.ListHistory(context.Background(), 1, "admin", 22, model.QueryExecutionListQuery{PageSize: 20, Status: &status})
 	if err != nil {
@@ -949,7 +998,7 @@ func TestListHistory_Cursor_TimeFilter(t *testing.T) {
 			{ID: 3, TargetResourceID: 22, ActorUserID: 1, Status: model.QueryExecutionSuccess, CreatedAt: t3},
 		},
 	}
-	svc := NewQueryExecutionService(fakeTargetRepo{targets: []model.QueryTarget{target}}, repo, &fakeResolver{}, &fakeExecutor{}, NewQueryGuard(QueryGuardConfig{DefaultMaxRows: 100, HardMaxRows: 500}), &fakeClock{t: t3}, nil)
+	svc := NewQueryExecutionService(fakeTargetRepo{targets: []model.QueryTarget{target}}, repo, &fakeResolver{}, &fakeExecutor{}, NewQueryGuard(QueryGuardConfig{DefaultMaxRows: 100, HardMaxRows: 500}), &fakeClock{t: t3}, nil, &fakeDisclosureService{})
 	from := time.Date(2026, 6, 10, 0, 0, 0, 0, time.UTC)
 	to := time.Date(2026, 6, 20, 0, 0, 0, 0, time.UTC)
 	result, err := svc.ListHistory(context.Background(), 1, "admin", 22, model.QueryExecutionListQuery{PageSize: 20, From: &from, To: &to})
@@ -973,7 +1022,7 @@ func TestListHistory_Cursor_Continuation(t *testing.T) {
 			{ID: 3, TargetResourceID: 22, ActorUserID: 1, Status: model.QueryExecutionSuccess, CreatedAt: now.Add(-2 * time.Second)},
 		},
 	}
-	svc := NewQueryExecutionService(fakeTargetRepo{targets: []model.QueryTarget{target}}, repo, &fakeResolver{}, &fakeExecutor{}, NewQueryGuard(QueryGuardConfig{DefaultMaxRows: 100, HardMaxRows: 500}), &fakeClock{t: now}, nil)
+	svc := NewQueryExecutionService(fakeTargetRepo{targets: []model.QueryTarget{target}}, repo, &fakeResolver{}, &fakeExecutor{}, NewQueryGuard(QueryGuardConfig{DefaultMaxRows: 100, HardMaxRows: 500}), &fakeClock{t: now}, nil, &fakeDisclosureService{})
 
 	// Build an initial cursor pointing past the newest item so all 3 are "before" it.
 	queryHash := model.ComputeQueryHash(22, nil, nil, nil, "all")
@@ -1010,7 +1059,7 @@ func TestListHistory_Cursor_InvalidCursorReturnsValidation(t *testing.T) {
 	target := mysqlTarget("Staging")
 	target.ResourceID = 22
 	now := time.Date(2026, 6, 22, 8, 0, 0, 0, time.UTC)
-	svc := NewQueryExecutionService(fakeTargetRepo{targets: []model.QueryTarget{target}}, &fakeExecRepo{}, &fakeResolver{}, &fakeExecutor{}, NewQueryGuard(QueryGuardConfig{DefaultMaxRows: 100, HardMaxRows: 500}), &fakeClock{t: now}, nil)
+	svc := NewQueryExecutionService(fakeTargetRepo{targets: []model.QueryTarget{target}}, &fakeExecRepo{}, &fakeResolver{}, &fakeExecutor{}, NewQueryGuard(QueryGuardConfig{DefaultMaxRows: 100, HardMaxRows: 500}), &fakeClock{t: now}, nil, &fakeDisclosureService{})
 	badCursor := "not-a-valid-cursor"
 	_, err := svc.ListHistory(context.Background(), 1, "admin", 22, model.QueryExecutionListQuery{PageSize: 20, Cursor: &badCursor})
 	if !errors.Is(err, ErrQueryValidationFailed) {
@@ -1027,7 +1076,7 @@ func TestListHistory_Cursor_TamperedIDReturnsValidation(t *testing.T) {
 	target := mysqlTarget("Staging")
 	target.ResourceID = 22
 	now := time.Date(2026, 6, 22, 8, 0, 0, 0, time.UTC)
-	svc := NewQueryExecutionService(fakeTargetRepo{targets: []model.QueryTarget{target}}, &fakeExecRepo{}, &fakeResolver{}, &fakeExecutor{}, NewQueryGuard(QueryGuardConfig{DefaultMaxRows: 100, HardMaxRows: 500}), &fakeClock{t: now}, nil)
+	svc := NewQueryExecutionService(fakeTargetRepo{targets: []model.QueryTarget{target}}, &fakeExecRepo{}, &fakeResolver{}, &fakeExecutor{}, NewQueryGuard(QueryGuardConfig{DefaultMaxRows: 100, HardMaxRows: 500}), &fakeClock{t: now}, nil, &fakeDisclosureService{})
 
 	// Build a cursor with a valid hash, then tamper the ID to "abc".
 	queryHash := model.ComputeQueryHash(22, nil, nil, nil, "all")
@@ -1047,7 +1096,7 @@ func TestListHistory_Cursor_TamperedIDReturnsValidation(t *testing.T) {
 
 func TestListHistory_Cursor_UnknownTarget404(t *testing.T) {
 	t.Parallel()
-	svc := NewQueryExecutionService(fakeTargetRepo{targets: nil}, &fakeExecRepo{}, &fakeResolver{}, &fakeExecutor{}, NewQueryGuard(QueryGuardConfig{DefaultMaxRows: 100, HardMaxRows: 500}), &fakeClock{t: time.Date(2026, 6, 22, 8, 0, 0, 0, time.UTC)}, nil)
+	svc := NewQueryExecutionService(fakeTargetRepo{targets: nil}, &fakeExecRepo{}, &fakeResolver{}, &fakeExecutor{}, NewQueryGuard(QueryGuardConfig{DefaultMaxRows: 100, HardMaxRows: 500}), &fakeClock{t: time.Date(2026, 6, 22, 8, 0, 0, 0, time.UTC)}, nil, &fakeDisclosureService{})
 	_, err := svc.ListHistory(context.Background(), 1, "admin", 999, model.QueryExecutionListQuery{PageSize: 20})
 	if !errors.Is(err, ErrQueryTargetNotFound) {
 		t.Fatalf("err = %v, want ErrQueryTargetNotFound", err)
@@ -1070,7 +1119,7 @@ func TestListHistory_CursorInitial_SetsExplicitCursorMode(t *testing.T) {
 			{ID: 1, TargetResourceID: 22, ActorUserID: 1, Status: model.QueryExecutionSuccess, CreatedAt: now},
 		},
 	}
-	svc := NewQueryExecutionService(fakeTargetRepo{targets: []model.QueryTarget{target}}, repo, &fakeResolver{}, &fakeExecutor{}, NewQueryGuard(QueryGuardConfig{DefaultMaxRows: 100, HardMaxRows: 500}), &fakeClock{t: now}, nil)
+	svc := NewQueryExecutionService(fakeTargetRepo{targets: []model.QueryTarget{target}}, repo, &fakeResolver{}, &fakeExecutor{}, NewQueryGuard(QueryGuardConfig{DefaultMaxRows: 100, HardMaxRows: 500}), &fakeClock{t: now}, nil, &fakeDisclosureService{})
 
 	_, err := svc.ListHistory(context.Background(), 1, "admin", 22, model.QueryExecutionListQuery{PageSize: 20})
 	if err != nil {
@@ -1109,7 +1158,7 @@ func TestListHistory_Offset_SetsExplicitOffsetMode(t *testing.T) {
 			{ID: 1, TargetResourceID: 22, ActorUserID: 1, Status: model.QueryExecutionSuccess, CreatedAt: now},
 		},
 	}
-	svc := NewQueryExecutionService(fakeTargetRepo{targets: []model.QueryTarget{target}}, repo, &fakeResolver{}, &fakeExecutor{}, NewQueryGuard(QueryGuardConfig{DefaultMaxRows: 100, HardMaxRows: 500}), &fakeClock{t: now}, nil)
+	svc := NewQueryExecutionService(fakeTargetRepo{targets: []model.QueryTarget{target}}, repo, &fakeResolver{}, &fakeExecutor{}, NewQueryGuard(QueryGuardConfig{DefaultMaxRows: 100, HardMaxRows: 500}), &fakeClock{t: now}, nil, &fakeDisclosureService{})
 
 	_, err := svc.ListHistory(context.Background(), 1, "admin", 22, model.QueryExecutionListQuery{Page: 1, PageSize: 20})
 	if err != nil {

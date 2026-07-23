@@ -99,6 +99,12 @@ func setupNavigateFixture(t *testing.T) (string, uint64, *sql.DB) {
 		service.NewQueryGuard(service.QueryGuardConfig{DefaultMaxRows: 100, HardMaxRows: 500}),
 		wallClock{},
 		service.NewMySQLSchemaInspector(),
+		service.NewQueryDisclosureService(
+			mysql.NewQueryDisclosureRepository(db),
+			mysql.NewQueryDisclosureRepository(db),
+			service.NewMySQLSchemaInspector(),
+			queryTargetRepo,
+		),
 	)
 
 	dictRepo := mysql.NewDictionaryRepository(db)

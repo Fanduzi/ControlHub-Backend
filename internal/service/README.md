@@ -17,12 +17,20 @@ Business logic layer with interface-based repository dependencies. Each service 
 | lifecycle_status_service.go | Lifecycle status dictionary listing |
 | health_status_service.go | Health status dictionary listing |
 | query_schema_service.go | QuerySchemaService.GetTableDefinition returns governed MySQL table definitions |
+| query_disclosure_service.go | QueryDisclosureService — policy lookup, projection resolution, result transformation |
+| query_disclosure_projection.go | Column provenance resolution from SQL AST and FK metadata |
+| query_disclosure_mask.go | applyDisclosureMask for server-side value redaction |
 | auth_service_test.go | Auth service tests |
 | dictionary_service_test.go | Dictionary service tests |
+| query_disclosure_service_test.go | Disclosure service tests (Preflight, PreflightRelatedRecords, Apply) |
+| query_disclosure_mask_test.go | Disclosure mask unit tests |
 
 ## Exports
 - `NewXxxService(repo) *XxxService` constructors for all services
-- `ErrResourceNotFound`, `ErrInvalidCredentials` sentinel errors
+- `ErrResourceNotFound`, `ErrInvalidCredentials`, `ErrQueryDisclosureBlocked` sentinel errors
+- `QueryDisclosureReader`, `QueryDisclosureWriter` — narrow disclosure policy access interfaces
+- `DisclosurePlan`, `ColumnDisclosure` — resolved per-column disclosure decisions
+- `ColumnProvenance`, `ProjectionPlan` — column source identity from SQL/AST or FK metadata
 
 ## Dependencies
 - Upstream: `internal/model` (domain types)

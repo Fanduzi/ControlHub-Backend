@@ -35,10 +35,14 @@ type QueryExecuteRequest struct {
 }
 
 // QueryResultColumn describes one result column by its name and database type.
+// DisplayMode and CopyAllowed carry the server-owned disclosure decision for
+// this column (derived from the disclosure policy; absent policy = blocked).
 type QueryResultColumn struct {
-	Name         string `json:"name"`
-	DatabaseType string `json:"databaseType"`
-	Nullable     bool   `json:"nullable"`
+	Name         string               `json:"name"`
+	DatabaseType string               `json:"databaseType"`
+	Nullable     bool                 `json:"nullable"`
+	DisplayMode  ResultDisclosureMode `json:"displayMode"`
+	CopyAllowed  bool                 `json:"copyAllowed"`
 }
 
 // QueryExecuteResponse is the body returned for a query execution attempt. It

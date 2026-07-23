@@ -57,7 +57,7 @@ func navTestScaffold(t *testing.T) (*QueryExecutionService, *fakeExecRepo, *fake
 		repo, resolver, executor,
 		NewQueryGuard(QueryGuardConfig{DefaultMaxRows: 100, HardMaxRows: 500}),
 		&fakeClock{t: time.Date(2026, 7, 14, 8, 0, 0, 0, time.UTC)},
-		inspector,
+		inspector, &fakeDisclosureService{},
 	)
 	return svc, repo, executor, inspector
 }
@@ -96,7 +96,7 @@ func navCompositeScaffold(t *testing.T) (*QueryExecutionService, *fakeExecRepo, 
 		repo, resolver, executor,
 		NewQueryGuard(QueryGuardConfig{DefaultMaxRows: 100, HardMaxRows: 500}),
 		&fakeClock{t: time.Date(2026, 7, 14, 8, 0, 0, 0, time.UTC)},
-		inspector,
+		inspector, &fakeDisclosureService{},
 	)
 	return svc, repo, executor, inspector
 }
@@ -168,7 +168,7 @@ func TestNavigateRelatedRecords_UnknownTarget(t *testing.T) {
 		repo, &fakeResolver{}, &fakeExecutor{},
 		NewQueryGuard(QueryGuardConfig{DefaultMaxRows: 100, HardMaxRows: 500}),
 		&fakeClock{t: time.Now()},
-		nil,
+		nil, &fakeDisclosureService{},
 	)
 
 	_, err := svc.NavigateRelatedRecords(context.Background(), 1, 9999, validNavRequest())
@@ -190,7 +190,7 @@ func TestNavigateRelatedRecords_DisabledTarget(t *testing.T) {
 		&fakeResolver{dsn: testResolverDSN}, &fakeExecutor{},
 		NewQueryGuard(QueryGuardConfig{DefaultMaxRows: 100, HardMaxRows: 500}),
 		&fakeClock{t: time.Now()},
-		nil,
+		nil, &fakeDisclosureService{},
 	)
 
 	_, err := svc.NavigateRelatedRecords(context.Background(), 1, 9001, validNavRequest())
@@ -369,6 +369,48 @@ func TestNavigateRelatedRecords_RejectedHistoryAudit(t *testing.T) {
 	}
 }
 
+// --- Disclosure blocked ---
+
+func TestNavigateRelatedRecords_DisclosureBlocked(t *testing.T) {
+	t.Parallel()
+	repo := &fakeExecRepo{
+		credentials: map[uint64]model.QueryCredentialMetadata{
+			9001: enabledCred(model.QueryEnvPolicyNonProdOnly),
+		},
+	}
+	executor := &fakeExecutor{result: QueryDatabaseResult{RowCount: 1}}
+	inspector := &fakeNavSchemaInspector{
+		detail: &ObjectDetail{
+			Name: "order_items",
+			Kind: "table",
+			ForeignKeys: []FKSummary{
+				{
+					Name:    "fk_order_items_order",
+					Columns: []FKColumn{{Column: "order_id", ReferencedSchema: "orders", ReferencedTable: "orders", ReferencedColumn: "id"}},
+				},
+			},
+		},
+	}
+	svc := NewQueryExecutionService(
+		fakeTargetRepo{targets: []model.QueryTarget{mysqlTarget("Staging")}},
+		repo, &fakeResolver{dsn: testResolverDSN}, executor,
+		NewQueryGuard(QueryGuardConfig{DefaultMaxRows: 100, HardMaxRows: 500}),
+		&fakeClock{t: time.Now()},
+		inspector, &fakeDisclosureService{blockErr: ErrQueryDisclosureBlocked},
+	)
+
+	_, err := svc.NavigateRelatedRecords(context.Background(), 1, 9001, validNavRequest())
+	if !errors.Is(err, ErrQueryNotAllowed) {
+		t.Fatalf("error = %v, want ErrQueryNotAllowed (wrapping ErrQueryDisclosureBlocked)", err)
+	}
+	if executor.called {
+		t.Fatal("executor must not be reached when disclosure blocks the query")
+	}
+	if len(repo.insertedAttempts) != 1 || repo.insertedAttempts[0].Status != model.QueryExecutionRejected {
+		t.Fatalf("disclosure-blocked attempt must be recorded as rejected: %+v", repo.insertedAttempts)
+	}
+}
+
 // --- Timeout handling ---
 
 func TestNavigateRelatedRecords_Timeout(t *testing.T) {
@@ -396,7 +438,7 @@ func TestNavigateRelatedRecords_Timeout(t *testing.T) {
 		repo, &fakeResolver{dsn: testResolverDSN}, executor,
 		NewQueryGuard(QueryGuardConfig{DefaultMaxRows: 100, HardMaxRows: 500}),
 		&fakeClock{t: time.Now()},
-		inspector,
+		inspector, &fakeDisclosureService{},
 	)
 
 	_, err := svc.NavigateRelatedRecords(context.Background(), 1, 9001, validNavRequest())
@@ -439,7 +481,7 @@ func TestNavigateRelatedRecords_BackendFailure(t *testing.T) {
 		repo, &fakeResolver{dsn: testResolverDSN}, executor,
 		NewQueryGuard(QueryGuardConfig{DefaultMaxRows: 100, HardMaxRows: 500}),
 		&fakeClock{t: time.Now()},
-		inspector,
+		inspector, &fakeDisclosureService{},
 	)
 
 	_, err := svc.NavigateRelatedRecords(context.Background(), 1, 9001, validNavRequest())
@@ -497,7 +539,7 @@ func TestNavigateRelatedRecords_InspectorError(t *testing.T) {
 		repo, &fakeResolver{dsn: testResolverDSN}, &fakeExecutor{},
 		NewQueryGuard(QueryGuardConfig{DefaultMaxRows: 100, HardMaxRows: 500}),
 		&fakeClock{t: time.Now()},
-		inspector,
+		inspector, &fakeDisclosureService{},
 	)
 
 	_, err := svc.NavigateRelatedRecords(context.Background(), 1, 9001, validNavRequest())
@@ -533,7 +575,7 @@ func TestNavigateRelatedRecords_HistoryPersistenceFailure(t *testing.T) {
 		repo, &fakeResolver{dsn: testResolverDSN}, &fakeExecutor{result: QueryDatabaseResult{RowCount: 1}},
 		NewQueryGuard(QueryGuardConfig{DefaultMaxRows: 100, HardMaxRows: 500}),
 		&fakeClock{t: time.Now()},
-		inspector,
+		inspector, &fakeDisclosureService{},
 	)
 
 	_, err := svc.NavigateRelatedRecords(context.Background(), 1, 9001, validNavRequest())
@@ -584,7 +626,7 @@ func TestNavigateRelatedRecords_SourceObjectNotFound(t *testing.T) {
 		repo, &fakeResolver{dsn: testResolverDSN}, &fakeExecutor{},
 		NewQueryGuard(QueryGuardConfig{DefaultMaxRows: 100, HardMaxRows: 500}),
 		&fakeClock{t: time.Now()},
-		inspector,
+		inspector, &fakeDisclosureService{},
 	)
 
 	_, err := svc.NavigateRelatedRecords(context.Background(), 1, 9001, validNavRequest())
@@ -701,7 +743,7 @@ func TestNavigateRelatedRecords_EmbeddedBacktickEscaped(t *testing.T) {
 		repo, &fakeResolver{dsn: testResolverDSN}, executor,
 		NewQueryGuard(QueryGuardConfig{DefaultMaxRows: 100, HardMaxRows: 500}),
 		&fakeClock{t: time.Now()},
-		inspector,
+		inspector, &fakeDisclosureService{},
 	)
 
 	_, err := svc.NavigateRelatedRecords(context.Background(), 1, 9001, validNavRequest())
@@ -749,7 +791,7 @@ func TestNavigateRelatedRecords_ProductionCapEnforced(t *testing.T) {
 		repo, &fakeResolver{dsn: testResolverDSN}, executor,
 		NewQueryGuard(QueryGuardConfig{DefaultMaxRows: 100, HardMaxRows: 500}),
 		&fakeClock{t: time.Now()},
-		inspector,
+		inspector, &fakeDisclosureService{},
 	)
 	req := validNavRequest()
 	req.MaxRows = 500
@@ -791,7 +833,7 @@ func TestNavigateRelatedRecords_EmptyReferencedSchemaRejected(t *testing.T) {
 		repo, &fakeResolver{dsn: testResolverDSN}, executor,
 		NewQueryGuard(QueryGuardConfig{DefaultMaxRows: 100, HardMaxRows: 500}),
 		&fakeClock{t: time.Now()},
-		inspector,
+		inspector, &fakeDisclosureService{},
 	)
 
 	_, err := svc.NavigateRelatedRecords(context.Background(), 1, 9001, validNavRequest())
@@ -831,7 +873,7 @@ func TestNavigateRelatedRecords_MixedReferencedTableRejected(t *testing.T) {
 		repo, &fakeResolver{dsn: testResolverDSN}, executor,
 		NewQueryGuard(QueryGuardConfig{DefaultMaxRows: 100, HardMaxRows: 500}),
 		&fakeClock{t: time.Now()},
-		inspector,
+		inspector, &fakeDisclosureService{},
 	)
 	req := validNavRequest()
 	req.LocalValues = []string{"1", "2"}
@@ -860,7 +902,7 @@ func TestNavigateRelatedRecords_InspectorErrorNotLeaked(t *testing.T) {
 		repo, &fakeResolver{dsn: testResolverDSN}, &fakeExecutor{},
 		NewQueryGuard(QueryGuardConfig{DefaultMaxRows: 100, HardMaxRows: 500}),
 		&fakeClock{t: time.Now()},
-		inspector,
+		inspector, &fakeDisclosureService{},
 	)
 
 	_, err := svc.NavigateRelatedRecords(context.Background(), 1, 9001, validNavRequest())

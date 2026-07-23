@@ -313,6 +313,12 @@ func setupQuerySandboxTarget(t *testing.T) (*service.QueryExecutionService, uint
 		service.NewQueryGuard(service.QueryGuardConfig{DefaultMaxRows: 100, HardMaxRows: 500}),
 		wallClock{},
 		service.NewMySQLSchemaInspector(),
+		service.NewQueryDisclosureService(
+			mysql.NewQueryDisclosureRepository(db),
+			mysql.NewQueryDisclosureRepository(db),
+			service.NewMySQLSchemaInspector(),
+			mysql.NewQueryTargetRepository(db),
+		),
 	)
 	return svc, res.ID, db
 }

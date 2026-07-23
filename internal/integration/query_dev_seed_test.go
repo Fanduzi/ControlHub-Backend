@@ -111,6 +111,12 @@ func newExecutionService(db *sql.DB) *service.QueryExecutionService {
 		service.NewQueryGuard(service.QueryGuardConfig{DefaultMaxRows: 100, HardMaxRows: 500}),
 		wallClock{},
 		service.NewMySQLSchemaInspector(),
+		service.NewQueryDisclosureService(
+			mysql.NewQueryDisclosureRepository(db),
+			mysql.NewQueryDisclosureRepository(db),
+			service.NewMySQLSchemaInspector(),
+			mysql.NewQueryTargetRepository(db),
+		),
 	)
 }
 

@@ -1381,6 +1381,266 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/ErrorResponse"
+  /query-disclosure-policies:
+    get:
+      summary: List disclosure policies for a query target
+      operationId: listDisclosurePolicies
+      description: >
+        Phase 38Q. Returns all per-column result disclosure policies for a
+        query target. Any authenticated actor with a fresh Bearer token may
+        read. Never returns credentials, DSNs, or secrets.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: targetResourceId
+          in: query
+          required: true
+          schema:
+            type: integer
+            format: int64
+            minimum: 1
+          description: Query target resource ID.
+      responses:
+        "200":
+          description: Disclosure policy list
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DisclosurePolicyListResponse"
+              example:
+                items:
+                  - id: 1
+                    targetResourceId: 22
+                    databaseName: orders
+                    objectName: users
+                    columnName: email
+                    mode: raw_copy_allowed
+                    createdAt: "2026-07-23T10:00:00Z"
+                    updatedAt: "2026-07-23T10:00:00Z"
+        "400":
+          description: Missing or invalid targetResourceId
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "401":
+          description: Missing or invalid Bearer token (or token older than the TTL)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "404":
+          description: Query target not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "500":
+          description: Unexpected server failure
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+    post:
+      summary: Create a disclosure policy
+      operationId: createDisclosurePolicy
+      description: >
+        Phase 38Q. Admin-only. Creates a new per-column result disclosure
+        policy for a query target. The body is strictly decoded (unknown
+        fields are rejected). The actor is derived from the verified token
+        and is never accepted in the request body. Requires a fresh Bearer
+        token and the admin role.
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/DisclosurePolicyUpsertRequest"
+            example:
+              targetResourceId: 22
+              databaseName: orders
+              objectName: users
+              columnName: email
+              mode: raw_copy_allowed
+      responses:
+        "201":
+          description: Disclosure policy created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DisclosurePolicy"
+              example:
+                id: 1
+                targetResourceId: 22
+                databaseName: orders
+                objectName: users
+                columnName: email
+                mode: raw_copy_allowed
+                createdAt: "2026-07-23T10:00:00Z"
+                updatedAt: "2026-07-23T10:00:00Z"
+        "400":
+          description: Validation failed (bad request, unknown fields, invalid mode or identifiers)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "401":
+          description: Missing or invalid Bearer token (or token older than the TTL)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "403":
+          description: Authenticated actor is not an admin
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "404":
+          description: Query target not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "500":
+          description: Unexpected server failure
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+    put:
+      summary: Update a disclosure policy
+      operationId: updateDisclosurePolicy
+      description: >
+        Phase 38Q. Admin-only. Updates an existing per-column result
+        disclosure policy. The body is strictly decoded (unknown fields are
+        rejected). The actor is derived from the verified token and is never
+        accepted in the request body. Requires a fresh Bearer token and the
+        admin role.
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/DisclosurePolicyUpsertRequest"
+            example:
+              targetResourceId: 22
+              databaseName: orders
+              objectName: users
+              columnName: email
+              mode: masked_no_copy
+      responses:
+        "204":
+          description: Disclosure policy updated
+        "400":
+          description: Validation failed (bad request, unknown fields, invalid mode or identifiers)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "401":
+          description: Missing or invalid Bearer token (or token older than the TTL)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "403":
+          description: Authenticated actor is not an admin
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "404":
+          description: Query target not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "500":
+          description: Unexpected server failure
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+    delete:
+      summary: Delete a disclosure policy
+      operationId: deleteDisclosurePolicy
+      description: >
+        Phase 38Q. Admin-only. Removes a per-column disclosure policy by
+        scope (targetResourceId, databaseName, objectName, columnName).
+        Idempotent. Requires a fresh Bearer token and the admin role.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: targetResourceId
+          in: query
+          required: true
+          schema:
+            type: integer
+            format: int64
+            minimum: 1
+          description: Query target resource ID.
+        - name: databaseName
+          in: query
+          required: true
+          schema:
+            type: string
+            minLength: 1
+            maxLength: 128
+          description: Database name.
+        - name: objectName
+          in: query
+          required: true
+          schema:
+            type: string
+            minLength: 1
+            maxLength: 128
+          description: Object (table/view) name.
+        - name: columnName
+          in: query
+          required: true
+          schema:
+            type: string
+            minLength: 1
+            maxLength: 128
+          description: Column name.
+      responses:
+        "204":
+          description: Disclosure policy removed
+        "400":
+          description: Missing or invalid scope parameters
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "401":
+          description: Missing or invalid Bearer token (or token older than the TTL)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "403":
+          description: Authenticated actor is not an admin
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "404":
+          description: Query target not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "500":
+          description: Unexpected server failure
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
   /resources:
     get:
       summary: List resources
@@ -2919,6 +3179,91 @@ components:
             $ref: "#/components/schemas/RelationshipMapEdge"
         truncated:
           type: boolean
+    DisclosurePolicy:
+      type: object
+      description: >
+        Per-column result disclosure mode for a query target. Absence of a
+        matching row means the column is blocked (fail-closed). Never carries
+        credentials, DSNs, or secrets.
+      required: [id, targetResourceId, databaseName, objectName, columnName, mode, createdAt, updatedAt]
+      properties:
+        id:
+          type: integer
+          format: int64
+        targetResourceId:
+          type: integer
+          format: int64
+        databaseName:
+          type: string
+          maxLength: 128
+          pattern: '^[a-zA-Z0-9_]+$'
+          description: Database name identifier.
+        objectName:
+          type: string
+          maxLength: 128
+          pattern: '^[a-zA-Z0-9_]+$'
+          description: Object (table/view) name identifier.
+        columnName:
+          type: string
+          maxLength: 128
+          pattern: '^[a-zA-Z0-9_]+$'
+          description: Column name identifier.
+        mode:
+          $ref: "#/components/schemas/ResultDisclosureMode"
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+    DisclosurePolicyUpsertRequest:
+      type: object
+      description: >
+        Body for creating or updating a disclosure policy. All fields are
+        required. Unknown fields are rejected by strict decoding (additionalProperties
+        is false). The actor is derived from the verified token and must never
+        appear in the body.
+      required: [targetResourceId, databaseName, objectName, columnName, mode]
+      additionalProperties: false
+      properties:
+        targetResourceId:
+          type: integer
+          format: int64
+          minimum: 1
+        databaseName:
+          type: string
+          minLength: 1
+          maxLength: 128
+          pattern: '^[a-zA-Z0-9_]+$'
+        objectName:
+          type: string
+          minLength: 1
+          maxLength: 128
+          pattern: '^[a-zA-Z0-9_]+$'
+        columnName:
+          type: string
+          minLength: 1
+          maxLength: 128
+          pattern: '^[a-zA-Z0-9_]+$'
+        mode:
+          $ref: "#/components/schemas/ResultDisclosureMode"
+    DisclosurePolicyListResponse:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/DisclosurePolicy"
+    ResultDisclosureMode:
+      type: string
+      description: >
+        Server-owned disclosure decision for a result column. Only two modes
+        are persisted; "blocked" is the fail-closed default when no matching
+        row exists in the policy table.
+      enum:
+        - raw_copy_allowed
+        - masked_no_copy
     PageInfo:
       type: object
       required: [page, pageSize, totalItems, totalPages, hasNextPage, hasPreviousPage]

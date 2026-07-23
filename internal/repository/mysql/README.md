@@ -10,9 +10,14 @@ Data access layer implementing service-layer repository interfaces with raw SQL 
 | audit_repository.go | Audit event queries (global and by resource) |
 | user_repository.go | User credential lookup by email |
 | dictionary_repository.go | Dictionary queries — DB-backed (environments, owners, roles) and static (resource types, relation types, lifecycle/health statuses) |
+| query_execution_repository.go | Query credential metadata (get/upsert/delete with audit), execution history, audit events |
+| query_target_repository.go | Read-only query target read model — joins database_instance resources with profiles, environments, owners, and cluster membership |
+| query_disclosure_repository.go | Phase 38Q governed result-disclosure policy CRUD (insert/update/delete/list/get by scope) |
 
 ## Exports
 - `NewResourceRepository(db)`, `NewRelationRepository(db)`, `NewAuditRepository(db)`, `NewUserRepository(db)`, `NewDictionaryRepository(db)` — constructor functions
+- `NewQueryExecutionRepository(db)`, `NewQueryTargetRepository(db)`, `NewQueryDisclosureRepository(db)` — constructor functions
+- `QueryDisclosureReader`, `QueryDisclosureWriter` — narrow service-owned interfaces for disclosure policy access
 - Repository structs satisfy service-layer interfaces
 
 ## Dependencies

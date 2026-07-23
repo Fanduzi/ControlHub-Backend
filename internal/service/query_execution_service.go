@@ -109,6 +109,15 @@ type Clock interface {
 	Now() time.Time
 }
 
+// QueryDisclosurePlanner resolves and applies result-disclosure policies for a
+// single query execution. The concrete *QueryDisclosureService satisfies this
+// interface; tests substitute a lightweight fake.
+type QueryDisclosurePlanner interface {
+	Preflight(ctx context.Context, dsn string, targetResourceID uint64, guarded GuardedQuery) (DisclosurePlan, error)
+	PreflightRelatedRecords(ctx context.Context, dsn string, targetResourceID uint64, referencedDatabase string, referencedTable string) (DisclosurePlan, error)
+	Apply(plan DisclosurePlan, columns []model.QueryResultColumn, rows [][]any) ([]model.QueryResultColumn, [][]any)
+}
+
 // QueryExecutionService orchestrates guarded read-only SELECT execution: it
 // gates on target/policy/credential, guards the statement, resolves the
 // credential, executes under a bounded timeout, and records history + audit for
@@ -122,6 +131,7 @@ type QueryExecutionService struct {
 	clock       Clock
 	access      *TargetAccessResolver
 	inspector   QuerySchemaInspector
+	disclosure  QueryDisclosurePlanner
 }
 
 // NewQueryExecutionService wires the service. targets is reused from the query
@@ -135,6 +145,7 @@ func NewQueryExecutionService(
 	guard *QueryGuard,
 	clock Clock,
 	inspector QuerySchemaInspector,
+	disclosure QueryDisclosurePlanner,
 ) *QueryExecutionService {
 	return &QueryExecutionService{
 		targets:     targets,
@@ -145,6 +156,7 @@ func NewQueryExecutionService(
 		clock:       clock,
 		access:      NewTargetAccessResolver(targets, executions, credentials),
 		inspector:   inspector,
+		disclosure:  disclosure,
 	}
 }
 
@@ -195,6 +207,17 @@ func (s *QueryExecutionService) Execute(ctx context.Context, actorUserID uint64,
 			fmt.Errorf("%w: %v", ErrQueryValidationFailed, err), start)
 	}
 
+	// Disclosure preflight: resolve column provenance and check policies.
+	// Blocks if any projected column lacks an exact disclosure policy.
+	plan, err := s.disclosure.Preflight(ctx, access.dsn, target.ResourceID, guarded)
+	if err != nil {
+		if errors.Is(err, ErrQueryDisclosureBlocked) {
+			return s.reject(ctx, target, actorUserID, &guarded, "query_result_disclosure_blocked", "query blocked by result disclosure policy",
+				fmt.Errorf("%w: %v", ErrQueryNotAllowed, err), start)
+		}
+		return model.QueryExecuteResponse{}, err
+	}
+
 	timeout := defaultQueryTimeout
 	if isProductionEnvironment(target.ConnectionContext.Environment) {
 		timeout = productionQueryTimeout
@@ -212,6 +235,10 @@ func (s *QueryExecutionService) Execute(ctx context.Context, actorUserID uint64,
 		}
 		return model.QueryExecuteResponse{}, fmt.Errorf("%w: %s", sentinel, safeMsg)
 	}
+
+	columns, rows := s.disclosure.Apply(plan, result.Columns, result.Rows)
+	result.Columns = columns
+	result.Rows = rows
 
 	// Success: record (history + audit) then return. A recording failure must
 	// not yield a success response, so execID is guaranteed non-zero here.
@@ -444,13 +471,24 @@ func (s *QueryExecutionService) NavigateRelatedRecords(ctx context.Context, acto
 			ErrNavigationValueMismatch, start)
 	}
 
-	// 6. Build the parameterized SELECT from trusted FK metadata.
+	// 6. Disclosure preflight for related records.
+	refSchema := matchedFK.Columns[0].ReferencedSchema
+	refTable := matchedFK.Columns[0].ReferencedTable
+
+	plan, err := s.disclosure.PreflightRelatedRecords(ctx, access.dsn, target.ResourceID, refSchema, refTable)
+	if err != nil {
+		if errors.Is(err, ErrQueryDisclosureBlocked) {
+			return s.rejectNavigation(ctx, target, actorUserID, matchedFK, "query_result_disclosure_blocked", "query blocked by result disclosure policy",
+				fmt.Errorf("%w: %v", ErrQueryNotAllowed, err), start)
+		}
+		return model.RelatedRecordNavigationResponse{}, err
+	}
+
+	// 7. Build the parameterized SELECT from trusted FK metadata.
 	//    SELECT * FROM `<ref_schema>`.`<ref_table>` WHERE `<ref_col1>` = ? AND ... LIMIT <decimal>
 	//    Identifiers are backtick-quoted with embedded backticks doubled; values
 	//    are bound via database/sql placeholders; the limit is a server-clamped
 	//    decimal literal so the placeholder count matches the argument count.
-	refSchema := matchedFK.Columns[0].ReferencedSchema
-	refTable := matchedFK.Columns[0].ReferencedTable
 
 	var whereClauses []string
 	for _, col := range matchedFK.Columns {
@@ -470,7 +508,7 @@ func (s *QueryExecutionService) NavigateRelatedRecords(ctx context.Context, acto
 		values[i] = v
 	}
 
-	// 7. Execute with timeout (same policy as Execute).
+	// 8. Execute with timeout (same policy as Execute).
 	timeout := defaultQueryTimeout
 	if isProductionEnvironment(target.ConnectionContext.Environment) {
 		timeout = productionQueryTimeout
@@ -478,7 +516,7 @@ func (s *QueryExecutionService) NavigateRelatedRecords(ctx context.Context, acto
 	execCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
-	// 8. Execute the bound query.
+	// 9. Execute the bound query.
 	result, err := s.executor.QueryRelatedRecords(execCtx, access.dsn, RelatedRecordsQueryInput{
 		Statement: query,
 		Values:    values,
@@ -492,13 +530,17 @@ func (s *QueryExecutionService) NavigateRelatedRecords(ctx context.Context, acto
 		return model.RelatedRecordNavigationResponse{}, fmt.Errorf("%w: %s", sentinel, safeMsg)
 	}
 
-	// 9. Build relation metadata from trusted FK columns.
+	columns, rows := s.disclosure.Apply(plan, result.Columns, result.Rows)
+	result.Columns = columns
+	result.Rows = rows
+
+	// 10. Build relation metadata from trusted FK columns.
 	refColumns := make([]string, len(matchedFK.Columns))
 	for i, col := range matchedFK.Columns {
 		refColumns[i] = col.ReferencedColumn
 	}
 
-	// 10. Record success using canonical inspected relation identity.
+	// 11. Record success using canonical inspected relation identity.
 	execID, perr := s.persistNavigationAttempt(ctx, target, actorUserID, matchedFK, model.QueryExecutionSuccess, result.RowCount, "", "", start)
 	if perr != nil {
 		return model.RelatedRecordNavigationResponse{}, errPersistAttempt

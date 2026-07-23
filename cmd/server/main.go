@@ -61,6 +61,16 @@ func buildDependencies(db *sql.DB, cfg config.Config) api.Dependencies {
 	// for MySQL/TiDB query targets — metadata only, never a DSN.
 	queryCredentialSvc := service.NewQueryCredentialService(queryTargetRepo, queryExecutionRepo, credentialResolver)
 
+	// Query disclosure policy service (Phase 38Q) manages per-column result
+	// disclosure policies for query targets.
+	queryDisclosureRepo := mysql.NewQueryDisclosureRepository(db)
+	queryDisclosureSvc := service.NewQueryDisclosureService(
+		queryDisclosureRepo,
+		queryDisclosureRepo,
+		service.NewMySQLSchemaInspector(),
+		queryTargetRepo,
+	)
+
 	queryExecutionSvc := service.NewQueryExecutionService(
 		queryTargetRepo,
 		queryExecutionRepo,
@@ -69,6 +79,7 @@ func buildDependencies(db *sql.DB, cfg config.Config) api.Dependencies {
 		service.NewQueryGuard(service.QueryGuardConfig{DefaultMaxRows: 100, HardMaxRows: 500}),
 		realClock{},
 		service.NewMySQLSchemaInspector(),
+		queryDisclosureSvc,
 	)
 
 	accessResolver := service.NewTargetAccessResolver(queryTargetRepo, queryExecutionRepo, credentialResolver)
@@ -112,6 +123,7 @@ func buildDependencies(db *sql.DB, cfg config.Config) api.Dependencies {
 		QueryExecutionService:  queryExecutionSvc,
 		QuerySchemaService:     querySchemaSvc,
 		QueryExplainService:    queryExplainSvc,
+		QueryDisclosureService: queryDisclosureSvc,
 		QueryExecutionAuth: api.QueryExecutionAuthConfig{
 			TokenMaxAge: cfg.QueryExecutionTokenMaxAge,
 			Clock:       time.Now,
