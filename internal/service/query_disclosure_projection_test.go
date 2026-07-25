@@ -110,6 +110,7 @@ func TestDisclosureProjectionResolveExecute(t *testing.T) {
 		{name: "literal-only SELECT with WHERE rejected", statement: "SELECT 1 WHERE 1=1", wantErr: true},
 		{name: "literal-only SELECT with subquery in WHERE rejected", statement: "SELECT 1 WHERE EXISTS (SELECT 1 FROM customers)", wantErr: true},
 		{name: "literal-only SELECT with CTE rejected", statement: "WITH cte AS (SELECT 1) SELECT * FROM cte", wantErr: true},
+		{name: "literal-only SELECT with CTE and literal outer rejected", statement: "WITH cte AS (SELECT sensitive FROM customers) SELECT 1", wantErr: true},
 		{name: "literal-only SELECT with HAVING rejected", statement: "SELECT 1 HAVING 1=1", wantErr: true},
 		{name: "literal-only SELECT with ORDER BY rejected", statement: "SELECT 1 ORDER BY 1", wantErr: true},
 		{name: "literal-only SELECT with LIMIT rejected", statement: "SELECT 1 LIMIT 1", wantErr: true},
