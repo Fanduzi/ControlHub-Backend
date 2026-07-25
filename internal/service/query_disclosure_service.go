@@ -214,10 +214,20 @@ func (s *QueryDisclosureService) Apply(
 
 // buildDisclosurePlan looks up policies for each projected column and assembles
 // the DisclosurePlan. Returns ErrQueryDisclosureBlocked if any column lacks an
-// exact policy.
+// exact policy. Literal-only columns (empty source fields) are automatically
+// marked raw_copy_allowed without a policy lookup.
 func (s *QueryDisclosureService) buildDisclosurePlan(ctx context.Context, targetResourceID uint64, projection ProjectionPlan) (DisclosurePlan, error) {
 	plan := DisclosurePlan{Columns: make([]ColumnDisclosure, 0, len(projection.Columns))}
 	for _, col := range projection.Columns {
+		if col.SourceDatabase == "" && col.SourceObject == "" && col.SourceColumn == "" {
+			// Literal-only column: no table data to govern.
+			plan.Columns = append(plan.Columns, ColumnDisclosure{
+				Provenance:  col,
+				Mode:        model.ResultDisclosureRawCopyAllowed,
+				CopyAllowed: true,
+			})
+			continue
+		}
 		policy, err := s.policies.GetByScope(ctx, targetResourceID, col.SourceDatabase, col.SourceObject, col.SourceColumn)
 		if err != nil {
 			if errors.Is(err, sql.ErrNoRows) {

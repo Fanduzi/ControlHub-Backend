@@ -63,10 +63,12 @@ func resolveExecuteProjection(ctx context.Context, inspector QuerySchemaInspecto
 		return ProjectionPlan{}, nil
 	}
 	if isNoTableProjection(selectStatement) {
-		// SELECT without a real table (e.g., SELECT 1, which the parser models
-		// with the "dual" pseudo-table) projects no table column values, so
-		// there is nothing to govern for disclosure.
-		return ProjectionPlan{}, nil
+		// Pure literal-only no-FROM SELECT projections (e.g., SELECT 1,
+		// SELECT 'text', SELECT NULL) are intrinsically safe: they carry
+		// no table data to govern. Return columns with raw_copy_allowed.
+		// Non-literal expressions (functions, operators, subqueries, etc.)
+		// are rejected as unsupported.
+		return resolveLiteralOnlyProjection(selectStatement)
 	}
 
 	source, err := resolveProjectionSource(selectStatement, input.database)
@@ -161,6 +163,48 @@ func isNoTableProjection(statement *sqlparser.Select) bool {
 		return false
 	}
 	return table.Qualifier.IsEmpty() && strings.EqualFold(table.Name.String(), "dual")
+}
+
+// resolveLiteralOnlyProjection validates that every SELECT expression is an
+// AST literal node (with optional alias) and returns a plan where each column
+// is marked raw_copy_allowed. Non-literal expressions cause
+// errProjectionUnsupported.
+func resolveLiteralOnlyProjection(statement *sqlparser.Select) (ProjectionPlan, error) {
+	plan := ProjectionPlan{Columns: make([]ColumnProvenance, 0, len(statement.SelectExprs.Exprs))}
+	for i, expression := range statement.SelectExprs.Exprs {
+		aliased, ok := expression.(*sqlparser.AliasedExpr)
+		if !ok {
+			return ProjectionPlan{}, fmt.Errorf("%w: non-aliased expression in literal SELECT", errProjectionUnsupported)
+		}
+		if !isLiteralExpr(aliased.Expr) {
+			return ProjectionPlan{}, fmt.Errorf("%w: non-literal expression in literal SELECT", errProjectionUnsupported)
+		}
+		outputName := fmt.Sprintf("column_%d", i+1)
+		if !aliased.As.IsEmpty() {
+			outputName = aliased.As.String()
+		}
+		plan.Columns = append(plan.Columns, ColumnProvenance{
+			OutputName: outputName,
+		})
+	}
+	return plan, nil
+}
+
+// isLiteralExpr reports whether expr is a safe SQL literal: integer, string,
+// decimal, float, hex, bit, date/time/timestamp, NULL, or bool. Functions,
+// operators, column references, subqueries, variables, and all other
+// expressions return false.
+func isLiteralExpr(expr sqlparser.Expr) bool {
+	switch expr.(type) {
+	case *sqlparser.Literal:
+		return true
+	case *sqlparser.NullVal:
+		return true
+	case *sqlparser.BoolVal:
+		return true
+	default:
+		return false
+	}
 }
 
 func resolveProjectionSource(statement *sqlparser.Select, defaultDatabase string) (projectionSource, error) {
