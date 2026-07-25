@@ -168,8 +168,27 @@ func isNoTableProjection(statement *sqlparser.Select) bool {
 // resolveLiteralOnlyProjection validates that every SELECT expression is an
 // AST literal node (with optional alias) and returns a plan where each column
 // is marked raw_copy_allowed. Non-literal expressions cause
-// errProjectionUnsupported.
+// errProjectionUnsupported. Rejects WHERE, HAVING, CTEs, GROUP BY, ORDER BY,
+// LIMIT, and subqueries to prevent blind exfiltration through predicates.
 func resolveLiteralOnlyProjection(statement *sqlparser.Select) (ProjectionPlan, error) {
+	if statement.Where != nil {
+		return ProjectionPlan{}, fmt.Errorf("%w: WHERE clause in literal SELECT", errProjectionUnsupported)
+	}
+	if statement.Having != nil {
+		return ProjectionPlan{}, fmt.Errorf("%w: HAVING clause in literal SELECT", errProjectionUnsupported)
+	}
+	if statement.With != nil {
+		return ProjectionPlan{}, fmt.Errorf("%w: CTE in literal SELECT", errProjectionUnsupported)
+	}
+	if statement.GroupBy != nil {
+		return ProjectionPlan{}, fmt.Errorf("%w: GROUP BY in literal SELECT", errProjectionUnsupported)
+	}
+	if len(statement.OrderBy) > 0 {
+		return ProjectionPlan{}, fmt.Errorf("%w: ORDER BY in literal SELECT", errProjectionUnsupported)
+	}
+	if statement.Limit != nil {
+		return ProjectionPlan{}, fmt.Errorf("%w: LIMIT in literal SELECT", errProjectionUnsupported)
+	}
 	plan := ProjectionPlan{Columns: make([]ColumnProvenance, 0, len(statement.SelectExprs.Exprs))}
 	for i, expression := range statement.SelectExprs.Exprs {
 		aliased, ok := expression.(*sqlparser.AliasedExpr)
