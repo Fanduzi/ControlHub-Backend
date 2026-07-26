@@ -430,7 +430,7 @@ func TestApply_TransformsRows(t *testing.T) {
 	}
 }
 
-func TestApply_EmptyPlanPreservesOriginal(t *testing.T) {
+func TestApply_EmptyPlanBlocks(t *testing.T) {
 	t.Parallel()
 
 	// Given: an empty disclosure plan (no columns resolved).
@@ -439,17 +439,14 @@ func TestApply_EmptyPlanPreservesOriginal(t *testing.T) {
 	rows := [][]any{{42}}
 
 	// When: Apply is called with an empty plan.
-	gotColumns, gotRows, applyErr := svc.Apply(DisclosurePlan{}, columns, rows)
-	if applyErr != nil {
-		t.Fatalf("Apply() returned unexpected error: %v", applyErr)
-	}
+	_, _, applyErr := svc.Apply(DisclosurePlan{}, columns, rows)
 
-	// Then: columns and rows are returned unchanged.
-	if len(gotColumns) != 1 || gotColumns[0].Name != "id" {
-		t.Errorf("columns changed unexpectedly: %v", gotColumns)
+	// Then: empty plan must be rejected (fail-closed). Raw rows must not pass through.
+	if applyErr == nil {
+		t.Fatal("Apply() error = nil, want ErrQueryDisclosureBlocked for empty plan")
 	}
-	if len(gotRows) != 1 || gotRows[0][0] != 42 {
-		t.Errorf("rows changed unexpectedly: %v", gotRows)
+	if !isDisclosureBlocked(applyErr) {
+		t.Errorf("Apply() error = %v, want wrapped ErrQueryDisclosureBlocked", applyErr)
 	}
 }
 
@@ -612,6 +609,64 @@ func TestApply_RejectsUnknownMode(t *testing.T) {
 	}
 	if !isDisclosureBlocked(err) {
 		t.Errorf("Apply() error = %v, want wrapped ErrQueryDisclosureBlocked", err)
+	}
+}
+
+func TestPreflight_NonSelectStatementBlocks(t *testing.T) {
+	t.Parallel()
+
+	inspector := &fakeSchemaInspector{detail: nil}
+	reader := &fakeDisclosureReader{policies: map[string]model.ResultDisclosurePolicy{}}
+	targets := &fakeTargetRepo{targets: []model.QueryTarget{{ResourceID: 1}}}
+	svc := newTestDisclosureService(reader, inspector, targets)
+
+	tests := []struct {
+		name string
+		sql  string
+	}{
+		{"SHOW_TABLES", "SHOW TABLES"},
+		{"DESCRIBE", "DESCRIBE users"},
+		{"SHOW_DATABASES", "SHOW DATABASES"},
+		{"SHOW_COLUMNS", "SHOW COLUMNS FROM users"},
+		{"SHOW_STATUS", "SHOW STATUS"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := svc.Preflight(context.Background(), testDSN, 1, GuardedQuery{
+				OriginalStatement: tt.sql,
+			})
+			if err == nil {
+				t.Fatalf("Preflight(%q) error = nil, want ErrQueryDisclosureBlocked", tt.sql)
+			}
+			if !isDisclosureBlocked(err) {
+				t.Errorf("Preflight(%q) error = %v, want wrapped ErrQueryDisclosureBlocked", tt.sql, err)
+			}
+		})
+	}
+}
+
+func TestPreflight_SelectLiteralStillAllowed(t *testing.T) {
+	t.Parallel()
+
+	inspector := &fakeSchemaInspector{detail: nil}
+	reader := &fakeDisclosureReader{policies: map[string]model.ResultDisclosurePolicy{}}
+	targets := &fakeTargetRepo{targets: []model.QueryTarget{{ResourceID: 1}}}
+	svc := newTestDisclosureService(reader, inspector, targets)
+
+	// SELECT 1 is a pure literal no-FROM query; it must still pass preflight
+	// because resolveLiteralOnlyProjection produces columns with raw_copy_allowed.
+	plan, err := svc.Preflight(context.Background(), testDSN, 1, GuardedQuery{
+		OriginalStatement: "SELECT 1",
+	})
+	if err != nil {
+		t.Fatalf("Preflight(SELECT 1) error = %v, want nil", err)
+	}
+	if len(plan.Columns) != 1 {
+		t.Fatalf("Preflight(SELECT 1) columns = %d, want 1", len(plan.Columns))
+	}
+	if plan.Columns[0].Mode != model.ResultDisclosureRawCopyAllowed {
+		t.Errorf("Preflight(SELECT 1) mode = %q, want raw_copy_allowed", plan.Columns[0].Mode)
 	}
 }
 

@@ -132,6 +132,10 @@ func (s *QueryDisclosureService) Preflight(
 		return DisclosurePlan{}, fmt.Errorf("%w: %v", ErrQueryDisclosureBlocked, err)
 	}
 
+	if len(projection.Columns) == 0 {
+		return DisclosurePlan{}, fmt.Errorf("%w: statement produces no resolvable columns for disclosure governance", ErrQueryDisclosureBlocked)
+	}
+
 	return s.buildDisclosurePlan(ctx, targetResourceID, projection)
 }
 
@@ -184,7 +188,7 @@ func (s *QueryDisclosureService) Apply(
 	rows [][]any,
 ) ([]model.QueryResultColumn, [][]any, error) {
 	if len(plan.Columns) == 0 {
-		return columns, rows, nil
+		return nil, nil, fmt.Errorf("%w: disclosure plan has no columns; cannot validate result safety", ErrQueryDisclosureBlocked)
 	}
 
 	if len(plan.Columns) != len(columns) {
