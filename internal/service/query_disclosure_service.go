@@ -174,6 +174,10 @@ func (s *QueryDisclosureService) PreflightRelatedRecords(
 // Returns an error if the plan column count doesn't match the result column
 // count — this catches schema drift between preflight and execution that could
 // otherwise leak unplanned raw values.
+//
+// Defensive validation: each ColumnDisclosure is validated before copying rows.
+// Invalid mode/copy pairs, blocked mode, empty mode, or unknown values cause
+// rejection before any row values can be returned.
 func (s *QueryDisclosureService) Apply(
 	plan DisclosurePlan,
 	columns []model.QueryResultColumn,
@@ -185,6 +189,19 @@ func (s *QueryDisclosureService) Apply(
 
 	if len(plan.Columns) != len(columns) {
 		return nil, nil, fmt.Errorf("%w: plan has %d columns but result has %d", ErrQueryDisclosureBlocked, len(plan.Columns), len(columns))
+	}
+
+	// Defensive validation: verify each column disclosure before copying rows.
+	for i, cd := range plan.Columns {
+		if err := cd.Mode.Validate(); err != nil {
+			return nil, nil, fmt.Errorf("%w: column %d has invalid mode: %v", ErrQueryDisclosureBlocked, i, err)
+		}
+		if cd.Mode == model.ResultDisclosureRawCopyAllowed && !cd.CopyAllowed {
+			return nil, nil, fmt.Errorf("%w: column %d has raw mode but copyAllowed=false", ErrQueryDisclosureBlocked, i)
+		}
+		if cd.Mode == model.ResultDisclosureMaskedNoCopy && cd.CopyAllowed {
+			return nil, nil, fmt.Errorf("%w: column %d has masked mode but copyAllowed=true", ErrQueryDisclosureBlocked, i)
+		}
 	}
 
 	// Update column metadata with disclosure decisions.
@@ -234,6 +251,9 @@ func (s *QueryDisclosureService) buildDisclosurePlan(ctx context.Context, target
 				return DisclosurePlan{}, fmt.Errorf("%w: no policy for %s.%s.%s", ErrQueryDisclosureBlocked, col.SourceDatabase, col.SourceObject, col.SourceColumn)
 			}
 			return DisclosurePlan{}, fmt.Errorf("lookup disclosure policy: %w", err)
+		}
+		if err := policy.Mode.Validate(); err != nil {
+			return DisclosurePlan{}, fmt.Errorf("%w: invalid stored mode for %s.%s.%s: %v", ErrQueryDisclosureBlocked, col.SourceDatabase, col.SourceObject, col.SourceColumn, err)
 		}
 		plan.Columns = append(plan.Columns, ColumnDisclosure{
 			Provenance:  col,

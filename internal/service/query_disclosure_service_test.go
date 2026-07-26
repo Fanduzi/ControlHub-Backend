@@ -453,6 +453,168 @@ func TestApply_EmptyPlanPreservesOriginal(t *testing.T) {
 	}
 }
 
+func TestPreflight_BlockedStoredModeBlocks(t *testing.T) {
+	t.Parallel()
+
+	// Given: a table with a column that has a blocked stored mode.
+	inspector := &fakeSchemaInspector{
+		detail: &ObjectDetail{
+			Name: "users",
+			Kind: "table",
+			Columns: []ColumnSummary{
+				{Name: "id", Position: 1, Type: "int", Nullable: "NO", Key: "PRI"},
+			},
+		},
+	}
+	reader := &fakeDisclosureReader{
+		policies: map[string]model.ResultDisclosurePolicy{
+			disclosureScopeKey("testdb", "users", "id"): {TargetResourceID: 1, Mode: model.ResultDisclosureBlocked},
+		},
+	}
+	targets := &fakeTargetRepo{targets: []model.QueryTarget{{ResourceID: 1}}}
+	svc := newTestDisclosureService(reader, inspector, targets)
+
+	// When: Preflight resolves disclosure for a column with blocked stored mode.
+	_, err := svc.Preflight(context.Background(), testDSN, 1, GuardedQuery{
+		OriginalStatement: "SELECT id FROM users",
+	})
+
+	// Then: ErrQueryDisclosureBlocked is returned.
+	if err == nil {
+		t.Fatal("Preflight() error = nil, want ErrQueryDisclosureBlocked")
+	}
+	if !isDisclosureBlocked(err) {
+		t.Errorf("Preflight() error = %v, want wrapped ErrQueryDisclosureBlocked", err)
+	}
+}
+
+func TestPreflight_UnknownStoredModeBlocks(t *testing.T) {
+	t.Parallel()
+
+	// Given: a table with a column that has an unknown stored mode.
+	inspector := &fakeSchemaInspector{
+		detail: &ObjectDetail{
+			Name: "users",
+			Kind: "table",
+			Columns: []ColumnSummary{
+				{Name: "id", Position: 1, Type: "int", Nullable: "NO", Key: "PRI"},
+			},
+		},
+	}
+	reader := &fakeDisclosureReader{
+		policies: map[string]model.ResultDisclosurePolicy{
+			disclosureScopeKey("testdb", "users", "id"): {TargetResourceID: 1, Mode: "unknown_mode"},
+		},
+	}
+	targets := &fakeTargetRepo{targets: []model.QueryTarget{{ResourceID: 1}}}
+	svc := newTestDisclosureService(reader, inspector, targets)
+
+	// When: Preflight resolves disclosure for a column with unknown stored mode.
+	_, err := svc.Preflight(context.Background(), testDSN, 1, GuardedQuery{
+		OriginalStatement: "SELECT id FROM users",
+	})
+
+	// Then: ErrQueryDisclosureBlocked is returned.
+	if err == nil {
+		t.Fatal("Preflight() error = nil, want ErrQueryDisclosureBlocked")
+	}
+	if !isDisclosureBlocked(err) {
+		t.Errorf("Preflight() error = %v, want wrapped ErrQueryDisclosureBlocked", err)
+	}
+}
+
+func TestApply_RejectsRawModeWithCopyAllowedFalse(t *testing.T) {
+	t.Parallel()
+
+	// Given: a plan with raw mode but copyAllowed=false.
+	svc := &QueryDisclosureService{}
+	plan := DisclosurePlan{Columns: []ColumnDisclosure{
+		{Mode: model.ResultDisclosureRawCopyAllowed, CopyAllowed: false},
+	}}
+	columns := []model.QueryResultColumn{{Name: "id", DatabaseType: "int"}}
+	rows := [][]any{{42}}
+
+	// When: Apply is called with invalid mode/copy pair.
+	_, _, err := svc.Apply(plan, columns, rows)
+
+	// Then: ErrQueryDisclosureBlocked is returned.
+	if err == nil {
+		t.Fatal("Apply() error = nil, want ErrQueryDisclosureBlocked")
+	}
+	if !isDisclosureBlocked(err) {
+		t.Errorf("Apply() error = %v, want wrapped ErrQueryDisclosureBlocked", err)
+	}
+}
+
+func TestApply_RejectsMaskedModeWithCopyAllowedTrue(t *testing.T) {
+	t.Parallel()
+
+	// Given: a plan with masked mode but copyAllowed=true.
+	svc := &QueryDisclosureService{}
+	plan := DisclosurePlan{Columns: []ColumnDisclosure{
+		{Mode: model.ResultDisclosureMaskedNoCopy, CopyAllowed: true},
+	}}
+	columns := []model.QueryResultColumn{{Name: "ssn", DatabaseType: "varchar"}}
+	rows := [][]any{{"123-45-6789"}}
+
+	// When: Apply is called with invalid mode/copy pair.
+	_, _, err := svc.Apply(plan, columns, rows)
+
+	// Then: ErrQueryDisclosureBlocked is returned.
+	if err == nil {
+		t.Fatal("Apply() error = nil, want ErrQueryDisclosureBlocked")
+	}
+	if !isDisclosureBlocked(err) {
+		t.Errorf("Apply() error = %v, want wrapped ErrQueryDisclosureBlocked", err)
+	}
+}
+
+func TestApply_RejectsBlockedMode(t *testing.T) {
+	t.Parallel()
+
+	// Given: a plan with blocked mode.
+	svc := &QueryDisclosureService{}
+	plan := DisclosurePlan{Columns: []ColumnDisclosure{
+		{Mode: model.ResultDisclosureBlocked, CopyAllowed: false},
+	}}
+	columns := []model.QueryResultColumn{{Name: "id", DatabaseType: "int"}}
+	rows := [][]any{{42}}
+
+	// When: Apply is called with blocked mode.
+	_, _, err := svc.Apply(plan, columns, rows)
+
+	// Then: ErrQueryDisclosureBlocked is returned.
+	if err == nil {
+		t.Fatal("Apply() error = nil, want ErrQueryDisclosureBlocked")
+	}
+	if !isDisclosureBlocked(err) {
+		t.Errorf("Apply() error = %v, want wrapped ErrQueryDisclosureBlocked", err)
+	}
+}
+
+func TestApply_RejectsUnknownMode(t *testing.T) {
+	t.Parallel()
+
+	// Given: a plan with unknown mode.
+	svc := &QueryDisclosureService{}
+	plan := DisclosurePlan{Columns: []ColumnDisclosure{
+		{Mode: "unknown_mode", CopyAllowed: false},
+	}}
+	columns := []model.QueryResultColumn{{Name: "id", DatabaseType: "int"}}
+	rows := [][]any{{42}}
+
+	// When: Apply is called with unknown mode.
+	_, _, err := svc.Apply(plan, columns, rows)
+
+	// Then: ErrQueryDisclosureBlocked is returned.
+	if err == nil {
+		t.Fatal("Apply() error = nil, want ErrQueryDisclosureBlocked")
+	}
+	if !isDisclosureBlocked(err) {
+		t.Errorf("Apply() error = %v, want wrapped ErrQueryDisclosureBlocked", err)
+	}
+}
+
 func isDisclosureBlocked(err error) bool {
 	return errors.Is(err, ErrQueryDisclosureBlocked)
 }

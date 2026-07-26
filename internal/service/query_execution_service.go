@@ -673,15 +673,18 @@ func validateRelatedRecordsFKMetadata(fk *FKSummary) error {
 
 // classifyExecutorError maps an executor error to a history status, a sentinel
 // for the handler, an audit/error code, and a client-safe message. A timeout is
-// 408; an oversized result is 400 (validation); anything else from the target
-// database is 502. The returned message is fixed and never echoes the raw
-// executor error, which may contain DSN fragments from the driver.
+// 408; an oversized result is 400 (validation); a disclosure policy block is
+// 403; anything else from the target database is 502. The returned message is
+// fixed and never echoes the raw executor error, which may contain DSN fragments
+// from the driver.
 func classifyExecutorError(err error) (model.QueryExecutionStatus, error, string, string) {
 	switch {
 	case errors.Is(err, context.DeadlineExceeded):
 		return model.QueryExecutionTimeout, ErrQueryTimeout, "query_timeout", "query exceeded the time limit"
 	case errors.Is(err, ErrQueryResultTooLarge):
 		return model.QueryExecutionRejected, ErrQueryValidationFailed, "validation_failed", "result set exceeds configured limits"
+	case errors.Is(err, ErrQueryDisclosureBlocked):
+		return model.QueryExecutionRejected, ErrQueryNotAllowed, "query_result_disclosure_blocked", "query blocked by result disclosure policy"
 	default:
 		return model.QueryExecutionFailed, ErrQueryBackendFailure, "query_backend_error", "target database query failed"
 	}

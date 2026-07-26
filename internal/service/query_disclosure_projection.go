@@ -62,7 +62,7 @@ func resolveExecuteProjection(ctx context.Context, inspector QuerySchemaInspecto
 		// user table column values; no disclosure governance is needed.
 		return ProjectionPlan{}, nil
 	}
-	if isNoTableProjection(selectStatement) {
+	if isNoTableProjection(selectStatement, input.guarded.OriginalStatement) {
 		// Pure literal-only no-FROM SELECT projections (e.g., SELECT 1,
 		// SELECT 'text', SELECT NULL) are intrinsically safe: they carry
 		// no table data to govern. Return columns with raw_copy_allowed.
@@ -146,8 +146,11 @@ func resolveRelatedRecordProjection(ctx context.Context, inspector QuerySchemaIn
 // isNoTableProjection reports whether the SELECT projects no real table
 // column values — either it has no FROM clause or its only source is the
 // "dual" pseudo-table the parser synthesizes for FROM-less SELECTs (e.g.
-// SELECT 1). Such statements carry no table data to govern for disclosure.
-func isNoTableProjection(statement *sqlparser.Select) bool {
+// SELECT 1). This is the strict syntactic boundary: SELECT 1, SELECT 'text',
+// SELECT NULL are intrinsically safe. SELECT 1 FROM dual (explicit dual),
+// aliases, and qualified variants are NOT exempt and must be rejected before
+// SQL execution.
+func isNoTableProjection(statement *sqlparser.Select, originalStatement string) bool {
 	if len(statement.From) == 0 {
 		return true
 	}
@@ -162,7 +165,13 @@ func isNoTableProjection(statement *sqlparser.Select) bool {
 	if !ok {
 		return false
 	}
-	return table.Qualifier.IsEmpty() && strings.EqualFold(table.Name.String(), "dual")
+	if !table.Qualifier.IsEmpty() || !strings.EqualFold(table.Name.String(), "dual") {
+		return false
+	}
+	// The parser synthesizes "dual" for FROM-less SELECTs. Check if the
+	// original statement explicitly contains "FROM dual" to distinguish
+	// parser-synthesized dual from explicit dual.
+	return !containsExplicitDual(originalStatement)
 }
 
 // resolveLiteralOnlyProjection validates that every SELECT expression is an
@@ -257,6 +266,23 @@ func (s projectionSource) provenance(outputName, sourceColumn string) ColumnProv
 		SourceObject:   s.object,
 		SourceColumn:   sourceColumn,
 	}
+}
+
+// containsExplicitDual checks if the original SQL statement explicitly
+// contains "FROM dual" (case-insensitive). This distinguishes parser-synthesized
+// dual (from FROM-less SELECTs) from explicit dual in the source.
+func containsExplicitDual(stmt string) bool {
+	upper := strings.ToUpper(stmt)
+	// Look for "FROM" followed by whitespace and "DUAL"
+	// This handles "SELECT 1 FROM dual", "SELECT 1 AS n FROM dual", etc.
+	// But not "SELECT 1" (parser-synthesized dual)
+	words := strings.Fields(upper)
+	for i, word := range words {
+		if word == "FROM" && i+1 < len(words) && words[i+1] == "DUAL" {
+			return true
+		}
+	}
+	return false
 }
 
 func matchesProjectionSource(qualifier sqlparser.TableName, source projectionSource) bool {
