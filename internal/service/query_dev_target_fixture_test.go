@@ -26,9 +26,9 @@ func (f *fakeFixtureDictionary) ListOwners() ([]model.Owner, error) {
 }
 
 type fixtureUpsertArgs struct {
-	resourceID                   uint64
+	resourceID                  uint64
 	engine, version, host, role string
-	port                         int
+	port                        int
 }
 
 type fakeFixtureResourceStore struct {
@@ -152,8 +152,11 @@ func TestEnsureLocalQueryTarget_ReusesExistingTarget(t *testing.T) {
 	}
 	created := false
 	store := &fakeFixtureResourceStore{
-		listFn:   func() ([]model.Resource, error) { return existing, nil },
-		createFn: func(model.ResourceCreateInput) (*model.Resource, error) { created = true; return &model.Resource{ID: 1}, nil },
+		listFn: func() ([]model.Resource, error) { return existing, nil },
+		createFn: func(model.ResourceCreateInput) (*model.Resource, error) {
+			created = true
+			return &model.Resource{ID: 1}, nil
+		},
 		upsertFn: func(uint64, string, string, string, int, string) error { return nil },
 	}
 	id, err := fixtureSvc(dict, store).EnsureLocalQueryTarget(context.Background(), validFixtureCfg())
@@ -177,7 +180,7 @@ func TestEnsureLocalQueryTarget_CreatesWhenMissing(t *testing.T) {
 		owners: []model.Owner{{ID: 9, Email: "dba@example.com"}},
 	}
 	store := &fakeFixtureResourceStore{
-		listFn:   func() ([]model.Resource, error) { return nil, nil },
+		listFn: func() ([]model.Resource, error) { return nil, nil },
 		createFn: func(in model.ResourceCreateInput) (*model.Resource, error) {
 			return &model.Resource{ID: 55, Name: in.Name, ResourceType: in.ResourceType, Source: in.Source}, nil
 		},
@@ -244,9 +247,15 @@ func TestEnsureLocalQueryTarget_ExistingNonFixtureSameNameRejectsWithoutProfileU
 		{ID: 42, Name: "local-mysql-query-dev", ResourceType: model.ResourceTypeDatabaseInstance, EnvironmentID: 7, Source: "manual"},
 	}
 	store := &fakeFixtureResourceStore{
-		listFn:   func() ([]model.Resource, error) { return existing, nil },
-		createFn: func(model.ResourceCreateInput) (*model.Resource, error) { t.Fatal("CreateResource must not be called for a non-fixture same-name resource"); return nil, nil },
-		upsertFn: func(uint64, string, string, string, int, string) error { t.Fatal("UpsertDatabaseInstanceProfile must not be called for a non-fixture resource"); return nil },
+		listFn: func() ([]model.Resource, error) { return existing, nil },
+		createFn: func(model.ResourceCreateInput) (*model.Resource, error) {
+			t.Fatal("CreateResource must not be called for a non-fixture same-name resource")
+			return nil, nil
+		},
+		upsertFn: func(uint64, string, string, string, int, string) error {
+			t.Fatal("UpsertDatabaseInstanceProfile must not be called for a non-fixture resource")
+			return nil
+		},
 	}
 	_, err := fixtureSvc(dict, store).EnsureLocalQueryTarget(context.Background(), validFixtureCfg())
 	if !errors.Is(err, errFixtureExistingResourceNotFixture) {
@@ -273,7 +282,10 @@ func TestEnsureLocalQueryTarget_CreateConflictThenRefetchNonFixtureRejects(t *te
 			return []model.Resource{{ID: 77, Name: "local-mysql-query-dev", ResourceType: model.ResourceTypeDatabaseInstance, EnvironmentID: 7, Source: "manual"}}, nil
 		},
 		createFn: func(model.ResourceCreateInput) (*model.Resource, error) { return nil, ErrResourceConflict },
-		upsertFn: func(uint64, string, string, string, int, string) error { t.Fatal("UpsertDatabaseInstanceProfile must not be called when the conflict is a non-fixture resource"); return nil },
+		upsertFn: func(uint64, string, string, string, int, string) error {
+			t.Fatal("UpsertDatabaseInstanceProfile must not be called when the conflict is a non-fixture resource")
+			return nil
+		},
 	}
 	_, err := fixtureSvc(dict, store).EnsureLocalQueryTarget(context.Background(), validFixtureCfg())
 	if !errors.Is(err, errFixtureExistingResourceNotFixture) {
@@ -287,9 +299,15 @@ func TestEnsureLocalQueryTarget_EnvironmentSlugNotFound_Rejects(t *testing.T) {
 		owners: []model.Owner{{ID: 9, Email: "dba@example.com"}},
 	}
 	store := &fakeFixtureResourceStore{
-		listFn:   func() ([]model.Resource, error) { t.Fatal("ListResources must not be called"); return nil, nil },
-		createFn: func(model.ResourceCreateInput) (*model.Resource, error) { t.Fatal("CreateResource must not be called"); return nil, nil },
-		upsertFn: func(uint64, string, string, string, int, string) error { t.Fatal("Upsert must not be called"); return nil },
+		listFn: func() ([]model.Resource, error) { t.Fatal("ListResources must not be called"); return nil, nil },
+		createFn: func(model.ResourceCreateInput) (*model.Resource, error) {
+			t.Fatal("CreateResource must not be called")
+			return nil, nil
+		},
+		upsertFn: func(uint64, string, string, string, int, string) error {
+			t.Fatal("Upsert must not be called")
+			return nil
+		},
 	}
 	_, err := fixtureSvc(dict, store).EnsureLocalQueryTarget(context.Background(), validFixtureCfg())
 	if !errors.Is(err, errFixtureEnvSlugNotFound) {
@@ -303,9 +321,15 @@ func TestEnsureLocalQueryTarget_OwnerEmailNotFound_Rejects(t *testing.T) {
 		owners: []model.Owner{{ID: 9, Email: "sre@example.com"}}, // no dba
 	}
 	store := &fakeFixtureResourceStore{
-		listFn:   func() ([]model.Resource, error) { t.Fatal("ListResources must not be called"); return nil, nil },
-		createFn: func(model.ResourceCreateInput) (*model.Resource, error) { t.Fatal("CreateResource must not be called"); return nil, nil },
-		upsertFn: func(uint64, string, string, string, int, string) error { t.Fatal("Upsert must not be called"); return nil },
+		listFn: func() ([]model.Resource, error) { t.Fatal("ListResources must not be called"); return nil, nil },
+		createFn: func(model.ResourceCreateInput) (*model.Resource, error) {
+			t.Fatal("CreateResource must not be called")
+			return nil, nil
+		},
+		upsertFn: func(uint64, string, string, string, int, string) error {
+			t.Fatal("Upsert must not be called")
+			return nil
+		},
 	}
 	_, err := fixtureSvc(dict, store).EnsureLocalQueryTarget(context.Background(), validFixtureCfg())
 	if !errors.Is(err, errFixtureOwnerEmailNotFound) {

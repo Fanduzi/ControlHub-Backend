@@ -223,46 +223,68 @@ func validateResourceCreateInput(input model.ResourceCreateInput) error {
 	var ve *ValidationError
 
 	if err := input.ResourceType.Validate(); err != nil {
-		if ve == nil { ve = newValidationError("validation failed") }
+		if ve == nil {
+			ve = newValidationError("validation failed")
+		}
 		ve.WithField("resourceType", "Resource type is not supported")
 	}
 	if input.Name == "" {
-		if ve == nil { ve = newValidationError("validation failed") }
+		if ve == nil {
+			ve = newValidationError("validation failed")
+		}
 		ve.WithField("name", "Name is required")
 	} else if !resourceNamePattern.MatchString(input.Name) {
-		if ve == nil { ve = newValidationError("validation failed") }
+		if ve == nil {
+			ve = newValidationError("validation failed")
+		}
 		ve.WithField("name", "Must match pattern: lowercase letters, numbers, dots, hyphens, underscores")
 	}
 	if input.DisplayName == "" {
-		if ve == nil { ve = newValidationError("validation failed") }
+		if ve == nil {
+			ve = newValidationError("validation failed")
+		}
 		ve.WithField("displayName", "Display name is required")
 	}
 	if input.EnvironmentID == 0 {
-		if ve == nil { ve = newValidationError("validation failed") }
+		if ve == nil {
+			ve = newValidationError("validation failed")
+		}
 		ve.WithField("environmentId", "Environment is required")
 	}
 	if input.OwnerID == 0 {
-		if ve == nil { ve = newValidationError("validation failed") }
+		if ve == nil {
+			ve = newValidationError("validation failed")
+		}
 		ve.WithField("ownerId", "Owner is required")
 	}
 	if err := input.LifecycleStatus.Validate(); err != nil {
-		if ve == nil { ve = newValidationError("validation failed") }
+		if ve == nil {
+			ve = newValidationError("validation failed")
+		}
 		ve.WithField("lifecycleStatus", "Lifecycle status is not supported")
 	}
 	if err := input.HealthStatus.Validate(); err != nil {
-		if ve == nil { ve = newValidationError("validation failed") }
+		if ve == nil {
+			ve = newValidationError("validation failed")
+		}
 		ve.WithField("healthStatus", "Health status is not supported")
 	}
 	if input.Source != "manual" {
-		if ve == nil { ve = newValidationError("validation failed") }
+		if ve == nil {
+			ve = newValidationError("validation failed")
+		}
 		ve.WithField("source", "Source must be manual")
 	}
 	if err := model.ValidateResourceSubtype(string(input.ResourceType), input.ResourceSubtype); err != nil {
-		if ve == nil { ve = newValidationError("validation failed") }
+		if ve == nil {
+			ve = newValidationError("validation failed")
+		}
 		ve.WithField("resourceSubtype", err.Error())
 	}
 	if err := validateResourceLabels(input.Labels); err != nil {
-		if ve == nil { ve = newValidationError("validation failed") }
+		if ve == nil {
+			ve = newValidationError("validation failed")
+		}
 		ve.WithField("labels", err.Error())
 	}
 

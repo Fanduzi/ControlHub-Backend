@@ -19,14 +19,14 @@ import (
 // Sentinel errors for the schema metadata service. They map to controlled HTTP
 // responses and never carry a DSN, host, port, or secret.
 var (
-	ErrSchemaValidationFailed       = errors.New("schema validation failed")
-	ErrSchemaNotAllowed             = errors.New("schema access not allowed")
-	ErrSchemaTargetNotFound         = errors.New("schema target not found")
-	ErrSchemaObjectNotFound         = errors.New("schema object not found")
-	ErrSchemaDefinitionNotSupported    = errors.New("schema definition not supported")
+	ErrSchemaValidationFailed         = errors.New("schema validation failed")
+	ErrSchemaNotAllowed               = errors.New("schema access not allowed")
+	ErrSchemaTargetNotFound           = errors.New("schema target not found")
+	ErrSchemaObjectNotFound           = errors.New("schema object not found")
+	ErrSchemaDefinitionNotSupported   = errors.New("schema definition not supported")
 	ErrSchemaRelationshipNotSupported = errors.New("relationship map not supported for this object type")
-	ErrSchemaTimeout                   = errors.New("schema query timed out")
-	ErrSchemaBackendError           = errors.New("schema backend error")
+	ErrSchemaTimeout                  = errors.New("schema query timed out")
+	ErrSchemaBackendError             = errors.New("schema backend error")
 )
 
 // Fixed audit event type strings for schema operations.
@@ -274,10 +274,10 @@ func (s *QuerySchemaService) GetRelationshipMap(
 	key := cacheKey("relationship_map", targetID, bound.Credential.CredentialRef, database, name, "", 0, 0, false)
 	if !refresh {
 		if cached, ok := s.cache.Get(key); ok {
-		if aErr := s.audit.InsertAuditEvent(ctx, actorID, targetID, auditSchemaRelationshipMapRead, "success"); aErr != nil {
-			return model.RelationshipMapResponse{}, ErrSchemaBackendError
-		}
-		return cached.(model.RelationshipMapResponse), nil
+			if aErr := s.audit.InsertAuditEvent(ctx, actorID, targetID, auditSchemaRelationshipMapRead, "success"); aErr != nil {
+				return model.RelationshipMapResponse{}, ErrSchemaBackendError
+			}
+			return cached.(model.RelationshipMapResponse), nil
 		}
 	}
 

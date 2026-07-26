@@ -402,10 +402,10 @@ func (s *MySQLSchemaInspector) GetTableDefinition(ctx context.Context, dsn strin
 // (without column-level detail).
 type constraintIdentity struct {
 	constraintName string
-	srcSchema     string
-	srcTable      string
-	refSchema     string
-	refTable      string
+	srcSchema      string
+	srcTable       string
+	refSchema      string
+	refTable       string
 }
 
 // constraintColumn holds one column mapping fetched for a selected constraint.
@@ -813,7 +813,6 @@ func fetchConstraintColumns(ctx context.Context, tx *sql.Tx, database, tableName
 
 	return cols, nil
 }
-
 
 // loadColumns queries COLUMNS for the given table, capped at schemaMaxColumns.
 func (s *MySQLSchemaInspector) loadColumns(ctx context.Context, tx *sql.Tx, database, name string, detail *ObjectDetail) error {

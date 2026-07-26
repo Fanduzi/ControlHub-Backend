@@ -18,11 +18,11 @@ import (
 const (
 	testResourceCreatedID uint64 = 100
 	testRelationCreatedID uint64 = 200
-	testResource1ID      uint64 = 101
-	testResource2ID      uint64 = 102
-	testMissingID        uint64 = 999999
-	testEnvID            uint64 = 1
-	testOwnerID          uint64 = 2
+	testResource1ID       uint64 = 101
+	testResource2ID       uint64 = 102
+	testMissingID         uint64 = 999999
+	testEnvID             uint64 = 1
+	testOwnerID           uint64 = 2
 )
 
 type fakeResourceWriteRepo struct {

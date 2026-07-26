@@ -21,8 +21,8 @@ import (
 type fakeResourceReadRepo struct {
 	*fakeResourceWriteRepo
 
-	listErr      error
-	getErr       error
+	listErr       error
+	getErr        error
 	getProfileErr error
 }
 
