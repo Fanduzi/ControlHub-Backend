@@ -17,9 +17,9 @@ import (
 // raw-plan byte cap lives in the executor. MaxExplainPlanDepth bounds
 // recursion so a pathologically deep plan cannot consume unbounded stack.
 const (
-	MaxExplainNodes                   = 64
-	MaxExplainRisks                   = 16
-	MaxExplainPlanDepth               = 64
+	MaxExplainNodes         = 64
+	MaxExplainRisks         = 16
+	MaxExplainPlanDepth     = 64
 	HighEstimatedRowsThreshold uint64 = 100_000
 )
 

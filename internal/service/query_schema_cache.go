@@ -27,15 +27,15 @@ const (
 // target_id, credential_ref, scope, database, kind, query, page, pageSize, and
 // includeSystem. It intentionally excludes DSN, password, and database username.
 type schemaCacheKey struct {
-	Scope         string // "databases", "objects", "object_details"
-	TargetID      uint64
-	CredentialRef string // non-secret reference only
-	Database      string
-	Kind          string
-	Query         string
-	Page          int
-	PageSize      int
-	IncludeSystem bool
+	Scope          string // "databases", "objects", "object_details"
+	TargetID       uint64
+	CredentialRef  string // non-secret reference only
+	Database       string
+	Kind           string
+	Query          string
+	Page           int
+	PageSize       int
+	IncludeSystem  bool
 }
 
 // cacheKey builds a schemaCacheKey from request parameters. The credentialRef
@@ -57,9 +57,9 @@ func cacheKey(scope string, targetID uint64, credentialRef, database, kind, quer
 // schemaCacheEntry holds a cached value with its insertion time and whether it
 // represents an empty result (for negative TTL).
 type schemaCacheEntry struct {
-	value      any
+	value     any
 	insertedAt time.Time
-	isEmpty    bool
+	isEmpty   bool
 }
 
 // QuerySchemaCache is a bounded, concurrency-safe, in-memory cache for schema

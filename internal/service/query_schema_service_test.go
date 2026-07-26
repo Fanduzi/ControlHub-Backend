@@ -17,16 +17,16 @@ import (
 // fakeSchemaInspector is a test double for QuerySchemaInspector. It returns
 // pre-configured results and records calls for assertion.
 type fakeSchemaInspector struct {
-	databases       []DatabaseSummary
-	dbPageInfo      model.PageInfo
-	objects         []ObjectSummary
-	objPageInfo     model.PageInfo
-	detail          *ObjectDetail
-	tableDef        *TableDefinition
-	tableDefErr     error
+	databases      []DatabaseSummary
+	dbPageInfo     model.PageInfo
+	objects        []ObjectSummary
+	objPageInfo    model.PageInfo
+	detail         *ObjectDetail
+	tableDef       *TableDefinition
+	tableDefErr    error
 	relationshipMap *RelationshipMapResult
-	err             error
-	called          bool
+	err            error
+	called         bool
 }
 
 func (f *fakeSchemaInspector) ListDatabases(_ context.Context, _ string, _ string, _ bool, _, _ int) ([]DatabaseSummary, model.PageInfo, error) {
