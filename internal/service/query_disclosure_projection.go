@@ -276,7 +276,7 @@ func containsExplicitDual(stmt string) bool {
 	// Strip SQL comments first, then check for FROM dual
 	stripped := stripSQLComments(stmt)
 	upper := strings.ToUpper(strings.TrimSpace(stripped))
-	
+
 	// Check if the statement contains FROM followed by DUAL
 	// This handles "SELECT 1 FROM dual", "SELECT 1 AS n FROM dual", etc.
 	// But not "SELECT 1" (parser-synthesized dual)
@@ -297,7 +297,7 @@ func stripSQLComments(stmt string) string {
 	var result strings.Builder
 	i := 0
 	n := len(stmt)
-	
+
 	for i < n {
 		// Handle line comments
 		if i+1 < n && stmt[i] == '-' && stmt[i+1] == '-' {
@@ -307,7 +307,7 @@ func stripSQLComments(stmt string) string {
 			}
 			continue
 		}
-		
+
 		// Handle block comments
 		if i+1 < n && stmt[i] == '/' && stmt[i+1] == '*' {
 			i += 2
@@ -321,7 +321,7 @@ func stripSQLComments(stmt string) string {
 			}
 			continue
 		}
-		
+
 		// Handle quoted strings (preserve them)
 		if stmt[i] == '\'' || stmt[i] == '"' {
 			quote := stmt[i]
@@ -341,7 +341,7 @@ func stripSQLComments(stmt string) string {
 			}
 			continue
 		}
-		
+
 		// Handle backtick-quoted identifiers
 		if stmt[i] == '`' {
 			result.WriteByte(stmt[i])
@@ -356,11 +356,11 @@ func stripSQLComments(stmt string) string {
 			}
 			continue
 		}
-		
+
 		result.WriteByte(stmt[i])
 		i++
 	}
-	
+
 	return result.String()
 }
 
