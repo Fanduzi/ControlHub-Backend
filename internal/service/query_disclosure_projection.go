@@ -269,11 +269,15 @@ func (s projectionSource) provenance(outputName, sourceColumn string) ColumnProv
 }
 
 // containsExplicitDual checks if the original SQL statement explicitly
-// contains "FROM dual" (case-insensitive). This distinguishes parser-synthesized
-// dual (from FROM-less SELECTs) from explicit dual in the source.
+// contains "FROM dual" (case-insensitive), properly handling SQL comments.
+// This distinguishes parser-synthesized dual (from FROM-less SELECTs) from
+// explicit dual in the source.
 func containsExplicitDual(stmt string) bool {
-	upper := strings.ToUpper(stmt)
-	// Look for "FROM" followed by whitespace and "DUAL"
+	// Strip SQL comments first, then check for FROM dual
+	stripped := stripSQLComments(stmt)
+	upper := strings.ToUpper(strings.TrimSpace(stripped))
+	
+	// Check if the statement contains FROM followed by DUAL
 	// This handles "SELECT 1 FROM dual", "SELECT 1 AS n FROM dual", etc.
 	// But not "SELECT 1" (parser-synthesized dual)
 	words := strings.Fields(upper)
@@ -283,6 +287,81 @@ func containsExplicitDual(stmt string) bool {
 		}
 	}
 	return false
+}
+
+// stripSQLComments removes SQL comments from a statement. It handles:
+// - Line comments: -- ... \n
+// - Block comments: /* ... */
+// - Preserves quoted strings and identifiers
+func stripSQLComments(stmt string) string {
+	var result strings.Builder
+	i := 0
+	n := len(stmt)
+	
+	for i < n {
+		// Handle line comments
+		if i+1 < n && stmt[i] == '-' && stmt[i+1] == '-' {
+			// Skip until end of line
+			for i < n && stmt[i] != '\n' {
+				i++
+			}
+			continue
+		}
+		
+		// Handle block comments
+		if i+1 < n && stmt[i] == '/' && stmt[i+1] == '*' {
+			i += 2
+			// Skip until */
+			for i+1 < n {
+				if stmt[i] == '*' && stmt[i+1] == '/' {
+					i += 2
+					break
+				}
+				i++
+			}
+			continue
+		}
+		
+		// Handle quoted strings (preserve them)
+		if stmt[i] == '\'' || stmt[i] == '"' {
+			quote := stmt[i]
+			result.WriteByte(stmt[i])
+			i++
+			for i < n && stmt[i] != quote {
+				if stmt[i] == '\\' && i+1 < n {
+					result.WriteByte(stmt[i])
+					i++
+				}
+				result.WriteByte(stmt[i])
+				i++
+			}
+			if i < n {
+				result.WriteByte(stmt[i])
+				i++
+			}
+			continue
+		}
+		
+		// Handle backtick-quoted identifiers
+		if stmt[i] == '`' {
+			result.WriteByte(stmt[i])
+			i++
+			for i < n && stmt[i] != '`' {
+				result.WriteByte(stmt[i])
+				i++
+			}
+			if i < n {
+				result.WriteByte(stmt[i])
+				i++
+			}
+			continue
+		}
+		
+		result.WriteByte(stmt[i])
+		i++
+	}
+	
+	return result.String()
 }
 
 func matchesProjectionSource(qualifier sqlparser.TableName, source projectionSource) bool {
