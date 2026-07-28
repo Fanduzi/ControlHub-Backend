@@ -38,11 +38,11 @@ func (f *fakeSavedStatementWriter) CreateWithAudit(_ context.Context, _ uint64, 
 	return f.createResp, f.createErr
 }
 
-func (f *fakeSavedStatementWriter) UpdateWithAudit(_ context.Context, _, _, _ uint64, _ model.QuerySavedStatementUpdateRequest) error {
+func (f *fakeSavedStatementWriter) UpdateWithAudit(_ context.Context, _, _, _ uint64, _ model.QuerySavedStatementUpdateRequest, _ bool) error {
 	return f.updateErr
 }
 
-func (f *fakeSavedStatementWriter) DeleteWithAudit(_ context.Context, _, _, _ uint64) error {
+func (f *fakeSavedStatementWriter) DeleteWithAudit(_ context.Context, _, _, _ uint64, _ bool) error {
 	return f.deleteErr
 }
 

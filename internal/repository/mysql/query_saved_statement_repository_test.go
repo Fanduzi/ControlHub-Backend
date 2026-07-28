@@ -289,7 +289,7 @@ func TestCreateWithAudit_InsertsBoth(t *testing.T) {
 		WithArgs(uint64(10), uint64(1), "my query", "SELECT 1", "personal").
 		WillReturnResult(sqlmock.NewResult(42, 1))
 	mock.ExpectExec("INSERT INTO audit_events").
-		WithArgs(uint64(10)).
+		WithArgs(uint64(1), uint64(10)).
 		WillReturnResult(sqlmock.NewResult(1, 1))
 	mock.ExpectCommit()
 
@@ -328,9 +328,9 @@ func TestCreateWithAudit_AuditContainsNoStatementNameOwner(t *testing.T) {
 		WillReturnResult(sqlmock.NewResult(1, 1))
 
 	// The audit INSERT must NOT contain statement text, name, or owner ID.
-	// Only target_resource_id, fixed event_type, and fixed result.
+	// Only actor_user_id, target_resource_id, fixed event_type, and fixed result.
 	mock.ExpectExec("INSERT INTO audit_events").
-		WithArgs(uint64(10)).
+		WithArgs(uint64(1), uint64(10)).
 		WillReturnResult(sqlmock.NewResult(1, 1))
 	mock.ExpectCommit()
 
@@ -363,7 +363,7 @@ func TestCreateWithAudit_AuditFailureRollsBack(t *testing.T) {
 		WillReturnResult(sqlmock.NewResult(42, 1))
 	// Audit insert fails
 	mock.ExpectExec("INSERT INTO audit_events").
-		WithArgs(uint64(10)).
+		WithArgs(uint64(1), uint64(10)).
 		WillReturnError(sql.ErrConnDone)
 	mock.ExpectRollback()
 
@@ -401,7 +401,7 @@ func TestUpdateWithAudit_NonOwnerReturnsErrNoRows(t *testing.T) {
 	err = repo.UpdateWithAudit(t.Context(), 99, 10, 1, model.QuerySavedStatementUpdateRequest{
 		Name:      "new name",
 		Statement: "SELECT 2",
-	})
+	}, false)
 	if err == nil {
 		t.Fatal("expected sql.ErrNoRows, got nil")
 	}
@@ -427,14 +427,14 @@ func TestUpdateWithAudit_Success(t *testing.T) {
 		WithArgs("new name", "SELECT 2", uint64(10), uint64(1), uint64(1)).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectExec("INSERT INTO audit_events").
-		WithArgs(uint64(10)).
+		WithArgs(uint64(1), uint64(10)).
 		WillReturnResult(sqlmock.NewResult(1, 1))
 	mock.ExpectCommit()
 
 	err = repo.UpdateWithAudit(t.Context(), 1, 10, 1, model.QuerySavedStatementUpdateRequest{
 		Name:      "new name",
 		Statement: "SELECT 2",
-	})
+	}, false)
 	if err != nil {
 		t.Fatalf("UpdateWithAudit: %v", err)
 	}
@@ -457,14 +457,14 @@ func TestUpdateWithAudit_AuditFailureRollsBack(t *testing.T) {
 		WithArgs("new name", "SELECT 2", uint64(10), uint64(1), uint64(1)).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectExec("INSERT INTO audit_events").
-		WithArgs(uint64(10)).
+		WithArgs(uint64(1), uint64(10)).
 		WillReturnError(sql.ErrConnDone)
 	mock.ExpectRollback()
 
 	err = repo.UpdateWithAudit(t.Context(), 1, 10, 1, model.QuerySavedStatementUpdateRequest{
 		Name:      "new name",
 		Statement: "SELECT 2",
-	})
+	}, false)
 	if err == nil {
 		t.Fatal("expected error from audit failure, got nil")
 	}
@@ -490,7 +490,7 @@ func TestDeleteWithAudit_NonOwnerReturnsErrNoRows(t *testing.T) {
 		WillReturnResult(sqlmock.NewResult(0, 0))
 	mock.ExpectRollback()
 
-	err = repo.DeleteWithAudit(t.Context(), 99, 10, 1)
+	err = repo.DeleteWithAudit(t.Context(), 99, 10, 1, false)
 	if err == nil {
 		t.Fatal("expected sql.ErrNoRows, got nil")
 	}
@@ -516,11 +516,11 @@ func TestDeleteWithAudit_Success(t *testing.T) {
 		WithArgs(uint64(10), uint64(1), uint64(1)).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectExec("INSERT INTO audit_events").
-		WithArgs(uint64(10)).
+		WithArgs(uint64(1), uint64(10)).
 		WillReturnResult(sqlmock.NewResult(1, 1))
 	mock.ExpectCommit()
 
-	err = repo.DeleteWithAudit(t.Context(), 1, 10, 1)
+	err = repo.DeleteWithAudit(t.Context(), 1, 10, 1, false)
 	if err != nil {
 		t.Fatalf("DeleteWithAudit: %v", err)
 	}
@@ -543,11 +543,11 @@ func TestDeleteWithAudit_AuditFailureRollsBack(t *testing.T) {
 		WithArgs(uint64(10), uint64(1), uint64(1)).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectExec("INSERT INTO audit_events").
-		WithArgs(uint64(10)).
+		WithArgs(uint64(1), uint64(10)).
 		WillReturnError(sql.ErrConnDone)
 	mock.ExpectRollback()
 
-	err = repo.DeleteWithAudit(t.Context(), 1, 10, 1)
+	err = repo.DeleteWithAudit(t.Context(), 1, 10, 1, false)
 	if err == nil {
 		t.Fatal("expected error from audit failure, got nil")
 	}

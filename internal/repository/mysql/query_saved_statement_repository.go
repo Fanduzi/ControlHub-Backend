@@ -147,9 +147,9 @@ func (r *MySQLQuerySavedStatementRepository) CreateWithAudit(ctx context.Context
 	}
 
 	// Insert audit event (fixed strings only, no statement/name/owner)
-	const auditQ = `INSERT INTO audit_events (target_resource_id, event_type, result)
-		VALUES (?, 'query.saved_statement.created', 'success')`
-	if _, err := tx.ExecContext(ctx, auditQ, req.TargetResourceID); err != nil {
+	const auditQ = `INSERT INTO audit_events (actor_user_id, target_resource_id, event_type, result)
+		VALUES (?, ?, 'query.saved_statement.created', 'success')`
+	if _, err := tx.ExecContext(ctx, auditQ, ownerUserID, req.TargetResourceID); err != nil {
 		return model.QuerySavedStatement{}, fmt.Errorf("insert audit event: %w", err)
 	}
 
@@ -168,19 +168,31 @@ func (r *MySQLQuerySavedStatementRepository) CreateWithAudit(ctx context.Context
 }
 
 // UpdateWithAudit updates a saved statement and inserts an audit event atomically.
-// Returns sql.ErrNoRows when the statement doesn't exist or isn't owned by the actor.
-func (r *MySQLQuerySavedStatementRepository) UpdateWithAudit(ctx context.Context, actorUserID, targetResourceID, statementID uint64, req model.QuerySavedStatementUpdateRequest) error {
+// When isAdmin is true, the update applies to any statement (for shared templates).
+// When isAdmin is false, the update only applies to statements owned by actorUserID.
+// Returns sql.ErrNoRows when the statement doesn't exist or isn't accessible.
+func (r *MySQLQuerySavedStatementRepository) UpdateWithAudit(ctx context.Context, actorUserID, targetResourceID, statementID uint64, req model.QuerySavedStatementUpdateRequest, isAdmin bool) error {
 	tx, err := r.db.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("begin transaction: %w", err)
 	}
 	defer tx.Rollback()
 
-	// Update statement (only if owned by actor)
-	const updateQ = `UPDATE query_saved_statements
-		SET name = ?, statement = ?, updated_at = CURRENT_TIMESTAMP(6)
-		WHERE target_resource_id = ? AND id = ? AND owner_user_id = ?`
-	res, err := tx.ExecContext(ctx, updateQ, req.Name, req.Statement, targetResourceID, statementID, actorUserID)
+	// Update statement - admins can update any statement, non-owners only their own
+	var updateQ string
+	var args []any
+	if isAdmin {
+		updateQ = `UPDATE query_saved_statements
+			SET name = ?, statement = ?, updated_at = CURRENT_TIMESTAMP(6)
+			WHERE target_resource_id = ? AND id = ?`
+		args = []any{req.Name, req.Statement, targetResourceID, statementID}
+	} else {
+		updateQ = `UPDATE query_saved_statements
+			SET name = ?, statement = ?, updated_at = CURRENT_TIMESTAMP(6)
+			WHERE target_resource_id = ? AND id = ? AND owner_user_id = ?`
+		args = []any{req.Name, req.Statement, targetResourceID, statementID, actorUserID}
+	}
+	res, err := tx.ExecContext(ctx, updateQ, args...)
 	if err != nil {
 		return fmt.Errorf("update saved statement: %w", err)
 	}
@@ -193,9 +205,9 @@ func (r *MySQLQuerySavedStatementRepository) UpdateWithAudit(ctx context.Context
 	}
 
 	// Insert audit event
-	const auditQ = `INSERT INTO audit_events (target_resource_id, event_type, result)
-		VALUES (?, 'query.saved_statement.updated', 'success')`
-	if _, err := tx.ExecContext(ctx, auditQ, targetResourceID); err != nil {
+	const auditQ = `INSERT INTO audit_events (actor_user_id, target_resource_id, event_type, result)
+		VALUES (?, ?, 'query.saved_statement.updated', 'success')`
+	if _, err := tx.ExecContext(ctx, auditQ, actorUserID, targetResourceID); err != nil {
 		return fmt.Errorf("insert audit event: %w", err)
 	}
 
@@ -203,18 +215,29 @@ func (r *MySQLQuerySavedStatementRepository) UpdateWithAudit(ctx context.Context
 }
 
 // DeleteWithAudit deletes a saved statement and inserts an audit event atomically.
-// Returns sql.ErrNoRows when the statement doesn't exist or isn't owned by the actor.
-func (r *MySQLQuerySavedStatementRepository) DeleteWithAudit(ctx context.Context, actorUserID, targetResourceID, statementID uint64) error {
+// When isAdmin is true, the delete applies to any statement (for shared templates).
+// When isAdmin is false, the delete only applies to statements owned by actorUserID.
+// Returns sql.ErrNoRows when the statement doesn't exist or isn't accessible.
+func (r *MySQLQuerySavedStatementRepository) DeleteWithAudit(ctx context.Context, actorUserID, targetResourceID, statementID uint64, isAdmin bool) error {
 	tx, err := r.db.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("begin transaction: %w", err)
 	}
 	defer tx.Rollback()
 
-	// Delete statement (only if owned by actor)
-	const deleteQ = `DELETE FROM query_saved_statements
-		WHERE target_resource_id = ? AND id = ? AND owner_user_id = ?`
-	res, err := tx.ExecContext(ctx, deleteQ, targetResourceID, statementID, actorUserID)
+	// Delete statement - admins can delete any statement, non-owners only their own
+	var deleteQ string
+	var args []any
+	if isAdmin {
+		deleteQ = `DELETE FROM query_saved_statements
+			WHERE target_resource_id = ? AND id = ?`
+		args = []any{targetResourceID, statementID}
+	} else {
+		deleteQ = `DELETE FROM query_saved_statements
+			WHERE target_resource_id = ? AND id = ? AND owner_user_id = ?`
+		args = []any{targetResourceID, statementID, actorUserID}
+	}
+	res, err := tx.ExecContext(ctx, deleteQ, args...)
 	if err != nil {
 		return fmt.Errorf("delete saved statement: %w", err)
 	}
@@ -227,9 +250,9 @@ func (r *MySQLQuerySavedStatementRepository) DeleteWithAudit(ctx context.Context
 	}
 
 	// Insert audit event
-	const auditQ = `INSERT INTO audit_events (target_resource_id, event_type, result)
-		VALUES (?, 'query.saved_statement.deleted', 'success')`
-	if _, err := tx.ExecContext(ctx, auditQ, targetResourceID); err != nil {
+	const auditQ = `INSERT INTO audit_events (actor_user_id, target_resource_id, event_type, result)
+		VALUES (?, ?, 'query.saved_statement.deleted', 'success')`
+	if _, err := tx.ExecContext(ctx, auditQ, actorUserID, targetResourceID); err != nil {
 		return fmt.Errorf("insert audit event: %w", err)
 	}
 

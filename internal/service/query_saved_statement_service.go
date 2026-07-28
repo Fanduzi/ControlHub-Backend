@@ -29,8 +29,8 @@ type QuerySavedStatementReader interface {
 // QuerySavedStatementWriter writes saved statements with atomic audit.
 type QuerySavedStatementWriter interface {
 	CreateWithAudit(ctx context.Context, ownerUserID uint64, req model.QuerySavedStatementCreateRequest) (model.QuerySavedStatement, error)
-	UpdateWithAudit(ctx context.Context, actorUserID, targetResourceID, statementID uint64, req model.QuerySavedStatementUpdateRequest) error
-	DeleteWithAudit(ctx context.Context, actorUserID, targetResourceID, statementID uint64) error
+	UpdateWithAudit(ctx context.Context, actorUserID, targetResourceID, statementID uint64, req model.QuerySavedStatementUpdateRequest, isAdmin bool) error
+	DeleteWithAudit(ctx context.Context, actorUserID, targetResourceID, statementID uint64, isAdmin bool) error
 }
 
 // SavedStatementGuard validates SQL statements for saving.
@@ -110,7 +110,8 @@ func (s *QuerySavedStatementService) Create(ctx context.Context, actor Authentic
 	return s.writer.CreateWithAudit(ctx, actor.ID, req)
 }
 
-// Update updates a saved statement. Only the owner can update. Scope is immutable.
+// Update updates a saved statement. Scope is immutable.
+// Personal statements: owner only. Shared templates: admin only.
 func (s *QuerySavedStatementService) Update(ctx context.Context, actor AuthenticatedUser, targetResourceID, statementID uint64, req model.QuerySavedStatementUpdateRequest) error {
 	if err := req.Validate(); err != nil {
 		return fmt.Errorf("%w: %v", ErrQueryValidationFailed, err)
@@ -120,12 +121,30 @@ func (s *QuerySavedStatementService) Update(ctx context.Context, actor Authentic
 		return err
 	}
 
+	// Fetch statement to check scope for authorization.
+	stmt, err := s.reader.GetByID(ctx, targetResourceID, statementID)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return ErrQuerySavedStatementNotFound
+		}
+		return fmt.Errorf("get saved statement: %w", err)
+	}
+
+	// Authorization: personal = owner only, shared_template = admin only.
+	if stmt.Scope == model.QuerySavedStatementPersonal && stmt.OwnerUserID != actor.ID {
+		return ErrQuerySavedStatementNotFound
+	}
+	if stmt.Scope == model.QuerySavedStatementSharedTemplate && !isAdmin(actor) {
+		return ErrQueryForbidden
+	}
+
 	// Validate SQL statement.
 	if _, err := s.guard.GuardSavedStatement(req.Statement); err != nil {
 		return fmt.Errorf("%w: %v", ErrQueryValidationFailed, err)
 	}
 
-	err := s.writer.UpdateWithAudit(ctx, actor.ID, targetResourceID, statementID, req)
+	isAdminUser := isAdmin(actor)
+	err = s.writer.UpdateWithAudit(ctx, actor.ID, targetResourceID, statementID, req, isAdminUser)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return ErrQuerySavedStatementNotFound
@@ -135,14 +154,32 @@ func (s *QuerySavedStatementService) Update(ctx context.Context, actor Authentic
 	return nil
 }
 
-// Delete deletes a saved statement. Only the owner can delete personal statements.
-// Admins can delete shared templates.
+// Delete deletes a saved statement.
+// Personal statements: owner only. Shared templates: admin only.
 func (s *QuerySavedStatementService) Delete(ctx context.Context, actor AuthenticatedUser, targetResourceID, statementID uint64) error {
 	if err := s.validateTargetExists(ctx, targetResourceID); err != nil {
 		return err
 	}
 
-	err := s.writer.DeleteWithAudit(ctx, actor.ID, targetResourceID, statementID)
+	// Fetch statement to check scope for authorization.
+	stmt, err := s.reader.GetByID(ctx, targetResourceID, statementID)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return ErrQuerySavedStatementNotFound
+		}
+		return fmt.Errorf("get saved statement: %w", err)
+	}
+
+	// Authorization: personal = owner only, shared_template = admin only.
+	if stmt.Scope == model.QuerySavedStatementPersonal && stmt.OwnerUserID != actor.ID {
+		return ErrQuerySavedStatementNotFound
+	}
+	if stmt.Scope == model.QuerySavedStatementSharedTemplate && !isAdmin(actor) {
+		return ErrQueryForbidden
+	}
+
+	isAdminUser := isAdmin(actor)
+	err = s.writer.DeleteWithAudit(ctx, actor.ID, targetResourceID, statementID, isAdminUser)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return ErrQuerySavedStatementNotFound
