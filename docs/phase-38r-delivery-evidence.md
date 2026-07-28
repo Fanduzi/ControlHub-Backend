@@ -7,8 +7,8 @@
 
 | Repo | Original base | Final pushed (origin/main) |
 |---|---|---|
-| Backend | `b7778c588750292592543b72e82336eb86402b55` | `5781434` |
-| Frontend | `3580eea58a3dbcd03a4e3c8c2892dc60361331b8` | `3d2ad21` |
+| Backend | `b7778c588750292592543b72e82336eb86402b55` | `b770f39` |
+| Frontend | `3580eea58a3dbcd03a4e3c8c2892dc60361331b8` | `122c642` |
 
 ## Commits (backend, oldest first)
 
@@ -17,7 +17,7 @@
 | `e8073b0` | phase38r: add missing service authorization tests |
 | `fc4e6ff` | phase38r: add admin/owner success tests for shared template and personal mutation |
 | `69b463d` | fix: resolve integration/fuzz failures, remove CI gate, add delivery evidence |
-| `5781434` | docs: update delivery evidence with final SHAs, green CI, and full gate results |
+| `b770f39` | docs: update delivery evidence with final SHAs, green CI, and full gate results |
 
 ## Commits (frontend, oldest first)
 
@@ -30,7 +30,7 @@
 | `0e79524` | fix: add required env vars for query dev seed step in CI |
 | `3954109` | fix: add query_e2e database, tables, and seed data to CI MySQL |
 | `6ede0c0` | fix: remove test.skip, add Load side-effect contract, fix E2E repeatability |
-| `3d2ad21` | fix: dismiss dropdown with Escape before asserting hidden in interaction stability test |
+| `122c642` | fix: dismiss dropdown with Escape before asserting hidden in interaction stability test |
 | *(pending)* | fix: prove Run-after-Load uses governed execution, create Momus artifact |
 
 ## Root/Worktree/Branch Status
@@ -105,14 +105,14 @@ This proves Load does not break the governed execution/disclosure chain.
 
 | CWD | SHA | PID | Tests | Passed | Failed | Skipped |
 |---|---|---|---|---|---|---|
-| `/Users/fan/JsProjects/ControlHub` | `3d2ad21` | 48238 | 133 | 133 | 0 | 0 |
+| `/Users/fan/JsProjects/ControlHub` | `122c642` | 48238 | 133 | 133 | 0 | 0 |
 
 ## CI Evidence
 
 | Repo | Run ID | SHA | Jobs | Conclusion | URL |
 |---|---|---|---|---|---|
-| Backend | 30366194377 | `5781434` | release-local-gates, release-docker-gates | all success | https://github.com/Fanduzi/ControlHub-Backend/actions/runs/30366194377 |
-| Frontend | 30369425329 | `3d2ad21` | release-local, release-e2e | all success | https://github.com/Fanduzi/ControlHub-Frontend/actions/runs/30369425329 |
+| Backend | 30366194377 | `b770f39` | release-local-gates, release-docker-gates | all success | https://github.com/Fanduzi/ControlHub-Backend/actions/runs/30366194377 |
+| Frontend | 30369425329 | `122c642` | release-local, release-e2e | all success | https://github.com/Fanduzi/ControlHub-Frontend/actions/runs/30369425329 |
 
 ### CI Job Details
 - Backend `release-local-gates`: gofmt, go vet, go build, unit tests, openapi-validate — all PASS
