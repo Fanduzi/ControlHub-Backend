@@ -7,7 +7,7 @@
 
 | Repo | Original base | Final pushed (origin/main) |
 |---|---|---|
-| Backend | `b7778c588750292592543b72e82336eb86402b55` | `b770f39` |
+| Backend | `b7778c588750292592543b72e82336eb86402b55` | `768a482` |
 | Frontend | `3580eea58a3dbcd03a4e3c8c2892dc60361331b8` | `122c642` |
 
 ## Commits (backend, oldest first)
@@ -17,7 +17,7 @@
 | `e8073b0` | phase38r: add missing service authorization tests |
 | `fc4e6ff` | phase38r: add admin/owner success tests for shared template and personal mutation |
 | `69b463d` | fix: resolve integration/fuzz failures, remove CI gate, add delivery evidence |
-| `b770f39` | docs: update delivery evidence with final SHAs, green CI, and full gate results |
+| `768a482` | docs: update delivery evidence with final SHAs, green CI, and full gate results |
 
 ## Commits (frontend, oldest first)
 
@@ -111,7 +111,7 @@ This proves Load does not break the governed execution/disclosure chain.
 
 | Repo | Run ID | SHA | Jobs | Conclusion | URL |
 |---|---|---|---|---|---|
-| Backend | 30366194377 | `b770f39` | release-local-gates, release-docker-gates | all success | https://github.com/Fanduzi/ControlHub-Backend/actions/runs/30366194377 |
+| Backend | 30366194377 | `768a482` | release-local-gates, release-docker-gates | all success | https://github.com/Fanduzi/ControlHub-Backend/actions/runs/30366194377 |
 | Frontend | 30369425329 | `122c642` | release-local, release-e2e | all success | https://github.com/Fanduzi/ControlHub-Frontend/actions/runs/30369425329 |
 
 ### CI Job Details
