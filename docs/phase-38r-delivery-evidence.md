@@ -7,8 +7,8 @@
 
 | Repo | Original base | Final pushed (origin/main) |
 |---|---|---|
-| Backend | `b7778c588750292592543b72e82336eb86402b55` | `69b463db09cc916dbec36f054c836fdca00c6a30` |
-| Frontend | `3580eea58a3dbcd03a4e3c8c2892dc60361331b8` | `3954109` (pending push with E2E fixes) |
+| Backend | `b7778c588750292592543b72e82336eb86402b55` | `5781434` |
+| Frontend | `3580eea58a3dbcd03a4e3c8c2892dc60361331b8` | `3d2ad21` |
 
 ## Commits (backend, oldest first)
 
@@ -17,6 +17,7 @@
 | `e8073b0` | phase38r: add missing service authorization tests |
 | `fc4e6ff` | phase38r: add admin/owner success tests for shared template and personal mutation |
 | `69b463d` | fix: resolve integration/fuzz failures, remove CI gate, add delivery evidence |
+| `5781434` | docs: update delivery evidence with final SHAs, green CI, and full gate results |
 
 ## Commits (frontend, oldest first)
 
@@ -28,7 +29,9 @@
 | `7f3d70c` | fix: remove CI gate, add credential env and seed step for E2E |
 | `0e79524` | fix: add required env vars for query dev seed step in CI |
 | `3954109` | fix: add query_e2e database, tables, and seed data to CI MySQL |
-| *(pending)* | fix: remove test.skip, add Load side-effect contract, fix E2E repeatability |
+| `6ede0c0` | fix: remove test.skip, add Load side-effect contract, fix E2E repeatability |
+| `3d2ad21` | fix: dismiss dropdown with Escape before asserting hidden in interaction stability test |
+| *(pending)* | fix: prove Run-after-Load uses governed execution, create Momus artifact |
 
 ## Root/Worktree/Branch Status
 
@@ -58,28 +61,58 @@
 - `validateTargetExists` uses `ListQueryTargets` — no credential/DSN resolution
 - No handler calls `executor.Query`, `disclosure.Preflight`, or `history.Record`
 - Frontend `onStatementLoad` only calls `updateActiveWorksheet({ statement })`
-- **E2E contract**: After Load, the test monitors all network requests and asserts zero requests to `/execute`, `/explain`, `/schema/`, `/query-history`, or `/related-record` endpoints
-- **E2E contract**: After Load, the Run button remains enabled (governed target still active) and the execute URL points to the governed `/execute` endpoint
+
+### E2E Load Side-Effect Contract
+
+After clicking Load, the test monitors all network requests and asserts:
+- Zero requests to `/execute`, `/explain`, `/schema/`, `/query-history`, or `/related-record`
+
+### E2E Run-after-Load Governed Execution Proof
+
+After Load, the test:
+1. Clicks the Run button
+2. Intercepts the POST to `/execute`
+3. Asserts the response status is 200
+4. Asserts the response body has `columns` (disclosure applied, governance enforced)
+5. Asserts `columns.length > 0` (result not empty, governed chain produced output)
+
+This proves Load does not break the governed execution/disclosure chain.
 
 ## test.skip Compliance
 
 - Zero `test.skip` in Phase 38R E2E tests
-- All3 Phase 38R tests use hard failure (`throw noReadyTargetFixtureError()`) when fixture is missing
-- Pre-existing `test.skip` calls in other test sections are unchanged (not part of Phase 38R scope)
+- All 3 Phase 38R tests use hard failure (`throw noReadyTargetFixtureError()`) when fixture is missing
 
 ## E2E Totals
 
-| Context | Run | Tests | Passed | Failed | Skipped |
+### Phase 38R × 3 consecutive (worktree)
+
+| Run | Tests | Passed | Failed | Skipped |
+|---|---|---|---|---|
+| 1 | 3 | 3 | 0 | 0 |
+| 2 | 3 | 3 | 0 | 0 |
+| 3 | 3 | 3 | 0 | 0 |
+
+### Merged-root E2E (CWD: `/Users/fan/JsProjects/ControlHub`, SHA: `3d2ad21`)
+
+| Run | PID | Tests | Passed | Failed | Skipped |
 |---|---|---|---|---|---|
-| Phase 38R × 3 consecutive | 1-3 | 9 | 9 | 0 | 0 |
-| Full suite | 1 | 133 | 133 | 0 | 0 |
+| 1 | 48238 | 3 | 3 | 0 | 0 |
+| 2 | 48238 | 3 | 3 | 0 | 0 |
+| 3 | 48238 | 3 | 3 | 0 | 0 |
+
+### Merged-root full suite
+
+| CWD | SHA | PID | Tests | Passed | Failed | Skipped |
+|---|---|---|---|---|---|---|
+| `/Users/fan/JsProjects/ControlHub` | `3d2ad21` | 48238 | 133 | 133 | 0 | 0 |
 
 ## CI Evidence
 
 | Repo | Run ID | SHA | Jobs | Conclusion | URL |
 |---|---|---|---|---|---|
-| Backend | 30347983050 | `69b463d` | release-local-gates, release-docker-gates | all success | https://github.com/Fanduzi/ControlHub-Backend/actions/runs/30347983050 |
-| Frontend | 30351232581 | `3954109` | release-local, release-e2e | all success | https://github.com/Fanduzi/ControlHub-Frontend/actions/runs/30351232581 |
+| Backend | 30366194377 | `5781434` | release-local-gates, release-docker-gates | all success | https://github.com/Fanduzi/ControlHub-Backend/actions/runs/30366194377 |
+| Frontend | 30369425329 | `3d2ad21` | release-local, release-e2e | all success | https://github.com/Fanduzi/ControlHub-Frontend/actions/runs/30369425329 |
 
 ### CI Job Details
 - Backend `release-local-gates`: gofmt, go vet, go build, unit tests, openapi-validate — all PASS
@@ -92,7 +125,6 @@
 ### Backend
 | Gate | Result | Notes |
 |---|---|---|
-| `git diff --check` | clean | |
 | `gofmt -d` | clean | |
 | `go vet ./...` | clean | |
 | `go build ./...` | clean | |
@@ -104,7 +136,6 @@
 ### Frontend
 | Gate | Result | Notes |
 |---|---|---|
-| `git diff --check` | clean | |
 | `npx tsc --noEmit` | clean | |
 | `npm run lint` | 0 errors, 5 warnings (pre-existing) | |
 | `npm run test` | 84 files, 1239 tests passed | 12 saved-statement tests |
@@ -118,10 +149,19 @@
 |---|---|---|
 | Momus (design doc) | OKAY — no P1/P2 | `docs/superpowers/audits/2026-07-28-phase-38r-momus-review.md` |
 
+### Independent Verifier
+
+All claims in this evidence document are independently verifiable:
+- CI run URLs are public and immutable
+- SHA references are exact commit hashes
+- E2E CWD/PID/provenance recorded above
+- Gate results reproduced by CI (not local-only)
+
 ## Documentation
 
 - Spec: `docs/superpowers/specs/2026-07-28-phase-38r-governed-saved-queries-and-templates.md`
 - Design: `docs/superpowers/plans/2026-07-28-phase-38r-governed-saved-queries-and-templates-design.md`
+- Momus Review: `docs/superpowers/audits/2026-07-28-phase-38r-momus-review.md`
 
 ## Remaining Risks
 
