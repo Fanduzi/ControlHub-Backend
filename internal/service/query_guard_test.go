@@ -699,3 +699,114 @@ func TestGuardExplainSelectPreservesUserPlan(t *testing.T) {
 		t.Fatalf("digest %q should mask the literal 1", got.StatementDigest)
 	}
 }
+
+// --- Phase 38R: GuardSavedStatement for the save-route entry point ---
+
+func TestGuardSavedStatement(t *testing.T) {
+	t.Parallel()
+	g := newTestGuard()
+
+	tests := []struct {
+		name      string
+		statement string
+		wantErr   bool
+	}{
+		// Allowed
+		{"simple select", "SELECT 1", false},
+		{"select with from", "SELECT id FROM orders", false},
+		{"select with where", "SELECT id FROM orders WHERE id > 10", false},
+		{"select with join", "SELECT o.id FROM orders o JOIN customers c ON o.customer_id = c.id", false},
+		{"select with subquery", "SELECT id FROM orders WHERE customer_id IN (SELECT id FROM customers)", false},
+
+		// Rejected: empty
+		{"empty string", "", true},
+		{"whitespace only", "   ", true},
+
+		// Rejected: non-SELECT
+		{"show databases", "SHOW DATABASES", true},
+		{"show tables", "SHOW TABLES", true},
+		{"describe table", "DESCRIBE orders", true},
+		{"desc table", "DESC orders", true},
+		{"explain select", "EXPLAIN SELECT 1", true},
+		{"insert", "INSERT INTO orders (id) VALUES (1)", true},
+		{"update", "UPDATE orders SET id = 1", true},
+		{"delete", "DELETE FROM orders", true},
+		{"create table", "CREATE TABLE test (id INT)", true},
+		{"drop table", "DROP TABLE orders", true},
+		{"alter table", "ALTER TABLE orders ADD COLUMN test INT", true},
+
+		// Rejected: multi-statement
+		{"two selects", "SELECT 1; SELECT 2", true},
+		{"select with trailing semicolon", "SELECT 1;", false},
+
+		// Rejected: unsafe functions
+		{"sleep function", "SELECT SLEEP(5)", true},
+		{"benchmark function", "SELECT BENCHMARK(1000000, SHA2('test', 256))", true},
+		{"load_file function", "SELECT LOAD_FILE('/etc/passwd')", true},
+
+		// Rejected: locking
+		{"for update", "SELECT id FROM orders FOR UPDATE", true},
+		{"lock in share mode", "SELECT id FROM orders LOCK IN SHARE MODE", true},
+
+		// Rejected: into
+		{"into outfile", "SELECT id INTO OUTFILE '/tmp/test.txt' FROM orders", true},
+		{"into dumpfile", "SELECT id INTO DUMPFILE '/tmp/test.txt' FROM orders", true},
+
+		// Rejected: user variable assignment
+		{"user variable", "SELECT @var := 1", true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result, err := g.GuardSavedStatement(tt.statement)
+			if (err != nil) != tt.wantErr {
+				t.Errorf("GuardSavedStatement(%q) error = %v, wantErr %v", tt.statement, err, tt.wantErr)
+				return
+			}
+			if !tt.wantErr && result == "" {
+				t.Errorf("GuardSavedStatement(%q) returned empty result", tt.statement)
+			}
+		})
+	}
+}
+
+func TestGuardSavedStatementPreservesOriginalText(t *testing.T) {
+	t.Parallel()
+	g := newTestGuard()
+
+	input := "SELECT id FROM orders"
+	result, err := g.GuardSavedStatement(input)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result != input {
+		t.Errorf("expected %q, got %q", input, result)
+	}
+}
+
+func TestGuardUnchanged(t *testing.T) {
+	t.Parallel()
+	g := newTestGuard()
+
+	// Guard should still accept SHOW, DESCRIBE, EXPLAIN
+	tests := []struct {
+		name      string
+		statement string
+		wantErr   bool
+	}{
+		{"select", "SELECT 1", false},
+		{"show databases", "SHOW DATABASES", false},
+		{"show tables", "SHOW TABLES", false},
+		{"describe", "DESCRIBE orders", false},
+		{"explain select", "EXPLAIN SELECT 1", false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := g.Guard(tt.statement, 100)
+			if (err != nil) != tt.wantErr {
+				t.Errorf("Guard(%q) error = %v, wantErr %v", tt.statement, err, tt.wantErr)
+			}
+		})
+	}
+}

@@ -1,6 +1,6 @@
 // Package service provides business logic for the read-only query sandbox.
 // input: errors, fmt, strconv, strings, vitess.io/vitess/go/vt/sqlparser
-// output: QueryGuardConfig, GuardedQuery, NewQueryGuard, QueryGuard.Guard, guard sentinel errors
+// output: QueryGuardConfig, GuardedQuery, NewQueryGuard, QueryGuard.Guard, QueryGuard.GuardExplainSelect, QueryGuard.GuardSavedStatement, guard sentinel errors
 // pos: AST-backed MySQL/TiDB read-only guard — rejects non-read statements, side-effecting functions, locking clauses, and enforces a backend-owned LIMIT
 // note: if this file changes, update header and README.md
 package service
@@ -153,6 +153,57 @@ func (g *QueryGuard) GuardExplainSelect(statement string) (GuardedQuery, error) 
 		StatementDigest:   g.digest(trimmed),
 		StatementPreview:  preview,
 	}, nil
+}
+
+// GuardSavedStatement validates a statement for saving in the query library.
+// It accepts only a bare parser-approved SELECT — never SHOW, DESCRIBE/DESC,
+// typed EXPLAIN, DML, DDL, multi-statements, locking clauses, or unsafe
+// functions. It reuses the same parser, multi-statement splitter, and
+// rejectForbiddenNodes AST walker as Guard and GuardExplainSelect, but does
+// NOT inject LIMIT — saved statements store the user's original text.
+//
+// This is the save-route entry point. Do NOT call it from execute or explain
+// routes — use Guard or GuardExplainSelect instead.
+func (g *QueryGuard) GuardSavedStatement(statement string) (string, error) {
+	trimmed := strings.TrimSpace(statement)
+	if trimmed == "" {
+		return "", ErrQueryStatementEmpty
+	}
+
+	// Multi-statement rejection
+	if multi, err := g.isMultiStatement(trimmed); err != nil {
+		return "", fmt.Errorf("%w: %v", ErrQueryStatementNotAllowed, err)
+	} else if multi {
+		return "", ErrQueryStatementNotAllowed
+	}
+
+	stmt, err := g.parser.Parse(trimmed)
+	if err != nil {
+		return "", fmt.Errorf("%w: %v", ErrQueryStatementNotAllowed, err)
+	}
+
+	// Only bare SELECT is allowed for saved statements
+	sel, ok := stmt.(*sqlparser.Select)
+	if !ok {
+		return "", ErrQueryStatementNotAllowed
+	}
+
+	// Reject INTO (OUTFILE / DUMPFILE / S3 / @var)
+	if sel.Into != nil {
+		return "", ErrQueryStatementNotAllowed
+	}
+
+	// Reject locking clauses (FOR UPDATE / LOCK IN SHARE MODE)
+	if sel.Lock != sqlparser.NoLock {
+		return "", ErrQueryStatementNotAllowed
+	}
+
+	// Walk for side-effecting / resource / lock functions
+	if err := g.rejectForbiddenNodes(sel); err != nil {
+		return "", err
+	}
+
+	return trimmed, nil
 }
 
 // guardSelect validates a SELECT statement: rejects INTO, locking clauses, and

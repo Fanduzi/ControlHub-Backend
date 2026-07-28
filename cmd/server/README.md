@@ -7,6 +7,26 @@ Application bootstrap and manual dependency injection.
 |------|---------------|
 | main.go | Load config, open DB, wire all services into api.Dependencies, start HTTP server |
 
+## Modules Wired
+| Module | Service | Repository | Phase |
+|--------|---------|------------|-------|
+| Resource | ResourceService | ResourceRepository | — |
+| Relation | RelationService | RelationRepository | — |
+| Topology | TopologyService | RelationRepository | — |
+| Audit | AuditService | AuditRepository | — |
+| Auth | AuthService | UserRepository | — |
+| Dictionary | EnvironmentService, OwnerService, RoleService, ResourceTypeService, RelationTypeService, LifecycleStatusService, HealthStatusService | DictionaryRepository | — |
+| Query Target | QueryTargetService | QueryTargetRepository | — |
+| Query Credential | QueryCredentialService | QueryTargetRepository, QueryExecutionRepository | 38A |
+| Query Execution | QueryExecutionService | QueryTargetRepository, QueryExecutionRepository | — |
+| Query Schema | QuerySchemaService | QueryExecutionRepository | 38I |
+| Query Explain | QueryExplainService | (none — reuses access resolver + audit repo) | 38N |
+| Query Disclosure | QueryDisclosureService | QueryDisclosureRepository | 38Q |
+| Query Saved Statement | QuerySavedStatementService | QuerySavedStatementRepository | 38R |
+
+## Shared Guards
+- `QueryGuard` is constructed once and reused by execution, explain, and saved-statement services.
+
 ## Exports
 - (binary entry point, no exported Go symbols)
 

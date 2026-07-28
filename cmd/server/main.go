@@ -71,12 +71,14 @@ func buildDependencies(db *sql.DB, cfg config.Config) api.Dependencies {
 		queryTargetRepo,
 	)
 
+	queryGuard := service.NewQueryGuard(service.QueryGuardConfig{DefaultMaxRows: 100, HardMaxRows: 500})
+
 	queryExecutionSvc := service.NewQueryExecutionService(
 		queryTargetRepo,
 		queryExecutionRepo,
 		credentialResolver,
 		service.NewMySQLQueryExecutor(service.QueryExecutorCaps{}),
-		service.NewQueryGuard(service.QueryGuardConfig{DefaultMaxRows: 100, HardMaxRows: 500}),
+		queryGuard,
 		realClock{},
 		service.NewMySQLSchemaInspector(),
 		queryDisclosureSvc,
@@ -91,11 +93,21 @@ func buildDependencies(db *sql.DB, cfg config.Config) api.Dependencies {
 		realClock{},
 	)
 
+	// Query saved statement service (Phase 38R) manages governed saved statements
+	// with personal and shared_template scopes.
+	querySavedStatementRepo := mysql.NewQuerySavedStatementRepository(db)
+	querySavedStatementSvc := service.NewQuerySavedStatementService(
+		querySavedStatementRepo,
+		querySavedStatementRepo,
+		queryTargetRepo,
+		queryGuard, // reuse the shared guard
+	)
+
 	// Query explain service (Phase 38N) — a distinct governed operation that
 	// never executes the bare SELECT and never creates a query_executions
 	// row. It reuses the shared guard, access resolver, and audit repo.
 	queryExplainSvc := service.NewQueryExplainService(
-		service.NewQueryGuard(service.QueryGuardConfig{DefaultMaxRows: 100, HardMaxRows: 500}),
+		queryGuard,
 		accessResolver,
 		service.NewMySQLExplainExecutor(),
 		service.NewExplainNormalizer(),
@@ -123,7 +135,8 @@ func buildDependencies(db *sql.DB, cfg config.Config) api.Dependencies {
 		QueryExecutionService:  queryExecutionSvc,
 		QuerySchemaService:     querySchemaSvc,
 		QueryExplainService:    queryExplainSvc,
-		QueryDisclosureService: queryDisclosureSvc,
+		QueryDisclosureService:     queryDisclosureSvc,
+		QuerySavedStatementService: querySavedStatementSvc,
 		QueryExecutionAuth: api.QueryExecutionAuthConfig{
 			TokenMaxAge: cfg.QueryExecutionTokenMaxAge,
 			Clock:       time.Now,

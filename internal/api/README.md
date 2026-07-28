@@ -15,6 +15,7 @@ HTTP handlers, chi routing, CORS middleware, and fake-repo test infrastructure.
 | query_schema_handler.go | handleGetTableDefinition for MySQL table-definition requests |
 | query_credential_handler.go | Phase 38A credential metadata handlers (GET/PUT/DELETE) |
 | query_disclosure_handler.go | Phase 38Q disclosure policy CRUD handlers (admin-only writes) |
+| query_saved_statement_handler.go | Phase 38R saved statement CRUD handlers (personal + shared_template) |
 | test_server.go | Fake repositories and NewTestServer() for handler tests |
 | health_handler_test.go | Health endpoint tests |
 | resource_handler_test.go | Resource and profile endpoint tests |
@@ -23,6 +24,7 @@ HTTP handlers, chi routing, CORS middleware, and fake-repo test infrastructure.
 | dictionary_handler_test.go | Dictionary endpoint tests |
 | query_credential_handler_test.go | Credential metadata handler tests |
 | query_disclosure_handler_test.go | Disclosure policy handler tests |
+| query_saved_statement_handler_test.go | Saved statement handler tests |
 
 ## Routes
 | Method | Path | Description |
@@ -32,6 +34,10 @@ HTTP handlers, chi routing, CORS middleware, and fake-repo test infrastructure.
 | POST | /query-disclosure-policies | Create a disclosure policy (admin-only) |
 | PUT | /query-disclosure-policies | Update a disclosure policy (admin-only) |
 | DELETE | /query-disclosure-policies | Delete a disclosure policy (admin-only) |
+| GET | /query-targets/{id}/saved-statements | List saved statements for a query target |
+| POST | /query-targets/{id}/saved-statements | Create a saved statement |
+| PUT | /query-targets/{id}/saved-statements/{statementId} | Update a saved statement |
+| DELETE | /query-targets/{id}/saved-statements/{statementId} | Delete a saved statement |
 
 ## Exports
 - `Dependencies` struct — all service dependencies

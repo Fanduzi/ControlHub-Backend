@@ -1641,6 +1641,292 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/ErrorResponse"
+  /query-targets/{id}/saved-statements:
+    get:
+      summary: List saved statements for a query target
+      operationId: listSavedStatements
+      description: >
+        Phase 38R. Returns saved statements visible to the authenticated
+        actor for a query target. Personal statements are scoped to the
+        token owner; shared templates are visible to all. Requires a fresh
+        Bearer token. Never returns credentials, DSNs, or secrets.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+            format: int64
+            minimum: 1
+          description: Query target resource ID.
+        - name: q
+          in: query
+          schema:
+            type: string
+          description: Free-text search over statement name.
+        - name: page
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            default: 1
+          description: Page number (1-based).
+        - name: pageSize
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            default: 50
+            maximum: 100
+          description: Items per page. Defaults to 50, capped at 100.
+      responses:
+        "200":
+          description: Saved statement list
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/QuerySavedStatementListResponse"
+              example:
+                items:
+                  - id: 1
+                    targetResourceId: 22
+                    name: "Active orders"
+                    statement: "SELECT * FROM orders WHERE status = 'active'"
+                    scope: personal
+                    createdAt: "2026-07-28T10:00:00Z"
+                    updatedAt: "2026-07-28T10:00:00Z"
+                pageInfo:
+                  page: 1
+                  pageSize: 50
+                  totalItems: 1
+                  totalPages: 1
+                  hasNextPage: false
+                  hasPreviousPage: false
+                canManageSharedTemplates: false
+        "400":
+          description: Invalid parameters
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "401":
+          description: Missing or invalid Bearer token (or token older than the TTL)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "404":
+          description: Query target not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "500":
+          description: Unexpected server failure
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+    post:
+      summary: Create a saved statement
+      operationId: createSavedStatement
+      description: >
+        Phase 38R. Creates a new saved statement for a query target. The
+        actor is derived from the verified token and is never accepted in
+        the request body. The scope determines visibility: personal is
+        visible only to the creator, shared_template is visible to all.
+        Requires a fresh Bearer token.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+            format: int64
+            minimum: 1
+          description: Query target resource ID.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/QuerySavedStatementCreateRequest"
+            example:
+              name: "Active orders"
+              statement: "SELECT * FROM orders WHERE status = 'active'"
+              scope: personal
+      responses:
+        "201":
+          description: Saved statement created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/QuerySavedStatement"
+              example:
+                id: 1
+                targetResourceId: 22
+                name: "Active orders"
+                statement: "SELECT * FROM orders WHERE status = 'active'"
+                scope: personal
+                createdAt: "2026-07-28T10:00:00Z"
+                updatedAt: "2026-07-28T10:00:00Z"
+        "400":
+          description: Validation failed (bad request, unknown fields, invalid scope, missing name/statement)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "401":
+          description: Missing or invalid Bearer token (or token older than the TTL)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "404":
+          description: Query target not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "500":
+          description: Unexpected server failure
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+  /query-targets/{id}/saved-statements/{statementId}:
+    put:
+      summary: Update a saved statement
+      operationId: updateSavedStatement
+      description: >
+        Phase 38R. Updates the name and/or statement text of an existing
+        saved statement. Scope is immutable and never accepted on update.
+        The actor must own the statement or be an admin updating a shared
+        template. Requires a fresh Bearer token.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+            format: int64
+            minimum: 1
+          description: Query target resource ID.
+        - name: statementId
+          in: path
+          required: true
+          schema:
+            type: integer
+            format: int64
+            minimum: 1
+          description: Saved statement ID.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/QuerySavedStatementUpdateRequest"
+            example:
+              name: "Updated name"
+              statement: "SELECT * FROM orders WHERE status = 'pending'"
+      responses:
+        "204":
+          description: Saved statement updated
+        "400":
+          description: Validation failed (bad request, unknown fields, missing name/statement)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "401":
+          description: Missing or invalid Bearer token (or token older than the TTL)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "403":
+          description: Actor does not own the statement and is not an admin
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "404":
+          description: Query target or saved statement not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "500":
+          description: Unexpected server failure
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+    delete:
+      summary: Delete a saved statement
+      operationId: deleteSavedStatement
+      description: >
+        Phase 38R. Deletes a saved statement. The actor must own the
+        statement or be an admin deleting a shared template. Idempotent.
+        Requires a fresh Bearer token.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+            format: int64
+            minimum: 1
+          description: Query target resource ID.
+        - name: statementId
+          in: path
+          required: true
+          schema:
+            type: integer
+            format: int64
+            minimum: 1
+          description: Saved statement ID.
+      responses:
+        "204":
+          description: Saved statement deleted
+        "400":
+          description: Invalid parameters
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "401":
+          description: Missing or invalid Bearer token (or token older than the TTL)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "403":
+          description: Actor does not own the statement and is not an admin
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "404":
+          description: Query target or saved statement not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "500":
+          description: Unexpected server failure
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
   /resources:
     get:
       summary: List resources
@@ -3264,6 +3550,99 @@ components:
       enum:
         - raw_copy_allowed
         - masked_no_copy
+    QuerySavedStatementScope:
+      type: string
+      description: >
+        Visibility scope for a saved statement. personal is visible only to
+        the creator; shared_template is visible to all authenticated actors
+        on the target.
+      enum:
+        - personal
+        - shared_template
+    QuerySavedStatement:
+      type: object
+      description: >
+        A governed saved statement for a query target. Never carries
+        credentials, DSNs, or owner identity.
+      required: [id, targetResourceId, name, statement, scope, createdAt, updatedAt]
+      properties:
+        id:
+          type: integer
+          format: int64
+        targetResourceId:
+          type: integer
+          format: int64
+        name:
+          type: string
+          maxLength: 120
+          description: Human-readable statement name.
+        statement:
+          type: string
+          maxLength: 16384
+          description: SQL statement text.
+        scope:
+          $ref: "#/components/schemas/QuerySavedStatementScope"
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+    QuerySavedStatementCreateRequest:
+      type: object
+      description: >
+        Body for creating a saved statement. All fields are required.
+        Unknown fields are rejected by strict decoding (additionalProperties
+        is false). The actor and targetResourceId are derived from the path
+        and token, never accepted from the body.
+      required: [name, statement, scope]
+      additionalProperties: false
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 120
+          description: Human-readable statement name. No control characters.
+        statement:
+          type: string
+          minLength: 1
+          maxLength: 16384
+          description: SQL statement text.
+        scope:
+          $ref: "#/components/schemas/QuerySavedStatementScope"
+    QuerySavedStatementUpdateRequest:
+      type: object
+      description: >
+        Body for updating a saved statement. Scope is immutable and never
+        accepted on update. Unknown fields are rejected by strict decoding.
+      required: [name, statement]
+      additionalProperties: false
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 120
+          description: Human-readable statement name. No control characters.
+        statement:
+          type: string
+          minLength: 1
+          maxLength: 16384
+          description: SQL statement text.
+    QuerySavedStatementListResponse:
+      type: object
+      required: [items, pageInfo, canManageSharedTemplates]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/QuerySavedStatement"
+        pageInfo:
+          $ref: "#/components/schemas/PageInfo"
+        canManageSharedTemplates:
+          type: boolean
+          description: >
+            True when the authenticated actor has admin privileges to manage
+            shared_template statements on this target.
     PageInfo:
       type: object
       required: [page, pageSize, totalItems, totalPages, hasNextPage, hasPreviousPage]

@@ -20,6 +20,7 @@ import (
 
 type TestServer struct {
 	Router *chi.Mux
+	deps   Dependencies
 }
 
 type fakeResourceRepo struct {
@@ -753,6 +754,27 @@ func (f *fakeQueryDisclosure) DeletePolicy(_ context.Context, _ uint64, _, _, _ 
 	return nil
 }
 
+type fakeSavedStatementService struct {
+	listResp   model.QuerySavedStatementListResponse
+	createResp model.QuerySavedStatement
+}
+
+func (f *fakeSavedStatementService) List(_ context.Context, _ service.AuthenticatedUser, _ uint64, _ string, _, _ int) (model.QuerySavedStatementListResponse, error) {
+	return f.listResp, nil
+}
+
+func (f *fakeSavedStatementService) Create(_ context.Context, _ service.AuthenticatedUser, _ model.QuerySavedStatementCreateRequest) (model.QuerySavedStatement, error) {
+	return f.createResp, nil
+}
+
+func (f *fakeSavedStatementService) Update(_ context.Context, _ service.AuthenticatedUser, _, _ uint64, _ model.QuerySavedStatementUpdateRequest) error {
+	return nil
+}
+
+func (f *fakeSavedStatementService) Delete(_ context.Context, _ service.AuthenticatedUser, _, _ uint64) error {
+	return nil
+}
+
 func NewTestServer() *TestServer {
 	archivedAt := time.Date(2026, 4, 11, 22, 0, 0, 0, time.UTC)
 	archiveReason := "retired"
@@ -814,9 +836,14 @@ func NewTestServer() *TestServer {
 		QueryCredentialService: service.NewQueryCredentialService(queryTargetRepo, credentialStore, service.NewEnvCredentialResolver()),
 		QuerySchemaService:     &fakeQuerySchema{},
 		QueryDisclosureService: &fakeQueryDisclosure{},
+		QuerySavedStatementService: &fakeSavedStatementService{},
+		QueryExecutionAuth: QueryExecutionAuthConfig{
+			TokenMaxAge: 8 * 60 * 60 * 1e9, // 8h
+			Clock:       func() time.Time { return time.Date(2026, 6, 22, 8, 0, 0, 0, time.UTC) },
+		},
 	}
 
-	return &TestServer{Router: NewRouter(deps)}
+	return &TestServer{Router: NewRouter(deps), deps: deps}
 }
 
 type fakeUserCredentialRepo struct{}

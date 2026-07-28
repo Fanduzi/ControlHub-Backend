@@ -55,6 +55,11 @@ type Dependencies struct {
 	// fresh bearer token; POST/PUT/DELETE additionally require the admin role
 	// (enforced in the handler).
 	QueryDisclosureService queryDisclosureAPI
+	// Query saved statements (Phase 38R). querySavedStatementAPI is the thin
+	// interface the handlers depend on; the concrete
+	// *service.QuerySavedStatementService satisfies it. All four routes require
+	// a fresh bearer token (same freshness policy as query execution).
+	QuerySavedStatementService querySavedStatementAPI
 }
 
 func corsLocalDev(next http.Handler) http.Handler {
@@ -162,6 +167,17 @@ func NewRouter(deps Dependencies) *chi.Mux {
 			r.Post("/query-disclosure-policies", handleCreatePolicy(deps.QueryDisclosureService))
 			r.Put("/query-disclosure-policies", handleUpdatePolicy(deps.QueryDisclosureService))
 			r.Delete("/query-disclosure-policies", handleDeletePolicy(deps.QueryDisclosureService))
+		})
+	}
+	// Query saved statement routes (Phase 38R). All four require a fresh
+	// bearer token (same freshness policy as query execution).
+	if deps.QuerySavedStatementService != nil {
+		router.Group(func(r chi.Router) {
+			r.Use(requireFreshQueryActor(deps.AuthService, deps.QueryExecutionAuth))
+			r.Get("/query-targets/{id}/saved-statements", handleListSavedStatements(deps.QuerySavedStatementService))
+			r.Post("/query-targets/{id}/saved-statements", handleCreateSavedStatement(deps.QuerySavedStatementService))
+			r.Put("/query-targets/{id}/saved-statements/{statementId}", handleUpdateSavedStatement(deps.QuerySavedStatementService))
+			r.Delete("/query-targets/{id}/saved-statements/{statementId}", handleDeleteSavedStatement(deps.QuerySavedStatementService))
 		})
 	}
 	return router
