@@ -1,5 +1,5 @@
 // Package model provides domain entities for the resource management system.
-// input: fmt, time packages
+// input: fmt, time, unicode/utf8 packages
 // output: QuerySavedStatementScope, QuerySavedStatement, QuerySavedStatementCreateRequest, QuerySavedStatementUpdateRequest, QuerySavedStatementListQuery, QuerySavedStatementListResponse
 // pos: Governed saved statements for target-scoped query library
 // note: if this file changes, update header and README.md
@@ -8,6 +8,7 @@ package model
 import (
 	"fmt"
 	"time"
+	"unicode/utf8"
 )
 
 // QuerySavedStatementScope is the immutable visibility scope for a saved statement.
@@ -46,18 +47,15 @@ type QuerySavedStatement struct {
 }
 
 // QuerySavedStatementCreateRequest is the body for creating a saved statement.
+// TargetResourceID comes from the URL path, not the request body.
 type QuerySavedStatementCreateRequest struct {
-	TargetResourceID uint64                   `json:"targetResourceId"`
-	Name             string                   `json:"name"`
-	Statement        string                   `json:"statement"`
-	Scope            QuerySavedStatementScope `json:"scope"`
+	Name      string                   `json:"name"`
+	Statement string                   `json:"statement"`
+	Scope     QuerySavedStatementScope `json:"scope"`
 }
 
 // Validate checks all required fields and bounds.
 func (r QuerySavedStatementCreateRequest) Validate() error {
-	if r.TargetResourceID == 0 {
-		return fmt.Errorf("target_resource_id is required")
-	}
 	if err := validateSavedStatementName(r.Name); err != nil {
 		return err
 	}
@@ -112,10 +110,11 @@ type QuerySavedStatementListResponse struct {
 
 // validateSavedStatementName rejects empty, over-long, and control-character names.
 func validateSavedStatementName(name string) error {
+	name = trimWhitespace(name)
 	if name == "" {
 		return fmt.Errorf("name is required")
 	}
-	if len(name) > MaxSavedStatementNameLength {
+	if utf8.RuneCountInString(name) > MaxSavedStatementNameLength {
 		return fmt.Errorf("name exceeds %d characters", MaxSavedStatementNameLength)
 	}
 	for _, r := range name {
@@ -124,4 +123,16 @@ func validateSavedStatementName(name string) error {
 		}
 	}
 	return nil
+}
+
+func trimWhitespace(s string) string {
+	start := 0
+	end := len(s)
+	for start < end && s[start] == ' ' {
+		start++
+	}
+	for end > start && s[end-1] == ' ' {
+		end--
+	}
+	return s[start:end]
 }

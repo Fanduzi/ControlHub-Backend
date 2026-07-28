@@ -127,17 +127,16 @@ func (r *MySQLQuerySavedStatementRepository) GetByID(ctx context.Context, target
 
 // CreateWithAudit inserts a new saved statement and an audit event atomically.
 // The audit event uses fixed strings only — never statement text, name, or owner ID.
-func (r *MySQLQuerySavedStatementRepository) CreateWithAudit(ctx context.Context, ownerUserID uint64, req model.QuerySavedStatementCreateRequest) (model.QuerySavedStatement, error) {
+func (r *MySQLQuerySavedStatementRepository) CreateWithAudit(ctx context.Context, ownerUserID, targetResourceID uint64, req model.QuerySavedStatementCreateRequest) (model.QuerySavedStatement, error) {
 	tx, err := r.db.BeginTx(ctx, nil)
 	if err != nil {
 		return model.QuerySavedStatement{}, fmt.Errorf("begin transaction: %w", err)
 	}
 	defer tx.Rollback()
 
-	// Insert saved statement
 	const insertQ = `INSERT INTO query_saved_statements (target_resource_id, owner_user_id, name, statement, scope)
 		VALUES (?, ?, ?, ?, ?)`
-	res, err := tx.ExecContext(ctx, insertQ, req.TargetResourceID, ownerUserID, req.Name, req.Statement, string(req.Scope))
+	res, err := tx.ExecContext(ctx, insertQ, targetResourceID, ownerUserID, req.Name, req.Statement, string(req.Scope))
 	if err != nil {
 		return model.QuerySavedStatement{}, fmt.Errorf("insert saved statement: %w", err)
 	}
@@ -146,10 +145,9 @@ func (r *MySQLQuerySavedStatementRepository) CreateWithAudit(ctx context.Context
 		return model.QuerySavedStatement{}, fmt.Errorf("saved statement last insert id: %w", err)
 	}
 
-	// Insert audit event (fixed strings only, no statement/name/owner)
 	const auditQ = `INSERT INTO audit_events (actor_user_id, target_resource_id, event_type, result)
 		VALUES (?, ?, 'query.saved_statement.created', 'success')`
-	if _, err := tx.ExecContext(ctx, auditQ, ownerUserID, req.TargetResourceID); err != nil {
+	if _, err := tx.ExecContext(ctx, auditQ, ownerUserID, targetResourceID); err != nil {
 		return model.QuerySavedStatement{}, fmt.Errorf("insert audit event: %w", err)
 	}
 
@@ -159,7 +157,7 @@ func (r *MySQLQuerySavedStatementRepository) CreateWithAudit(ctx context.Context
 
 	return model.QuerySavedStatement{
 		ID:               uint64(id),
-		TargetResourceID: req.TargetResourceID,
+		TargetResourceID: targetResourceID,
 		OwnerUserID:      ownerUserID,
 		Name:             req.Name,
 		Statement:        req.Statement,

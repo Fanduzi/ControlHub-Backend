@@ -17,11 +17,22 @@ import (
 	"github.com/fan/controlhub/internal/service"
 )
 
+func parseOptionalInt(raw string, defaultVal int) (int, error) {
+	if raw == "" {
+		return defaultVal, nil
+	}
+	val, err := strconv.Atoi(raw)
+	if err != nil {
+		return 0, err
+	}
+	return val, nil
+}
+
 // querySavedStatementAPI is the handler-level interface the saved statement
 // service satisfies. Actor is taken from the verified token, never from body.
 type querySavedStatementAPI interface {
 	List(ctx context.Context, actor service.AuthenticatedUser, targetResourceID uint64, q string, page, pageSize int) (model.QuerySavedStatementListResponse, error)
-	Create(ctx context.Context, actor service.AuthenticatedUser, req model.QuerySavedStatementCreateRequest) (model.QuerySavedStatement, error)
+	Create(ctx context.Context, actor service.AuthenticatedUser, targetResourceID uint64, req model.QuerySavedStatementCreateRequest) (model.QuerySavedStatement, error)
 	Update(ctx context.Context, actor service.AuthenticatedUser, targetResourceID, statementID uint64, req model.QuerySavedStatementUpdateRequest) error
 	Delete(ctx context.Context, actor service.AuthenticatedUser, targetResourceID, statementID uint64) error
 }
@@ -42,8 +53,16 @@ func handleListSavedStatements(svc querySavedStatementAPI) http.HandlerFunc {
 		}
 
 		q := r.URL.Query().Get("q")
-		page, _ := strconv.Atoi(r.URL.Query().Get("page"))
-		pageSize, _ := strconv.Atoi(r.URL.Query().Get("pageSize"))
+		page, err := parseOptionalInt(r.URL.Query().Get("page"), 1)
+		if err != nil {
+			writeJSONError(w, http.StatusBadRequest, "validation_failed", "invalid page parameter")
+			return
+		}
+		pageSize, err := parseOptionalInt(r.URL.Query().Get("pageSize"), 20)
+		if err != nil {
+			writeJSONError(w, http.StatusBadRequest, "validation_failed", "invalid pageSize parameter")
+			return
+		}
 
 		resp, err := svc.List(r.Context(), actor, targetResourceID, q, page, pageSize)
 		if err != nil {
@@ -74,14 +93,13 @@ func handleCreateSavedStatement(svc querySavedStatementAPI) http.HandlerFunc {
 			writeJSONError(w, http.StatusBadRequest, "validation_failed", "invalid request payload")
 			return
 		}
-		req.TargetResourceID = targetResourceID
 
 		if err := req.Validate(); err != nil {
 			writeJSONError(w, http.StatusBadRequest, "validation_failed", err.Error())
 			return
 		}
 
-		result, err := svc.Create(r.Context(), actor, req)
+		result, err := svc.Create(r.Context(), actor, targetResourceID, req)
 		if err != nil {
 			writeSavedStatementError(w, err)
 			return

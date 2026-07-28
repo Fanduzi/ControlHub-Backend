@@ -34,7 +34,7 @@ type fakeSavedStatementWriter struct {
 	deleteErr  error
 }
 
-func (f *fakeSavedStatementWriter) CreateWithAudit(_ context.Context, _ uint64, _ model.QuerySavedStatementCreateRequest) (model.QuerySavedStatement, error) {
+func (f *fakeSavedStatementWriter) CreateWithAudit(_ context.Context, _, _ uint64, _ model.QuerySavedStatementCreateRequest) (model.QuerySavedStatement, error) {
 	return f.createResp, f.createErr
 }
 
@@ -144,12 +144,11 @@ func TestQuerySavedStatementServiceCreate(t *testing.T) {
 		// When: editor creates a personal statement.
 		actor := AuthenticatedUser{ID: 1, Role: "editor"}
 		req := model.QuerySavedStatementCreateRequest{
-			TargetResourceID: 22,
-			Name:             "Test",
-			Statement:        "SELECT 1",
-			Scope:            model.QuerySavedStatementPersonal,
+			Name:      "Test",
+			Statement: "SELECT 1",
+			Scope:     model.QuerySavedStatementPersonal,
 		}
-		_, err := svc.Create(context.Background(), actor, req)
+		_, err := svc.Create(context.Background(), actor, 22, req)
 
 		// Then: creation succeeds.
 		if err != nil {
@@ -169,12 +168,11 @@ func TestQuerySavedStatementServiceCreate(t *testing.T) {
 		// When: editor tries to create a shared template.
 		actor := AuthenticatedUser{ID: 1, Role: "editor"}
 		req := model.QuerySavedStatementCreateRequest{
-			TargetResourceID: 22,
-			Name:             "Test",
-			Statement:        "SELECT 1",
-			Scope:            model.QuerySavedStatementSharedTemplate,
+			Name:      "Test",
+			Statement: "SELECT 1",
+			Scope:     model.QuerySavedStatementSharedTemplate,
 		}
-		_, err := svc.Create(context.Background(), actor, req)
+		_, err := svc.Create(context.Background(), actor, 22, req)
 
 		// Then: ErrQueryForbidden is returned.
 		if !errors.Is(err, ErrQueryForbidden) {
@@ -194,12 +192,11 @@ func TestQuerySavedStatementServiceCreate(t *testing.T) {
 		// When: actor tries to save a disallowed statement.
 		actor := AuthenticatedUser{ID: 1, Role: "editor"}
 		req := model.QuerySavedStatementCreateRequest{
-			TargetResourceID: 22,
-			Name:             "Test",
-			Statement:        "DROP TABLE orders",
-			Scope:            model.QuerySavedStatementPersonal,
+			Name:      "Test",
+			Statement: "DROP TABLE orders",
+			Scope:     model.QuerySavedStatementPersonal,
 		}
-		_, err := svc.Create(context.Background(), actor, req)
+		_, err := svc.Create(context.Background(), actor, 22, req)
 
 		// Then: ErrQueryValidationFailed wraps the guard error.
 		if !errors.Is(err, ErrQueryValidationFailed) {
@@ -219,12 +216,11 @@ func TestQuerySavedStatementServiceCreate(t *testing.T) {
 		// When: creating a statement for a nonexistent target.
 		actor := AuthenticatedUser{ID: 1, Role: "editor"}
 		req := model.QuerySavedStatementCreateRequest{
-			TargetResourceID: 999,
-			Name:             "Test",
-			Statement:        "SELECT 1",
-			Scope:            model.QuerySavedStatementPersonal,
+			Name:      "Test",
+			Statement: "SELECT 1",
+			Scope:     model.QuerySavedStatementPersonal,
 		}
-		_, err := svc.Create(context.Background(), actor, req)
+		_, err := svc.Create(context.Background(), actor, 999, req)
 
 		// Then: ErrQueryTargetNotFound is returned.
 		if !errors.Is(err, ErrQueryTargetNotFound) {
@@ -246,12 +242,11 @@ func TestQuerySavedStatementServiceCreate(t *testing.T) {
 		// When: admin creates a shared template.
 		actor := AuthenticatedUser{ID: 1, Role: "admin"}
 		req := model.QuerySavedStatementCreateRequest{
-			TargetResourceID: 22,
-			Name:             "Shared",
-			Statement:        "SELECT 1",
-			Scope:            model.QuerySavedStatementSharedTemplate,
+			Name:      "Shared",
+			Statement: "SELECT 1",
+			Scope:     model.QuerySavedStatementSharedTemplate,
 		}
-		_, err := svc.Create(context.Background(), actor, req)
+		_, err := svc.Create(context.Background(), actor, 22, req)
 
 		// Then: creation succeeds.
 		if err != nil {

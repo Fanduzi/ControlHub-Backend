@@ -763,7 +763,7 @@ func (f *fakeSavedStatementService) List(_ context.Context, _ service.Authentica
 	return f.listResp, nil
 }
 
-func (f *fakeSavedStatementService) Create(_ context.Context, _ service.AuthenticatedUser, _ model.QuerySavedStatementCreateRequest) (model.QuerySavedStatement, error) {
+func (f *fakeSavedStatementService) Create(_ context.Context, _ service.AuthenticatedUser, _ uint64, _ model.QuerySavedStatementCreateRequest) (model.QuerySavedStatement, error) {
 	return f.createResp, nil
 }
 

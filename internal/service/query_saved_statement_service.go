@@ -28,7 +28,7 @@ type QuerySavedStatementReader interface {
 
 // QuerySavedStatementWriter writes saved statements with atomic audit.
 type QuerySavedStatementWriter interface {
-	CreateWithAudit(ctx context.Context, ownerUserID uint64, req model.QuerySavedStatementCreateRequest) (model.QuerySavedStatement, error)
+	CreateWithAudit(ctx context.Context, ownerUserID, targetResourceID uint64, req model.QuerySavedStatementCreateRequest) (model.QuerySavedStatement, error)
 	UpdateWithAudit(ctx context.Context, actorUserID, targetResourceID, statementID uint64, req model.QuerySavedStatementUpdateRequest, isAdmin bool) error
 	DeleteWithAudit(ctx context.Context, actorUserID, targetResourceID, statementID uint64, isAdmin bool) error
 }
@@ -88,26 +88,24 @@ func (s *QuerySavedStatementService) List(ctx context.Context, actor Authenticat
 
 // Create creates a new saved statement. Personal statements can be created
 // by any authenticated actor. Shared templates can only be created by admins.
-func (s *QuerySavedStatementService) Create(ctx context.Context, actor AuthenticatedUser, req model.QuerySavedStatementCreateRequest) (model.QuerySavedStatement, error) {
+func (s *QuerySavedStatementService) Create(ctx context.Context, actor AuthenticatedUser, targetResourceID uint64, req model.QuerySavedStatementCreateRequest) (model.QuerySavedStatement, error) {
 	if err := req.Validate(); err != nil {
 		return model.QuerySavedStatement{}, fmt.Errorf("%w: %v", ErrQueryValidationFailed, err)
 	}
 
-	// Admin check for shared templates.
 	if req.Scope == model.QuerySavedStatementSharedTemplate && !isAdmin(actor) {
 		return model.QuerySavedStatement{}, ErrQueryForbidden
 	}
 
-	if err := s.validateTargetExists(ctx, req.TargetResourceID); err != nil {
+	if err := s.validateTargetExists(ctx, targetResourceID); err != nil {
 		return model.QuerySavedStatement{}, err
 	}
 
-	// Validate SQL statement.
 	if _, err := s.guard.GuardSavedStatement(req.Statement); err != nil {
 		return model.QuerySavedStatement{}, fmt.Errorf("%w: %v", ErrQueryValidationFailed, err)
 	}
 
-	return s.writer.CreateWithAudit(ctx, actor.ID, req)
+	return s.writer.CreateWithAudit(ctx, actor.ID, targetResourceID, req)
 }
 
 // Update updates a saved statement. Scope is immutable.

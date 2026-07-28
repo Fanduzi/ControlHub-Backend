@@ -293,11 +293,10 @@ func TestCreateWithAudit_InsertsBoth(t *testing.T) {
 		WillReturnResult(sqlmock.NewResult(1, 1))
 	mock.ExpectCommit()
 
-	s, err := repo.CreateWithAudit(t.Context(), 1, model.QuerySavedStatementCreateRequest{
-		TargetResourceID: 10,
-		Name:             "my query",
-		Statement:        "SELECT 1",
-		Scope:            model.QuerySavedStatementPersonal,
+	s, err := repo.CreateWithAudit(t.Context(), 1, 10, model.QuerySavedStatementCreateRequest{
+		Name:      "my query",
+		Statement: "SELECT 1",
+		Scope:     model.QuerySavedStatementPersonal,
 	})
 	if err != nil {
 		t.Fatalf("CreateWithAudit: %v", err)
@@ -334,11 +333,10 @@ func TestCreateWithAudit_AuditContainsNoStatementNameOwner(t *testing.T) {
 		WillReturnResult(sqlmock.NewResult(1, 1))
 	mock.ExpectCommit()
 
-	_, err = repo.CreateWithAudit(t.Context(), 1, model.QuerySavedStatementCreateRequest{
-		TargetResourceID: 10,
-		Name:             "secret name",
-		Statement:        "SELECT password FROM users",
-		Scope:            model.QuerySavedStatementPersonal,
+	_, err = repo.CreateWithAudit(t.Context(), 1, 10, model.QuerySavedStatementCreateRequest{
+		Name:      "secret name",
+		Statement: "SELECT password FROM users",
+		Scope:     model.QuerySavedStatementPersonal,
 	})
 	if err != nil {
 		t.Fatalf("CreateWithAudit: %v", err)
@@ -367,11 +365,10 @@ func TestCreateWithAudit_AuditFailureRollsBack(t *testing.T) {
 		WillReturnError(sql.ErrConnDone)
 	mock.ExpectRollback()
 
-	_, err = repo.CreateWithAudit(t.Context(), 1, model.QuerySavedStatementCreateRequest{
-		TargetResourceID: 10,
-		Name:             "my query",
-		Statement:        "SELECT 1",
-		Scope:            model.QuerySavedStatementPersonal,
+	_, err = repo.CreateWithAudit(t.Context(), 1, 10, model.QuerySavedStatementCreateRequest{
+		Name:      "my query",
+		Statement: "SELECT 1",
+		Scope:     model.QuerySavedStatementPersonal,
 	})
 	if err == nil {
 		t.Fatal("expected error from audit failure, got nil")
