@@ -107,6 +107,12 @@ func TestOpenAPIFuzz(t *testing.T) {
 		QueryExecutionService:  queryExecutionSvc,
 		QueryExplainService:    queryExplainSvc,
 		QuerySchemaService:     service.NewQuerySchemaService(accessResolver, service.NewMySQLSchemaInspector(), service.NewQuerySchemaCache(256, wallClock{}), queryExecutionRepo, wallClock{}),
+		QuerySavedStatementService: service.NewQuerySavedStatementService(
+			mysql.NewQuerySavedStatementRepository(db),
+			mysql.NewQuerySavedStatementRepository(db),
+			queryTargetRepo,
+			service.NewQueryGuard(service.QueryGuardConfig{DefaultMaxRows: 100, HardMaxRows: 500}),
+		),
 		QueryDisclosureService: service.NewQueryDisclosureService(
 			mysql.NewQueryDisclosureRepository(db),
 			mysql.NewQueryDisclosureRepository(db),
@@ -118,10 +124,9 @@ func TestOpenAPIFuzz(t *testing.T) {
 			Clock:       time.Now,
 		},
 	}
-
 	router := api.NewRouter(deps)
-	server := &http.Server{Handler: router}
 
+	server := &http.Server{Handler: router}
 	// Start server in background.
 	go func() {
 		if err := server.Serve(listener); err != nil && err != http.ErrServerClosed {

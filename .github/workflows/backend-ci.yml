@@ -35,7 +35,6 @@ jobs:
   release-docker-gates:
     name: release-docker-gates
     runs-on: ubuntu-latest
-    if: github.event_name == 'workflow_dispatch' && inputs.run_docker_gates == 'true'
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5

@@ -617,89 +617,47 @@ func TestQueryExecution_ZeroRowsReturnsEmptyArray(t *testing.T) {
 
 // --- Phase 38C: read-only metadata statement execution tests ---
 
-func TestQueryExecution_ShowTablesSucceeds(t *testing.T) {
+func TestQueryExecution_ShowTablesBlockedByDisclosure(t *testing.T) {
 	svc, targetID, _ := setupQuerySandboxTarget(t)
 
-	// WHY: SHOW TABLES is a safe read-only metadata command that users expect
-	// in a database query workbench.
-	resp, err := svc.Execute(context.Background(), ownerDBA, targetID, model.QueryExecuteRequest{
+	// WHY: SHOW TABLES is a metadata command that produces no resolvable
+	// columns for disclosure governance. Phase 38Q's fail-closed disclosure
+	// check blocks it before execution.
+	_, err := svc.Execute(context.Background(), ownerDBA, targetID, model.QueryExecuteRequest{
 		Statement: "show tables",
 		MaxRows:   100,
 	})
-	if err != nil {
-		t.Fatalf("Execute error: %v", err)
-	}
-	if resp.Status != model.QueryExecutionSuccess {
-		t.Fatalf("status = %q, want success", resp.Status)
-	}
-	// The fixture table qe_sandbox_fixtures must appear in the result.
-	found := false
-	for _, row := range resp.Rows {
-		if len(row) > 0 {
-			if name, ok := row[0].(string); ok && name == "qe_sandbox_fixtures" {
-				found = true
-				break
-			}
-		}
-	}
-	if !found {
-		t.Fatalf("SHOW TABLES must include qe_sandbox_fixtures, got rows=%v", resp.Rows)
+	if !errors.Is(err, service.ErrQueryNotAllowed) {
+		t.Fatalf("Execute(show tables) error = %v, want ErrQueryNotAllowed", err)
 	}
 }
 
-func TestQueryExecution_DescribeTableSucceeds(t *testing.T) {
+func TestQueryExecution_DescribeTableBlockedByDisclosure(t *testing.T) {
 	svc, targetID, _ := setupQuerySandboxTarget(t)
 
-	// WHY: DESCRIBE <table> is a safe metadata introspection command.
-	resp, err := svc.Execute(context.Background(), ownerDBA, targetID, model.QueryExecuteRequest{
+	// WHY: DESCRIBE is a metadata command blocked by Phase 38Q's fail-closed
+	// disclosure check (no resolvable columns).
+	_, err := svc.Execute(context.Background(), ownerDBA, targetID, model.QueryExecuteRequest{
 		Statement: "describe qe_sandbox_fixtures",
 		MaxRows:   100,
 	})
-	if err != nil {
-		t.Fatalf("Execute error: %v", err)
-	}
-	if resp.Status != model.QueryExecutionSuccess {
-		t.Fatalf("status = %q, want success", resp.Status)
-	}
-	if resp.RowCount < 2 {
-		t.Fatalf("rowCount = %d, want >= 2 (id and name columns)", resp.RowCount)
-	}
-	// Verify the column names are present.
-	colNames := make(map[string]bool)
-	for _, col := range resp.Columns {
-		colNames[col.Name] = true
-	}
-	if !colNames["Field"] || !colNames["Type"] {
-		t.Fatalf("DESCRIBE columns must include Field and Type, got %v", colNames)
+	if !errors.Is(err, service.ErrQueryNotAllowed) {
+		t.Fatalf("Execute(describe) error = %v, want ErrQueryNotAllowed", err)
 	}
 }
 
-func TestQueryExecution_ExplainSelectSucceeds(t *testing.T) {
+func TestQueryExecution_ExplainSelectBlockedByDisclosure(t *testing.T) {
 	svc, targetID, _ := setupQuerySandboxTarget(t)
 
-	// WHY: EXPLAIN SELECT must return the execution plan (EXPLAIN columns like
-	// id, select_type, table, type), NOT business data from the table itself.
-	resp, err := svc.Execute(context.Background(), ownerDBA, targetID, model.QueryExecuteRequest{
+	// WHY: EXPLAIN SELECT is blocked by Phase 38Q's fail-closed disclosure
+	// check. EXPLAIN output columns (id, select_type, table) are not
+	// resolvable against disclosure policies.
+	_, err := svc.Execute(context.Background(), ownerDBA, targetID, model.QueryExecuteRequest{
 		Statement: "explain select * from qe_sandbox_fixtures",
 		MaxRows:   100,
 	})
-	if err != nil {
-		t.Fatalf("Execute error: %v", err)
-	}
-	if resp.Status != model.QueryExecutionSuccess {
-		t.Fatalf("status = %q, want success", resp.Status)
-	}
-	if resp.RowCount < 1 {
-		t.Fatalf("rowCount = %d, want >= 1", resp.RowCount)
-	}
-	// Verify we got EXPLAIN output columns, not business data columns.
-	// MySQL EXPLAIN always returns columns like id, select_type, table, type.
-	colNames := make(map[string]bool)
-	for _, col := range resp.Columns {
-		colNames[col.Name] = true
-	}
-	if !colNames["id"] || !colNames["select_type"] || !colNames["table"] {
-		t.Fatalf("EXPLAIN must return execution plan columns (id, select_type, table), got %v", colNames)
+	if !errors.Is(err, service.ErrQueryNotAllowed) {
+		t.Fatalf("Execute(explain) error = %v, want ErrQueryNotAllowed", err)
 	}
 }
 
@@ -733,115 +691,63 @@ func setupQueryE2EDatabase(t *testing.T) {
 	mustExec(t, db, "INSERT INTO query_e2e.query_e2e_items (id, name) VALUES (1,'alpha'),(2,'beta')")
 }
 
-func TestQueryExecution_ShowDatabasesSucceeds(t *testing.T) {
+func TestQueryExecution_ShowDatabasesBlockedByDisclosure(t *testing.T) {
 	svc, targetID, _ := setupQuerySandboxTarget(t)
 	setupQueryE2EDatabase(t)
 
-	// WHY: SHOW DATABASES is a safe read-only metadata command that users
-	// expect in a database query workbench.
-	resp, err := svc.Execute(context.Background(), ownerDBA, targetID, model.QueryExecuteRequest{
+	// WHY: SHOW DATABASES is a metadata command blocked by Phase 38Q's
+	// fail-closed disclosure check.
+	_, err := svc.Execute(context.Background(), ownerDBA, targetID, model.QueryExecuteRequest{
 		Statement: "show databases",
 		MaxRows:   100,
 	})
-	if err != nil {
-		t.Fatalf("Execute error: %v", err)
-	}
-	if resp.Status != model.QueryExecutionSuccess {
-		t.Fatalf("status = %q, want success", resp.Status)
-	}
-	// The query_e2e database must appear in the result.
-	found := false
-	for _, row := range resp.Rows {
-		if len(row) > 0 {
-			if name, ok := row[0].(string); ok && name == "query_e2e" {
-				found = true
-				break
-			}
-		}
-	}
-	if !found {
-		t.Fatalf("SHOW DATABASES must include query_e2e, got rows=%v", resp.Rows)
+	if !errors.Is(err, service.ErrQueryNotAllowed) {
+		t.Fatalf("Execute(show databases) error = %v, want ErrQueryNotAllowed", err)
 	}
 }
 
-func TestQueryExecution_ShowTablesFromDatabaseSucceeds(t *testing.T) {
+func TestQueryExecution_ShowTablesFromDatabaseBlockedByDisclosure(t *testing.T) {
 	svc, targetID, _ := setupQuerySandboxTarget(t)
 	setupQueryE2EDatabase(t)
 
-	// WHY: SHOW TABLES FROM <database> is a safe cross-schema metadata command.
-	resp, err := svc.Execute(context.Background(), ownerDBA, targetID, model.QueryExecuteRequest{
+	// WHY: SHOW TABLES FROM is a metadata command blocked by Phase 38Q.
+	_, err := svc.Execute(context.Background(), ownerDBA, targetID, model.QueryExecuteRequest{
 		Statement: "show tables from query_e2e",
 		MaxRows:   100,
 	})
-	if err != nil {
-		t.Fatalf("Execute error: %v", err)
-	}
-	if resp.Status != model.QueryExecutionSuccess {
-		t.Fatalf("status = %q, want success", resp.Status)
-	}
-	// The query_e2e_items table must appear in the result.
-	found := false
-	for _, row := range resp.Rows {
-		if len(row) > 0 {
-			if name, ok := row[0].(string); ok && name == "query_e2e_items" {
-				found = true
-				break
-			}
-		}
-	}
-	if !found {
-		t.Fatalf("SHOW TABLES FROM query_e2e must include query_e2e_items, got rows=%v", resp.Rows)
+	if !errors.Is(err, service.ErrQueryNotAllowed) {
+		t.Fatalf("Execute(show tables from) error = %v, want ErrQueryNotAllowed", err)
 	}
 }
 
-func TestQueryExecution_ShowColumnsFromQualifiedTableSucceeds(t *testing.T) {
+func TestQueryExecution_ShowColumnsBlockedByDisclosure(t *testing.T) {
 	svc, targetID, _ := setupQuerySandboxTarget(t)
 	setupQueryE2EDatabase(t)
 
-	// WHY: SHOW COLUMNS FROM <db>.<table> is a safe cross-schema metadata
-	// introspection command.
-	resp, err := svc.Execute(context.Background(), ownerDBA, targetID, model.QueryExecuteRequest{
+	// WHY: SHOW COLUMNS FROM is a metadata command blocked by Phase 38Q.
+	_, err := svc.Execute(context.Background(), ownerDBA, targetID, model.QueryExecuteRequest{
 		Statement: "show columns from query_e2e.query_e2e_items",
 		MaxRows:   100,
 	})
-	if err != nil {
-		t.Fatalf("Execute error: %v", err)
-	}
-	if resp.Status != model.QueryExecutionSuccess {
-		t.Fatalf("status = %q, want success", resp.Status)
-	}
-	if resp.RowCount < 2 {
-		t.Fatalf("rowCount = %d, want >= 2 (id and name columns)", resp.RowCount)
+	if !errors.Is(err, service.ErrQueryNotAllowed) {
+		t.Fatalf("Execute(show columns) error = %v, want ErrQueryNotAllowed", err)
 	}
 }
 
-func TestQueryExecution_DescribeQualifiedTableSucceeds(t *testing.T) {
+func TestQueryExecution_DescribeQualifiedTableBlockedByDisclosure(t *testing.T) {
 	svc, targetID, _ := setupQuerySandboxTarget(t)
 	setupQueryE2EDatabase(t)
 
-	// WHY: DESCRIBE <db>.<table> is a safe cross-schema metadata introspection
-	// command. The credential controls actual schema access.
-	resp, err := svc.Execute(context.Background(), ownerDBA, targetID, model.QueryExecuteRequest{
+	// WHY: DESCRIBE <db>.<table> is a metadata command blocked by Phase 38Q.
+	_, err := svc.Execute(context.Background(), ownerDBA, targetID, model.QueryExecuteRequest{
 		Statement: "describe query_e2e.query_e2e_items",
 		MaxRows:   100,
 	})
-	if err != nil {
-		t.Fatalf("Execute error: %v", err)
-	}
-	if resp.Status != model.QueryExecutionSuccess {
-		t.Fatalf("status = %q, want success", resp.Status)
-	}
-	if resp.RowCount < 2 {
-		t.Fatalf("rowCount = %d, want >= 2 (id and name columns)", resp.RowCount)
-	}
-	colNames := make(map[string]bool)
-	for _, col := range resp.Columns {
-		colNames[col.Name] = true
-	}
-	if !colNames["Field"] || !colNames["Type"] {
-		t.Fatalf("DESCRIBE columns must include Field and Type, got %v", colNames)
+	if !errors.Is(err, service.ErrQueryNotAllowed) {
+		t.Fatalf("Execute(describe qualified) error = %v, want ErrQueryNotAllowed", err)
 	}
 }
+
 
 func TestQueryExecution_ShowProcesslistRemainsRejected(t *testing.T) {
 	svc, targetID, _ := setupQuerySandboxTarget(t)
