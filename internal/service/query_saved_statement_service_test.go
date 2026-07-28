@@ -382,6 +382,64 @@ func TestQuerySavedStatementServiceUpdate(t *testing.T) {
 			t.Errorf("expected ErrQueryTargetNotFound, got %v", err)
 		}
 	})
+
+	t.Run("admin successfully updates shared template", func(t *testing.T) {
+		// Given: a shared_template statement owned by user 2.
+		svc := NewQuerySavedStatementService(
+			&fakeSavedStatementReader{
+				getResp: model.QuerySavedStatement{
+					ID:          1,
+					OwnerUserID: 2,
+					Scope:       model.QuerySavedStatementSharedTemplate,
+				},
+			},
+			&fakeSavedStatementWriter{},
+			fakeTargetRepo{targets: []model.QueryTarget{{ResourceID: 22}}},
+			&fakeSavedStatementGuard{},
+		)
+
+		// When: an admin actor updates a shared template.
+		actor := AuthenticatedUser{ID: 1, Role: "admin"}
+		req := model.QuerySavedStatementUpdateRequest{
+			Name:      "Updated by admin",
+			Statement: "SELECT 2",
+		}
+		err := svc.Update(context.Background(), actor, 22, 1, req)
+
+		// Then: update succeeds without error.
+		if err != nil {
+			t.Fatalf("expected nil error for admin updating shared template, got %v", err)
+		}
+	})
+
+	t.Run("owner successfully updates own personal statement", func(t *testing.T) {
+		// Given: a personal statement owned by user 1.
+		svc := NewQuerySavedStatementService(
+			&fakeSavedStatementReader{
+				getResp: model.QuerySavedStatement{
+					ID:          1,
+					OwnerUserID: 1,
+					Scope:       model.QuerySavedStatementPersonal,
+				},
+			},
+			&fakeSavedStatementWriter{},
+			fakeTargetRepo{targets: []model.QueryTarget{{ResourceID: 22}}},
+			&fakeSavedStatementGuard{},
+		)
+
+		// When: the owner updates their own personal statement.
+		actor := AuthenticatedUser{ID: 1, Role: "editor"}
+		req := model.QuerySavedStatementUpdateRequest{
+			Name:      "My updated query",
+			Statement: "SELECT 2",
+		}
+		err := svc.Update(context.Background(), actor, 22, 1, req)
+
+		// Then: update succeeds without error.
+		if err != nil {
+			t.Fatalf("expected nil error for owner updating own personal, got %v", err)
+		}
+	})
 }
 
 func TestQuerySavedStatementServiceDelete(t *testing.T) {
@@ -470,6 +528,56 @@ func TestQuerySavedStatementServiceDelete(t *testing.T) {
 		// Then: ErrQuerySavedStatementNotFound is returned (owner mismatch).
 		if !errors.Is(err, ErrQuerySavedStatementNotFound) {
 			t.Errorf("expected ErrQuerySavedStatementNotFound, got %v", err)
+		}
+	})
+
+	t.Run("admin successfully deletes shared template", func(t *testing.T) {
+		// Given: a shared_template statement.
+		svc := NewQuerySavedStatementService(
+			&fakeSavedStatementReader{
+				getResp: model.QuerySavedStatement{
+					ID:          1,
+					OwnerUserID: 2,
+					Scope:       model.QuerySavedStatementSharedTemplate,
+				},
+			},
+			&fakeSavedStatementWriter{},
+			fakeTargetRepo{targets: []model.QueryTarget{{ResourceID: 22}}},
+			&fakeSavedStatementGuard{},
+		)
+
+		// When: an admin deletes a shared template.
+		actor := AuthenticatedUser{ID: 1, Role: "admin"}
+		err := svc.Delete(context.Background(), actor, 22, 1)
+
+		// Then: delete succeeds.
+		if err != nil {
+			t.Fatalf("expected nil error for admin deleting shared template, got %v", err)
+		}
+	})
+
+	t.Run("owner successfully deletes own personal statement", func(t *testing.T) {
+		// Given: a personal statement owned by user 1.
+		svc := NewQuerySavedStatementService(
+			&fakeSavedStatementReader{
+				getResp: model.QuerySavedStatement{
+					ID:          1,
+					OwnerUserID: 1,
+					Scope:       model.QuerySavedStatementPersonal,
+				},
+			},
+			&fakeSavedStatementWriter{},
+			fakeTargetRepo{targets: []model.QueryTarget{{ResourceID: 22}}},
+			&fakeSavedStatementGuard{},
+		)
+
+		// When: the owner deletes their own personal statement.
+		actor := AuthenticatedUser{ID: 1, Role: "editor"}
+		err := svc.Delete(context.Background(), actor, 22, 1)
+
+		// Then: delete succeeds.
+		if err != nil {
+			t.Fatalf("expected nil error for owner deleting own personal, got %v", err)
 		}
 	})
 }
