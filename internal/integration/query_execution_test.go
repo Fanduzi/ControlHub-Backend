@@ -261,7 +261,13 @@ func setupQuerySandboxTarget(t *testing.T) (*service.QueryExecutionService, uint
 	// Self-contained fixture table owned by the test (never ControlHub seed data).
 	mustExec(t, db, `drop table if exists qe_sandbox_fixtures`)
 	mustExec(t, db, `create table qe_sandbox_fixtures (id bigint unsigned not null primary key, name varchar(64) not null)`)
-	mustExec(t, db, `insert into qe_sandbox_fixtures (id, name) values (1,'alpha'),(2,'beta'),(3,'gamma')`)
+	values := make([]string, 0, 25)
+	args := make([]any, 0, 50)
+	for id := 1; id <= 25; id++ {
+		values = append(values, "(?, ?)")
+		args = append(args, id, fmt.Sprintf("fixture-%02d", id))
+	}
+	mustExec(t, db, "insert into qe_sandbox_fixtures (id, name) values "+strings.Join(values, ","), args...)
 
 	// Target resource (mysql, staging) + its connection profile (host/port).
 	resRepo := mysql.NewResourceRepository(db)
@@ -748,7 +754,6 @@ func TestQueryExecution_DescribeQualifiedTableBlockedByDisclosure(t *testing.T) 
 		t.Fatalf("Execute(describe qualified) error = %v, want ErrQueryNotAllowed", err)
 	}
 }
-
 
 func TestQueryExecution_ShowProcesslistRemainsRejected(t *testing.T) {
 	svc, targetID, _ := setupQuerySandboxTarget(t)
@@ -1311,158 +1316,308 @@ func TestQueryExecutionRepository_IdenticalTimestampsOrderedByID(t *testing.T) {
 	}
 }
 
-// --- Phase 38S: governed query-result paging contract (RED tests) ---
+// --- Phase 38S: governed query-result paging contract ---
 
-func TestQueryExecution_PaginatedSelectReturnsAllRowsWithoutPaging(t *testing.T) {
-	svc, targetID, db := setupQuerySandboxTarget(t)
+func assertQueryPageIDs(t *testing.T, resp model.QueryExecuteResponse, expected []int64) {
+	t.Helper()
+	if len(resp.Rows) != len(expected) || resp.RowCount != len(expected) {
+		t.Fatalf("page rows = %d/%d, want %d", len(resp.Rows), resp.RowCount, len(expected))
+	}
+	for i, row := range resp.Rows {
+		if len(row) != 2 {
+			t.Fatalf("row %d has %d columns, want 2", i, len(row))
+		}
+		if id := fmt.Sprintf("%v", row[0]); id != strconv.FormatInt(expected[i], 10) {
+			t.Fatalf("row %d id = %v (%T), want %d", i, row[0], row[0], expected[i])
+		}
+	}
+}
+
+func TestQueryExecution_PaginatedSelectReturnsOrderedPagesAndSeparateCaps(t *testing.T) {
+	svc, targetID, _ := setupQuerySandboxTarget(t)
 	ctx := context.Background()
-	mustExec(t, db, "INSERT INTO qe_sandbox_fixtures (id, name) VALUES (4,'delta'),(5,'epsilon'),(6,'zeta')")
+	statement := "SELECT id, name FROM qe_sandbox_fixtures ORDER BY id"
 
-	resp, err := svc.Execute(ctx, ownerDBA, targetID, model.QueryExecuteRequest{
-		Statement: "SELECT * FROM qe_sandbox_fixtures ORDER BY id",
-		MaxRows:   100,
-	})
-	if err != nil {
-		t.Fatalf("Execute error: %v", err)
-	}
-	// Phase 38S: with pagination, a pageSize=2 request should return at most
-	// 2 rows. Currently: all 6 rows are returned (no pagination).
-	if resp.RowCount != 6 {
-		t.Errorf("Phase 38S: expected all 6 rows (no pagination), got %d", resp.RowCount)
-	}
-	// Phase 38S: response must carry pagination metadata.
-	for _, field := range []string{"page", "pageSize", "totalCount", "totalPages"} {
-		raw, _ := json.Marshal(resp)
-		if !strings.Contains(string(raw), field) {
-			t.Errorf("Phase 38S: response must include %q for pagination; response=%s", field, string(raw))
-		}
-	}
-}
-
-func TestQueryExecution_GuardDoesNotInjectOffsetForRealMySQL(t *testing.T) {
-	g := service.NewQueryGuard(service.QueryGuardConfig{DefaultMaxRows: 100, HardMaxRows: 500})
-	guarded, err := g.Guard("SELECT * FROM qe_sandbox_fixtures ORDER BY id", 10)
-	if err != nil {
-		t.Fatalf("Guard error: %v", err)
-	}
-	lower := strings.ToLower(guarded.ExecutableSQL)
-	// Phase 38S: Guard must inject OFFSET for paginated SELECT.
-	// Currently: only LIMIT is injected, no OFFSET.
-	if !strings.Contains(lower, "offset") {
-		t.Errorf("Phase 38S: Guard must inject OFFSET for paginated SELECT. ExecutableSQL=%q", guarded.ExecutableSQL)
-	}
-	if guarded.LimitApplied != 10 {
-		t.Errorf("Phase 38S: LimitApplied = %d, want 10", guarded.LimitApplied)
-	}
-}
-
-func TestQueryExecution_PaginatedSelectOverridesUserLimitOffset(t *testing.T) {
-	g := service.NewQueryGuard(service.QueryGuardConfig{DefaultMaxRows: 100, HardMaxRows: 500})
-	// Phase 38S: user-supplied LIMIT and OFFSET must be overridden by
-	// AST-owned values. The backend owns the pagination.
-	guarded, err := g.Guard("SELECT * FROM qe_sandbox_fixtures LIMIT 1000 OFFSET 500", 10)
-	if err != nil {
-		t.Fatalf("Guard error: %v", err)
-	}
-	lower := strings.ToLower(guarded.ExecutableSQL)
-	if strings.Contains(lower, "limit 1000") {
-		t.Errorf("Phase 38S: user LIMIT 1000 must be overridden. ExecutableSQL=%q", guarded.ExecutableSQL)
-	}
-	if strings.Contains(lower, "offset 500") {
-		t.Errorf("Phase 38S: user OFFSET 500 must be overridden. ExecutableSQL=%q", guarded.ExecutableSQL)
-	}
-}
-
-func TestQueryExecution_PaginatedSelectBareSelectOnly(t *testing.T) {
-	g := service.NewQueryGuard(service.QueryGuardConfig{DefaultMaxRows: 100, HardMaxRows: 500})
-	// Phase 38S contract: only bare SELECT gets pagination. SHOW/DESCRIBE/
-	// EXPLAIN remain single-response (no LIMIT/OFFSET injection).
-	for _, stmt := range []string{"SHOW TABLES", "DESCRIBE qe_sandbox_fixtures", "EXPLAIN SELECT * FROM qe_sandbox_fixtures"} {
-		guarded, err := g.Guard(stmt, 100)
-		if err != nil {
-			t.Fatalf("Guard(%q) error: %v", stmt, err)
-		}
-		if guarded.LimitApplied != 0 {
-			t.Errorf("Phase 38S: %s must remain single-response (LimitApplied=0), got %d", stmt, guarded.LimitApplied)
-		}
-	}
-}
-
-func TestQueryExecution_PaginatedDisclosurePolicyChangeBetweenPages(t *testing.T) {
-	svc, targetID, db := setupQuerySandboxTarget(t)
-	ctx := context.Background()
-
-	resp1, err := svc.Execute(ctx, ownerDBA, targetID, model.QueryExecuteRequest{
-		Statement: "SELECT * FROM qe_sandbox_fixtures ORDER BY id",
-		MaxRows:   100,
+	page1, err := svc.Execute(ctx, ownerDBA, targetID, model.QueryExecuteRequest{
+		Statement: statement,
+		MaxRows:   25,
+		Pagination: &model.QueryExecutePaginationRequest{
+			Page: 1, PageSize: 10,
+		},
 	})
 	if err != nil {
 		t.Fatalf("page 1 Execute error: %v", err)
 	}
-	if resp1.Status != model.QueryExecutionSuccess {
-		t.Fatalf("page 1 status = %q, want success", resp1.Status)
+	if page1.Pagination == nil || page1.Pagination.Page != 1 || page1.Pagination.PageSize != 10 {
+		t.Fatalf("page 1 pagination = %+v, want page=1 pageSize=10", page1.Pagination)
 	}
+	if page1.LimitApplied != 25 || !page1.Truncated || !page1.Pagination.HasNextPage || page1.Pagination.HasPreviousPage {
+		t.Fatalf("page 1 caps/navigation = limit=%d truncated=%v pagination=%+v", page1.LimitApplied, page1.Truncated, page1.Pagination)
+	}
+	assertQueryPageIDs(t, page1, []int64{1, 2, 3, 4, 5, 6, 7, 8, 9, 10})
 
-	// Phase 38S: change the disclosure policy between pages. Page 2 must
-	// re-evaluate the policy and may be blocked.
-	_, _ = db.Exec("DELETE FROM query_disclosure_policies WHERE target_resource_id = ?", targetID)
-
-	// Phase 38S: page 2 should be blocked by the policy change.
-	// Currently: there is no page concept, so re-executing succeeds.
-	resp2, err := svc.Execute(ctx, ownerDBA, targetID, model.QueryExecuteRequest{
-		Statement: "SELECT * FROM qe_sandbox_fixtures ORDER BY id",
-		MaxRows:   100,
+	page2, err := svc.Execute(ctx, ownerDBA, targetID, model.QueryExecuteRequest{
+		Statement: statement,
+		MaxRows:   25,
+		Pagination: &model.QueryExecutePaginationRequest{
+			Page: 2, PageSize: 10,
+		},
 	})
 	if err != nil {
-		// Phase 38S: disclosure block is expected after policy removal.
-		if errors.Is(err, service.ErrQueryNotAllowed) {
-			return
-		}
 		t.Fatalf("page 2 Execute error: %v", err)
 	}
-	// Phase 38S: if page 2 succeeds, the policy must have been re-evaluated.
-	// Currently: page 2 succeeds because there's no page concept.
-	if resp2.Status == model.QueryExecutionSuccess {
-		t.Error("Phase 38S: page 2 should be blocked after disclosure policy removal")
+	if page2.Pagination == nil || page2.Pagination.Page != 2 || page2.Pagination.PageSize != 10 {
+		t.Fatalf("page 2 pagination = %+v, want page=2 pageSize=10", page2.Pagination)
 	}
-}
+	if page2.LimitApplied != 25 || !page2.Truncated || !page2.Pagination.HasNextPage || !page2.Pagination.HasPreviousPage {
+		t.Fatalf("page 2 caps/navigation = limit=%d truncated=%v pagination=%+v", page2.LimitApplied, page2.Truncated, page2.Pagination)
+	}
+	assertQueryPageIDs(t, page2, []int64{11, 12, 13, 14, 15, 16, 17, 18, 19, 20})
 
-func TestQueryExecution_PaginatedAuditHistoryFailureCannotProduceSuccess(t *testing.T) {
-	svc, targetID, _ := setupQuerySandboxTarget(t)
-	ctx := context.Background()
-	// Phase 38S: if audit/history fails for any page, the response must not
-	// be success. This extends the Phase 37 guarantee to per-page recording.
-	resp, err := svc.Execute(ctx, ownerDBA, targetID, model.QueryExecuteRequest{
-		Statement: "SELECT * FROM qe_sandbox_fixtures ORDER BY id",
-		MaxRows:   100,
+	page3, err := svc.Execute(ctx, ownerDBA, targetID, model.QueryExecuteRequest{
+		Statement: statement,
+		MaxRows:   25,
+		Pagination: &model.QueryExecutePaginationRequest{
+			Page: 3, PageSize: 10,
+		},
 	})
 	if err != nil {
-		// Any error is acceptable — the point is success must not coexist
-		// with a recording failure.
-		return
+		t.Fatalf("page 3 Execute error: %v", err)
 	}
-	if resp.Status == model.QueryExecutionSuccess && resp.ExecutionID == 0 {
-		t.Error("Phase 38S: success response must have a non-zero ExecutionID (recording guarantee)")
+	if page3.LimitApplied != 25 || page3.Truncated || page3.Pagination == nil || page3.Pagination.HasNextPage || !page3.Pagination.HasPreviousPage {
+		t.Fatalf("page 3 caps/navigation = limit=%d truncated=%v pagination=%+v", page3.LimitApplied, page3.Truncated, page3.Pagination)
+	}
+	assertQueryPageIDs(t, page3, []int64{21, 22, 23, 24, 25})
+}
+
+func TestQueryExecution_PaginatedSelectIgnoresUserLimitAndOffset(t *testing.T) {
+	svc, targetID, _ := setupQuerySandboxTarget(t)
+	ctx := context.Background()
+
+	resp, err := svc.Execute(ctx, ownerDBA, targetID, model.QueryExecuteRequest{
+		Statement: "SELECT id, name FROM qe_sandbox_fixtures ORDER BY id LIMIT 1 OFFSET 24",
+		MaxRows:   25,
+		Pagination: &model.QueryExecutePaginationRequest{
+			Page: 1, PageSize: 10,
+		},
+	})
+	if err != nil {
+		t.Fatalf("user-window page 1 Execute error: %v", err)
+	}
+	if resp.LimitApplied != 25 || resp.Pagination == nil || resp.Pagination.Page != 1 {
+		t.Fatalf("server page window = limit=%d pagination=%+v, want maxRows=25 page=1", resp.LimitApplied, resp.Pagination)
+	}
+	assertQueryPageIDs(t, resp, []int64{1, 2, 3, 4, 5, 6, 7, 8, 9, 10})
+
+	resp, err = svc.Execute(ctx, ownerDBA, targetID, model.QueryExecuteRequest{
+		Statement: "SELECT id, name FROM qe_sandbox_fixtures ORDER BY id LIMIT 1 OFFSET 0",
+		MaxRows:   25,
+		Pagination: &model.QueryExecutePaginationRequest{
+			Page: 2, PageSize: 10,
+		},
+	})
+	if err != nil {
+		t.Fatalf("user-window page 2 Execute error: %v", err)
+	}
+	assertQueryPageIDs(t, resp, []int64{11, 12, 13, 14, 15, 16, 17, 18, 19, 20})
+}
+
+func TestQueryExecution_PaginatedSelectRejectsPageAtMaxRowsBoundaryBeforeTargetExecution(t *testing.T) {
+	svc, targetID, db := setupQuerySandboxTarget(t)
+	ctx := context.Background()
+	statement := "SELECT id, name FROM qe_sandbox_fixtures WHERE name = 'page-secret' ORDER BY id"
+
+	_, err := svc.Execute(ctx, ownerDBA, targetID, model.QueryExecuteRequest{
+		Statement: statement,
+		MaxRows:   20,
+		Pagination: &model.QueryExecutePaginationRequest{
+			Page: 3, PageSize: 10,
+		},
+	})
+	if !errors.Is(err, service.ErrQueryValidationFailed) {
+		t.Fatalf("cap-boundary error = %v, want ErrQueryValidationFailed", err)
+	}
+	if strings.Contains(strings.ToLower(err.Error()), "page-secret") || strings.Contains(strings.ToLower(err.Error()), "offset") {
+		t.Fatalf("cap-boundary error leaked request details: %q", err)
+	}
+
+	repo := mysql.NewQueryExecutionRepository(db)
+	items, total, err := repo.ListExecutions(ctx, model.QueryExecutionListQuery{
+		TargetResourceID: targetID, Page: 1, PageSize: 10, Mode: model.PaginationModeOffset,
+	})
+	if err != nil {
+		t.Fatalf("list cap-boundary history: %v", err)
+	}
+	if total != 1 || len(items) != 1 {
+		t.Fatalf("cap-boundary history total/len = %d/%d, want 1/1", total, len(items))
+	}
+	if items[0].Status != model.QueryExecutionRejected || items[0].RowCount != 0 || items[0].StatementPreview != "" || items[0].ErrorCode != "validation_failed" {
+		t.Fatalf("cap-boundary history = %+v, want rejected with no executable statement", items[0])
+	}
+
+	var auditResult string
+	if err := db.QueryRow(`select result from audit_events where target_resource_id = ? order by id desc limit 1`, targetID).Scan(&auditResult); err != nil {
+		t.Fatalf("read cap-boundary audit: %v", err)
+	}
+	if auditResult != "validation_failed" {
+		t.Fatalf("cap-boundary audit result = %q, want validation_failed", auditResult)
 	}
 }
 
-func TestQueryExecution_PaginatedControlledErrorsNoSQLDSNCredentials(t *testing.T) {
-	svc, targetID, _ := setupQuerySandboxTarget(t)
+func TestQueryExecution_PaginatedSelectRecordsEachPageInHistoryAndAudit(t *testing.T) {
+	svc, targetID, db := setupQuerySandboxTarget(t)
 	ctx := context.Background()
-	// Phase 38S: error messages must not leak SQL, DSN, credentials, actor ID,
-	// or offset. This extends the Phase 37 leak-free guarantee.
-	_, err := svc.Execute(ctx, ownerDBA, targetID, model.QueryExecuteRequest{
-		Statement: "DELETE FROM qe_sandbox_fixtures",
-		MaxRows:   10,
+	statement := "SELECT id, name FROM qe_sandbox_fixtures ORDER BY id"
+	request := func(page int) model.QueryExecuteRequest {
+		return model.QueryExecuteRequest{
+			Statement: statement,
+			MaxRows:   25,
+			Pagination: &model.QueryExecutePaginationRequest{
+				Page: page, PageSize: 10,
+			},
+		}
+	}
+
+	page1, err := svc.Execute(ctx, ownerDBA, targetID, request(1))
+	if err != nil {
+		t.Fatalf("page 1 Execute error: %v", err)
+	}
+	page2, err := svc.Execute(ctx, ownerDBA, targetID, request(2))
+	if err != nil {
+		t.Fatalf("page 2 Execute error: %v", err)
+	}
+	if page1.ExecutionID == 0 || page2.ExecutionID == 0 || page1.ExecutionID == page2.ExecutionID {
+		t.Fatalf("page execution IDs = %d,%d, want distinct non-zero attempts", page1.ExecutionID, page2.ExecutionID)
+	}
+
+	historyRepo := mysql.NewQueryExecutionRepository(db)
+	items, total, err := historyRepo.ListExecutions(ctx, model.QueryExecutionListQuery{
+		TargetResourceID: targetID, Page: 1, PageSize: 10, Mode: model.PaginationModeOffset,
 	})
-	if err == nil {
-		t.Fatal("expected error for DELETE statement")
+	if err != nil {
+		t.Fatalf("list page history: %v", err)
 	}
-	errStr := err.Error()
-	if strings.Contains(errStr, "tcp") || strings.Contains(errStr, "3306") || strings.Contains(errStr, "root") {
-		t.Errorf("Phase 38S: error must not leak DSN fragments: %q", errStr)
+	if total != 2 || len(items) != 2 {
+		t.Fatalf("page history total/len = %d/%d, want 2/2", total, len(items))
 	}
-	if strings.Contains(errStr, "DELETE FROM") {
-		t.Errorf("Phase 38S: error must not leak SQL: %q", errStr)
+	for _, item := range items {
+		if item.Status != model.QueryExecutionSuccess || item.RowCount != 10 || item.ErrorCode != "" || item.ErrorMessage != "" {
+			t.Fatalf("page history item = %+v, want normal success attempt", item)
+		}
+		if strings.Contains(strings.ToLower(item.StatementPreview), "offset") || strings.Contains(strings.ToLower(item.StatementPreview), "limit") {
+			t.Fatalf("history stored server paging SQL: %q", item.StatementPreview)
+		}
+	}
+
+	auditRepo := mysql.NewAuditRepository(db)
+	auditItems, err := auditRepo.ListByResourceID(targetID)
+	if err != nil {
+		t.Fatalf("list page audit: %v", err)
+	}
+	if len(auditItems) != 2 {
+		t.Fatalf("page audit items = %d, want 2", len(auditItems))
+	}
+	for _, item := range auditItems {
+		if item.EventType != "query.executed" || item.Result != "success" || item.ActorUserID != ownerDBA {
+			t.Fatalf("page audit item = %+v, want attributed success", item)
+		}
+	}
+}
+
+func TestQueryExecution_PaginatedDisclosurePolicyChangeBetweenPagesMasksPageTwo(t *testing.T) {
+	svc, targetID, db := setupQuerySandboxTarget(t)
+	ctx := context.Background()
+	statement := "SELECT id, name FROM qe_sandbox_fixtures ORDER BY id"
+
+	page1, err := svc.Execute(ctx, ownerDBA, targetID, model.QueryExecuteRequest{
+		Statement: statement,
+		MaxRows:   25,
+		Pagination: &model.QueryExecutePaginationRequest{
+			Page: 1, PageSize: 10,
+		},
+	})
+	if err != nil {
+		t.Fatalf("page 1 Execute error: %v", err)
+	}
+	if page1.Rows[0][1] != "fixture-01" {
+		t.Fatalf("page 1 name = %v, want raw fixture-01", page1.Rows[0][1])
+	}
+
+	mustExec(t, db, `update query_result_disclosure_policies
+		set mode = ?
+		where target_resource_id = ? and database_name = ? and object_name = ? and column_name = ?`,
+		string(model.ResultDisclosureMaskedNoCopy), targetID, testDBName(t), "qe_sandbox_fixtures", "name")
+
+	page2, err := svc.Execute(ctx, ownerDBA, targetID, model.QueryExecuteRequest{
+		Statement: statement,
+		MaxRows:   25,
+		Pagination: &model.QueryExecutePaginationRequest{
+			Page: 2, PageSize: 10,
+		},
+	})
+	if err != nil {
+		t.Fatalf("page 2 Execute error after policy change: %v", err)
+	}
+	if page2.Columns[0].DisplayMode != model.ResultDisclosureRawCopyAllowed || !page2.Columns[0].CopyAllowed {
+		t.Fatalf("page 2 id disclosure = %+v, want raw copy allowed", page2.Columns[0])
+	}
+	if page2.Columns[1].DisplayMode != model.ResultDisclosureMaskedNoCopy || page2.Columns[1].CopyAllowed {
+		t.Fatalf("page 2 name disclosure = %+v, want masked no-copy", page2.Columns[1])
+	}
+	assertQueryPageIDs(t, page2, []int64{11, 12, 13, 14, 15, 16, 17, 18, 19, 20})
+	for _, row := range page2.Rows {
+		if row[1] != "[MASKED]" {
+			t.Fatalf("page 2 name = %v, want [MASKED] after policy change", row[1])
+		}
+	}
+}
+
+func TestQueryExecution_PaginatedControlledErrorsAndRecordsDoNotLeakSecrets(t *testing.T) {
+	svc, targetID, db := setupQuerySandboxTarget(t)
+	ctx := context.Background()
+	statement := "SELECT id, name FROM qe_sandbox_fixtures WHERE name = 'page-secret' ORDER BY id"
+
+	_, executionErr := svc.Execute(ctx, ownerDBA, targetID, model.QueryExecuteRequest{
+		Statement: statement,
+		MaxRows:   20,
+		Pagination: &model.QueryExecutePaginationRequest{
+			Page: 3, PageSize: 10,
+		},
+	})
+	if executionErr == nil {
+		t.Fatal("expected cap-boundary error")
+	}
+
+	repo := mysql.NewQueryExecutionRepository(db)
+	history, _, err := repo.ListExecutions(ctx, model.QueryExecutionListQuery{
+		TargetResourceID: targetID, Page: 1, PageSize: 10, Mode: model.PaginationModeOffset,
+	})
+	if err != nil {
+		t.Fatalf("list secret-safety history: %v", err)
+	}
+	audit, err := mysql.NewAuditRepository(db).ListByResourceID(targetID)
+	if err != nil {
+		t.Fatalf("list secret-safety audit: %v", err)
+	}
+	historyJSON, err := json.Marshal(history)
+	if err != nil {
+		t.Fatalf("marshal history: %v", err)
+	}
+	auditJSON, err := json.Marshal(audit)
+	if err != nil {
+		t.Fatalf("marshal audit: %v", err)
+	}
+	for _, raw := range []string{executionErr.Error(), string(historyJSON), string(auditJSON)} {
+		for _, forbidden := range []string{
+			"page-secret", "fixture-01", globalEnv.dsn, sandboxCredentialRef,
+			"tcp(", "root:test", "offset", "result rows", "query result",
+		} {
+			if strings.Contains(strings.ToLower(raw), strings.ToLower(forbidden)) {
+				t.Fatalf("secret %q leaked in governed output %q", forbidden, raw)
+			}
+		}
+	}
+	if strings.Contains(string(historyJSON), `"actorUserId"`) {
+		t.Fatalf("history JSON exposed internal actor ID: %s", historyJSON)
 	}
 }
