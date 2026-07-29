@@ -13,6 +13,7 @@ HTTP handlers, chi routing, CORS middleware, and fake-repo test infrastructure.
 | auth_handler.go | POST /auth/login handler |
 | dictionary_handler.go | Dictionary list handlers (environments, owners, roles, resource-types, relation-types, lifecycle-statuses, health-statuses) |
 | query_schema_handler.go | handleGetTableDefinition for MySQL table-definition requests |
+| query_execution_handler.go | POST execute and GET execution-history handlers, including optional governed result paging |
 | query_credential_handler.go | Phase 38A credential metadata handlers (GET/PUT/DELETE) |
 | query_disclosure_handler.go | Phase 38Q disclosure policy CRUD handlers (admin-only writes) |
 | query_saved_statement_handler.go | Phase 38R saved statement CRUD handlers (personal + shared_template) |
@@ -30,6 +31,7 @@ HTTP handlers, chi routing, CORS middleware, and fake-repo test infrastructure.
 | Method | Path | Description |
 |--------|------|-------------|
 | GET | /query-targets/{id}/schema/table-definition | Get MySQL table definition (base tables only) |
+| POST | /query-targets/{id}/execute | Execute a governed read-only statement, with optional page-number result paging for SELECT |
 | GET | /query-disclosure-policies | List disclosure policies for a query target |
 | POST | /query-disclosure-policies | Create a disclosure policy (admin-only) |
 | PUT | /query-disclosure-policies | Update a disclosure policy (admin-only) |
@@ -42,6 +44,24 @@ HTTP handlers, chi routing, CORS middleware, and fake-repo test infrastructure.
 ## Exports
 - `Dependencies` struct — all service dependencies
 - `NewRouter(deps Dependencies) *chi.Mux` — wired router
+
+## Execute result paging
+
+`POST /query-targets/{id}/execute` accepts the existing statement request with an
+optional `pagination` object containing a 1-based `page` and a `pageSize` of
+10, 25, 50, or 100. The response includes `pagination` only for paged bare
+`SELECT` statements. It reports the page, page size, and adjacent-page flags,
+not totals or snapshot identifiers.
+
+The server owns the page window and effective row cap. It validates the page,
+applies the window through the SQL AST, and never relies on browser SQL
+rewriting. Each page is a fresh governed request with target access, credential,
+statement guard, disclosure policy, timeout, cap, history, and audit checks.
+Result rows are not persisted and no snapshot is retained between pages.
+
+`SHOW`, `DESCRIBE`, and typed `EXPLAIN` remain single-response metadata
+statements. A supplied pagination object does not split or navigate their
+responses.
 
 ## Dependencies
 - Upstream: `internal/service` (all services), `github.com/go-chi/chi/v5`

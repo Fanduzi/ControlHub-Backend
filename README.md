@@ -237,8 +237,26 @@ Dependency flow (strict, one-directional): `cmd/server` → `api` → `service` 
 | GET | /lifecycle-statuses | List lifecycle status dictionary items |
 | GET | /health-statuses | List health status dictionary items |
 | GET | /query-targets/{id}/schema/table-definition | Get MySQL table definition (base tables only) |
+| POST | /query-targets/{id}/execute | Execute a governed read-only statement, with optional result paging for SELECT |
 | GET | /openapi.yaml | Raw OpenAPI 3.1.0 spec |
 | GET | /docs | Scalar API Reference docs UI |
+
+### Governed query result paging
+
+`POST /query-targets/{id}/execute` accepts optional page-number pagination for
+bare `SELECT` statements. Send `pagination.page` as a 1-based page number and
+`pagination.pageSize` as one of 10, 25, 50, or 100. The response reports the
+requested page, page size, and whether adjacent pages exist. It does not expose
+totals or snapshot identifiers.
+
+The server owns page-window and row-cap enforcement. Each page is a fresh
+governed execution with access, credential, statement, disclosure, timeout,
+cap, history, and audit checks. The browser does not rewrite SQL. Result rows
+are not persisted, and no result snapshot is retained between pages.
+
+`SHOW`, `DESCRIBE`, and typed `EXPLAIN` remain single-response metadata
+statements. Supplying pagination does not split those responses or create page
+navigation metadata.
 
 ## Audit Storage Strategy
 
