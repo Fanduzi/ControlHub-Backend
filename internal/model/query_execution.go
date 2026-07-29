@@ -1,6 +1,6 @@
 // Package model provides domain entities for the resource management system.
-// input: errors, fmt, time packages
-// output: QueryExecution*, QueryResult* types, status/error enums, query credential policy/ref validators, ErrInvalidCredentialMetadata
+// input: errors, fmt, math, time packages
+// output: QueryExecution*, QueryResult* types, QueryExecutePagination* types, status/error enums, query credential policy/ref validators, ValidatePagination, ValidatePaginationPage, ErrInvalidCredentialMetadata
 // pos: Query sandbox execution requests, responses, and history records
 // note: if this file changes, update header and README.md
 package model
@@ -11,6 +11,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"strconv"
 	"strings"
 	"time"
@@ -27,11 +28,41 @@ const (
 	QueryExecutionTimeout  QueryExecutionStatus = "timeout"
 )
 
+// AllowedPageSizes lists the page sizes permitted for governed query-result
+// paging. Only these values are accepted by ValidatePagination; any other
+// pageSize is rejected so the executor never receives an unbounded page shape.
+var AllowedPageSizes = []int{10, 25, 50, 100}
+
+// QueryExecuteDefaultPageSize is the default page size when the caller omits
+// the pagination block from a governed query-execute request.
+const QueryExecuteDefaultPageSize = 10
+
+// QueryExecutePaginationRequest carries the caller's requested page boundary
+// for governed query-result paging. Page is 1-based; PageSize must be one of
+// AllowedPageSizes. When omitted from the request body, the executor applies
+// QueryExecuteDefaultPageSize and starts at page 1.
+type QueryExecutePaginationRequest struct {
+	Page     int `json:"page"`
+	PageSize int `json:"pageSize"`
+}
+
+// QueryExecutePaginationResponse carries the server-computed page metadata
+// for governed query-result paging. HasPreviousPage and HasNextPage are
+// derived from the offset and effective row cap; they never leak total-row
+// counts or snapshot identifiers.
+type QueryExecutePaginationResponse struct {
+	Page            int  `json:"page"`
+	PageSize        int  `json:"pageSize"`
+	HasPreviousPage bool `json:"hasPreviousPage"`
+	HasNextPage     bool `json:"hasNextPage"`
+}
+
 // QueryExecuteRequest is the body of POST /query-targets/{id}/execute. The
 // actor is never taken from here — it is derived from the verified token.
 type QueryExecuteRequest struct {
-	Statement string `json:"statement"`
-	MaxRows   int    `json:"maxRows,omitempty"`
+	Statement  string                         `json:"statement"`
+	MaxRows    int                            `json:"maxRows,omitempty"`
+	Pagination *QueryExecutePaginationRequest `json:"pagination,omitempty"`
 }
 
 // QueryResultColumn describes one result column by its name and database type.
@@ -48,17 +79,18 @@ type QueryResultColumn struct {
 // QueryExecuteResponse is the body returned for a query execution attempt. It
 // carries result columns and rows only; it never carries credentials or DSNs.
 type QueryExecuteResponse struct {
-	ExecutionID      uint64               `json:"executionId"`
-	Status           QueryExecutionStatus `json:"status"`
-	TargetResourceID uint64               `json:"targetResourceId"`
-	Engine           string               `json:"engine"`
-	Columns          []QueryResultColumn  `json:"columns"`
-	Rows             [][]any              `json:"rows"`
-	RowCount         int                  `json:"rowCount"`
-	Truncated        bool                 `json:"truncated"`
-	DurationMs       int64                `json:"durationMs"`
-	LimitApplied     int                  `json:"limitApplied"`
-	ExecutedAt       time.Time            `json:"executedAt"`
+	ExecutionID      uint64                          `json:"executionId"`
+	Status           QueryExecutionStatus            `json:"status"`
+	TargetResourceID uint64                          `json:"targetResourceId"`
+	Engine           string                          `json:"engine"`
+	Columns          []QueryResultColumn             `json:"columns"`
+	Rows             [][]any                         `json:"rows"`
+	RowCount         int                             `json:"rowCount"`
+	Truncated        bool                            `json:"truncated"`
+	DurationMs       int64                           `json:"durationMs"`
+	LimitApplied     int                             `json:"limitApplied"`
+	ExecutedAt       time.Time                       `json:"executedAt"`
+	Pagination       *QueryExecutePaginationResponse `json:"pagination,omitempty"`
 }
 
 // QueryExecutionActor is the privacy-safe actor projection for history rows.
@@ -236,6 +268,44 @@ func ValidateStatus(s string) error {
 		return nil
 	}
 	return fmt.Errorf("invalid status: %s", s)
+}
+
+// ValidatePagination rejects page <= 0, pageSize not in AllowedPageSizes,
+// and (page-1)*pageSize overflow. The overflow guard uses checked arithmetic
+// so a malicious page value cannot wrap the offset negative.
+func ValidatePagination(page, pageSize int) error {
+	if page <= 0 {
+		return fmt.Errorf("page must be > 0, got %d", page)
+	}
+	allowed := false
+	for _, s := range AllowedPageSizes {
+		if pageSize == s {
+			allowed = true
+			break
+		}
+	}
+	if !allowed {
+		return fmt.Errorf("pageSize must be one of %v, got %d", AllowedPageSizes, pageSize)
+	}
+	// Checked arithmetic: (page-1) * pageSize must not overflow int.
+	if page-1 > math.MaxInt/pageSize {
+		return fmt.Errorf("pagination offset overflow: (page=%d-1)*pageSize=%d", page, pageSize)
+	}
+	return nil
+}
+
+// ValidatePaginationPage extends ValidatePagination with a cap boundary check:
+// (page-1)*pageSize must be strictly less than effectiveMaxRows. This prevents
+// the executor from receiving an offset that exceeds the governed row cap.
+func ValidatePaginationPage(page, pageSize, effectiveMaxRows int) error {
+	if err := ValidatePagination(page, pageSize); err != nil {
+		return err
+	}
+	offset := (page - 1) * pageSize
+	if offset >= effectiveMaxRows {
+		return fmt.Errorf("page %d with pageSize %d (offset %d) exceeds effective max rows %d", page, pageSize, offset, effectiveMaxRows)
+	}
+	return nil
 }
 
 // ParseTimestamp parses an RFC3339 or RFC3339Nano timestamp.

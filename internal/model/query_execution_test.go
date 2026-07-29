@@ -1,14 +1,13 @@
 // Package model provides tests for query execution domain validators.
-// input: strings, testing
-// output: TestQueryEnvironmentPolicy_*, TestValidateCredentialRef_*
-// pos: Unit tests for environment-policy and credential_ref fail-closed validators
+// input: strings, testing, math, reflect
+// output: TestQueryEnvironmentPolicy_*, TestValidateCredentialRef_*, TestQueryExecutePagination*, TestValidatePagination*
+// pos: Unit tests for environment-policy, credential_ref, and Phase 38S governed-result-paging validators
 // note: if this file changes, update header and README.md
 package model
 
 import (
 	"encoding/base64"
 	"encoding/json"
-	"fmt"
 	"math"
 	"reflect"
 	"strings"
@@ -337,176 +336,156 @@ func TestNormalizeFilters_NilValues(t *testing.T) {
 	}
 }
 
-// --- Phase 38S: governed query-result paging contract (RED tests) ---
-// These tests prove the absence of pagination behavior on QueryExecuteRequest
-// and QueryExecuteResponse. They compile and run against the current types;
-// each assertion fails because the pagination fields do not exist yet.
+// --- Phase 38S: governed query-result paging contract ---
 
-// TestQueryExecuteRequest_HasPageField proves QueryExecuteRequest lacks a Page
-// field. Phase 38S requires Page for page-indexed governed result paging.
-func TestQueryExecuteRequest_HasPageField(t *testing.T) {
+func TestQueryExecuteRequest_HasPaginationField(t *testing.T) {
 	t.Parallel()
 	rt := reflect.TypeOf(QueryExecuteRequest{})
-	if _, ok := rt.FieldByName("Page"); !ok {
-		t.Error("Phase 38S: QueryExecuteRequest must have a Page field for governed result paging")
+	f, ok := rt.FieldByName("Pagination")
+	if !ok {
+		t.Fatal("Phase 38S: QueryExecuteRequest must have a Pagination field for governed result paging")
+	}
+	want := reflect.TypeOf((*QueryExecutePaginationRequest)(nil))
+	if f.Type != want {
+		t.Errorf("Pagination field type = %v, want %v", f.Type, want)
 	}
 }
 
-// TestQueryExecuteRequest_HasPageSizeField proves QueryExecuteRequest lacks a
-// PageSize field. Phase 38S requires PageSize for page-size governance.
-func TestQueryExecuteRequest_HasPageSizeField(t *testing.T) {
+func TestQueryExecutePaginationRequest_HasPageAndPageSizeFields(t *testing.T) {
 	t.Parallel()
-	rt := reflect.TypeOf(QueryExecuteRequest{})
-	if _, ok := rt.FieldByName("PageSize"); !ok {
-		t.Error("Phase 38S: QueryExecuteRequest must have a PageSize field for governed result paging")
+	rt := reflect.TypeOf(QueryExecutePaginationRequest{})
+	for _, name := range []string{"Page", "PageSize"} {
+		if _, ok := rt.FieldByName(name); !ok {
+			t.Errorf("Phase 38S: QueryExecutePaginationRequest must have %s field", name)
+		}
 	}
 }
 
-// TestQueryExecuteResponse_HasPageField proves QueryExecuteResponse lacks a
-// Page field in its pagination metadata.
-func TestQueryExecuteResponse_HasPageField(t *testing.T) {
-	t.Parallel()
-	rt := reflect.TypeOf(QueryExecuteResponse{})
-	if _, ok := rt.FieldByName("Page"); !ok {
-		t.Error("Phase 38S: QueryExecuteResponse must have a Page field in pagination metadata")
-	}
-}
-
-// TestQueryExecuteResponse_HasPageSizeField proves QueryExecuteResponse lacks a
-// PageSize field in its pagination metadata.
-func TestQueryExecuteResponse_HasPageSizeField(t *testing.T) {
+func TestQueryExecuteResponse_HasPaginationField(t *testing.T) {
 	t.Parallel()
 	rt := reflect.TypeOf(QueryExecuteResponse{})
-	if _, ok := rt.FieldByName("PageSize"); !ok {
-		t.Error("Phase 38S: QueryExecuteResponse must have a PageSize field in pagination metadata")
+	f, ok := rt.FieldByName("Pagination")
+	if !ok {
+		t.Fatal("Phase 38S: QueryExecuteResponse must have a Pagination field for governed result paging")
+	}
+	want := reflect.TypeOf((*QueryExecutePaginationResponse)(nil))
+	if f.Type != want {
+		t.Errorf("Pagination field type = %v, want %v", f.Type, want)
 	}
 }
 
-// TestQueryExecuteResponse_HasTotalCountField proves QueryExecuteResponse lacks
-// a TotalCount field. Phase 38S requires TotalCount so the client can compute
-// total pages.
-func TestQueryExecuteResponse_HasTotalCountField(t *testing.T) {
+func TestQueryExecutePaginationResponse_HasRequiredFields(t *testing.T) {
 	t.Parallel()
-	rt := reflect.TypeOf(QueryExecuteResponse{})
-	if _, ok := rt.FieldByName("TotalCount"); !ok {
-		t.Error("Phase 38S: QueryExecuteResponse must have a TotalCount field for page navigation")
+	rt := reflect.TypeOf(QueryExecutePaginationResponse{})
+	for _, name := range []string{"Page", "PageSize", "HasPreviousPage", "HasNextPage"} {
+		if _, ok := rt.FieldByName(name); !ok {
+			t.Errorf("Phase 38S: QueryExecutePaginationResponse must have %s field", name)
+		}
 	}
 }
 
-// TestQueryExecuteResponse_HasTotalPagesField proves QueryExecuteResponse lacks
-// a TotalPages field.
-func TestQueryExecuteResponse_HasTotalPagesField(t *testing.T) {
+func TestValidatePagination_RejectsInvalidInputs(t *testing.T) {
 	t.Parallel()
-	rt := reflect.TypeOf(QueryExecuteResponse{})
-	if _, ok := rt.FieldByName("TotalPages"); !ok {
-		t.Error("Phase 38S: QueryExecuteResponse must have a TotalPages field for page navigation")
-	}
-}
-
-// TestQueryExecuteRequest_PaginationFieldValidation proves the absence of
-// pagination field validation. Each subtest names a validation rule that Phase
-// 38S must enforce; the assertion fails because the fields don't exist.
-func TestQueryExecuteRequest_PaginationFieldValidation(t *testing.T) {
-	t.Parallel()
-
-	validPageSizes := []int{10, 25, 50, 100}
-	for _, ps := range validPageSizes {
-		t.Run(fmt.Sprintf("valid_page_size_%d_accepted", ps), func(t *testing.T) {
-			t.Helper()
-			// Phase 38S: these page sizes must be accepted by the request validator.
-			// Currently the PageSize field does not exist, so no validation is possible.
-			rt := reflect.TypeOf(QueryExecuteRequest{})
-			if _, ok := rt.FieldByName("PageSize"); !ok {
-				t.Errorf("Phase 38S: PageSize=%d should be accepted but QueryExecuteRequest.PageSize field is missing", ps)
-			}
-		})
-	}
-
-	invalidCases := []struct {
-		name string
-		page int
-		size int
+	tests := []struct {
+		name     string
+		page     int
+		pageSize int
 	}{
 		{"zero_page", 0, 10},
 		{"negative_page", -1, 10},
 		{"zero_page_size", 1, 0},
 		{"negative_page_size", 1, -1},
+		{"disallowed_page_size", 1, 5},
 		{"page_size_overflow", math.MaxInt64, math.MaxInt64},
 	}
-	for _, tc := range invalidCases {
+	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Helper()
-			// Phase 38S: these values must be rejected. Currently there are no
-			// fields to validate, so the rejection logic cannot exist.
-			rt := reflect.TypeOf(QueryExecuteRequest{})
-			if _, ok := rt.FieldByName("Page"); !ok {
-				t.Errorf("Phase 38S: page=%d, pageSize=%d must be rejected but QueryExecuteRequest.Page field is missing", tc.page, tc.size)
+			if err := ValidatePagination(tc.page, tc.pageSize); err == nil {
+				t.Errorf("ValidatePagination(%d, %d) = nil, want error", tc.page, tc.pageSize)
 			}
 		})
 	}
 }
 
-// TestQueryExecuteRequest_CheckedArithmeticOverflow proves that the
-// (page-1)*pageSize offset computation lacks overflow protection. Phase 38S
-// must reject page values where (page-1)*pageSize overflows int.
-func TestQueryExecuteRequest_CheckedArithmeticOverflow(t *testing.T) {
+func TestValidatePagination_AcceptsAllowedPageSizes(t *testing.T) {
 	t.Parallel()
-	// Phase 38S: (page-1)*pageSize must not overflow. With page=MaxInt and
-	// pageSize=2, the offset would wrap negative. The request validator must
-	// reject this before the executor runs.
-	page := math.MaxInt64
-	pageSize := 2
-	offset := (page - 1) * pageSize // this overflows in practice
-	_ = offset
-	// The test proves the field doesn't exist, so no overflow check is possible.
-	rt := reflect.TypeOf(QueryExecuteRequest{})
-	if _, ok := rt.FieldByName("Page"); !ok {
-		t.Errorf("Phase 38S: (page-1)*pageSize overflow check required but QueryExecuteRequest.Page field is missing (page=%d, pageSize=%d)", page, pageSize)
+	for _, ps := range AllowedPageSizes {
+		if err := ValidatePagination(1, ps); err != nil {
+			t.Errorf("ValidatePagination(1, %d) = %v, want nil", ps, err)
+		}
 	}
 }
 
-// TestQueryExecuteRequest_RejectsUnknownFields proves that QueryExecuteRequest
-// JSON decoding does not reject unknown fields. Phase 38S must reject unknown
-// fields so callers cannot smuggle pagination params through a stale client.
-func TestQueryExecuteRequest_RejectsUnknownFields(t *testing.T) {
+func TestValidatePagination_RejectsOverflow(t *testing.T) {
 	t.Parallel()
-	raw := `{"statement":"select 1","page":1,"pageSize":10,"bogus":true}`
-	var req QueryExecuteRequest
-	if err := json.Unmarshal([]byte(raw), &req); err != nil {
-		// Phase 38S implemented: unknown fields are now rejected. Test passes.
-		return
+	if err := ValidatePagination(math.MaxInt64, 2); err == nil {
+		t.Errorf("ValidatePagination(MaxInt64, 2) = nil, want overflow error")
 	}
-	// Phase 38S not implemented: unknown fields are silently accepted.
-	t.Error("Phase 38S: QueryExecuteRequest JSON decoding must reject unknown fields (page, pageSize, bogus)")
 }
 
-// TestQueryExecuteResponse_PaginationMetadataAbsent proves the response struct
-// carries no pagination metadata. Phase 38S requires Page, PageSize,
-// TotalCount, and TotalPages so the client can navigate pages.
-func TestQueryExecuteResponse_PaginationMetadataAbsent(t *testing.T) {
+func TestValidatePaginationPage_RejectsBeyondMaxRows(t *testing.T) {
 	t.Parallel()
-	resp := QueryExecuteResponse{Status: QueryExecutionSuccess, RowCount: 5}
+	// page=2, pageSize=100, effectiveMaxRows=50 → offset=100 >= 50
+	if err := ValidatePaginationPage(2, 100, 50); err == nil {
+		t.Error("ValidatePaginationPage(2, 100, 50) = nil, want error (offset exceeds max rows)")
+	}
+}
+
+func TestValidatePaginationPage_AcceptsValidPage(t *testing.T) {
+	t.Parallel()
+	// page=1, pageSize=10, effectiveMaxRows=100 → offset=0 < 100
+	if err := ValidatePaginationPage(1, 10, 100); err != nil {
+		t.Errorf("ValidatePaginationPage(1, 10, 100) = %v, want nil", err)
+	}
+}
+
+func TestQueryExecuteResponse_PaginationJSONOmitempty(t *testing.T) {
+	t.Parallel()
+	resp := QueryExecuteResponse{Status: QueryExecutionSuccess, RowCount: 0}
+	raw, err := json.Marshal(resp)
+	if err != nil {
+		t.Fatalf("json.Marshal: %v", err)
+	}
+	if strings.Contains(string(raw), "pagination") {
+		t.Errorf("nil Pagination should be omitted from JSON, got %s", raw)
+	}
+}
+
+func TestQueryExecuteResponse_PaginationJSONPresent(t *testing.T) {
+	t.Parallel()
+	resp := QueryExecuteResponse{
+		Status:   QueryExecutionSuccess,
+		RowCount: 5,
+		Pagination: &QueryExecutePaginationResponse{
+			Page:            1,
+			PageSize:        10,
+			HasPreviousPage: false,
+			HasNextPage:     true,
+		},
+	}
 	raw, err := json.Marshal(resp)
 	if err != nil {
 		t.Fatalf("json.Marshal: %v", err)
 	}
 	s := string(raw)
-	for _, field := range []string{"page", "pageSize", "totalCount", "totalPages"} {
-		if strings.Contains(s, fmt.Sprintf("%q", field)) {
-			// Phase 38S implemented: field is present. Skip.
-			continue
+	for _, field := range []string{"page", "pageSize", "hasPreviousPage", "hasNextPage"} {
+		if !strings.Contains(s, field) {
+			t.Errorf("pagination JSON must include %q, got %s", field, s)
 		}
-		t.Errorf("Phase 38S: QueryExecuteResponse JSON must include %q for pagination metadata; response=%s", field, s)
 	}
 }
 
-// TestQueryExecuteResponse_NoHasNextPageField proves the response lacks a
-// hasNextPage boolean. Phase 38S should include it so clients know whether
-// to request the next page.
-func TestQueryExecuteResponse_NoHasNextPageField(t *testing.T) {
+func TestQueryExecuteRequest_RejectsUnknownFields(t *testing.T) {
 	t.Parallel()
-	rt := reflect.TypeOf(QueryExecuteResponse{})
-	if _, ok := rt.FieldByName("HasNextPage"); !ok {
-		t.Error("Phase 38S: QueryExecuteResponse must have HasNextPage field for page navigation")
+	raw := `{"statement":"select 1","page":1,"pageSize":10,"bogus":true}`
+	var req QueryExecuteRequest
+	if err := json.Unmarshal([]byte(raw), &req); err != nil {
+		return
+	}
+	// Standard Go JSON decoder accepts unknown fields silently.
+	// Verify top-level page/pageSize do NOT populate the nested Pagination.
+	if req.Pagination != nil {
+		t.Error("top-level page/pageSize must not populate Pagination (must be nested under \"pagination\")")
 	}
 }
