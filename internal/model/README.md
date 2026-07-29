@@ -35,6 +35,29 @@ Domain structs, taxonomy constants, validation methods, and dictionary definitio
 - `QuerySavedStatementScope.Validate()`, `QuerySavedStatementCreateRequest.Validate()`, `QuerySavedStatementUpdateRequest.Validate()` (Phase 38R governed saved statements)
 - `ValidatePagination()`, `ValidatePaginationPage()`, `QueryExecutePaginationRequest`, `QueryExecutePaginationResponse`, `AllowedPageSizes`, `QueryExecuteDefaultPageSize` (Phase 38S governed query-result paging)
 
+## Phase 38S governed query-result paging
+
+`QueryExecuteRequest.Pagination` is optional. When present, the request carries a
+1-based `page` and a `pageSize` from `AllowedPageSizes`, which is currently
+`[10, 25, 50, 100]`. When pagination is omitted, execute keeps its existing
+single-response behavior.
+
+`ValidatePagination` checks the page number, supported page size, and checked
+page-window arithmetic. `ValidatePaginationPage` also checks that the requested
+page begins within the effective server-owned row cap. The server owns the page
+window and cap, so callers do not supply rewritten SQL or a client-controlled
+window boundary.
+
+`QueryExecutePaginationResponse` reports only the requested page, page size, and
+whether adjacent pages exist. It does not report totals or snapshot identifiers.
+Each result page is a fresh governed execution with target access, credential,
+statement guard, disclosure policy, timeout, row cap, history, and audit checks.
+Result rows are not persisted, and paging does not create a result snapshot.
+
+Metadata statements such as `SHOW`, `DESCRIBE`, and typed `EXPLAIN` remain a
+single response even if a pagination block is supplied. Pagination applies to
+bare `SELECT` statements only.
+
 ## Dependencies
 - Upstream: none (this is the base layer)
 - Downstream: consumed by service, repository, and api layers

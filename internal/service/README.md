@@ -43,6 +43,21 @@ Business logic layer with interface-based repository dependencies. Each service 
 - `QuerySavedStatementReader`, `QuerySavedStatementWriter`, `SavedStatementGuard` — saved statement data access interfaces
 - `QuerySavedStatementService.List/Create/Update/Delete` — authorized CRUD for target-scoped saved statements
 
+## Phase 38S governed result paging
+
+`QueryGuard.GuardPaginatedSelect` accepts only a parser-approved bare `SELECT`.
+It validates the requested page against the effective server-owned row cap and
+adds the page window to the parsed AST. The executor receives that guarded SQL,
+not browser-rewritten SQL. `SHOW`, `DESCRIBE`, and typed `EXPLAIN` return the
+`ErrQueryPaginationNotApplicable` signal so `QueryExecutionService.Execute`
+falls back to the normal single-response path.
+
+Every paged `SELECT` is executed afresh. The service resolves target access,
+credential binding, statement governance, disclosure policy, timeout, and the
+effective row cap for every page, then records the execution attempt in history
+and audit. The service does not run a totals query, persist result rows, or
+create a snapshot between pages.
+
 ## Dependencies
 - Upstream: `internal/model` (domain types)
 - Downstream: `internal/repository/mysql` (implements the interfaces)
