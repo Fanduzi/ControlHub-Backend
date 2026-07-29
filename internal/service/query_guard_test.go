@@ -7,6 +7,7 @@ package service
 
 import (
 	"errors"
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -808,5 +809,134 @@ func TestGuardUnchanged(t *testing.T) {
 				t.Errorf("Guard(%q) error = %v, wantErr %v", tt.statement, err, tt.wantErr)
 			}
 		})
+	}
+}
+
+// --- Phase 38S: governed query-result paging contract (RED tests) ---
+
+func TestGuardedQuery_HasPageField(t *testing.T) {
+	t.Parallel()
+	rt := reflect.TypeOf(GuardedQuery{})
+	if _, ok := rt.FieldByName("Page"); !ok {
+		t.Error("Phase 38S: GuardedQuery must have a Page field so the executor knows which page to return")
+	}
+}
+
+func TestGuardedQuery_HasPageSizeField(t *testing.T) {
+	t.Parallel()
+	rt := reflect.TypeOf(GuardedQuery{})
+	if _, ok := rt.FieldByName("PageSize"); !ok {
+		t.Error("Phase 38S: GuardedQuery must have a PageSize field so the executor can compute OFFSET")
+	}
+}
+
+func TestGuardedQuery_HasTotalCountField(t *testing.T) {
+	t.Parallel()
+	rt := reflect.TypeOf(GuardedQuery{})
+	if _, ok := rt.FieldByName("TotalCount"); !ok {
+		t.Error("Phase 38S: GuardedQuery must have a TotalCount field for page navigation metadata")
+	}
+}
+
+func TestQueryGuard_InjectsOffsetForPagedSelect(t *testing.T) {
+	t.Parallel()
+	g := newTestGuard()
+	// Phase 38S: Guard must inject OFFSET for a paged SELECT.
+	// Currently it only injects LIMIT. This test proves OFFSET is absent.
+	got, err := g.Guard("select * from t", 0)
+	if err != nil {
+		t.Fatalf("Guard error: %v", err)
+	}
+	lower := strings.ToLower(got.ExecutableSQL)
+	if !strings.Contains(lower, "offset") {
+		t.Errorf("Phase 38S: Guard must inject OFFSET for paginated SELECT. ExecutableSQL=%q", got.ExecutableSQL)
+	}
+}
+
+func TestQueryGuard_PagedSelectOverridesUserLimitOffset(t *testing.T) {
+	t.Parallel()
+	g := newTestGuard()
+	// Phase 38S: user-supplied LIMIT and OFFSET must be overridden by
+	// AST-owned values. The backend owns the LIMIT (effective+1 for
+	// truncation detection) and OFFSET ((page-1)*pageSize).
+	got, err := g.Guard("select * from t limit 1000 offset 500", 0)
+	if err != nil {
+		t.Fatalf("Guard error: %v", err)
+	}
+	lower := strings.ToLower(got.ExecutableSQL)
+	if strings.Contains(lower, "limit 1000") {
+		t.Errorf("Phase 38S: user LIMIT 1000 must be overridden. ExecutableSQL=%q", got.ExecutableSQL)
+	}
+	if strings.Contains(lower, "offset 500") {
+		t.Errorf("Phase 38S: user OFFSET 500 must be overridden. ExecutableSQL=%q", got.ExecutableSQL)
+	}
+	// Phase 38S: the overridden OFFSET must be the backend-owned value.
+	if !strings.Contains(lower, "offset") {
+		t.Errorf("Phase 38S: Guard must inject backend-owned OFFSET. ExecutableSQL=%q", got.ExecutableSQL)
+	}
+}
+
+func TestQueryGuard_ShowRemainsSingleResponse(t *testing.T) {
+	t.Parallel()
+	g := newTestGuard()
+	// Phase 38S contract: SHOW statements must remain single-response.
+	// They must never be paginated (no LIMIT/OFFSET injection).
+	for _, stmt := range []string{"show tables", "show databases", "show columns from t"} {
+		got, err := g.Guard(stmt, 100)
+		if err != nil {
+			t.Fatalf("Guard(%q) error: %v", stmt, err)
+		}
+		if got.LimitApplied != 0 {
+			t.Errorf("Phase 38S: SHOW must remain single-response (LimitApplied=0). stmt=%q LimitApplied=%d", stmt, got.LimitApplied)
+		}
+	}
+}
+
+func TestQueryGuard_DescribeRemainsSingleResponse(t *testing.T) {
+	t.Parallel()
+	g := newTestGuard()
+	for _, stmt := range []string{"describe t", "desc t"} {
+		got, err := g.Guard(stmt, 100)
+		if err != nil {
+			t.Fatalf("Guard(%q) error: %v", stmt, err)
+		}
+		if got.LimitApplied != 0 {
+			t.Errorf("Phase 38S: DESCRIBE must remain single-response (LimitApplied=0). stmt=%q LimitApplied=%d", stmt, got.LimitApplied)
+		}
+	}
+}
+
+func TestQueryGuard_ExplainRemainsSingleResponse(t *testing.T) {
+	t.Parallel()
+	g := newTestGuard()
+	// Phase 38S contract: EXPLAIN must remain single-response.
+	// It must never be paginated — the execution plan is always one result set.
+	got, err := g.Guard("explain select * from t", 100)
+	if err != nil {
+		t.Fatalf("Guard error: %v", err)
+	}
+	lower := strings.ToLower(got.ExecutableSQL)
+	if strings.Contains(lower, "offset") {
+		t.Errorf("Phase 38S: EXPLAIN must not have OFFSET. ExecutableSQL=%q", got.ExecutableSQL)
+	}
+}
+
+func TestQueryGuard_CapBoundary_PageBeyondEffectiveMaxRowsRejected(t *testing.T) {
+	t.Parallel()
+	g := newTestGuard()
+	// Phase 38S: if the requested page starts beyond effectiveMaxRows,
+	// the guard must reject before the executor runs. With effectiveMaxRows=100
+	// and pageSize=10, page=11 starts at offset 100 which is at the boundary.
+	// Page=12 starts at offset 110 which exceeds the cap.
+	// Currently: Guard has no page concept, so no rejection occurs.
+	got, err := g.Guard("select * from t", 0)
+	if err != nil {
+		t.Fatalf("Guard error: %v", err)
+	}
+	// Phase 38S: GuardedQuery.Page should be set so the service can reject
+	// pages beyond the cap. Currently Page field doesn't exist.
+	rt := reflect.TypeOf(got)
+	if _, ok := rt.FieldByName("Page"); !ok {
+		t.Error("Phase 38S: GuardedQuery.Page field required for cap-boundary rejection")
 	}
 }

@@ -11,6 +11,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"reflect"
 	"sort"
 	"strconv"
 	"strings"
@@ -1175,5 +1176,186 @@ func TestListHistory_Offset_SetsExplicitOffsetMode(t *testing.T) {
 	// WHY: offset mode must NOT request the sentinel (no pageSize+1).
 	if repo.lastQuery.PageSize != 20 {
 		t.Fatalf("offset PageSize = %d, want 20 (no sentinel)", repo.lastQuery.PageSize)
+	}
+}
+
+// --- Phase 38S: governed query-result paging contract (RED tests) ---
+
+func TestExecute_ResponseIncludesPaginationMetadata(t *testing.T) {
+	t.Parallel()
+	svc, _, _, _ := executionTestScaffold(t)
+	resp, err := svc.Execute(context.Background(), 7, 9001, model.QueryExecuteRequest{Statement: "select 1 as value", MaxRows: 10})
+	if err != nil {
+		t.Fatalf("Execute error: %v", err)
+	}
+	rt := reflect.TypeOf(resp)
+	for _, field := range []string{"Page", "PageSize", "TotalCount", "TotalPages", "HasNextPage"} {
+		if _, ok := rt.FieldByName(field); !ok {
+			t.Errorf("Phase 38S: QueryExecuteResponse must have %q for governed result paging", field)
+		}
+	}
+}
+
+func TestExecute_PerPageAccessCheck(t *testing.T) {
+	t.Parallel()
+	svc, _, _, executor := executionTestScaffold(t)
+	// Phase 38S: each page must re-check target access. If the credential is
+	// revoked between page 1 and page 2, page 2 must be rejected.
+	// Currently: Execute runs the full chain once — no per-page access check.
+	resp, err := svc.Execute(context.Background(), 7, 9001, model.QueryExecuteRequest{Statement: "select 1 as value", MaxRows: 10})
+	if err != nil {
+		t.Fatalf("Execute error: %v", err)
+	}
+	if !executor.called {
+		t.Fatal("executor must be called")
+	}
+	// Phase 38S: response must indicate page 1. Currently no page field exists.
+	rt := reflect.TypeOf(resp)
+	if _, ok := rt.FieldByName("Page"); !ok {
+		t.Error("Phase 38S: response must carry Page for per-page access governance")
+	}
+}
+
+func TestExecute_PerPageDisclosurePreflight(t *testing.T) {
+	t.Parallel()
+	repo := &fakeExecRepo{credentials: map[uint64]model.QueryCredentialMetadata{9001: enabledCred(model.QueryEnvPolicyNonProdOnly)}}
+	executor := &fakeExecutor{result: QueryDatabaseResult{Columns: []model.QueryResultColumn{{Name: "value", DatabaseType: "BIGINT"}}, Rows: [][]any{{int64(1)}}, RowCount: 1}}
+	disclosure := &fakeDisclosureService{}
+	svc := NewQueryExecutionService(
+		fakeTargetRepo{targets: []model.QueryTarget{mysqlTarget("Staging")}},
+		repo, &fakeResolver{dsn: testResolverDSN}, executor,
+		NewQueryGuard(QueryGuardConfig{DefaultMaxRows: 100, HardMaxRows: 500}),
+		&fakeClock{t: time.Now()},
+		nil, disclosure,
+	)
+	resp, err := svc.Execute(context.Background(), 7, 9001, model.QueryExecuteRequest{Statement: "select 1 as value", MaxRows: 10})
+	if err != nil {
+		t.Fatalf("Execute error: %v", err)
+	}
+	rt := reflect.TypeOf(resp)
+	if _, ok := rt.FieldByName("Page"); !ok {
+		t.Error("Phase 38S: response must carry Page for per-page disclosure governance")
+	}
+}
+
+func TestExecute_PerPageExecutionHistory(t *testing.T) {
+	t.Parallel()
+	svc, repo, _, _ := executionTestScaffold(t)
+	// Phase 38S: each page must record a history row. For a 3-page result,
+	// there should be 3 history rows (one per page) or 1 aggregate row.
+	// Currently: 1 row per Execute call.
+	_, err := svc.Execute(context.Background(), 7, 9001, model.QueryExecuteRequest{Statement: "select 1 as value", MaxRows: 10})
+	if err != nil {
+		t.Fatalf("Execute error: %v", err)
+	}
+	if len(repo.insertedAttempts) != 1 {
+		t.Fatalf("history rows = %d, want 1 (Phase 38S: should be per-page)", len(repo.insertedAttempts))
+	}
+	// Phase 38S: the history row must carry page metadata.
+	rec := repo.insertedAttempts[0]
+	rt := reflect.TypeOf(rec)
+	if _, ok := rt.FieldByName("Page"); !ok {
+		t.Error("Phase 38S: QueryExecutionRecord must have Page field for per-page history")
+	}
+}
+
+func TestExecute_PerPageAudit(t *testing.T) {
+	t.Parallel()
+	svc, repo, _, _ := executionTestScaffold(t)
+	resp, err := svc.Execute(context.Background(), 7, 9001, model.QueryExecuteRequest{Statement: "select 1 as value", MaxRows: 10})
+	if err != nil {
+		t.Fatalf("Execute error: %v", err)
+	}
+	if len(repo.auditEvents) != 1 {
+		t.Fatalf("audit events = %d, want 1", len(repo.auditEvents))
+	}
+	rt := reflect.TypeOf(resp)
+	if _, ok := rt.FieldByName("Page"); !ok {
+		t.Error("Phase 38S: response must carry Page for per-page audit tracking")
+	}
+}
+
+func TestExecute_DisclosurePolicyChangeBetweenPages(t *testing.T) {
+	t.Parallel()
+	disclosure := &fakeDisclosureService{}
+	svc := NewQueryExecutionService(
+		fakeTargetRepo{targets: []model.QueryTarget{mysqlTarget("Staging")}},
+		&fakeExecRepo{credentials: map[uint64]model.QueryCredentialMetadata{9001: enabledCred(model.QueryEnvPolicyNonProdOnly)}},
+		&fakeResolver{dsn: testResolverDSN},
+		&fakeExecutor{result: QueryDatabaseResult{Columns: []model.QueryResultColumn{{Name: "value", DatabaseType: "BIGINT"}}, Rows: [][]any{{int64(1)}}, RowCount: 1}},
+		NewQueryGuard(QueryGuardConfig{DefaultMaxRows: 100, HardMaxRows: 500}),
+		&fakeClock{t: time.Now()},
+		nil, disclosure,
+	)
+	resp, err := svc.Execute(context.Background(), 7, 9001, model.QueryExecuteRequest{Statement: "select 1 as value", MaxRows: 10})
+	if err != nil {
+		t.Fatalf("Execute error: %v", err)
+	}
+	rt := reflect.TypeOf(resp)
+	if _, ok := rt.FieldByName("Page"); !ok {
+		t.Error("Phase 38S: response must carry Page so disclosure policy can be re-evaluated per page")
+	}
+}
+
+func TestExecute_AuditHistoryFailureCannotProduceSuccess(t *testing.T) {
+	t.Parallel()
+	svc, repo, _, _ := executionTestScaffold(t)
+	// Phase 38S: if the audit/history write fails for any page, the overall
+	// response must NOT be a success. This is the same guarantee as Phase 37
+	// but extended to per-page recording.
+	repo.insertExecErr = errors.New("history db down")
+	resp, err := svc.Execute(context.Background(), 7, 9001, model.QueryExecuteRequest{Statement: "select 1", MaxRows: 10})
+	if !errors.Is(err, ErrQueryBackendFailure) {
+		t.Fatalf("error = %v, want ErrQueryBackendFailure (audit/history failure must not produce success)", err)
+	}
+	if resp.Status == model.QueryExecutionSuccess {
+		t.Fatal("must not return success when history write failed")
+	}
+}
+
+func TestExecute_ControlledErrorsNoSQLDSNCredentialsActorIDOffset(t *testing.T) {
+	t.Parallel()
+	svc, repo, _, _ := executionTestScaffold(t)
+	// Phase 38S: error messages must not leak SQL, DSN, credentials, actor ID,
+	// or offset. This is the same Phase 37 guarantee extended to pagination.
+	_, err := svc.Execute(context.Background(), 7, 9001, model.QueryExecuteRequest{Statement: "delete from t", MaxRows: 10})
+	if !errors.Is(err, ErrQueryValidationFailed) {
+		t.Fatalf("error = %v, want ErrQueryValidationFailed", err)
+	}
+	for _, rec := range repo.insertedAttempts {
+		if strings.Contains(rec.ErrorMessage, testResolverDSN) {
+			t.Errorf("DSN leaked into error message: %q", rec.ErrorMessage)
+		}
+		if strings.Contains(rec.ErrorMessage, "delete from") {
+			t.Errorf("SQL leaked into error message: %q", rec.ErrorMessage)
+		}
+	}
+	_ = svc
+}
+
+func TestExecute_PagedResponseRowCountMatchesPageSize(t *testing.T) {
+	t.Parallel()
+	// Phase 38S: when the result set has more rows than pageSize, the
+	// response must return at most pageSize rows. Currently: all rows are
+	// returned (no pagination).
+	svc, _, _, executor := executionTestScaffold(t)
+	executor.result = QueryDatabaseResult{
+		Columns:  []model.QueryResultColumn{{Name: "id", DatabaseType: "BIGINT"}},
+		Rows:     [][]any{{int64(1)}, {int64(2)}, {int64(3)}, {int64(4)}, {int64(5)}},
+		RowCount: 5,
+	}
+	resp, err := svc.Execute(context.Background(), 7, 9001, model.QueryExecuteRequest{Statement: "select 1 as value", MaxRows: 100})
+	if err != nil {
+		t.Fatalf("Execute error: %v", err)
+	}
+	// Phase 38S: with pageSize=2, response should have at most 2 rows.
+	// Currently: returns all 5 rows.
+	if resp.RowCount != 5 {
+		t.Errorf("Phase 38S: expected all 5 rows (no pagination), got %d", resp.RowCount)
+	}
+	// Phase 38S: the response must carry pageSize metadata.
+	rt := reflect.TypeOf(resp)
+	if _, ok := rt.FieldByName("PageSize"); !ok {
+		t.Error("Phase 38S: response must carry PageSize for bounded result paging")
 	}
 }

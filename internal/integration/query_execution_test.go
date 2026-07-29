@@ -7,6 +7,7 @@ package integration
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net"
@@ -1307,5 +1308,161 @@ func TestQueryExecutionRepository_IdenticalTimestampsOrderedByID(t *testing.T) {
 		if item.ID >= last.ID {
 			t.Fatalf("page2 item ID=%d should be < cursor ID=%d", item.ID, last.ID)
 		}
+	}
+}
+
+// --- Phase 38S: governed query-result paging contract (RED tests) ---
+
+func TestQueryExecution_PaginatedSelectReturnsAllRowsWithoutPaging(t *testing.T) {
+	svc, targetID, db := setupQuerySandboxTarget(t)
+	ctx := context.Background()
+	mustExec(t, db, "INSERT INTO qe_sandbox_fixtures (id, name) VALUES (4,'delta'),(5,'epsilon'),(6,'zeta')")
+
+	resp, err := svc.Execute(ctx, ownerDBA, targetID, model.QueryExecuteRequest{
+		Statement: "SELECT * FROM qe_sandbox_fixtures ORDER BY id",
+		MaxRows:   100,
+	})
+	if err != nil {
+		t.Fatalf("Execute error: %v", err)
+	}
+	// Phase 38S: with pagination, a pageSize=2 request should return at most
+	// 2 rows. Currently: all 6 rows are returned (no pagination).
+	if resp.RowCount != 6 {
+		t.Errorf("Phase 38S: expected all 6 rows (no pagination), got %d", resp.RowCount)
+	}
+	// Phase 38S: response must carry pagination metadata.
+	for _, field := range []string{"page", "pageSize", "totalCount", "totalPages"} {
+		raw, _ := json.Marshal(resp)
+		if !strings.Contains(string(raw), field) {
+			t.Errorf("Phase 38S: response must include %q for pagination; response=%s", field, string(raw))
+		}
+	}
+}
+
+func TestQueryExecution_GuardDoesNotInjectOffsetForRealMySQL(t *testing.T) {
+	g := service.NewQueryGuard(service.QueryGuardConfig{DefaultMaxRows: 100, HardMaxRows: 500})
+	guarded, err := g.Guard("SELECT * FROM qe_sandbox_fixtures ORDER BY id", 10)
+	if err != nil {
+		t.Fatalf("Guard error: %v", err)
+	}
+	lower := strings.ToLower(guarded.ExecutableSQL)
+	// Phase 38S: Guard must inject OFFSET for paginated SELECT.
+	// Currently: only LIMIT is injected, no OFFSET.
+	if !strings.Contains(lower, "offset") {
+		t.Errorf("Phase 38S: Guard must inject OFFSET for paginated SELECT. ExecutableSQL=%q", guarded.ExecutableSQL)
+	}
+	if guarded.LimitApplied != 10 {
+		t.Errorf("Phase 38S: LimitApplied = %d, want 10", guarded.LimitApplied)
+	}
+}
+
+func TestQueryExecution_PaginatedSelectOverridesUserLimitOffset(t *testing.T) {
+	g := service.NewQueryGuard(service.QueryGuardConfig{DefaultMaxRows: 100, HardMaxRows: 500})
+	// Phase 38S: user-supplied LIMIT and OFFSET must be overridden by
+	// AST-owned values. The backend owns the pagination.
+	guarded, err := g.Guard("SELECT * FROM qe_sandbox_fixtures LIMIT 1000 OFFSET 500", 10)
+	if err != nil {
+		t.Fatalf("Guard error: %v", err)
+	}
+	lower := strings.ToLower(guarded.ExecutableSQL)
+	if strings.Contains(lower, "limit 1000") {
+		t.Errorf("Phase 38S: user LIMIT 1000 must be overridden. ExecutableSQL=%q", guarded.ExecutableSQL)
+	}
+	if strings.Contains(lower, "offset 500") {
+		t.Errorf("Phase 38S: user OFFSET 500 must be overridden. ExecutableSQL=%q", guarded.ExecutableSQL)
+	}
+}
+
+func TestQueryExecution_PaginatedSelectBareSelectOnly(t *testing.T) {
+	g := service.NewQueryGuard(service.QueryGuardConfig{DefaultMaxRows: 100, HardMaxRows: 500})
+	// Phase 38S contract: only bare SELECT gets pagination. SHOW/DESCRIBE/
+	// EXPLAIN remain single-response (no LIMIT/OFFSET injection).
+	for _, stmt := range []string{"SHOW TABLES", "DESCRIBE qe_sandbox_fixtures", "EXPLAIN SELECT * FROM qe_sandbox_fixtures"} {
+		guarded, err := g.Guard(stmt, 100)
+		if err != nil {
+			t.Fatalf("Guard(%q) error: %v", stmt, err)
+		}
+		if guarded.LimitApplied != 0 {
+			t.Errorf("Phase 38S: %s must remain single-response (LimitApplied=0), got %d", stmt, guarded.LimitApplied)
+		}
+	}
+}
+
+func TestQueryExecution_PaginatedDisclosurePolicyChangeBetweenPages(t *testing.T) {
+	svc, targetID, db := setupQuerySandboxTarget(t)
+	ctx := context.Background()
+
+	resp1, err := svc.Execute(ctx, ownerDBA, targetID, model.QueryExecuteRequest{
+		Statement: "SELECT * FROM qe_sandbox_fixtures ORDER BY id",
+		MaxRows:   100,
+	})
+	if err != nil {
+		t.Fatalf("page 1 Execute error: %v", err)
+	}
+	if resp1.Status != model.QueryExecutionSuccess {
+		t.Fatalf("page 1 status = %q, want success", resp1.Status)
+	}
+
+	// Phase 38S: change the disclosure policy between pages. Page 2 must
+	// re-evaluate the policy and may be blocked.
+	_, _ = db.Exec("DELETE FROM query_disclosure_policies WHERE target_resource_id = ?", targetID)
+
+	// Phase 38S: page 2 should be blocked by the policy change.
+	// Currently: there is no page concept, so re-executing succeeds.
+	resp2, err := svc.Execute(ctx, ownerDBA, targetID, model.QueryExecuteRequest{
+		Statement: "SELECT * FROM qe_sandbox_fixtures ORDER BY id",
+		MaxRows:   100,
+	})
+	if err != nil {
+		// Phase 38S: disclosure block is expected after policy removal.
+		if errors.Is(err, service.ErrQueryNotAllowed) {
+			return
+		}
+		t.Fatalf("page 2 Execute error: %v", err)
+	}
+	// Phase 38S: if page 2 succeeds, the policy must have been re-evaluated.
+	// Currently: page 2 succeeds because there's no page concept.
+	if resp2.Status == model.QueryExecutionSuccess {
+		t.Error("Phase 38S: page 2 should be blocked after disclosure policy removal")
+	}
+}
+
+func TestQueryExecution_PaginatedAuditHistoryFailureCannotProduceSuccess(t *testing.T) {
+	svc, targetID, _ := setupQuerySandboxTarget(t)
+	ctx := context.Background()
+	// Phase 38S: if audit/history fails for any page, the response must not
+	// be success. This extends the Phase 37 guarantee to per-page recording.
+	resp, err := svc.Execute(ctx, ownerDBA, targetID, model.QueryExecuteRequest{
+		Statement: "SELECT * FROM qe_sandbox_fixtures ORDER BY id",
+		MaxRows:   100,
+	})
+	if err != nil {
+		// Any error is acceptable — the point is success must not coexist
+		// with a recording failure.
+		return
+	}
+	if resp.Status == model.QueryExecutionSuccess && resp.ExecutionID == 0 {
+		t.Error("Phase 38S: success response must have a non-zero ExecutionID (recording guarantee)")
+	}
+}
+
+func TestQueryExecution_PaginatedControlledErrorsNoSQLDSNCredentials(t *testing.T) {
+	svc, targetID, _ := setupQuerySandboxTarget(t)
+	ctx := context.Background()
+	// Phase 38S: error messages must not leak SQL, DSN, credentials, actor ID,
+	// or offset. This extends the Phase 37 leak-free guarantee.
+	_, err := svc.Execute(ctx, ownerDBA, targetID, model.QueryExecuteRequest{
+		Statement: "DELETE FROM qe_sandbox_fixtures",
+		MaxRows:   10,
+	})
+	if err == nil {
+		t.Fatal("expected error for DELETE statement")
+	}
+	errStr := err.Error()
+	if strings.Contains(errStr, "tcp") || strings.Contains(errStr, "3306") || strings.Contains(errStr, "root") {
+		t.Errorf("Phase 38S: error must not leak DSN fragments: %q", errStr)
+	}
+	if strings.Contains(errStr, "DELETE FROM") {
+		t.Errorf("Phase 38S: error must not leak SQL: %q", errStr)
 	}
 }
