@@ -1,7 +1,7 @@
 // Package api provides tests for the query execution handlers.
 // input: bytes, context, fmt, net/http, net/http/httptest, strings, testing, time, chi, internal/model, internal/service
 // output: TestQueryExecution_* (execute success/errors, auth, history; actor taken from token not body)
-// pos: Handler + auth middleware + error-mapping coverage for the Phase 37 query sandbox endpoints
+// pos: Handler + auth middleware + error-mapping coverage for the Phase 37 query sandbox endpoints, Phase 38S governed result paging
 // note: if this file changes, update header and README.md
 package api
 
@@ -25,21 +25,22 @@ var qeTestNow = time.Date(2026, 6, 22, 8, 0, 0, 0, time.UTC)
 
 // stubQueryExec is a configurable queryExecutionAPI stub for handler tests.
 type stubQueryExec struct {
-	executeResp   model.QueryExecuteResponse
-	executeErr    error
-	listItems     []model.QueryExecutionRecord
-	listErr       error
-	navResp       model.RelatedRecordNavigationResponse
-	navErr        error
-	gotActor      uint64
-	gotRole       string
-	gotTargetID   uint64
-	gotMaxRows    int
-	gotNavRequest model.RelatedRecordNavigationRequest
-	gotQuery      model.QueryExecutionListQuery
-	executeCalled bool
-	listCalled    bool
-	navCalled     bool
+	executeResp    model.QueryExecuteResponse
+	executeErr     error
+	listItems      []model.QueryExecutionRecord
+	listErr        error
+	navResp        model.RelatedRecordNavigationResponse
+	navErr         error
+	gotActor       uint64
+	gotRole        string
+	gotTargetID    uint64
+	gotMaxRows     int
+	gotPagination  *model.QueryExecutePaginationRequest
+	gotNavRequest  model.RelatedRecordNavigationRequest
+	gotQuery       model.QueryExecutionListQuery
+	executeCalled  bool
+	listCalled     bool
+	navCalled      bool
 }
 
 func (s *stubQueryExec) Execute(_ context.Context, actorUserID uint64, targetID uint64, req model.QueryExecuteRequest) (model.QueryExecuteResponse, error) {
@@ -47,7 +48,17 @@ func (s *stubQueryExec) Execute(_ context.Context, actorUserID uint64, targetID 
 	s.gotActor = actorUserID
 	s.gotTargetID = targetID
 	s.gotMaxRows = req.MaxRows
-	return s.executeResp, s.executeErr
+	s.gotPagination = req.Pagination
+	resp := s.executeResp
+	if req.Pagination != nil {
+		resp.Pagination = &model.QueryExecutePaginationResponse{
+			Page:            req.Pagination.Page,
+			PageSize:        req.Pagination.PageSize,
+			HasPreviousPage: req.Pagination.Page > 1,
+			HasNextPage:     false,
+		}
+	}
+	return resp, s.executeErr
 }
 
 func (s *stubQueryExec) ListHistory(_ context.Context, actorUserID uint64, actorRole string, targetID uint64, q model.QueryExecutionListQuery) (*model.QueryExecutionCursorPage, error) {
@@ -808,12 +819,19 @@ func TestQueryExecution_Execute_StrictPaginationDecoding_AcceptsPageAndPageSize(
 
 	rec := httptest.NewRecorder()
 	router.ServeHTTP(rec, qeRequest(http.MethodPost, "/query-targets/22/execute",
-		`{"statement":"select 1","page":1,"pageSize":10}`, token))
+		`{"statement":"select 1","pagination":{"page":1,"pageSize":10}}`, token))
 
-	// Phase 38S: handler must accept page/pageSize fields.
-	// Currently: DisallowUnknownFields rejects them as unknown.
 	if rec.Code != http.StatusOK {
-		t.Errorf("Phase 38S: handler should accept pagination fields, got %d; body=%s", rec.Code, rec.Body.String())
+		t.Errorf("handler should accept pagination fields, got %d; body=%s", rec.Code, rec.Body.String())
+	}
+	if !stub.executeCalled {
+		t.Error("Execute must be called for valid pagination")
+	}
+	if stub.gotPagination == nil {
+		t.Fatal("pagination must be passed to service")
+	}
+	if stub.gotPagination.Page != 1 || stub.gotPagination.PageSize != 10 {
+		t.Errorf("pagination = page:%d pageSize:%d, want 1/10", stub.gotPagination.Page, stub.gotPagination.PageSize)
 	}
 }
 
@@ -833,13 +851,15 @@ func TestQueryExecution_Execute_StrictPaginationDecoding_ValidPageSizes(t *testi
 			router := newQueryExecRouter(stub)
 			token := mintToken(t, "qe-test-secret", 42, "admin", qeTestNow)
 
-			body := fmt.Sprintf(`{"statement":"select 1","page":1,"pageSize":%d}`, tc.pageSize)
+			body := fmt.Sprintf(`{"statement":"select 1","pagination":{"page":1,"pageSize":%d}}`, tc.pageSize)
 			rec := httptest.NewRecorder()
 			router.ServeHTTP(rec, qeRequest(http.MethodPost, "/query-targets/22/execute", body, token))
 
-			// Phase 38S: these page sizes must be accepted.
 			if rec.Code != http.StatusOK {
-				t.Errorf("Phase 38S: pageSize=%d should be accepted, got %d; body=%s", tc.pageSize, rec.Code, rec.Body.String())
+				t.Errorf("pageSize=%d should be accepted, got %d; body=%s", tc.pageSize, rec.Code, rec.Body.String())
+			}
+			if stub.gotPagination == nil || stub.gotPagination.PageSize != tc.pageSize {
+				t.Errorf("service did not receive pageSize=%d", tc.pageSize)
 			}
 		})
 	}
@@ -850,10 +870,10 @@ func TestQueryExecution_Execute_StrictPaginationDecoding_RejectsInvalidPage(t *t
 		name string
 		body string
 	}{
-		{"zero_page", `{"statement":"select 1","page":0,"pageSize":10}`},
-		{"negative_page", `{"statement":"select 1","page":-1,"pageSize":10}`},
-		{"fractional_page", `{"statement":"select 1","page":1.5,"pageSize":10}`},
-		{"string_page", `{"statement":"select 1","page":"abc","pageSize":10}`},
+		{"zero_page", `{"statement":"select 1","pagination":{"page":0,"pageSize":10}}`},
+		{"negative_page", `{"statement":"select 1","pagination":{"page":-1,"pageSize":10}}`},
+		{"fractional_page", `{"statement":"select 1","pagination":{"page":1.5,"pageSize":10}}`},
+		{"string_page", `{"statement":"select 1","pagination":{"page":"abc","pageSize":10}}`},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -864,13 +884,11 @@ func TestQueryExecution_Execute_StrictPaginationDecoding_RejectsInvalidPage(t *t
 			rec := httptest.NewRecorder()
 			router.ServeHTTP(rec, qeRequest(http.MethodPost, "/query-targets/22/execute", tc.body, token))
 
-			// Phase 38S: invalid page values must be rejected with 400.
-			// Currently: page field is unknown, so 400 is returned for the wrong reason.
 			if rec.Code != http.StatusBadRequest {
-				t.Errorf("Phase 38S: %s should return 400, got %d; body=%s", tc.name, rec.Code, rec.Body.String())
+				t.Errorf("%s should return 400, got %d; body=%s", tc.name, rec.Code, rec.Body.String())
 			}
 			if stub.executeCalled {
-				t.Errorf("Phase 38S: %s must not call Execute", tc.name)
+				t.Errorf("%s must not call Execute", tc.name)
 			}
 		})
 	}
@@ -881,11 +899,11 @@ func TestQueryExecution_Execute_StrictPaginationDecoding_RejectsInvalidPageSize(
 		name string
 		body string
 	}{
-		{"zero_page_size", `{"statement":"select 1","page":1,"pageSize":0}`},
-		{"negative_page_size", `{"statement":"select 1","page":1,"pageSize":-1}`},
-		{"fractional_page_size", `{"statement":"select 1","page":1,"pageSize":1.5}`},
-		{"overflow_page_size", `{"statement":"select 1","page":1,"pageSize":999999999999}`},
-		{"string_page_size", `{"statement":"select 1","page":1,"pageSize":"abc"}`},
+		{"zero_page_size", `{"statement":"select 1","pagination":{"page":1,"pageSize":0}}`},
+		{"negative_page_size", `{"statement":"select 1","pagination":{"page":1,"pageSize":-1}}`},
+		{"fractional_page_size", `{"statement":"select 1","pagination":{"page":1,"pageSize":1.5}}`},
+		{"overflow_page_size", `{"statement":"select 1","pagination":{"page":1,"pageSize":999999999999}}`},
+		{"string_page_size", `{"statement":"select 1","pagination":{"page":1,"pageSize":"abc"}}`},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -897,32 +915,39 @@ func TestQueryExecution_Execute_StrictPaginationDecoding_RejectsInvalidPageSize(
 			router.ServeHTTP(rec, qeRequest(http.MethodPost, "/query-targets/22/execute", tc.body, token))
 
 			if rec.Code != http.StatusBadRequest {
-				t.Errorf("Phase 38S: %s should return 400, got %d; body=%s", tc.name, rec.Code, rec.Body.String())
+				t.Errorf("%s should return 400, got %d; body=%s", tc.name, rec.Code, rec.Body.String())
 			}
 			if stub.executeCalled {
-				t.Errorf("Phase 38S: %s must not call Execute", tc.name)
+				t.Errorf("%s must not call Execute", tc.name)
 			}
 		})
 	}
 }
 
 func TestQueryExecution_Execute_StrictPaginationDecoding_RejectsUnknownFields(t *testing.T) {
-	stub := &stubQueryExec{executeResp: model.QueryExecuteResponse{Status: model.QueryExecutionSuccess}}
-	router := newQueryExecRouter(stub)
-	token := mintToken(t, "qe-test-secret", 42, "admin", qeTestNow)
-
-	// Phase 38S: unknown fields in the execute body must be rejected.
-	// This is the existing DisallowUnknownFields contract — it must hold
-	// even after pagination fields are added.
-	rec := httptest.NewRecorder()
-	router.ServeHTTP(rec, qeRequest(http.MethodPost, "/query-targets/22/execute",
-		`{"statement":"select 1","page":1,"pageSize":10,"bogus":true}`, token))
-
-	if rec.Code != http.StatusBadRequest {
-		t.Errorf("Phase 38S: unknown field 'bogus' must be rejected, got %d; body=%s", rec.Code, rec.Body.String())
+	cases := []struct {
+		name string
+		body string
+	}{
+		{"unknown_top_level", `{"statement":"select 1","pagination":{"page":1,"pageSize":10},"bogus":true}`},
+		{"unknown_in_pagination", `{"statement":"select 1","pagination":{"page":1,"pageSize":10,"bogus":true}}`},
 	}
-	if stub.executeCalled {
-		t.Error("Phase 38S: Execute must not be called when unknown fields are present")
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			stub := &stubQueryExec{executeResp: model.QueryExecuteResponse{Status: model.QueryExecutionSuccess}}
+			router := newQueryExecRouter(stub)
+			token := mintToken(t, "qe-test-secret", 42, "admin", qeTestNow)
+
+			rec := httptest.NewRecorder()
+			router.ServeHTTP(rec, qeRequest(http.MethodPost, "/query-targets/22/execute", tc.body, token))
+
+			if rec.Code != http.StatusBadRequest {
+				t.Errorf("unknown field must be rejected, got %d; body=%s", rec.Code, rec.Body.String())
+			}
+			if stub.executeCalled {
+				t.Error("Execute must not be called when unknown fields are present")
+			}
+		})
 	}
 }
 
@@ -931,19 +956,15 @@ func TestQueryExecution_Execute_StrictPaginationDecoding_RejectsMissingPageWithP
 	router := newQueryExecRouter(stub)
 	token := mintToken(t, "qe-test-secret", 42, "admin", qeTestNow)
 
-	// Phase 38S: pageSize without page must be rejected or use default page=1.
-	// The contract must be explicit about this combination.
 	rec := httptest.NewRecorder()
 	router.ServeHTTP(rec, qeRequest(http.MethodPost, "/query-targets/22/execute",
-		`{"statement":"select 1","pageSize":10}`, token))
+		`{"statement":"select 1","pagination":{"pageSize":10}}`, token))
 
-	// Phase 38S: this should either succeed (default page=1) or fail with 400.
-	// Currently: pageSize is unknown, so 400 is returned.
-	if rec.Code == http.StatusOK {
-		// If accepted, the service must receive page=1.
-		if !stub.executeCalled {
-			t.Error("Phase 38S: Execute must be called when pageSize is provided with default page")
-		}
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("pageSize without page must return 400, got %d; body=%s", rec.Code, rec.Body.String())
+	}
+	if stub.executeCalled {
+		t.Error("Execute must not be called when page is missing from pagination")
 	}
 }
 
@@ -952,19 +973,15 @@ func TestQueryExecution_Execute_StrictPaginationDecoding_RejectsOverflowedOffset
 	router := newQueryExecRouter(stub)
 	token := mintToken(t, "qe-test-secret", 42, "admin", qeTestNow)
 
-	// Phase 38S: (page-1)*pageSize must not overflow. With page=MaxInt and
-	// pageSize=2, the offset would wrap negative. The handler must reject this.
 	rec := httptest.NewRecorder()
 	router.ServeHTTP(rec, qeRequest(http.MethodPost, "/query-targets/22/execute",
-		`{"statement":"select 1","page":9223372036854775807,"pageSize":2}`, token))
+		`{"statement":"select 1","pagination":{"page":9223372036854775807,"pageSize":2}}`, token))
 
-	// Phase 38S: must reject overflowed offset with 400.
-	// Currently: page field is unknown, so 400 is returned for the wrong reason.
 	if rec.Code != http.StatusBadRequest {
-		t.Errorf("Phase 38S: overflowed offset must return 400, got %d; body=%s", rec.Code, rec.Body.String())
+		t.Errorf("overflowed offset must return 400, got %d; body=%s", rec.Code, rec.Body.String())
 	}
 	if stub.executeCalled {
-		t.Error("Phase 38S: Execute must not be called when offset overflows")
+		t.Error("Execute must not be called when offset overflows")
 	}
 }
 
@@ -978,16 +995,53 @@ func TestQueryExecution_Execute_ResponseIncludesPaginationEnvelope(t *testing.T)
 
 	rec := httptest.NewRecorder()
 	router.ServeHTTP(rec, qeRequest(http.MethodPost, "/query-targets/22/execute",
-		`{"statement":"select 1","page":1,"pageSize":10}`, token))
+		`{"statement":"select 1","pagination":{"page":1,"pageSize":10}}`, token))
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200; body=%s", rec.Code, rec.Body.String())
 	}
 	body := rec.Body.String()
-	// Phase 38S: response must include pagination metadata.
-	for _, field := range []string{`"page"`, `"pageSize"`, `"totalCount"`, `"totalPages"`, `"hasNextPage"`} {
+	for _, field := range []string{`"page"`, `"pageSize"`, `"hasPreviousPage"`, `"hasNextPage"`} {
 		if !strings.Contains(body, field) {
-			t.Errorf("Phase 38S: response JSON must include %s for pagination; body=%s", field, body)
+			t.Errorf("response JSON must include %s for pagination; body=%s", field, body)
 		}
+	}
+}
+
+func TestQueryExecution_Execute_PaginationNotIncludedWhenAbsent(t *testing.T) {
+	stub := &stubQueryExec{executeResp: model.QueryExecuteResponse{
+		Status:   model.QueryExecutionSuccess,
+		RowCount: 1,
+	}}
+	router := newQueryExecRouter(stub)
+	token := mintToken(t, "qe-test-secret", 42, "admin", qeTestNow)
+
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, qeRequest(http.MethodPost, "/query-targets/22/execute",
+		`{"statement":"select 1"}`, token))
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", rec.Code, rec.Body.String())
+	}
+	body := rec.Body.String()
+	if strings.Contains(body, `"pagination"`) {
+		t.Errorf("response must not include pagination when request omits it; body=%s", body)
+	}
+}
+
+func TestQueryExecution_Execute_MetadataStatementWithPaginationAccepted(t *testing.T) {
+	stub := &stubQueryExec{executeResp: model.QueryExecuteResponse{
+		Status:   model.QueryExecutionSuccess,
+		RowCount: 3,
+	}}
+	router := newQueryExecRouter(stub)
+	token := mintToken(t, "qe-test-secret", 42, "admin", qeTestNow)
+
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, qeRequest(http.MethodPost, "/query-targets/22/execute",
+		`{"statement":"show tables","pagination":{"page":1,"pageSize":10}}`, token))
+
+	if rec.Code != http.StatusOK {
+		t.Errorf("metadata statement with pagination should be accepted, got %d; body=%s", rec.Code, rec.Body.String())
 	}
 }

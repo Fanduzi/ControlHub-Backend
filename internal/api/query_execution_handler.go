@@ -1,7 +1,7 @@
 // Package api provides HTTP handlers and routing for the ControlHub REST API.
 // input: net/http, strconv, strings, chi, internal/model, internal/service
 // output: handleExecuteQuery, handleListQueryExecutions, writeQueryExecutionError, queryExecutionAPI interface
-// pos: HTTP handlers for POST /query-targets/{id}/execute and GET /query-targets/{id}/executions (Phase 37 read-only query sandbox)
+// pos: HTTP handlers for POST /query-targets/{id}/execute and GET /query-targets/{id}/executions (Phase 37 read-only query sandbox, Phase 38S governed result paging)
 // note: if this file changes, update header and README.md
 package api
 
@@ -45,6 +45,12 @@ func handleExecuteQuery(svc queryExecutionAPI) http.HandlerFunc {
 		if strings.TrimSpace(req.Statement) == "" {
 			writeJSONError(w, http.StatusBadRequest, "validation_failed", "statement is required")
 			return
+		}
+		if req.Pagination != nil {
+			if err := model.ValidatePagination(req.Pagination.Page, req.Pagination.PageSize); err != nil {
+				writeJSONError(w, http.StatusBadRequest, "validation_failed", err.Error())
+				return
+			}
 		}
 		actorUserID, ok := actorUserIDFromContext(r.Context())
 		if !ok {

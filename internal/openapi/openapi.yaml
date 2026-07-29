@@ -208,6 +208,27 @@ paths:
                 value:
                   statement: "select 1 as value"
                   maxRows: 100
+              paginatedPage1:
+                summary: Paginated SELECT — page 1
+                value:
+                  statement: "select id, name from resources where resource_type = 'service'"
+                  pagination:
+                    page: 1
+                    pageSize: 10
+              paginatedPage2:
+                summary: Paginated SELECT — page 2
+                value:
+                  statement: "select id, name from resources where resource_type = 'service'"
+                  pagination:
+                    page: 2
+                    pageSize: 10
+              metadataWithPagination:
+                summary: Metadata statement with pagination (pagination is silently ignored)
+                value:
+                  statement: "show tables"
+                  pagination:
+                    page: 1
+                    pageSize: 10
               acceptedShowTables:
                 value:
                   statement: "show tables"
@@ -239,8 +260,76 @@ paths:
                     durationMs: 18
                     limitApplied: 100
                     executedAt: "2026-06-22T08:30:00Z"
+                paginatedPage1:
+                  summary: Paginated result — page 1 of 3
+                  value:
+                    executionId: 1002
+                    status: success
+                    targetResourceId: 22
+                    engine: mysql
+                    columns:
+                      - {name: id, databaseType: BIGINT, nullable: false, displayMode: raw_copy_allowed, copyAllowed: true}
+                      - {name: name, databaseType: VARCHAR, nullable: true, displayMode: raw_copy_allowed, copyAllowed: true}
+                    rows:
+                      - [1, "Alpha"]
+                      - [2, "Beta"]
+                    rowCount: 2
+                    truncated: false
+                    durationMs: 12
+                    limitApplied: 10
+                    executedAt: "2026-07-29T08:00:00Z"
+                    pagination:
+                      page: 1
+                      pageSize: 10
+                      hasPreviousPage: false
+                      hasNextPage: true
+                paginatedPage2:
+                  summary: Paginated result — page 2 of 3
+                  value:
+                    executionId: 1003
+                    status: success
+                    targetResourceId: 22
+                    engine: mysql
+                    columns:
+                      - {name: id, databaseType: BIGINT, nullable: false, displayMode: raw_copy_allowed, copyAllowed: true}
+                      - {name: name, databaseType: VARCHAR, nullable: true, displayMode: raw_copy_allowed, copyAllowed: true}
+                    rows:
+                      - [11, "Kappa"]
+                      - [12, "Lambda"]
+                    rowCount: 2
+                    truncated: false
+                    durationMs: 14
+                    limitApplied: 10
+                    executedAt: "2026-07-29T08:01:00Z"
+                    pagination:
+                      page: 2
+                      pageSize: 10
+                      hasPreviousPage: true
+                      hasNextPage: true
+                metadataSingleResponse:
+                  summary: Metadata statement — pagination present but rows are unpaginated
+                  value:
+                    executionId: 1004
+                    status: success
+                    targetResourceId: 22
+                    engine: mysql
+                    columns:
+                      - {name: Tables_in_query_e2e, databaseType: VARCHAR, nullable: false, displayMode: raw_copy_allowed, copyAllowed: true}
+                    rows:
+                      - ["items"]
+                      - ["categories"]
+                    rowCount: 2
+                    truncated: false
+                    durationMs: 5
+                    limitApplied: 10
+                    executedAt: "2026-07-29T08:02:00Z"
+                    pagination:
+                      page: 1
+                      pageSize: 10
+                      hasPreviousPage: false
+                      hasNextPage: false
         "400":
-          description: Validation failed (bad request, blocked statement, bad maxRows)
+          description: Validation failed (bad request, blocked statement, bad maxRows, invalid pagination)
           content:
             application/json:
               schema:
@@ -250,6 +339,16 @@ paths:
                   value:
                     error: validation_failed
                     message: only read-only SQL statements are allowed
+                invalidPaginationPageSize:
+                  summary: pageSize not in [10, 25, 50, 100]
+                  value:
+                    error: validation_failed
+                    message: "pageSize must be one of [10 25 50 100], got 15"
+                invalidPaginationPage:
+                  summary: page must be > 0
+                  value:
+                    error: validation_failed
+                    message: "page must be > 0, got 0"
         "401":
           description: Missing or invalid Bearer token (or token older than the TTL)
           content:
@@ -4196,6 +4295,11 @@ components:
     QueryExecuteRequest:
       type: object
       required: [statement]
+      additionalProperties: false
+      description: >
+        Body of POST /query-targets/{id}/execute. The actor is never taken from
+        here — it is derived from the verified token. Unknown fields are rejected
+        by strict decoding.
       properties:
         statement:
           type: string
@@ -4211,6 +4315,56 @@ components:
             Optional row cap for this execution. Zero/omitted uses the backend
             default; negative values are rejected. The backend caps this at its
             hard maximum (tighter for production).
+        pagination:
+          $ref: "#/components/schemas/QueryExecutePaginationRequest"
+          description: >
+            Optional governed result paging boundary. When present, page and
+            pageSize are validated strictly. When absent, the executor applies
+            QueryExecuteDefaultPageSize and returns all rows up to the row cap.
+    QueryExecutePaginationRequest:
+      type: object
+      required: [page, pageSize]
+      additionalProperties: false
+      description: >
+        Governed result paging boundary for query execution. Page is 1-based.
+        PageSize must be one of [10, 25, 50, 100]. When this object is present
+        in the request, both fields are required and validated strictly.
+      properties:
+        page:
+          type: integer
+          minimum: 1
+          description: >
+            1-based page number. Must be > 0. The handler rejects page values
+            that would cause (page-1)*pageSize to overflow.
+        pageSize:
+          type: integer
+          enum: [10, 25, 50, 100]
+          description: >
+            Number of rows per page. Must be one of [10, 25, 50, 100]. Other
+            values are rejected to prevent unbounded page shapes.
+    QueryExecutePaginationResponse:
+      type: object
+      required: [page, pageSize, hasPreviousPage, hasNextPage]
+      description: >
+        Server-computed page metadata for governed query-result paging.
+        HasPreviousPage and HasNextPage are derived from the offset and
+        effective row cap; they never leak total-row counts or snapshot
+        identifiers. Present only when the request included pagination.
+      properties:
+        page:
+          type: integer
+          description: Current page number (1-based).
+        pageSize:
+          type: integer
+          description: Number of rows per page.
+        hasPreviousPage:
+          type: boolean
+          description: True when page > 1.
+        hasNextPage:
+          type: boolean
+          description: >
+            True when the page boundary does not reach the effective row cap.
+            The exact value depends on the executor's row-count probe.
     QueryResultColumn:
       type: object
       required: [name, databaseType, nullable, displayMode, copyAllowed]
@@ -4269,6 +4423,12 @@ components:
         executedAt:
           type: string
           format: date-time
+        pagination:
+          $ref: "#/components/schemas/QueryExecutePaginationResponse"
+          description: >
+            Present only when the request included a pagination object and the
+            statement is a bare SELECT. Absent for metadata statements (SHOW,
+            DESCRIBE) and when pagination was not requested.
     ExplainRequest:
       type: object
       additionalProperties: false
