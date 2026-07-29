@@ -7,7 +7,7 @@ package service
 
 import (
 	"errors"
-	"reflect"
+	"math"
 	"strings"
 	"testing"
 )
@@ -812,131 +812,115 @@ func TestGuardUnchanged(t *testing.T) {
 	}
 }
 
-// --- Phase 38S: governed query-result paging contract (RED tests) ---
+// --- Phase 38S: governed query-result paging contract ---
 
-func TestGuardedQuery_HasPageField(t *testing.T) {
-	t.Parallel()
-	rt := reflect.TypeOf(GuardedQuery{})
-	if _, ok := rt.FieldByName("Page"); !ok {
-		t.Error("Phase 38S: GuardedQuery must have a Page field so the executor knows which page to return")
-	}
-}
-
-func TestGuardedQuery_HasPageSizeField(t *testing.T) {
-	t.Parallel()
-	rt := reflect.TypeOf(GuardedQuery{})
-	if _, ok := rt.FieldByName("PageSize"); !ok {
-		t.Error("Phase 38S: GuardedQuery must have a PageSize field so the executor can compute OFFSET")
-	}
-}
-
-func TestGuardedQuery_HasTotalCountField(t *testing.T) {
-	t.Parallel()
-	rt := reflect.TypeOf(GuardedQuery{})
-	if _, ok := rt.FieldByName("TotalCount"); !ok {
-		t.Error("Phase 38S: GuardedQuery must have a TotalCount field for page navigation metadata")
-	}
-}
-
-func TestQueryGuard_InjectsOffsetForPagedSelect(t *testing.T) {
+func TestQueryGuard_GuardPaginatedSelect_serializesBackendOwnedWindow(t *testing.T) {
 	t.Parallel()
 	g := newTestGuard()
-	// Phase 38S: Guard must inject OFFSET for a paged SELECT.
-	// Currently it only injects LIMIT. This test proves OFFSET is absent.
-	got, err := g.Guard("select * from t", 0)
+
+	// Given a SELECT whose second page has 25 rows and a 100-row governed cap.
+	// When the page window is guarded.
+	got, err := g.GuardPaginatedSelect("select * from t", 2, 25, 100)
+
+	// Then Vitess serializes the AST-owned OFFSET as MySQL's LIMIT offset, count
+	// form. The SQL reads one extra row so the executor can detect a next page.
 	if err != nil {
-		t.Fatalf("Guard error: %v", err)
+		t.Fatalf("GuardPaginatedSelect error: %v", err)
 	}
-	lower := strings.ToLower(got.ExecutableSQL)
-	if !strings.Contains(lower, "offset") {
-		t.Errorf("Phase 38S: Guard must inject OFFSET for paginated SELECT. ExecutableSQL=%q", got.ExecutableSQL)
+	if got.ExecutableSQL != "select * from t limit 25, 26" {
+		t.Fatalf("ExecutableSQL = %q, want exact AST serialization", got.ExecutableSQL)
+	}
+	if got.LimitApplied != 100 {
+		t.Fatalf("LimitApplied = %d, want overall cap 100", got.LimitApplied)
+	}
+	if got.ResultLimit != 25 {
+		t.Fatalf("ResultLimit = %d, want page scan limit 25", got.ResultLimit)
 	}
 }
 
-func TestQueryGuard_PagedSelectOverridesUserLimitOffset(t *testing.T) {
+func TestQueryGuard_GuardPaginatedSelect_overridesClientLimitAndOffset(t *testing.T) {
 	t.Parallel()
 	g := newTestGuard()
-	// Phase 38S: user-supplied LIMIT and OFFSET must be overridden by
-	// AST-owned values. The backend owns the LIMIT (effective+1 for
-	// truncation detection) and OFFSET ((page-1)*pageSize).
-	got, err := g.Guard("select * from t limit 1000 offset 500", 0)
+
+	// Given client-controlled pagination clauses.
+	// When the server guards page three with a 10-row page size.
+	got, err := g.GuardPaginatedSelect("select id from t limit 1000 offset 500", 3, 10, 100)
+
+	// Then neither client value survives the AST rewrite.
 	if err != nil {
-		t.Fatalf("Guard error: %v", err)
+		t.Fatalf("GuardPaginatedSelect error: %v", err)
 	}
-	lower := strings.ToLower(got.ExecutableSQL)
-	if strings.Contains(lower, "limit 1000") {
-		t.Errorf("Phase 38S: user LIMIT 1000 must be overridden. ExecutableSQL=%q", got.ExecutableSQL)
-	}
-	if strings.Contains(lower, "offset 500") {
-		t.Errorf("Phase 38S: user OFFSET 500 must be overridden. ExecutableSQL=%q", got.ExecutableSQL)
-	}
-	// Phase 38S: the overridden OFFSET must be the backend-owned value.
-	if !strings.Contains(lower, "offset") {
-		t.Errorf("Phase 38S: Guard must inject backend-owned OFFSET. ExecutableSQL=%q", got.ExecutableSQL)
+	if got.ExecutableSQL != "select id from t limit 20, 11" {
+		t.Fatalf("ExecutableSQL = %q, want server-owned limit and offset", got.ExecutableSQL)
 	}
 }
 
-func TestQueryGuard_ShowRemainsSingleResponse(t *testing.T) {
+func TestQueryGuard_GuardPaginatedSelect_returnsFallbackForMetadata(t *testing.T) {
 	t.Parallel()
 	g := newTestGuard()
-	// Phase 38S contract: SHOW statements must remain single-response.
-	// They must never be paginated (no LIMIT/OFFSET injection).
-	for _, stmt := range []string{"show tables", "show databases", "show columns from t"} {
-		got, err := g.Guard(stmt, 100)
-		if err != nil {
-			t.Fatalf("Guard(%q) error: %v", stmt, err)
-		}
-		if got.LimitApplied != 0 {
-			t.Errorf("Phase 38S: SHOW must remain single-response (LimitApplied=0). stmt=%q LimitApplied=%d", stmt, got.LimitApplied)
+
+	for _, statement := range []string{
+		"show tables",
+		"describe t",
+		"explain select * from t",
+	} {
+		// Given a metadata statement.
+		// When the paging guard receives it.
+		_, err := g.GuardPaginatedSelect(statement, 1, 10, 100)
+
+		// Then the service can fall back to the normal guard without injecting a page window.
+		if !errors.Is(err, ErrQueryPaginationNotApplicable) {
+			t.Errorf("GuardPaginatedSelect(%q) error = %v, want ErrQueryPaginationNotApplicable", statement, err)
 		}
 	}
 }
 
-func TestQueryGuard_DescribeRemainsSingleResponse(t *testing.T) {
+func TestQueryGuard_GuardPaginatedSelect_rejectsPageOutsideGovernedCap(t *testing.T) {
 	t.Parallel()
 	g := newTestGuard()
-	for _, stmt := range []string{"describe t", "desc t"} {
-		got, err := g.Guard(stmt, 100)
-		if err != nil {
-			t.Fatalf("Guard(%q) error: %v", stmt, err)
-		}
-		if got.LimitApplied != 0 {
-			t.Errorf("Phase 38S: DESCRIBE must remain single-response (LimitApplied=0). stmt=%q LimitApplied=%d", stmt, got.LimitApplied)
-		}
+
+	// Given a page starting at the governed cap boundary.
+	// When the request is guarded.
+	_, err := g.GuardPaginatedSelect("select * from t", 11, 10, 100)
+
+	// Then it is rejected before SQL generation.
+	if !errors.Is(err, ErrQueryPaginationInvalid) {
+		t.Fatalf("GuardPaginatedSelect error = %v, want ErrQueryPaginationInvalid", err)
 	}
 }
 
-func TestQueryGuard_ExplainRemainsSingleResponse(t *testing.T) {
+func TestQueryGuard_GuardPaginatedSelect_rejectsOffsetOverflow(t *testing.T) {
 	t.Parallel()
 	g := newTestGuard()
-	// Phase 38S contract: EXPLAIN must remain single-response.
-	// It must never be paginated — the execution plan is always one result set.
-	got, err := g.Guard("explain select * from t", 100)
-	if err != nil {
-		t.Fatalf("Guard error: %v", err)
-	}
-	lower := strings.ToLower(got.ExecutableSQL)
-	if strings.Contains(lower, "offset") {
-		t.Errorf("Phase 38S: EXPLAIN must not have OFFSET. ExecutableSQL=%q", got.ExecutableSQL)
+
+	// Given page and page size whose offset multiplication overflows int.
+	// When the request is guarded.
+	_, err := g.GuardPaginatedSelect("select * from t", math.MaxInt, 2, math.MaxInt)
+
+	// Then the request is rejected rather than wrapping its OFFSET.
+	if !errors.Is(err, ErrQueryPaginationInvalid) {
+		t.Fatalf("GuardPaginatedSelect overflow error = %v, want ErrQueryPaginationInvalid", err)
 	}
 }
 
-func TestQueryGuard_CapBoundary_PageBeyondEffectiveMaxRowsRejected(t *testing.T) {
+func TestQueryGuard_GuardPaginatedSelect_preservesSelectSafetyChecks(t *testing.T) {
 	t.Parallel()
 	g := newTestGuard()
-	// Phase 38S: if the requested page starts beyond effectiveMaxRows,
-	// the guard must reject before the executor runs. With effectiveMaxRows=100
-	// and pageSize=10, page=11 starts at offset 100 which is at the boundary.
-	// Page=12 starts at offset 110 which exceeds the cap.
-	// Currently: Guard has no page concept, so no rejection occurs.
-	got, err := g.Guard("select * from t", 0)
-	if err != nil {
-		t.Fatalf("Guard error: %v", err)
-	}
-	// Phase 38S: GuardedQuery.Page should be set so the service can reject
-	// pages beyond the cap. Currently Page field doesn't exist.
-	rt := reflect.TypeOf(got)
-	if _, ok := rt.FieldByName("Page"); !ok {
-		t.Error("Phase 38S: GuardedQuery.Page field required for cap-boundary rejection")
+
+	for _, statement := range []string{
+		"select * from t; select * from u",
+		"select * from t into outfile '/tmp/x'",
+		"select * from t for update",
+		"select sleep(1)",
+		"select @value := 1",
+	} {
+		// Given a SELECT that violates the read-only contract.
+		// When it is sent through the paginated entry point.
+		_, err := g.GuardPaginatedSelect(statement, 1, 10, 100)
+
+		// Then the same AST safety policy rejects it.
+		if !errors.Is(err, ErrQueryStatementNotAllowed) {
+			t.Errorf("GuardPaginatedSelect(%q) error = %v, want ErrQueryStatementNotAllowed", statement, err)
+		}
 	}
 }

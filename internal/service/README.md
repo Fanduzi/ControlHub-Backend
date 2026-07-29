@@ -17,7 +17,7 @@ Business logic layer with interface-based repository dependencies. Each service 
 | lifecycle_status_service.go | Lifecycle status dictionary listing |
 | health_status_service.go | Health status dictionary listing |
 | query_schema_service.go | QuerySchemaService.GetTableDefinition returns governed MySQL table definitions |
-| query_guard.go | AST-backed read-only validation for execute, explain, and saved-query entry points |
+| query_guard.go | AST-backed read-only validation for execute, paginated results, explain, and saved-query entry points |
 | query_disclosure_service.go | QueryDisclosureService — policy lookup, projection resolution, result transformation |
 | query_disclosure_projection.go | Column provenance resolution from SQL AST and FK metadata |
 | query_disclosure_mask.go | applyDisclosureMask for server-side value redaction |
@@ -37,6 +37,7 @@ Business logic layer with interface-based repository dependencies. Each service 
 - `DisclosurePlan`, `ColumnDisclosure` — resolved per-column disclosure decisions
 - `ColumnProvenance`, `ProjectionPlan` — column source identity from SQL/AST or FK metadata
 - `QueryGuard.GuardSavedStatement` — save-route validation for bare parser-approved SELECT statements without LIMIT injection
+- `QueryGuard.GuardPaginatedSelect` — page-window validation for bare parser-approved SELECT statements with AST-owned LIMIT/OFFSET
 - `QuerySavedStatementReader`, `QuerySavedStatementWriter`, `SavedStatementGuard` — saved statement data access interfaces
 - `QuerySavedStatementService.List/Create/Update/Delete` — authorized CRUD for target-scoped saved statements
 

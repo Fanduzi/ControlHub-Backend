@@ -1,6 +1,6 @@
 // Package service provides business logic for the read-only query sandbox.
-// input: errors, fmt, strconv, strings, vitess.io/vitess/go/vt/sqlparser
-// output: QueryGuardConfig, GuardedQuery, NewQueryGuard, QueryGuard.Guard, QueryGuard.GuardExplainSelect, QueryGuard.GuardSavedStatement, guard sentinel errors
+// input: errors, fmt, math, strconv, strings, vitess.io/vitess/go/vt/sqlparser
+// output: QueryGuardConfig, GuardedQuery, NewQueryGuard, QueryGuard.Guard, QueryGuard.GuardPaginatedSelect, QueryGuard.GuardExplainSelect, QueryGuard.GuardSavedStatement, guard sentinel errors
 // pos: AST-backed MySQL/TiDB read-only guard — rejects non-read statements, side-effecting functions, locking clauses, and enforces a backend-owned LIMIT
 // note: if this file changes, update header and README.md
 package service
@@ -8,6 +8,7 @@ package service
 import (
 	"errors"
 	"fmt"
+	"math"
 	"strconv"
 	"strings"
 
@@ -29,14 +30,17 @@ type GuardedQuery struct {
 	OriginalStatement string
 	ExecutableSQL     string
 	LimitApplied      int
+	ResultLimit       int
 	StatementDigest   string
 	StatementPreview  string
 }
 
 var (
-	ErrQueryStatementEmpty      = errors.New("query statement is empty")
-	ErrQueryStatementNotAllowed = errors.New("only read-only SQL statements are allowed")
-	ErrQueryLimitInvalid        = errors.New("query maxRows must not be negative")
+	ErrQueryStatementEmpty          = errors.New("query statement is empty")
+	ErrQueryStatementNotAllowed     = errors.New("only read-only SQL statements are allowed")
+	ErrQueryLimitInvalid            = errors.New("query maxRows must not be negative")
+	ErrQueryPaginationInvalid       = errors.New("query pagination is invalid")
+	ErrQueryPaginationNotApplicable = errors.New("query pagination is not applicable")
 )
 
 // QueryGuard parses and validates MySQL/TiDB read-only statements. All
@@ -66,25 +70,17 @@ func NewQueryGuard(config QueryGuardConfig) *QueryGuard {
 // EXPLAIN, and DESCRIBE/DESC. Do NOT call it from the Explain route — use
 // GuardExplainSelect instead, which accepts a bare SELECT only.
 func (g *QueryGuard) Guard(statement string, requestedMaxRows int) (GuardedQuery, error) {
-	trimmed := strings.TrimSpace(statement)
-	if trimmed == "" {
-		return GuardedQuery{}, ErrQueryStatementEmpty
+	trimmed, err := trimQueryStatement(statement)
+	if err != nil {
+		return GuardedQuery{}, err
 	}
 	if requestedMaxRows < 0 {
 		return GuardedQuery{}, ErrQueryLimitInvalid
 	}
 
-	// Multi-statement rejection: split into real statements and require exactly
-	// one. This catches the classic "; drop table" amplifier before parsing.
-	if multi, err := g.isMultiStatement(trimmed); err != nil {
-		return GuardedQuery{}, fmt.Errorf("%w: %v", ErrQueryStatementNotAllowed, err)
-	} else if multi {
-		return GuardedQuery{}, ErrQueryStatementNotAllowed
-	}
-
-	stmt, err := g.parser.Parse(trimmed)
+	stmt, err := g.parseSingleStatement(trimmed)
 	if err != nil {
-		return GuardedQuery{}, fmt.Errorf("%w: %v", ErrQueryStatementNotAllowed, err)
+		return GuardedQuery{}, err
 	}
 
 	// Dispatch on statement type. SELECT gets the full side-effect walk + LIMIT
@@ -104,6 +100,37 @@ func (g *QueryGuard) Guard(statement string, requestedMaxRows int) (GuardedQuery
 	}
 }
 
+// GuardPaginatedSelect validates a SELECT and injects an AST-owned page window.
+// Metadata statements report ErrQueryPaginationNotApplicable so their caller can
+// fall back to Guard without changing their single-response semantics.
+func (g *QueryGuard) GuardPaginatedSelect(statement string, page, pageSize, effectiveMaxRows int) (GuardedQuery, error) {
+	trimmed, err := trimQueryStatement(statement)
+	if err != nil {
+		return GuardedQuery{}, err
+	}
+	stmt, err := g.parseSingleStatement(trimmed)
+	if err != nil {
+		return GuardedQuery{}, err
+	}
+
+	switch s := stmt.(type) {
+	case *sqlparser.Select:
+		if err := g.validateSelect(s); err != nil {
+			return GuardedQuery{}, err
+		}
+		offset, pageRows, err := paginationWindow(page, pageSize, effectiveMaxRows)
+		if err != nil {
+			return GuardedQuery{}, err
+		}
+		setPaginatedSelectLimit(s, pageRows, offset)
+		return g.newGuardedQuery(trimmed, sqlparser.String(s), effectiveMaxRows, pageRows), nil
+	case *sqlparser.Show, *sqlparser.ExplainStmt, *sqlparser.ExplainTab:
+		return GuardedQuery{}, ErrQueryPaginationNotApplicable
+	default:
+		return GuardedQuery{}, ErrQueryStatementNotAllowed
+	}
+}
+
 // GuardExplainSelect is the narrow Explain-route entry point. It accepts a
 // bare parser-approved SELECT only — never user-typed EXPLAIN, SHOW,
 // DESCRIBE/DESC, DML, DDL, multi-statement, or unsafe functions. It reuses
@@ -116,43 +143,22 @@ func (g *QueryGuard) Guard(statement string, requestedMaxRows int) (GuardedQuery
 // parser-approved SELECT; the executor owns prepending EXPLAIN FORMAT=JSON.
 // This structural seam prevents the executor from ever seeing arbitrary SQL.
 func (g *QueryGuard) GuardExplainSelect(statement string) (GuardedQuery, error) {
-	trimmed := strings.TrimSpace(statement)
-	if trimmed == "" {
-		return GuardedQuery{}, ErrQueryStatementEmpty
-	}
-	if multi, err := g.isMultiStatement(trimmed); err != nil {
-		return GuardedQuery{}, fmt.Errorf("%w: %v", ErrQueryStatementNotAllowed, err)
-	} else if multi {
-		return GuardedQuery{}, ErrQueryStatementNotAllowed
-	}
-	stmt, err := g.parser.Parse(trimmed)
+	trimmed, err := trimQueryStatement(statement)
 	if err != nil {
-		return GuardedQuery{}, fmt.Errorf("%w: %v", ErrQueryStatementNotAllowed, err)
+		return GuardedQuery{}, err
+	}
+	stmt, err := g.parseSingleStatement(trimmed)
+	if err != nil {
+		return GuardedQuery{}, err
 	}
 	sel, ok := stmt.(*sqlparser.Select)
 	if !ok {
 		return GuardedQuery{}, ErrQueryStatementNotAllowed
 	}
-	if sel.Into != nil {
-		return GuardedQuery{}, ErrQueryStatementNotAllowed
-	}
-	if sel.Lock != sqlparser.NoLock {
-		return GuardedQuery{}, ErrQueryStatementNotAllowed
-	}
-	if err := g.rejectForbiddenNodes(sel); err != nil {
+	if err := g.validateSelect(sel); err != nil {
 		return GuardedQuery{}, err
 	}
-	preview := trimmed
-	if len(preview) > statementPreviewMax {
-		preview = preview[:statementPreviewMax]
-	}
-	return GuardedQuery{
-		OriginalStatement: trimmed,
-		ExecutableSQL:     sqlparser.String(sel),
-		LimitApplied:      0,
-		StatementDigest:   g.digest(trimmed),
-		StatementPreview:  preview,
-	}, nil
+	return g.newGuardedQuery(trimmed, sqlparser.String(sel), 0, 0), nil
 }
 
 // GuardSavedStatement validates a statement for saving in the query library.
@@ -165,21 +171,13 @@ func (g *QueryGuard) GuardExplainSelect(statement string) (GuardedQuery, error) 
 // This is the save-route entry point. Do NOT call it from execute or explain
 // routes — use Guard or GuardExplainSelect instead.
 func (g *QueryGuard) GuardSavedStatement(statement string) (string, error) {
-	trimmed := strings.TrimSpace(statement)
-	if trimmed == "" {
-		return "", ErrQueryStatementEmpty
-	}
-
-	// Multi-statement rejection
-	if multi, err := g.isMultiStatement(trimmed); err != nil {
-		return "", fmt.Errorf("%w: %v", ErrQueryStatementNotAllowed, err)
-	} else if multi {
-		return "", ErrQueryStatementNotAllowed
-	}
-
-	stmt, err := g.parser.Parse(trimmed)
+	trimmed, err := trimQueryStatement(statement)
 	if err != nil {
-		return "", fmt.Errorf("%w: %v", ErrQueryStatementNotAllowed, err)
+		return "", err
+	}
+	stmt, err := g.parseSingleStatement(trimmed)
+	if err != nil {
+		return "", err
 	}
 
 	// Only bare SELECT is allowed for saved statements
@@ -188,18 +186,7 @@ func (g *QueryGuard) GuardSavedStatement(statement string) (string, error) {
 		return "", ErrQueryStatementNotAllowed
 	}
 
-	// Reject INTO (OUTFILE / DUMPFILE / S3 / @var)
-	if sel.Into != nil {
-		return "", ErrQueryStatementNotAllowed
-	}
-
-	// Reject locking clauses (FOR UPDATE / LOCK IN SHARE MODE)
-	if sel.Lock != sqlparser.NoLock {
-		return "", ErrQueryStatementNotAllowed
-	}
-
-	// Walk for side-effecting / resource / lock functions
-	if err := g.rejectForbiddenNodes(sel); err != nil {
+	if err := g.validateSelect(sel); err != nil {
 		return "", err
 	}
 
@@ -209,51 +196,13 @@ func (g *QueryGuard) GuardSavedStatement(statement string) (string, error) {
 // guardSelect validates a SELECT statement: rejects INTO, locking clauses, and
 // side-effect functions, then injects a backend-owned LIMIT.
 func (g *QueryGuard) guardSelect(sel *sqlparser.Select, trimmed string, requestedMaxRows int) (GuardedQuery, error) {
-	// INTO (OUTFILE / DUMPFILE / S3 / @var) — any INTO is rejected. INTO OUTFILE
-	// and DUMPFILE write server-side files; INTO @var carries variable state.
-	if sel.Into != nil {
-		return GuardedQuery{}, ErrQueryStatementNotAllowed
-	}
-	// Locking clauses (FOR UPDATE / LOCK IN SHARE MODE and their NOWAIT/SKIP
-	// LOCKED variants) — not read-only.
-	if sel.Lock != sqlparser.NoLock {
-		return GuardedQuery{}, ErrQueryStatementNotAllowed
-	}
-
-	// Walk the parsed tree for side-effecting / resource / lock functions and
-	// user-variable assignment. Decided by node type, never substring match.
-	if err := g.rejectForbiddenNodes(sel); err != nil {
+	if err := g.validateSelect(sel); err != nil {
 		return GuardedQuery{}, err
 	}
 
-	// Backend-owned LIMIT: zero/omitted requestedMaxRows -> DefaultMaxRows,
-	// capped at HardMaxRows. Overwrites any LIMIT the user supplied so the cap
-	// is authoritative. The SQL LIMIT is effective+1 so the executor can scan one
-	// extra row to detect truncation; limitApplied reports the real cap
-	// (effective), not the +1.
-	effective := requestedMaxRows
-	if effective == 0 {
-		effective = g.config.DefaultMaxRows
-	}
-	if effective > g.config.HardMaxRows {
-		effective = g.config.HardMaxRows
-	}
-	sel.Limit = &sqlparser.Limit{
-		Rowcount: &sqlparser.Literal{Type: sqlparser.IntVal, Val: strconv.Itoa(effective + 1)},
-	}
-
-	preview := trimmed
-	if len(preview) > statementPreviewMax {
-		preview = preview[:statementPreviewMax]
-	}
-
-	return GuardedQuery{
-		OriginalStatement: trimmed,
-		ExecutableSQL:     sqlparser.String(sel),
-		LimitApplied:      effective,
-		StatementDigest:   g.digest(trimmed),
-		StatementPreview:  preview,
-	}, nil
+	effective := g.effectiveMaxRows(requestedMaxRows)
+	setSelectLimit(sel, effective)
+	return g.newGuardedQuery(trimmed, sqlparser.String(sel), effective, 0), nil
 }
 
 // guardShow validates a SHOW statement against the read-only allow-list.
@@ -282,18 +231,7 @@ func (g *QueryGuard) guardShow(show *sqlparser.Show, trimmed string) (GuardedQue
 		return GuardedQuery{}, ErrQueryStatementNotAllowed
 	}
 
-	preview := trimmed
-	if len(preview) > statementPreviewMax {
-		preview = preview[:statementPreviewMax]
-	}
-
-	return GuardedQuery{
-		OriginalStatement: trimmed,
-		ExecutableSQL:     sqlparser.String(show),
-		LimitApplied:      0, // SHOW statements have no row cap
-		StatementDigest:   g.digest(trimmed),
-		StatementPreview:  preview,
-	}, nil
+	return g.newGuardedQuery(trimmed, sqlparser.String(show), 0, 0), nil
 }
 
 // guardExplain validates an EXPLAIN statement. Only EXPLAIN SELECT is allowed —
@@ -306,46 +244,20 @@ func (g *QueryGuard) guardExplain(explain *sqlparser.ExplainStmt, trimmed string
 		// EXPLAIN of non-SELECT (e.g. EXPLAIN UPDATE) — rejected.
 		return GuardedQuery{}, ErrQueryStatementNotAllowed
 	}
-	// Validate the inner SELECT through the side-effect guard (INTO, locking,
-	// forbidden functions). We do NOT call guardSelect because that would
-	// overwrite ExecutableSQL with just the SELECT + LIMIT, stripping EXPLAIN.
-	if innerSelect.Into != nil {
-		return GuardedQuery{}, ErrQueryStatementNotAllowed
-	}
-	if innerSelect.Lock != sqlparser.NoLock {
-		return GuardedQuery{}, ErrQueryStatementNotAllowed
-	}
-	if err := g.rejectForbiddenNodes(innerSelect); err != nil {
+	// Validate the inner SELECT through the side-effect guard. We do NOT call
+	// guardSelect because that would strip the EXPLAIN wrapper.
+	if err := g.validateSelect(innerSelect); err != nil {
 		return GuardedQuery{}, err
 	}
 
 	// Apply backend-owned LIMIT to the inner SELECT.
-	effective := requestedMaxRows
-	if effective == 0 {
-		effective = g.config.DefaultMaxRows
-	}
-	if effective > g.config.HardMaxRows {
-		effective = g.config.HardMaxRows
-	}
-	innerSelect.Limit = &sqlparser.Limit{
-		Rowcount: &sqlparser.Literal{Type: sqlparser.IntVal, Val: strconv.Itoa(effective + 1)},
-	}
+	effective := g.effectiveMaxRows(requestedMaxRows)
+	setSelectLimit(innerSelect, effective)
 
 	// Rebuild the EXPLAIN wrapper with the guarded inner SELECT.
 	explain.Statement = innerSelect
 
-	preview := trimmed
-	if len(preview) > statementPreviewMax {
-		preview = preview[:statementPreviewMax]
-	}
-
-	return GuardedQuery{
-		OriginalStatement: trimmed,
-		ExecutableSQL:     sqlparser.String(explain),
-		LimitApplied:      effective,
-		StatementDigest:   g.digest(trimmed),
-		StatementPreview:  preview,
-	}, nil
+	return g.newGuardedQuery(trimmed, sqlparser.String(explain), effective, 0), nil
 }
 
 // guardExplainTab validates a DESCRIBE/DESC <table> statement. These are safe
@@ -354,18 +266,97 @@ func (g *QueryGuard) guardExplain(explain *sqlparser.ExplainStmt, trimmed string
 // the guard's job is to reject writes and session mutation, not to second-guess
 // schema visibility.
 func (g *QueryGuard) guardExplainTab(tab *sqlparser.ExplainTab, trimmed string) (GuardedQuery, error) {
+	return g.newGuardedQuery(trimmed, sqlparser.String(tab), 0, 0), nil
+}
+
+func trimQueryStatement(statement string) (string, error) {
+	trimmed := strings.TrimSpace(statement)
+	if trimmed == "" {
+		return "", ErrQueryStatementEmpty
+	}
+	return trimmed, nil
+}
+
+func (g *QueryGuard) parseSingleStatement(statement string) (sqlparser.Statement, error) {
+	if multi, err := g.isMultiStatement(statement); err != nil {
+		return nil, fmt.Errorf("%w: %v", ErrQueryStatementNotAllowed, err)
+	} else if multi {
+		return nil, ErrQueryStatementNotAllowed
+	}
+	stmt, err := g.parser.Parse(statement)
+	if err != nil {
+		return nil, fmt.Errorf("%w: %v", ErrQueryStatementNotAllowed, err)
+	}
+	return stmt, nil
+}
+
+func (g *QueryGuard) validateSelect(sel *sqlparser.Select) error {
+	if sel.Into != nil {
+		return ErrQueryStatementNotAllowed
+	}
+	if sel.Lock != sqlparser.NoLock {
+		return ErrQueryStatementNotAllowed
+	}
+	return g.rejectForbiddenNodes(sel)
+}
+
+func (g *QueryGuard) effectiveMaxRows(requestedMaxRows int) int {
+	effective := requestedMaxRows
+	if effective == 0 {
+		effective = g.config.DefaultMaxRows
+	}
+	if effective > g.config.HardMaxRows {
+		effective = g.config.HardMaxRows
+	}
+	return effective
+}
+
+func setSelectLimit(sel *sqlparser.Select, limit int) {
+	sel.Limit = &sqlparser.Limit{
+		Rowcount: &sqlparser.Literal{Type: sqlparser.IntVal, Val: strconv.Itoa(limit + 1)},
+	}
+}
+
+func setPaginatedSelectLimit(sel *sqlparser.Select, pageRows, offset int) {
+	sel.Limit = &sqlparser.Limit{
+		Offset:   &sqlparser.Literal{Type: sqlparser.IntVal, Val: strconv.Itoa(offset)},
+		Rowcount: &sqlparser.Literal{Type: sqlparser.IntVal, Val: strconv.Itoa(pageRows + 1)},
+	}
+}
+
+func paginationWindow(page, pageSize, effectiveMaxRows int) (offset, pageRows int, err error) {
+	if page < 1 || pageSize < 1 || effectiveMaxRows < 1 {
+		return 0, 0, ErrQueryPaginationInvalid
+	}
+	pageIndex := page - 1
+	if pageIndex > math.MaxInt/pageSize {
+		return 0, 0, ErrQueryPaginationInvalid
+	}
+	offset = pageIndex * pageSize
+	remaining := effectiveMaxRows - offset
+	if remaining <= 0 {
+		return 0, 0, ErrQueryPaginationInvalid
+	}
+	pageRows = min(pageSize, remaining)
+	if pageRows == math.MaxInt {
+		return 0, 0, ErrQueryPaginationInvalid
+	}
+	return offset, pageRows, nil
+}
+
+func (g *QueryGuard) newGuardedQuery(trimmed, executableSQL string, limitApplied, resultLimit int) GuardedQuery {
 	preview := trimmed
 	if len(preview) > statementPreviewMax {
 		preview = preview[:statementPreviewMax]
 	}
-
 	return GuardedQuery{
 		OriginalStatement: trimmed,
-		ExecutableSQL:     trimmed,
-		LimitApplied:      0, // DESCRIBE statements have no row cap
+		ExecutableSQL:     executableSQL,
+		LimitApplied:      limitApplied,
+		ResultLimit:       resultLimit,
 		StatementDigest:   g.digest(trimmed),
 		StatementPreview:  preview,
-	}, nil
+	}
 }
 
 const statementPreviewMax = 512
