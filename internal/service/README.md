@@ -18,6 +18,8 @@ Business logic layer with interface-based repository dependencies. Each service 
 | health_status_service.go | Health status dictionary listing |
 | query_schema_service.go | QuerySchemaService.GetTableDefinition returns governed MySQL table definitions |
 | query_guard.go | AST-backed read-only validation for execute, paginated results, explain, and saved-query entry points |
+| query_execution_service.go | Governed query execution and Phase 38S result paging with per-page access, disclosure, history, and audit |
+| query_execution_service_test.go | Query execution service tests, including governed per-page access, disclosure, and persistence guarantees |
 | query_disclosure_service.go | QueryDisclosureService — policy lookup, projection resolution, result transformation |
 | query_disclosure_projection.go | Column provenance resolution from SQL AST and FK metadata |
 | query_disclosure_mask.go | applyDisclosureMask for server-side value redaction |

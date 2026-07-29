@@ -1,7 +1,7 @@
-// Package service provides tests for the Phase 37 query execution service.
+// Package service provides tests for the Phase 37/38S query execution service.
 // input: context, errors, strings, testing, time, internal/model
 // output: TestExecute_*, TestReadyDerivation_*, TestCredentialResolver_* (fakes for repos/resolver/executor/clock)
-// pos: Unit tests for execute gating, the environment-policy matrix, history/audit recording, and credential fail-closed behavior
+// pos: Unit tests for execute gating, governed result pages, the environment-policy matrix, history/audit recording, and credential fail-closed behavior
 // note: if this file changes, update header and README.md
 package service
 
@@ -163,11 +163,13 @@ type fakeResolver struct {
 	dsn       string
 	err       error
 	called    bool
+	calls     int
 	calledRef string
 }
 
 func (f *fakeResolver) Resolve(_ context.Context, ref string) (string, error) {
 	f.called = true
+	f.calls++
 	f.calledRef = ref
 	if err := model.ValidateCredentialRef(ref); err != nil {
 		f.err = err
@@ -184,12 +186,16 @@ type fakeExecutor struct {
 	err         error
 	delay       time.Duration
 	called      bool
+	queryCalls  int
+	queries     []GuardedQuery
 	gotDSN      string
 	gotNavInput *RelatedRecordsQueryInput
 }
 
-func (f *fakeExecutor) Query(ctx context.Context, dsn string, _ GuardedQuery) (QueryDatabaseResult, error) {
+func (f *fakeExecutor) Query(ctx context.Context, dsn string, guarded GuardedQuery) (QueryDatabaseResult, error) {
 	f.called = true
+	f.queryCalls++
+	f.queries = append(f.queries, guarded)
 	f.gotDSN = dsn
 	if f.delay > 0 {
 		select {
@@ -226,10 +232,14 @@ type fakeClock struct{ t time.Time }
 func (c *fakeClock) Now() time.Time { return c.t }
 
 type fakeDisclosureService struct {
-	blockErr error
+	blockErr         error
+	preflightCalls   int
+	preflightQueries []GuardedQuery
 }
 
-func (f *fakeDisclosureService) Preflight(_ context.Context, _ string, _ uint64, _ GuardedQuery) (DisclosurePlan, error) {
+func (f *fakeDisclosureService) Preflight(_ context.Context, _ string, _ uint64, guarded GuardedQuery) (DisclosurePlan, error) {
+	f.preflightCalls++
+	f.preflightQueries = append(f.preflightQueries, guarded)
 	if f.blockErr != nil {
 		return DisclosurePlan{}, f.blockErr
 	}
@@ -1191,6 +1201,214 @@ func TestExecute_AuditHistoryFailureCannotProduceSuccess(t *testing.T) {
 	}
 	if resp.Status == model.QueryExecutionSuccess {
 		t.Fatal("must not return success when history write failed")
+	}
+}
+
+func TestExecute_PagedRequestDefaultsMaxRowsToPageSize(t *testing.T) {
+	// Given a page request without an overall maxRows cap.
+	svc, _, _, executor := executionTestScaffold(t)
+	req := model.QueryExecuteRequest{
+		Statement: "select value from metrics",
+		Pagination: &model.QueryExecutePaginationRequest{
+			Page:     1,
+			PageSize: model.QueryExecuteDefaultPageSize,
+		},
+	}
+
+	// When the first page executes.
+	resp, err := svc.Execute(context.Background(), 7, 9001, req)
+
+	// Then the service owns the omitted maxRows default before building the page window.
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if len(executor.queries) != 1 {
+		t.Fatalf("query calls = %d, want 1", len(executor.queries))
+	}
+	if executor.queries[0].LimitApplied != model.QueryExecuteDefaultPageSize {
+		t.Fatalf("LimitApplied = %d, want %d", executor.queries[0].LimitApplied, model.QueryExecuteDefaultPageSize)
+	}
+	if resp.Pagination == nil || resp.Pagination.Page != 1 || resp.Pagination.PageSize != model.QueryExecuteDefaultPageSize {
+		t.Fatalf("pagination = %+v, want first default page", resp.Pagination)
+	}
+}
+
+func TestExecute_PagedSecondPageRunsFreshAccessAndDisclosure(t *testing.T) {
+	// Given two requests for adjacent pages of the same statement.
+	targetQueries := []model.QueryTargetListQuery{}
+	repo := &fakeExecRepo{credentials: map[uint64]model.QueryCredentialMetadata{
+		9001: enabledCred(model.QueryEnvPolicyNonProdOnly),
+	}}
+	resolver := &fakeResolver{dsn: testResolverDSN}
+	executor := &fakeExecutor{result: QueryDatabaseResult{
+		Columns:   []model.QueryResultColumn{{Name: "value", DatabaseType: "BIGINT"}},
+		Rows:      [][]any{{int64(1)}},
+		RowCount:  1,
+		Truncated: true,
+	}}
+	disclosure := &fakeDisclosureService{}
+	svc := NewQueryExecutionService(
+		fakeTargetRepo{targets: []model.QueryTarget{mysqlTarget("Staging")}, queries: &targetQueries},
+		repo, resolver, executor,
+		NewQueryGuard(QueryGuardConfig{DefaultMaxRows: 100, HardMaxRows: 500}),
+		&fakeClock{t: time.Date(2026, 6, 21, 8, 0, 0, 0, time.UTC)},
+		&fakeNavSchemaInspector{}, disclosure,
+	)
+	page := func(number int) model.QueryExecuteRequest {
+		return model.QueryExecuteRequest{
+			Statement: "select value from metrics",
+			MaxRows:   25,
+			Pagination: &model.QueryExecutePaginationRequest{
+				Page:     number,
+				PageSize: 10,
+			},
+		}
+	}
+
+	// When page one and then page two execute.
+	if _, err := svc.Execute(context.Background(), 7, 9001, page(1)); err != nil {
+		t.Fatalf("page 1 Execute: %v", err)
+	}
+	resp, err := svc.Execute(context.Background(), 7, 9001, page(2))
+
+	// Then every page re-enters access and disclosure before its own guarded query.
+	if err != nil {
+		t.Fatalf("page 2 Execute: %v", err)
+	}
+	if len(targetQueries) != 2 || resolver.calls != 2 || disclosure.preflightCalls != 2 || executor.queryCalls != 2 {
+		t.Fatalf("governance calls target=%d resolver=%d disclosure=%d executor=%d, want 2 each", len(targetQueries), resolver.calls, disclosure.preflightCalls, executor.queryCalls)
+	}
+	if got := executor.queries[1].ExecutableSQL; got != "select `value` from metrics limit 10, 11" {
+		t.Fatalf("page 2 SQL = %q, want server-owned offset window", got)
+	}
+	if resp.Pagination == nil || !resp.Pagination.HasPreviousPage || !resp.Pagination.HasNextPage {
+		t.Fatalf("page 2 pagination = %+v, want previous and next pages", resp.Pagination)
+	}
+	if len(repo.insertedAttempts) != 2 || len(repo.auditEvents) != 2 {
+		t.Fatalf("history/audit records = %d/%d, want 2/2", len(repo.insertedAttempts), len(repo.auditEvents))
+	}
+}
+
+func TestExecute_PagedSecondPageRechecksChangedPolicy(t *testing.T) {
+	// Given an allowed first page whose credential policy changes before page two.
+	targetQueries := []model.QueryTargetListQuery{}
+	repo := &fakeExecRepo{credentials: map[uint64]model.QueryCredentialMetadata{
+		9001: enabledCred(model.QueryEnvPolicyNonProdOnly),
+	}}
+	executor := &fakeExecutor{result: QueryDatabaseResult{RowCount: 1}}
+	disclosure := &fakeDisclosureService{}
+	svc := NewQueryExecutionService(
+		fakeTargetRepo{targets: []model.QueryTarget{mysqlTarget("Staging")}, queries: &targetQueries},
+		repo, &fakeResolver{dsn: testResolverDSN}, executor,
+		NewQueryGuard(QueryGuardConfig{DefaultMaxRows: 100, HardMaxRows: 500}),
+		&fakeClock{t: time.Date(2026, 6, 21, 8, 0, 0, 0, time.UTC)},
+		&fakeNavSchemaInspector{}, disclosure,
+	)
+	page := func(number int) model.QueryExecuteRequest {
+		return model.QueryExecuteRequest{
+			Statement: "select value from metrics",
+			MaxRows:   25,
+			Pagination: &model.QueryExecutePaginationRequest{
+				Page:     number,
+				PageSize: 10,
+			},
+		}
+	}
+	if _, err := svc.Execute(context.Background(), 7, 9001, page(1)); err != nil {
+		t.Fatalf("page 1 Execute: %v", err)
+	}
+	credential := repo.credentials[9001]
+	credential.EnvironmentPolicy = model.QueryEnvPolicyDisabled
+	repo.credentials[9001] = credential
+
+	// When page two executes after policy revocation.
+	_, err := svc.Execute(context.Background(), 7, 9001, page(2))
+
+	// Then the fresh access check blocks it before disclosure or execution.
+	if !errors.Is(err, ErrQueryNotAllowed) {
+		t.Fatalf("page 2 error = %v, want ErrQueryNotAllowed", err)
+	}
+	if len(targetQueries) != 2 || disclosure.preflightCalls != 1 || executor.queryCalls != 1 {
+		t.Fatalf("governance calls target=%d disclosure=%d executor=%d, want 2/1/1", len(targetQueries), disclosure.preflightCalls, executor.queryCalls)
+	}
+	if len(repo.insertedAttempts) != 2 || repo.insertedAttempts[1].Status != model.QueryExecutionRejected || len(repo.auditEvents) != 2 {
+		t.Fatalf("page 2 rejected recording = attempts=%+v audits=%d", repo.insertedAttempts, len(repo.auditEvents))
+	}
+}
+
+func TestExecute_PagedSuccessRequiresHistoryAndAudit(t *testing.T) {
+	for _, tt := range []struct {
+		name      string
+		configure func(*fakeExecRepo)
+	}{
+		{
+			name: "history write fails",
+			configure: func(repo *fakeExecRepo) {
+				repo.insertExecErr = errors.New("history db down")
+			},
+		},
+		{
+			name: "audit write fails",
+			configure: func(repo *fakeExecRepo) {
+				repo.insertAuditErr = errors.New("audit db down")
+			},
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			// Given a successful page whose required persistence write fails.
+			svc, repo, _, _ := executionTestScaffold(t)
+			tt.configure(repo)
+			req := model.QueryExecuteRequest{
+				Statement: "select value from metrics",
+				MaxRows:   10,
+				Pagination: &model.QueryExecutePaginationRequest{
+					Page:     1,
+					PageSize: 10,
+				},
+			}
+
+			// When the governed page executes.
+			resp, err := svc.Execute(context.Background(), 7, 9001, req)
+
+			// Then it cannot report an unaudited success.
+			if !errors.Is(err, ErrQueryBackendFailure) {
+				t.Fatalf("error = %v, want ErrQueryBackendFailure", err)
+			}
+			if resp.Status == model.QueryExecutionSuccess || resp.ExecutionID != 0 {
+				t.Fatalf("response = %+v, must not report success", resp)
+			}
+		})
+	}
+}
+
+func TestExecute_PagedMetadataStatementsRemainSingleResponses(t *testing.T) {
+	for _, statement := range []string{"show tables", "describe metrics", "explain select value from metrics"} {
+		t.Run(statement, func(t *testing.T) {
+			// Given a metadata statement sent with a page request.
+			svc, _, _, executor := executionTestScaffold(t)
+			req := model.QueryExecuteRequest{
+				Statement: statement,
+				MaxRows:   25,
+				Pagination: &model.QueryExecutePaginationRequest{
+					Page:     1,
+					PageSize: 10,
+				},
+			}
+
+			// When Execute falls back to the normal guard.
+			resp, err := svc.Execute(context.Background(), 7, 9001, req)
+
+			// Then the response is the existing metadata shape, without paging.
+			if err != nil {
+				t.Fatalf("Execute: %v", err)
+			}
+			if resp.Pagination != nil {
+				t.Fatalf("pagination = %+v, want nil for metadata", resp.Pagination)
+			}
+			if len(executor.queries) != 1 || executor.queries[0].ResultLimit != 0 {
+				t.Fatalf("guarded metadata query = %+v, want non-paginated result", executor.queries)
+			}
+		})
 	}
 }
 

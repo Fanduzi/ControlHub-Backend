@@ -1,7 +1,7 @@
-// Package service provides business logic for the Phase 37 read-only query sandbox.
+// Package service provides business logic for the Phase 37/38S read-only query sandbox.
 // input: context, errors, fmt, net, strconv, strings, time, go-sql-driver/mysql, internal/model
 // output: QueryExecutionService, query execution repository/resolver/executor/clock interfaces, sentinel errors, NewQueryExecutionService, Execute, ListHistory, validateDSNBinding
-// pos: Orchestrates guarded MySQL/TiDB SELECT execution — target/policy/guard gating, credential resolution + target binding, timed execution, and guaranteed per-attempt history + audit
+// pos: Orchestrates governed MySQL/TiDB query execution — target/policy/guard/disclosure gating, paged result windows, timed execution, and guaranteed per-attempt history + audit
 // note: if this file changes, update header and README.md
 package service
 
@@ -193,13 +193,35 @@ func (s *QueryExecutionService) Execute(ctx context.Context, actorUserID uint64,
 	target := access.Target
 	engine := target.ConnectionContext.Engine
 
+	// A paged request owns an explicit overall cap. Preserve the normal guard's
+	// legacy default behavior for non-paged execution.
+	maxRows := req.MaxRows
+	if req.Pagination != nil && maxRows == 0 {
+		maxRows = model.QueryExecuteDefaultPageSize
+	}
+
 	// Production requests are capped tighter before the guard applies its own
 	// default/hard-cap logic.
-	maxRows := req.MaxRows
 	if isProductionEnvironment(target.ConnectionContext.Environment) && (maxRows == 0 || maxRows > productionHardMaxRows) {
 		maxRows = productionHardMaxRows
 	}
-	guarded, err := s.guard.Guard(req.Statement, maxRows)
+
+	var guarded GuardedQuery
+	pagedSelect := false
+	if req.Pagination != nil {
+		if err := model.ValidatePagination(req.Pagination.Page, req.Pagination.PageSize); err != nil {
+			return s.reject(ctx, target, actorUserID, &guarded, "validation_failed", err.Error(),
+				fmt.Errorf("%w: %v", ErrQueryValidationFailed, err), start)
+		}
+		guarded, err = s.guard.GuardPaginatedSelect(req.Statement, req.Pagination.Page, req.Pagination.PageSize, maxRows)
+		if errors.Is(err, ErrQueryPaginationNotApplicable) {
+			guarded, err = s.guard.Guard(req.Statement, maxRows)
+		} else if err == nil {
+			pagedSelect = true
+		}
+	} else {
+		guarded, err = s.guard.Guard(req.Statement, maxRows)
+	}
 	if err != nil {
 		// The guard error is structural (SQL shape) and carries no DSN, so it is
 		// safe to surface as the validation message.
@@ -254,6 +276,17 @@ func (s *QueryExecutionService) Execute(ctx context.Context, actorUserID uint64,
 		return model.QueryExecuteResponse{}, errPersistAttempt
 	}
 
+	var pagination *model.QueryExecutePaginationResponse
+	if pagedSelect {
+		offset := (req.Pagination.Page - 1) * req.Pagination.PageSize
+		pagination = &model.QueryExecutePaginationResponse{
+			Page:            req.Pagination.Page,
+			PageSize:        req.Pagination.PageSize,
+			HasPreviousPage: req.Pagination.Page > 1,
+			HasNextPage:     result.Truncated && offset+guarded.ResultLimit < guarded.LimitApplied,
+		}
+	}
+
 	return model.QueryExecuteResponse{
 		ExecutionID:      execID,
 		Status:           model.QueryExecutionSuccess,
@@ -266,6 +299,7 @@ func (s *QueryExecutionService) Execute(ctx context.Context, actorUserID uint64,
 		DurationMs:       s.clock.Now().Sub(start).Milliseconds(),
 		LimitApplied:     guarded.LimitApplied,
 		ExecutedAt:       s.clock.Now(),
+		Pagination:       pagination,
 	}, nil
 }
 
