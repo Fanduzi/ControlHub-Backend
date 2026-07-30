@@ -108,6 +108,11 @@ func (g *QueryGuard) GuardPaginatedSelect(statement string, page, pageSize, requ
 	if err != nil {
 		return GuardedQuery{}, err
 	}
+	// Same limit validation as Guard: a negative cap is a limit error, never an
+	// invalid pagination window.
+	if requestedMaxRows < 0 {
+		return GuardedQuery{}, ErrQueryLimitInvalid
+	}
 	stmt, err := g.parseSingleStatement(trimmed)
 	if err != nil {
 		return GuardedQuery{}, err

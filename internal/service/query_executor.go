@@ -1,7 +1,7 @@
 // Package service provides the MySQL/TiDB query executor for the read-only sandbox.
 // input: context, database/sql, fmt, strings, time, go-sql-driver/mysql, internal/model
 // output: MySQLQueryExecutor, NewMySQLQueryExecutor, QueryExecutorCaps, newScanPointer, normalizeScanned (implements QueryDatabaseExecutor)
-// pos: Runs a guarded SELECT against a target DB under a read-only transaction with column/cell/payload caps; preserves SQL NULL as JSON null
+// pos: Runs a guarded SELECT against a target DB under a read-only transaction with column/cell/payload caps; paginated windows reject on payload-cap overflow, non-paged results truncate; preserves SQL NULL as JSON null
 // note: if this file changes, update header and README.md
 package service
 
@@ -81,7 +81,7 @@ func (e *MySQLQueryExecutor) Query(ctx context.Context, dsn string, guarded Guar
 	if guarded.ResultLimit > 0 {
 		scanLimit = guarded.ResultLimit
 	}
-	return e.scanBoundedRows(rows, scanLimit)
+	return e.scanBoundedRows(rows, scanLimit, guarded.ResultLimit > 0)
 }
 
 // QueryRelatedRecords executes a parameterized SELECT built by the service for
@@ -108,12 +108,16 @@ func (e *MySQLQueryExecutor) QueryRelatedRecords(ctx context.Context, dsn string
 	}
 	defer rows.Close()
 
-	return e.scanBoundedRows(rows, input.Limit)
+	return e.scanBoundedRows(rows, input.Limit, false)
 }
 
 // scanBoundedRows reads rows into a bounded QueryDatabaseResult, enforcing
 // column, cell, and payload caps. It is shared by Query and QueryRelatedRecords.
-func (e *MySQLQueryExecutor) scanBoundedRows(rows *sql.Rows, limit int) (QueryDatabaseResult, error) {
+// A paginated window must stay contiguous with its fixed offset, so a
+// response-byte overflow rejects the whole window with ErrQueryResultTooLarge
+// instead of returning a partial page the next offset would silently skip.
+// Non-paginated callers keep the bounded truncated-success contract.
+func (e *MySQLQueryExecutor) scanBoundedRows(rows *sql.Rows, limit int, paginatedWindow bool) (QueryDatabaseResult, error) {
 	colTypes, err := rows.ColumnTypes()
 	if err != nil {
 		return QueryDatabaseResult{}, err
@@ -156,6 +160,9 @@ func (e *MySQLQueryExecutor) scanBoundedRows(rows *sql.Rows, limit int) (QueryDa
 		}
 		responseBytes += rowBytes
 		if responseBytes > e.caps.MaxResponseBytes {
+			if paginatedWindow {
+				return QueryDatabaseResult{}, ErrQueryResultTooLarge
+			}
 			result.Truncated = true
 			break
 		}

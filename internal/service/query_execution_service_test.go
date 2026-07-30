@@ -1301,6 +1301,109 @@ func TestExecute_PagedResponseReportsEffectivePageWindow(t *testing.T) {
 	}
 }
 
+func TestExecute_PagedNegativeMaxRowsIsLimitValidationError(t *testing.T) {
+	// Given a paged request carrying a negative overall cap.
+	svc, repo, _, executor := executionTestScaffold(t)
+	req := model.QueryExecuteRequest{
+		Statement: "select value from metrics",
+		MaxRows:   -1,
+		Pagination: &model.QueryExecutePaginationRequest{
+			Page:     1,
+			PageSize: 10,
+		},
+	}
+
+	// When the page executes.
+	_, err := svc.Execute(context.Background(), 7, 9001, req)
+
+	// Then the rejection reuses the existing limit validation, not the
+	// pagination-window validation.
+	if !errors.Is(err, ErrQueryValidationFailed) {
+		t.Fatalf("error = %v, want ErrQueryValidationFailed", err)
+	}
+	if !strings.Contains(err.Error(), ErrQueryLimitInvalid.Error()) {
+		t.Fatalf("error = %q, want the guard limit-validation message %q", err, ErrQueryLimitInvalid.Error())
+	}
+	if strings.Contains(err.Error(), ErrQueryPaginationInvalid.Error()) {
+		t.Fatalf("error = %q, must not be misreported as invalid pagination", err)
+	}
+
+	// And the executor is never dispatched for an invalid cap.
+	if executor.called {
+		t.Fatal("executor must not be called for a negative maxRows")
+	}
+
+	// And exactly one rejected attempt is recorded to history + audit.
+	if len(repo.insertedAttempts) != 1 || repo.insertedAttempts[0].Status != model.QueryExecutionRejected {
+		t.Fatalf("history = %+v, want one rejected attempt", repo.insertedAttempts)
+	}
+	if repo.insertedAttempts[0].ErrorCode != "validation_failed" {
+		t.Fatalf("history error code = %q, want validation_failed", repo.insertedAttempts[0].ErrorCode)
+	}
+	if len(repo.auditEvents) != 1 || repo.auditEvents[0].result != "validation_failed" {
+		t.Fatalf("audit events = %+v, want one validation_failed event", repo.auditEvents)
+	}
+
+	// And neither the response error nor the recorded attempt leaks the raw
+	// statement or the resolved DSN.
+	recorded := repo.insertedAttempts[0].ErrorMessage
+	for _, leak := range []string{"secret-dsn-do-not-leak", "select value from metrics"} {
+		if strings.Contains(err.Error(), leak) || strings.Contains(recorded, leak) {
+			t.Fatalf("rejection leaks %q: err=%q history=%q", leak, err, recorded)
+		}
+	}
+}
+
+func TestExecute_PagedResultTooLargeRejectsWithoutPartialPage(t *testing.T) {
+	// Given a paged SELECT whose executor reports the payload-cap rejection.
+	svc, repo, _, executor := executionTestScaffold(t)
+	executor.err = ErrQueryResultTooLarge
+	req := model.QueryExecuteRequest{
+		Statement: "select value from metrics",
+		MaxRows:   25,
+		Pagination: &model.QueryExecutePaginationRequest{
+			Page:     1,
+			PageSize: 10,
+		},
+	}
+
+	// When the page executes.
+	resp, err := svc.Execute(context.Background(), 7, 9001, req)
+
+	// Then the attempt is a controlled rejection with the fixed safe message.
+	if !errors.Is(err, ErrQueryValidationFailed) {
+		t.Fatalf("error = %v, want ErrQueryValidationFailed", err)
+	}
+	if !strings.Contains(err.Error(), "result set exceeds configured limits") {
+		t.Fatalf("error = %q, want fixed safe message", err)
+	}
+	if strings.Contains(err.Error(), "secret-dsn-do-not-leak") {
+		t.Fatalf("error leaks the DSN: %q", err)
+	}
+
+	// And no partial page or pagination metadata is released.
+	if resp.Status == model.QueryExecutionSuccess {
+		t.Fatal("oversized paginated result must not be a success")
+	}
+	if len(resp.Rows) != 0 || resp.RowCount != 0 {
+		t.Fatalf("rows = %d/%d, want none", len(resp.Rows), resp.RowCount)
+	}
+	if resp.Pagination != nil {
+		t.Fatalf("pagination = %+v, want none for a rejected page", resp.Pagination)
+	}
+
+	// And the rejected attempt is recorded to history + audit as usual.
+	if len(repo.insertedAttempts) != 1 || repo.insertedAttempts[0].Status != model.QueryExecutionRejected {
+		t.Fatalf("history = %+v, want one rejected attempt", repo.insertedAttempts)
+	}
+	if repo.insertedAttempts[0].ErrorCode != "validation_failed" || repo.insertedAttempts[0].ErrorMessage != "result set exceeds configured limits" {
+		t.Fatalf("history code/message = %q/%q, want validation_failed with fixed safe message", repo.insertedAttempts[0].ErrorCode, repo.insertedAttempts[0].ErrorMessage)
+	}
+	if len(repo.auditEvents) != 1 || repo.auditEvents[0].result != "validation_failed" {
+		t.Fatalf("audit events = %+v, want one validation_failed event", repo.auditEvents)
+	}
+}
+
 func TestExecute_PagedSecondPageRunsFreshAccessAndDisclosure(t *testing.T) {
 	// Given two requests for adjacent pages of the same statement.
 	targetQueries := []model.QueryTargetListQuery{}

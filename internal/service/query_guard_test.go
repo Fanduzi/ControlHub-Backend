@@ -948,6 +948,24 @@ func TestQueryGuard_GuardPaginatedSelect_zeroMaxRowsUsesGuardDefault(t *testing.
 	}
 }
 
+func TestQueryGuard_GuardPaginatedSelect_negativeMaxRowsIsLimitError(t *testing.T) {
+	t.Parallel()
+	g := newTestGuard()
+
+	// Given a paged request with a negative overall cap.
+	// When the paginated guard receives it.
+	_, err := g.GuardPaginatedSelect("select 1", 1, 10, -1)
+
+	// Then the negative cap is classified by the same limit validation as
+	// non-paged execution, never as an invalid pagination window.
+	if !errors.Is(err, ErrQueryLimitInvalid) {
+		t.Fatalf("GuardPaginatedSelect negative maxRows error = %v, want ErrQueryLimitInvalid", err)
+	}
+	if errors.Is(err, ErrQueryPaginationInvalid) {
+		t.Fatalf("negative maxRows must not be reported as pagination error: %v", err)
+	}
+}
+
 func TestQueryGuard_GuardPaginatedSelect_preservesSelectSafetyChecks(t *testing.T) {
 	t.Parallel()
 	g := newTestGuard()

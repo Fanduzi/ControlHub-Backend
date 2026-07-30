@@ -1663,3 +1663,99 @@ func TestQueryExecution_PaginatedControlledErrorsAndRecordsDoNotLeakSecrets(t *t
 		t.Fatalf("history JSON exposed internal actor ID: %s", historyJSON)
 	}
 }
+
+// setupOversizedPagePayloadFixture seeds a deterministic wide fixture whose
+// first paginated window exceeds the executor's 1 MiB response cap: 10 ordered
+// rows of 13 cell-capped (8192-byte) payload columns each, plus disclosure
+// policies for every projected column. It returns the projection statement.
+func setupOversizedPagePayloadFixture(t *testing.T, db *sql.DB, targetID uint64) string {
+	t.Helper()
+	columns := make([]string, 0, 13)
+	definitions := make([]string, 0, 13)
+	repeats := make([]string, 0, 13)
+	for i := 1; i <= 13; i++ {
+		name := fmt.Sprintf("p%02d", i)
+		columns = append(columns, name)
+		definitions = append(definitions, name+" mediumtext not null")
+		repeats = append(repeats, "repeat('x', 8192)")
+	}
+	mustExec(t, db, `drop table if exists qe_paging_payload_fixtures`)
+	mustExec(t, db, "create table qe_paging_payload_fixtures (id bigint unsigned not null primary key, "+strings.Join(definitions, ", ")+")")
+	for id := 1; id <= 10; id++ {
+		mustExec(t, db, fmt.Sprintf(
+			"insert into qe_paging_payload_fixtures (id, %s) values (%d, %s)",
+			strings.Join(columns, ", "), id, strings.Join(repeats, ", ")))
+	}
+	seedDisclosurePolicies(t, db, targetID, testDBName(t), "qe_paging_payload_fixtures", append([]string{"id"}, columns...)...)
+	return "SELECT id, " + strings.Join(columns, ", ") + " FROM qe_paging_payload_fixtures ORDER BY id"
+}
+
+func TestQueryExecution_PaginatedOversizedPagePayloadIsControlledRejection(t *testing.T) {
+	svc, targetID, db := setupQuerySandboxTarget(t)
+	ctx := context.Background()
+	statement := setupOversizedPagePayloadFixture(t, db, targetID)
+
+	// When page one of the oversized window executes.
+	resp, executionErr := svc.Execute(ctx, ownerDBA, targetID, model.QueryExecuteRequest{
+		Statement: statement,
+		MaxRows:   20,
+		Pagination: &model.QueryExecutePaginationRequest{
+			Page: 1, PageSize: 10,
+		},
+	})
+
+	// Then the page is a controlled rejection, never a partial success whose
+	// next fixed offset would skip rows the operator never received.
+	if !errors.Is(executionErr, service.ErrQueryValidationFailed) {
+		t.Fatalf("oversized page error = %v, want ErrQueryValidationFailed", executionErr)
+	}
+	if !strings.Contains(executionErr.Error(), "result set exceeds configured limits") {
+		t.Fatalf("oversized page error = %q, want fixed safe message", executionErr)
+	}
+	if resp.RowCount != 0 || len(resp.Rows) != 0 || resp.Pagination != nil || resp.Status == model.QueryExecutionSuccess {
+		t.Fatalf("oversized page response = %+v, want no rows and no pagination metadata", resp)
+	}
+
+	// And the rejection never leaks payload, SQL, or credential material.
+	lower := strings.ToLower(executionErr.Error())
+	for _, forbidden := range []string{"qe_paging_payload_fixtures", "xxxx", "tcp(", "offset", strings.ToLower(globalEnv.dsn)} {
+		if strings.Contains(lower, forbidden) {
+			t.Fatalf("oversized page error leaked %q: %q", forbidden, executionErr)
+		}
+	}
+
+	// And the rejected attempt is recorded to history + audit.
+	repo := mysql.NewQueryExecutionRepository(db)
+	items, total, err := repo.ListExecutions(ctx, model.QueryExecutionListQuery{
+		TargetResourceID: targetID, Page: 1, PageSize: 10, Mode: model.PaginationModeOffset,
+	})
+	if err != nil {
+		t.Fatalf("list oversized-page history: %v", err)
+	}
+	if total != 1 || len(items) != 1 {
+		t.Fatalf("oversized-page history total/len = %d/%d, want 1/1", total, len(items))
+	}
+	if items[0].Status != model.QueryExecutionRejected || items[0].RowCount != 0 || items[0].ErrorCode != "validation_failed" {
+		t.Fatalf("oversized-page history = %+v, want rejected validation_failed attempt", items[0])
+	}
+	var auditResult string
+	if err := db.QueryRow(`select result from audit_events where target_resource_id = ? order by id desc limit 1`, targetID).Scan(&auditResult); err != nil {
+		t.Fatalf("read oversized-page audit: %v", err)
+	}
+	if auditResult != "validation_failed" {
+		t.Fatalf("oversized-page audit result = %q, want validation_failed", auditResult)
+	}
+
+	// And the same statement without pagination keeps the existing bounded
+	// truncated-success contract.
+	nonPaged, err := svc.Execute(ctx, ownerDBA, targetID, model.QueryExecuteRequest{
+		Statement: statement,
+		MaxRows:   20,
+	})
+	if err != nil {
+		t.Fatalf("non-paged oversized Execute error: %v", err)
+	}
+	if !nonPaged.Truncated || nonPaged.RowCount != 9 {
+		t.Fatalf("non-paged oversized result = truncated=%v rows=%d, want truncated 9-row success", nonPaged.Truncated, nonPaged.RowCount)
+	}
+}
