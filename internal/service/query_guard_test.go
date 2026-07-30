@@ -903,6 +903,51 @@ func TestQueryGuard_GuardPaginatedSelect_rejectsOffsetOverflow(t *testing.T) {
 	}
 }
 
+func TestQueryGuard_GuardPaginatedSelect_clampsRequestedMaxRowsToHardCap(t *testing.T) {
+	t.Parallel()
+	g := newTestGuard()
+
+	// Given a paged request whose overall cap far exceeds HardMaxRows (500).
+	// When page one is guarded.
+	got, err := g.GuardPaginatedSelect("select * from t", 1, 10, 2_000_000_000)
+
+	// Then the governed cap is the guard's hard cap, exactly as for non-paged
+	// execution — paging must never widen the absolute row boundary.
+	if err != nil {
+		t.Fatalf("GuardPaginatedSelect error: %v", err)
+	}
+	if got.LimitApplied != 500 {
+		t.Fatalf("LimitApplied = %d, want hard cap 500", got.LimitApplied)
+	}
+
+	// And a page whose offset reaches the hard cap is rejected before SQL
+	// generation, so deep paging cannot walk past the governed boundary.
+	if _, err := g.GuardPaginatedSelect("select * from t", 51, 10, 2_000_000_000); !errors.Is(err, ErrQueryPaginationInvalid) {
+		t.Fatalf("beyond-hard-cap page error = %v, want ErrQueryPaginationInvalid", err)
+	}
+}
+
+func TestQueryGuard_GuardPaginatedSelect_zeroMaxRowsUsesGuardDefault(t *testing.T) {
+	t.Parallel()
+	g := newTestGuard()
+
+	// Given a paged request that omits an overall cap (requestedMaxRows 0).
+	// When page two is guarded.
+	got, err := g.GuardPaginatedSelect("select * from t", 2, 10, 0)
+
+	// Then the guard applies the same DefaultMaxRows as non-paged execution,
+	// so a default worksheet can actually page within the default cap.
+	if err != nil {
+		t.Fatalf("GuardPaginatedSelect error: %v", err)
+	}
+	if got.LimitApplied != 100 {
+		t.Fatalf("LimitApplied = %d, want DefaultMaxRows 100", got.LimitApplied)
+	}
+	if got.ExecutableSQL != "select * from t limit 10, 11" {
+		t.Fatalf("ExecutableSQL = %q, want second default page window", got.ExecutableSQL)
+	}
+}
+
 func TestQueryGuard_GuardPaginatedSelect_preservesSelectSafetyChecks(t *testing.T) {
 	t.Parallel()
 	g := newTestGuard()

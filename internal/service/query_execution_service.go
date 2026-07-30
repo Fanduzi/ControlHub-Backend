@@ -193,12 +193,9 @@ func (s *QueryExecutionService) Execute(ctx context.Context, actorUserID uint64,
 	target := access.Target
 	engine := target.ConnectionContext.Engine
 
-	// A paged request owns an explicit overall cap. Preserve the normal guard's
-	// legacy default behavior for non-paged execution.
+	// maxRows is always the overall release cap; the guard owns the 0-default
+	// and hard-cap clamping for both paged and non-paged execution.
 	maxRows := req.MaxRows
-	if req.Pagination != nil && maxRows == 0 {
-		maxRows = model.QueryExecuteDefaultPageSize
-	}
 
 	// Production requests are capped tighter before the guard applies its own
 	// default/hard-cap logic.
@@ -279,9 +276,12 @@ func (s *QueryExecutionService) Execute(ctx context.Context, actorUserID uint64,
 	var pagination *model.QueryExecutePaginationResponse
 	if pagedSelect {
 		offset := (req.Pagination.Page - 1) * req.Pagination.PageSize
+		// ResultLimit is the guard-owned effective window; when the release cap
+		// truncates the requested pageSize, report the real window instead of
+		// overstating what was released.
 		pagination = &model.QueryExecutePaginationResponse{
 			Page:            req.Pagination.Page,
-			PageSize:        req.Pagination.PageSize,
+			PageSize:        guarded.ResultLimit,
 			HasPreviousPage: req.Pagination.Page > 1,
 			HasNextPage:     result.Truncated && offset+guarded.ResultLimit < guarded.LimitApplied,
 		}

@@ -1204,32 +1204,100 @@ func TestExecute_AuditHistoryFailureCannotProduceSuccess(t *testing.T) {
 	}
 }
 
-func TestExecute_PagedRequestDefaultsMaxRowsToPageSize(t *testing.T) {
+func TestExecute_PagedRequestDefaultsMaxRowsToGuardDefault(t *testing.T) {
 	// Given a page request without an overall maxRows cap.
 	svc, _, _, executor := executionTestScaffold(t)
 	req := model.QueryExecuteRequest{
 		Statement: "select value from metrics",
 		Pagination: &model.QueryExecutePaginationRequest{
 			Page:     1,
-			PageSize: model.QueryExecuteDefaultPageSize,
+			PageSize: 10,
 		},
 	}
 
 	// When the first page executes.
 	resp, err := svc.Execute(context.Background(), 7, 9001, req)
 
-	// Then the service owns the omitted maxRows default before building the page window.
+	// Then the omitted maxRows falls back to the guard's DefaultMaxRows total
+	// release cap, not the page size.
 	if err != nil {
 		t.Fatalf("Execute: %v", err)
 	}
 	if len(executor.queries) != 1 {
 		t.Fatalf("query calls = %d, want 1", len(executor.queries))
 	}
-	if executor.queries[0].LimitApplied != model.QueryExecuteDefaultPageSize {
-		t.Fatalf("LimitApplied = %d, want %d", executor.queries[0].LimitApplied, model.QueryExecuteDefaultPageSize)
+	if executor.queries[0].LimitApplied != 100 {
+		t.Fatalf("LimitApplied = %d, want guard DefaultMaxRows 100", executor.queries[0].LimitApplied)
 	}
-	if resp.Pagination == nil || resp.Pagination.Page != 1 || resp.Pagination.PageSize != model.QueryExecuteDefaultPageSize {
-		t.Fatalf("pagination = %+v, want first default page", resp.Pagination)
+	if resp.Pagination == nil || resp.Pagination.Page != 1 || resp.Pagination.PageSize != 10 {
+		t.Fatalf("pagination = %+v, want first page of size 10", resp.Pagination)
+	}
+}
+
+func TestExecute_PagedRequestCannotExceedHardMaxRows(t *testing.T) {
+	// Given a paged request that asks for an absurd overall cap.
+	svc, repo, _, executor := executionTestScaffold(t)
+	page := func(number int) model.QueryExecuteRequest {
+		return model.QueryExecuteRequest{
+			Statement: "select value from metrics",
+			MaxRows:   2_000_000_000,
+			Pagination: &model.QueryExecutePaginationRequest{
+				Page:     number,
+				PageSize: 10,
+			},
+		}
+	}
+
+	// When page one executes.
+	if _, err := svc.Execute(context.Background(), 7, 9001, page(1)); err != nil {
+		t.Fatalf("page 1 Execute: %v", err)
+	}
+
+	// Then the guard clamps the total release cap to HardMaxRows.
+	if len(executor.queries) != 1 || executor.queries[0].LimitApplied != 500 {
+		t.Fatalf("queries = %+v, want single query clamped to HardMaxRows 500", executor.queries)
+	}
+
+	// And a page beyond the clamped cap is rejected without touching the executor.
+	if _, err := svc.Execute(context.Background(), 7, 9001, page(51)); !errors.Is(err, ErrQueryValidationFailed) {
+		t.Fatalf("beyond-cap page error = %v, want ErrQueryValidationFailed", err)
+	}
+	if executor.queryCalls != 1 {
+		t.Fatalf("executor calls = %d, want 1 (beyond-cap page must not execute)", executor.queryCalls)
+	}
+	if len(repo.insertedAttempts) != 2 || repo.insertedAttempts[1].Status != model.QueryExecutionRejected {
+		t.Fatalf("history = %+v, want rejected record for beyond-cap page", repo.insertedAttempts)
+	}
+}
+
+func TestExecute_PagedResponseReportsEffectivePageWindow(t *testing.T) {
+	// Given a total cap smaller than the requested page size.
+	svc, _, _, executor := executionTestScaffold(t)
+	req := model.QueryExecuteRequest{
+		Statement: "select value from metrics",
+		MaxRows:   10,
+		Pagination: &model.QueryExecutePaginationRequest{
+			Page:     1,
+			PageSize: 25,
+		},
+	}
+
+	// When the page executes.
+	resp, err := svc.Execute(context.Background(), 7, 9001, req)
+
+	// Then the AST window and the reported pageSize both reflect the real
+	// effective window, so the metadata never overstates what was released.
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if got := executor.queries[0].ExecutableSQL; got != "select `value` from metrics limit 0, 11" {
+		t.Fatalf("SQL = %q, want cap-bounded first window", got)
+	}
+	if resp.Pagination == nil || resp.Pagination.PageSize != 10 {
+		t.Fatalf("pagination = %+v, want effective pageSize 10", resp.Pagination)
+	}
+	if resp.Pagination.HasNextPage {
+		t.Fatal("HasNextPage = true, want false when the cap is exhausted on page 1")
 	}
 }
 

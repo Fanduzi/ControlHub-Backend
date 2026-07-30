@@ -103,7 +103,7 @@ func (g *QueryGuard) Guard(statement string, requestedMaxRows int) (GuardedQuery
 // GuardPaginatedSelect validates a SELECT and injects an AST-owned page window.
 // Metadata statements report ErrQueryPaginationNotApplicable so their caller can
 // fall back to Guard without changing their single-response semantics.
-func (g *QueryGuard) GuardPaginatedSelect(statement string, page, pageSize, effectiveMaxRows int) (GuardedQuery, error) {
+func (g *QueryGuard) GuardPaginatedSelect(statement string, page, pageSize, requestedMaxRows int) (GuardedQuery, error) {
 	trimmed, err := trimQueryStatement(statement)
 	if err != nil {
 		return GuardedQuery{}, err
@@ -112,6 +112,7 @@ func (g *QueryGuard) GuardPaginatedSelect(statement string, page, pageSize, effe
 	if err != nil {
 		return GuardedQuery{}, err
 	}
+	effectiveMaxRows := g.effectiveMaxRows(requestedMaxRows)
 
 	switch s := stmt.(type) {
 	case *sqlparser.Select:
