@@ -1464,6 +1464,48 @@ func TestQueryExecution_PaginatedSelectRejectsPageAtMaxRowsBoundaryBeforeTargetE
 	}
 }
 
+func TestQueryExecution_PaginatedSelectCannotBypassHardMaxRows(t *testing.T) {
+	svc, targetID, _ := setupQuerySandboxTarget(t)
+	ctx := context.Background()
+	statement := "SELECT id, name FROM qe_sandbox_fixtures ORDER BY id"
+
+	// Given an absurd requested cap, the guard clamps the release cap to
+	// HardMaxRows (500) instead of trusting the caller.
+	page1, err := svc.Execute(ctx, ownerDBA, targetID, model.QueryExecuteRequest{
+		Statement: statement,
+		MaxRows:   2_000_000_000,
+		Pagination: &model.QueryExecutePaginationRequest{
+			Page: 1, PageSize: 10,
+		},
+	})
+	if err != nil {
+		t.Fatalf("huge-cap page 1 Execute error: %v", err)
+	}
+	if page1.LimitApplied != 500 {
+		t.Fatalf("huge-cap LimitApplied = %d, want hard cap 500", page1.LimitApplied)
+	}
+	assertQueryPageIDs(t, page1, []int64{1, 2, 3, 4, 5, 6, 7, 8, 9, 10})
+
+	// And a page whose offset reaches the clamped cap is rejected before any
+	// target execution, without leaking the statement or window internals.
+	_, err = svc.Execute(ctx, ownerDBA, targetID, model.QueryExecuteRequest{
+		Statement: statement,
+		MaxRows:   2_000_000_000,
+		Pagination: &model.QueryExecutePaginationRequest{
+			Page: 51, PageSize: 10,
+		},
+	})
+	if !errors.Is(err, service.ErrQueryValidationFailed) {
+		t.Fatalf("beyond-hard-cap error = %v, want ErrQueryValidationFailed", err)
+	}
+	lower := strings.ToLower(err.Error())
+	for _, secret := range []string{"qe_sandbox_fixtures", "offset", "dsn", "@tcp("} {
+		if strings.Contains(lower, secret) {
+			t.Fatalf("beyond-hard-cap error leaked %q: %q", secret, err)
+		}
+	}
+}
+
 func TestQueryExecution_PaginatedSelectRecordsEachPageInHistoryAndAudit(t *testing.T) {
 	svc, targetID, db := setupQuerySandboxTarget(t)
 	ctx := context.Background()

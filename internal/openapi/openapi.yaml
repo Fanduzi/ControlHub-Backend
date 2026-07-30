@@ -261,7 +261,7 @@ paths:
                     limitApplied: 100
                     executedAt: "2026-06-22T08:30:00Z"
                 paginatedPage1:
-                  summary: Paginated result — page 1 of 3
+                  summary: Paginated result — page 1, more pages available
                   value:
                     executionId: 1002
                     status: success
@@ -273,10 +273,18 @@ paths:
                     rows:
                       - [1, "Alpha"]
                       - [2, "Beta"]
-                    rowCount: 2
-                    truncated: false
+                      - [3, "Gamma"]
+                      - [4, "Delta"]
+                      - [5, "Epsilon"]
+                      - [6, "Zeta"]
+                      - [7, "Eta"]
+                      - [8, "Theta"]
+                      - [9, "Iota"]
+                      - [10, "Kappa"]
+                    rowCount: 10
+                    truncated: true
                     durationMs: 12
-                    limitApplied: 10
+                    limitApplied: 100
                     executedAt: "2026-07-29T08:00:00Z"
                     pagination:
                       page: 1
@@ -284,7 +292,7 @@ paths:
                       hasPreviousPage: false
                       hasNextPage: true
                 paginatedPage2:
-                  summary: Paginated result — page 2 of 3
+                  summary: Paginated result — final page 2
                   value:
                     executionId: 1003
                     status: success
@@ -294,20 +302,20 @@ paths:
                       - {name: id, databaseType: BIGINT, nullable: false, displayMode: raw_copy_allowed, copyAllowed: true}
                       - {name: name, databaseType: VARCHAR, nullable: true, displayMode: raw_copy_allowed, copyAllowed: true}
                     rows:
-                      - [11, "Kappa"]
-                      - [12, "Lambda"]
+                      - [11, "Lambda"]
+                      - [12, "Mu"]
                     rowCount: 2
                     truncated: false
                     durationMs: 14
-                    limitApplied: 10
+                    limitApplied: 100
                     executedAt: "2026-07-29T08:01:00Z"
                     pagination:
                       page: 2
                       pageSize: 10
                       hasPreviousPage: true
-                      hasNextPage: true
+                      hasNextPage: false
                 metadataSingleResponse:
-                  summary: Metadata statement — pagination present but rows are unpaginated
+                  summary: Metadata statement — single unpaginated response, no pagination metadata
                   value:
                     executionId: 1004
                     status: success
@@ -321,13 +329,8 @@ paths:
                     rowCount: 2
                     truncated: false
                     durationMs: 5
-                    limitApplied: 10
+                    limitApplied: 0
                     executedAt: "2026-07-29T08:02:00Z"
-                    pagination:
-                      page: 1
-                      pageSize: 10
-                      hasPreviousPage: false
-                      hasNextPage: false
         "400":
           description: Validation failed (bad request, blocked statement, bad maxRows, invalid pagination)
           content:
@@ -4319,8 +4322,8 @@ components:
           $ref: "#/components/schemas/QueryExecutePaginationRequest"
           description: >
             Optional governed result paging boundary. When present, page and
-            pageSize are validated strictly. When absent, the executor applies
-            QueryExecuteDefaultPageSize and returns all rows up to the row cap.
+            pageSize are validated strictly. When absent, execution keeps its
+            single-response behavior and returns all rows up to the row cap.
     QueryExecutePaginationRequest:
       type: object
       required: [page, pageSize]
@@ -4356,7 +4359,10 @@ components:
           description: Current page number (1-based).
         pageSize:
           type: integer
-          description: Number of rows per page.
+          description: >
+            Effective rows-per-page window owned by the server-side guard.
+            Equals the requested pageSize except when the governed row cap
+            truncates the window, in which case it reports the real window.
         hasPreviousPage:
           type: boolean
           description: True when page > 1.

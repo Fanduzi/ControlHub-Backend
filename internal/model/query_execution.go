@@ -1,6 +1,6 @@
 // Package model provides domain entities for the resource management system.
 // input: errors, fmt, math, time packages
-// output: QueryExecution*, QueryResult* types, QueryExecutePagination* types, status/error enums, query credential policy/ref validators, ValidatePagination, ValidatePaginationPage, ErrInvalidCredentialMetadata
+// output: QueryExecution*, QueryResult* types, QueryExecutePagination* types, status/error enums, query credential policy/ref validators, ValidatePagination, ErrInvalidCredentialMetadata
 // pos: Query sandbox execution requests, responses, and history records
 // note: if this file changes, update header and README.md
 package model
@@ -33,14 +33,10 @@ const (
 // pageSize is rejected so the executor never receives an unbounded page shape.
 var AllowedPageSizes = []int{10, 25, 50, 100}
 
-// QueryExecuteDefaultPageSize is the default page size when the caller omits
-// the pagination block from a governed query-execute request.
-const QueryExecuteDefaultPageSize = 10
-
 // QueryExecutePaginationRequest carries the caller's requested page boundary
 // for governed query-result paging. Page is 1-based; PageSize must be one of
-// AllowedPageSizes. When omitted from the request body, the executor applies
-// QueryExecuteDefaultPageSize and starts at page 1.
+// AllowedPageSizes. When omitted from the request body, execution keeps its
+// single-response behavior and no pagination metadata is returned.
 type QueryExecutePaginationRequest struct {
 	Page     int `json:"page"`
 	PageSize int `json:"pageSize"`
@@ -290,20 +286,6 @@ func ValidatePagination(page, pageSize int) error {
 	// Checked arithmetic: (page-1) * pageSize must not overflow int.
 	if page-1 > math.MaxInt/pageSize {
 		return fmt.Errorf("pagination offset overflow: (page=%d-1)*pageSize=%d", page, pageSize)
-	}
-	return nil
-}
-
-// ValidatePaginationPage extends ValidatePagination with a cap boundary check:
-// (page-1)*pageSize must be strictly less than effectiveMaxRows. This prevents
-// the executor from receiving an offset that exceeds the governed row cap.
-func ValidatePaginationPage(page, pageSize, effectiveMaxRows int) error {
-	if err := ValidatePagination(page, pageSize); err != nil {
-		return err
-	}
-	offset := (page - 1) * pageSize
-	if offset >= effectiveMaxRows {
-		return fmt.Errorf("page %d with pageSize %d (offset %d) exceeds effective max rows %d", page, pageSize, offset, effectiveMaxRows)
 	}
 	return nil
 }

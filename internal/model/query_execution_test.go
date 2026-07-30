@@ -424,22 +424,6 @@ func TestValidatePagination_RejectsOverflow(t *testing.T) {
 	}
 }
 
-func TestValidatePaginationPage_RejectsBeyondMaxRows(t *testing.T) {
-	t.Parallel()
-	// page=2, pageSize=100, effectiveMaxRows=50 → offset=100 >= 50
-	if err := ValidatePaginationPage(2, 100, 50); err == nil {
-		t.Error("ValidatePaginationPage(2, 100, 50) = nil, want error (offset exceeds max rows)")
-	}
-}
-
-func TestValidatePaginationPage_AcceptsValidPage(t *testing.T) {
-	t.Parallel()
-	// page=1, pageSize=10, effectiveMaxRows=100 → offset=0 < 100
-	if err := ValidatePaginationPage(1, 10, 100); err != nil {
-		t.Errorf("ValidatePaginationPage(1, 10, 100) = %v, want nil", err)
-	}
-}
-
 func TestQueryExecuteResponse_PaginationJSONOmitempty(t *testing.T) {
 	t.Parallel()
 	resp := QueryExecuteResponse{Status: QueryExecutionSuccess, RowCount: 0}
