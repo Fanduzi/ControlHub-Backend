@@ -8,7 +8,9 @@
 /.omo/
 /mempalace.yaml
 /AGENTS.md
+/.opencode/
 /opencode.json
+/package-lock.json
 /skills-lock.json
 /.idea/
 /.schemathesis-reports/
