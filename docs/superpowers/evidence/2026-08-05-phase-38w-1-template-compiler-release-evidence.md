@@ -72,4 +72,19 @@ The candidate changed only `internal/service/README.md`, `internal/service/query
 
 The candidate branch has no remote ref, and `gh run list --repo Fanduzi/ControlHub-Backend --commit 6809255379c7eaafba8055f38dceddc5f23810d1 --limit 20` returned no runs. The Backend CI workflow is [`.github/workflows/backend-ci.yml`](https://github.com/Fanduzi/ControlHub-Backend/blob/main/.github/workflows/backend-ci.yml); its required jobs are `release-local-gates` and `release-docker-gates`. No candidate CI conclusion exists before the merge/push step.
 
-The candidate worktree and local candidate branch remain present for the authorized fast-forward, push, CI verification, independent read-only verification, and final cleanup sequence. No unrelated worktree, branch, service, container, or root WIP was changed.
+At evidence-commit time, the candidate worktree and local candidate branch remained present for the authorized fast-forward, push, CI verification, independent read-only verification, and final cleanup sequence.
+
+## Post-Merge Closure
+
+The verified fast-forward merge and normal push range was `8504a7196347301429730733736bcff26b8dce97` to `d639ccd1ed5764eee4f41630f5decbd00c42e01c`.
+
+Backend CI run: [30932614342](https://github.com/Fanduzi/ControlHub-Backend/actions/runs/30932614342), head SHA `d639ccd1ed5764eee4f41630f5decbd00c42e01c`, status completed, conclusion success.
+
+Required CI jobs:
+
+- `release-local-gates`: [job 92070774860](https://github.com/Fanduzi/ControlHub-Backend/actions/runs/30932614342/job/92070774860), completed, success.
+- `release-docker-gates`: [job 92070774341](https://github.com/Fanduzi/ControlHub-Backend/actions/runs/30932614342/job/92070774341), completed, success.
+
+Cleanup receipt: `/tmp/controlhub-38w-1-template-compiler` was removed as a worktree and `phase-38w-1-template-compiler` was deleted as a local branch after CI and independent verification. The final worktree list contains only the root repository. No unrelated worktree, branch, service, container, or root WIP was changed.
+
+The SHA of this documentation-only evidence update is intentionally omitted from this file.
