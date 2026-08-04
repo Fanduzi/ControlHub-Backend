@@ -53,8 +53,8 @@ type CompiledTemplateStatement struct {
 }
 
 type GuardedTemplateStatement struct {
-	Query GuardedQuery
-	Args  []any
+	query GuardedQuery
+	args  []any
 }
 
 type TemplateStatementCompiler struct {
@@ -156,7 +156,7 @@ func (c *TemplateStatementCompiler) CompileAndGuard(guard *QueryGuard, input Tem
 	if err != nil {
 		return GuardedTemplateStatement{}, err
 	}
-	return GuardedTemplateStatement{Query: guarded, Args: append([]any(nil), compiled.Args...)}, nil
+	return GuardedTemplateStatement{query: guarded, args: append([]any(nil), compiled.Args...)}, nil
 }
 
 func (c *TemplateStatementCompiler) restorePositionalMarkers(statement string, expected int) (string, error) {

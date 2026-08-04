@@ -61,11 +61,11 @@ func TestTemplateStatementCompilerKeepsGuardedSQLPositionalForDriverBinding(t *t
 	if err != nil {
 		t.Fatalf("CompileAndGuard error: %v", err)
 	}
-	if got, want := guarded.Query.ExecutableSQL, "select id from orders where `status` = ? limit 101"; got != want {
+	if got, want := guarded.query.ExecutableSQL, "select id from orders where `status` = ? limit 101"; got != want {
 		t.Fatalf("guarded executable SQL = %q, want %q", got, want)
 	}
-	if want := []any{"paid"}; !reflect.DeepEqual(guarded.Args, want) {
-		t.Fatalf("guarded args = %#v, want %#v", guarded.Args, want)
+	if want := []any{"paid"}; !reflect.DeepEqual(guarded.args, want) {
+		t.Fatalf("guarded args = %#v, want %#v", guarded.args, want)
 	}
 }
 
@@ -255,11 +255,11 @@ func TestGuardedTemplateStatementUsesDatabaseSQLPositionalArguments(t *testing.T
 		t.Fatalf("sqlmock.New error: %v", err)
 	}
 	t.Cleanup(func() { _ = db.Close() })
-	mock.ExpectQuery(regexp.QuoteMeta(guarded.Query.ExecutableSQL)).
+	mock.ExpectQuery(regexp.QuoteMeta(guarded.query.ExecutableSQL)).
 		WithArgs("paid", int64(42)).
 		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(int64(7)))
 
-	rows, err := db.Query(guarded.Query.ExecutableSQL, guarded.Args...)
+	rows, err := db.Query(guarded.query.ExecutableSQL, guarded.args...)
 	if err != nil {
 		t.Fatalf("database/sql query error: %v", err)
 	}
@@ -294,11 +294,11 @@ func TestGuardedTemplateStatementBindsDecimalAndBooleanValues(t *testing.T) {
 		t.Fatalf("sqlmock.New error: %v", err)
 	}
 	t.Cleanup(func() { _ = db.Close() })
-	mock.ExpectQuery(regexp.QuoteMeta(guarded.Query.ExecutableSQL)).
+	mock.ExpectQuery(regexp.QuoteMeta(guarded.query.ExecutableSQL)).
 		WithArgs("100.50", true).
 		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(int64(7)))
 
-	rows, err := db.Query(guarded.Query.ExecutableSQL, guarded.Args...)
+	rows, err := db.Query(guarded.query.ExecutableSQL, guarded.args...)
 	if err != nil {
 		t.Fatalf("database/sql query error: %v", err)
 	}
