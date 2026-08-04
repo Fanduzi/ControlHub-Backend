@@ -19,7 +19,9 @@ Business logic layer with interface-based repository dependencies. Each service 
 | query_schema_service.go | QuerySchemaService.GetTableDefinition returns governed MySQL table definitions |
 | query_guard.go | AST-backed read-only validation for execute, paginated results, explain, and saved-query entry points |
 | query_template_compiler.go | Server-owned AST placeholder compiler and guarded positional binding seam |
+| query_executor.go | Read-only MySQL/TiDB execution, compiler-owned template binding, and bounded result scanning |
 | query_execution_service.go | Governed query execution and Phase 38S result paging with per-page access, disclosure, history, and audit |
+| query_executor_test.go | Executor scanning, result-cap, and compiler-owned template binding tests |
 | query_execution_service_test.go | Query execution service tests, including governed per-page access, disclosure, and persistence guarantees |
 | query_disclosure_service.go | QueryDisclosureService — policy lookup, projection resolution, result transformation |
 | query_disclosure_projection.go | Column provenance resolution from SQL AST and FK metadata |
@@ -44,6 +46,7 @@ Business logic layer with interface-based repository dependencies. Each service 
 - `QueryGuard.GuardPaginatedSelect` — page-window validation for bare parser-approved SELECT statements with AST-owned LIMIT/OFFSET
 - `TemplateStatementCompiler.Compile/CompileAndGuard` — server-owned named-placeholder compilation with positional driver bindings
 - `TemplateParameterDefinition`, `TemplateStatementInput`, `CompiledTemplateStatement`, `GuardedTemplateStatement` — compiler/guard seam values for governed execution
+- `QueryDatabaseExecutor.QueryTemplate` — executes only compiler-produced guarded SQL with positional values in a read-only transaction
 - `QuerySavedStatementReader`, `QuerySavedStatementWriter`, `SavedStatementGuard` — saved statement data access interfaces
 - `QuerySavedStatementService.List/Create/Update/Delete` — authorized CRUD for target-scoped saved statements
 
