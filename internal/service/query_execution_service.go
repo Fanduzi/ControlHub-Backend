@@ -1,7 +1,7 @@
 // Package service provides business logic for the Phase 37/38S read-only query sandbox.
 // input: context, errors, fmt, net, strconv, strings, time, go-sql-driver/mysql, internal/model
 // output: QueryExecutionService, query execution repository/resolver/executor/clock interfaces, sentinel errors, NewQueryExecutionService, Execute, ListHistory, validateDSNBinding
-// pos: Orchestrates governed MySQL/TiDB query execution — target/policy/guard/disclosure gating, paged result windows, timed execution, and guaranteed per-attempt history + audit
+// pos: Orchestrates governed MySQL/TiDB query execution and compiler-owned template execution — target/policy/guard/disclosure gating, paged result windows, timed execution, and guaranteed per-attempt history + audit
 // note: if this file changes, update header and README.md
 package service
 
@@ -77,6 +77,9 @@ type QueryCredentialResolver interface {
 // cell, and payload caps and returns ErrQueryResultTooLarge when they are hit.
 type QueryDatabaseExecutor interface {
 	Query(ctx context.Context, dsn string, guarded GuardedQuery) (QueryDatabaseResult, error)
+	// QueryTemplate executes only a compiler-produced guarded template statement.
+	// It is not a generic parameterized-query API.
+	QueryTemplate(ctx context.Context, dsn string, statement GuardedTemplateStatement) (QueryDatabaseResult, error)
 	// QueryRelatedRecords runs a parameterized SELECT built exclusively for
 	// related-record navigation. The SQL string is constructed by the service
 	// from trusted identifiers only; values are bound via database/sql

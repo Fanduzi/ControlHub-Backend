@@ -1,7 +1,7 @@
 // Package service provides tests for the Phase 37/38S query execution service.
 // input: context, errors, strings, testing, time, internal/model
 // output: TestExecute_*, TestReadyDerivation_*, TestCredentialResolver_* (fakes for repos/resolver/executor/clock)
-// pos: Unit tests for execute gating, governed result pages, the environment-policy matrix, history/audit recording, and credential fail-closed behavior
+// pos: Unit tests for execute gating, compiler-owned template executor dispatch, governed result pages, the environment-policy matrix, history/audit recording, and credential fail-closed behavior
 // note: if this file changes, update header and README.md
 package service
 
@@ -182,20 +182,38 @@ func (f *fakeResolver) Resolve(_ context.Context, ref string) (string, error) {
 }
 
 type fakeExecutor struct {
-	result      QueryDatabaseResult
-	err         error
-	delay       time.Duration
-	called      bool
-	queryCalls  int
-	queries     []GuardedQuery
-	gotDSN      string
-	gotNavInput *RelatedRecordsQueryInput
+	result        QueryDatabaseResult
+	err           error
+	delay         time.Duration
+	called        bool
+	queryCalls    int
+	queries       []GuardedQuery
+	gotDSN        string
+	gotNavInput   *RelatedRecordsQueryInput
+	templateCalls int
 }
 
 func (f *fakeExecutor) Query(ctx context.Context, dsn string, guarded GuardedQuery) (QueryDatabaseResult, error) {
 	f.called = true
 	f.queryCalls++
 	f.queries = append(f.queries, guarded)
+	f.gotDSN = dsn
+	if f.delay > 0 {
+		select {
+		case <-ctx.Done():
+			return QueryDatabaseResult{}, context.DeadlineExceeded
+		case <-time.After(f.delay):
+		}
+	}
+	if f.err != nil {
+		return QueryDatabaseResult{}, f.err
+	}
+	return f.result, nil
+}
+
+func (f *fakeExecutor) QueryTemplate(ctx context.Context, dsn string, statement GuardedTemplateStatement) (QueryDatabaseResult, error) {
+	f.called = true
+	f.templateCalls++
 	f.gotDSN = dsn
 	if f.delay > 0 {
 		select {
@@ -492,7 +510,7 @@ func TestExecute_MapsTimeoutToQueryTimeout(t *testing.T) {
 
 func TestExecute_RecordsSuccessfulAttempt(t *testing.T) {
 	t.Parallel()
-	svc, repo, _, _ := executionTestScaffold(t)
+	svc, repo, _, executor := executionTestScaffold(t)
 
 	if _, err := svc.Execute(context.Background(), 7, 9001, model.QueryExecuteRequest{Statement: "select 1", MaxRows: 10}); err != nil {
 		t.Fatalf("Execute error: %v", err)
@@ -508,6 +526,9 @@ func TestExecute_RecordsSuccessfulAttempt(t *testing.T) {
 	}
 	if len(repo.auditEvents) != 1 || repo.auditEvents[0].result != "success" {
 		t.Fatalf("audit events = %+v, want one success", repo.auditEvents)
+	}
+	if executor.templateCalls != 0 {
+		t.Fatalf("ordinary Execute called QueryTemplate %d times, want 0", executor.templateCalls)
 	}
 }
 
