@@ -1,13 +1,15 @@
 // Package service provides unit tests for the query executor scan helpers.
-// input: database/sql, errors, strings, testing, DATA-DOG/go-sqlmock
-// output: TestNewScanPointer_*, TestNormalizeScanned_* (NULL correctness + numeric type fidelity), TestScanBoundedRows_* (payload-cap boundary per execution mode)
-// pos: Unit tests verifying SQL NULL is preserved as nil, non-null numbers stay numbers, and the response-byte cap rejects paginated windows while truncating non-paged results
+// input: context, database/sql, errors, regexp, strings, testing, DATA-DOG/go-sqlmock
+// output: TestNewScanPointer_*, TestNormalizeScanned_*, TestScanBoundedRows_*, TestMySQLQueryExecutorQueryTemplate* (executor binding and cap behavior)
+// pos: Unit tests verifying SQL NULL is preserved as nil, non-null numbers stay numbers, and compiler-owned template SQL binds through the read-only executor
 // note: if this file changes, update header and README.md
 package service
 
 import (
+	"context"
 	"database/sql"
 	"errors"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -185,5 +187,79 @@ func TestScanBoundedRows_PaginatedRowLimitStopKeepsTruncatedSuccess(t *testing.T
 	}
 	if result.RowCount != 2 || len(result.Rows) != 2 || !result.Truncated {
 		t.Fatalf("paginated row-limit result = %+v, want full 2-row window truncated", result)
+	}
+}
+
+func TestMySQLQueryExecutorQueryTemplateBindsCompilerOwnedStatement(t *testing.T) {
+	t.Parallel()
+
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock.New error: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	executor := NewMySQLQueryExecutor(QueryExecutorCaps{})
+	executor.openDB = func(string) (*sql.DB, error) { return db, nil }
+	statement := GuardedTemplateStatement{
+		query: GuardedQuery{
+			ExecutableSQL: "select id from orders where `status` = ? limit 101",
+			LimitApplied:  100,
+		},
+		args: []any{"paid"},
+	}
+
+	mock.ExpectBegin()
+	mock.ExpectQuery(regexp.QuoteMeta(statement.query.ExecutableSQL)).
+		WithArgs("paid").
+		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(int64(7)))
+	mock.ExpectRollback()
+
+	var queryExecutor QueryDatabaseExecutor = executor
+	result, err := queryExecutor.QueryTemplate(context.Background(), "ignored-dsn", statement)
+	if err != nil {
+		t.Fatalf("QueryTemplate error: %v", err)
+	}
+	if result.RowCount != 1 || len(result.Rows) != 1 || result.Rows[0][0] != "7" {
+		t.Fatalf("QueryTemplate result = %+v, want one row containing string(7)", result)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("executor expectations: %v", err)
+	}
+}
+
+func TestMySQLQueryExecutorQueryTemplatePreservesPaginatedPayloadCap(t *testing.T) {
+	t.Parallel()
+
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock.New error: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	executor := NewMySQLQueryExecutor(QueryExecutorCaps{MaxResponseBytes: 100})
+	executor.openDB = func(string) (*sql.DB, error) { return db, nil }
+	statement := GuardedTemplateStatement{
+		query: GuardedQuery{
+			ExecutableSQL: "select payload from orders where `status` = ? limit 11",
+			LimitApplied:  10,
+			ResultLimit:   10,
+		},
+		args: []any{"paid"},
+	}
+
+	mock.ExpectBegin()
+	mock.ExpectQuery(regexp.QuoteMeta(statement.query.ExecutableSQL)).
+		WithArgs("paid").
+		WillReturnRows(sqlmock.NewRows([]string{"payload"}).
+			AddRow(strings.Repeat("a", 40)).
+			AddRow(strings.Repeat("b", 40)).
+			AddRow(strings.Repeat("c", 40)))
+	mock.ExpectRollback()
+
+	_, err = executor.QueryTemplate(context.Background(), "ignored-dsn", statement)
+	if !errors.Is(err, ErrQueryResultTooLarge) {
+		t.Fatalf("QueryTemplate paginated overflow error = %v, want ErrQueryResultTooLarge", err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("executor expectations: %v", err)
 	}
 }

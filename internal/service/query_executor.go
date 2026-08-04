@@ -1,7 +1,7 @@
 // Package service provides the MySQL/TiDB query executor for the read-only sandbox.
 // input: context, database/sql, fmt, strings, time, go-sql-driver/mysql, internal/model
 // output: MySQLQueryExecutor, NewMySQLQueryExecutor, QueryExecutorCaps, newScanPointer, normalizeScanned (implements QueryDatabaseExecutor)
-// pos: Runs a guarded SELECT against a target DB under a read-only transaction with column/cell/payload caps; paginated windows reject on payload-cap overflow, non-paged results truncate; preserves SQL NULL as JSON null
+// pos: Runs guarded ordinary and compiler-owned template SELECTs against a target DB under read-only transactions with column/cell/payload caps; paginated windows reject on payload-cap overflow, non-paged results truncate; preserves SQL NULL as JSON null
 // note: if this file changes, update header and README.md
 package service
 
@@ -37,7 +37,8 @@ type QueryExecutorCaps struct {
 // and total-response caps and returns ErrQueryResultTooLarge when the column cap
 // is exceeded (a controlled failure, not a 500).
 type MySQLQueryExecutor struct {
-	caps QueryExecutorCaps
+	caps   QueryExecutorCaps
+	openDB func(string) (*sql.DB, error)
 }
 
 // NewMySQLQueryExecutor builds an executor, filling zero caps with defaults.
@@ -51,13 +52,26 @@ func NewMySQLQueryExecutor(caps QueryExecutorCaps) *MySQLQueryExecutor {
 	if caps.MaxResponseBytes == 0 {
 		caps.MaxResponseBytes = defaultMaxResponseBytes
 	}
-	return &MySQLQueryExecutor{caps: caps}
+	return &MySQLQueryExecutor{
+		caps:   caps,
+		openDB: func(dsn string) (*sql.DB, error) { return sql.Open("mysql", dsn) },
+	}
 }
 
 // Query executes the guarded SELECT and returns the bounded result. The DSN is
 // used only to open the connection and never leaves this method.
 func (e *MySQLQueryExecutor) Query(ctx context.Context, dsn string, guarded GuardedQuery) (QueryDatabaseResult, error) {
-	db, err := sql.Open("mysql", dsn)
+	return e.queryGuarded(ctx, dsn, guarded)
+}
+
+// QueryTemplate executes only the compiler-produced guarded statement and its
+// positional arguments. It is not a generic parameterized-query API.
+func (e *MySQLQueryExecutor) QueryTemplate(ctx context.Context, dsn string, statement GuardedTemplateStatement) (QueryDatabaseResult, error) {
+	return e.queryGuarded(ctx, dsn, statement.query, statement.args...)
+}
+
+func (e *MySQLQueryExecutor) queryGuarded(ctx context.Context, dsn string, guarded GuardedQuery, args ...any) (QueryDatabaseResult, error) {
+	db, err := e.openTarget(dsn)
 	if err != nil {
 		return QueryDatabaseResult{}, fmt.Errorf("open target database: %w", err)
 	}
@@ -71,7 +85,7 @@ func (e *MySQLQueryExecutor) Query(ctx context.Context, dsn string, guarded Guar
 	}
 	defer tx.Rollback()
 
-	rows, err := tx.QueryContext(ctx, guarded.ExecutableSQL)
+	rows, err := tx.QueryContext(ctx, guarded.ExecutableSQL, args...)
 	if err != nil {
 		return QueryDatabaseResult{}, err
 	}
@@ -89,7 +103,7 @@ func (e *MySQLQueryExecutor) Query(ctx context.Context, dsn string, guarded Guar
 // the service-supplied values, and enforces the same column/cell/payload caps as
 // Query. This method is not a generic parameterized-query API.
 func (e *MySQLQueryExecutor) QueryRelatedRecords(ctx context.Context, dsn string, input RelatedRecordsQueryInput) (QueryDatabaseResult, error) {
-	db, err := sql.Open("mysql", dsn)
+	db, err := e.openTarget(dsn)
 	if err != nil {
 		return QueryDatabaseResult{}, fmt.Errorf("open target database: %w", err)
 	}
@@ -109,6 +123,13 @@ func (e *MySQLQueryExecutor) QueryRelatedRecords(ctx context.Context, dsn string
 	defer rows.Close()
 
 	return e.scanBoundedRows(rows, input.Limit, false)
+}
+
+func (e *MySQLQueryExecutor) openTarget(dsn string) (*sql.DB, error) {
+	if e.openDB != nil {
+		return e.openDB(dsn)
+	}
+	return sql.Open("mysql", dsn)
 }
 
 // scanBoundedRows reads rows into a bounded QueryDatabaseResult, enforcing
