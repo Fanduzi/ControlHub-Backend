@@ -216,14 +216,6 @@ func compileTemplateValue(definition TemplateParameterDefinition, value any) (an
 		return text, nil
 	case TemplateParameterInteger:
 		switch integer := value.(type) {
-		case int:
-			return int64(integer), nil
-		case int8:
-			return int64(integer), nil
-		case int16:
-			return int64(integer), nil
-		case int32:
-			return int64(integer), nil
 		case int64:
 			return integer, nil
 		case json.Number:
