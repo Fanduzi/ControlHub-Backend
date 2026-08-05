@@ -1796,6 +1796,7 @@ paths:
                     targetResourceId: 22
                     name: "Active orders"
                     statement: "SELECT * FROM orders WHERE status = 'active'"
+                    parameters: []
                     scope: personal
                     createdAt: "2026-07-28T10:00:00Z"
                     updatedAt: "2026-07-28T10:00:00Z"
@@ -1859,23 +1860,27 @@ paths:
               $ref: "#/components/schemas/QuerySavedStatementCreateRequest"
             example:
               name: "Active orders"
-              statement: "SELECT * FROM orders WHERE status = 'active'"
+              statement: "SELECT * FROM orders WHERE status = :status"
               scope: personal
+              parameters:
+                - name: status
+                  type: string
       responses:
         "201":
           description: Saved statement created
           content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/QuerySavedStatement"
-              example:
-                id: 1
-                targetResourceId: 22
-                name: "Active orders"
-                statement: "SELECT * FROM orders WHERE status = 'active'"
-                scope: personal
-                createdAt: "2026-07-28T10:00:00Z"
-                updatedAt: "2026-07-28T10:00:00Z"
+             application/json:
+               schema:
+                 $ref: "#/components/schemas/QuerySavedStatement"
+               example:
+                 id: 1
+                 targetResourceId: 22
+                 name: "Active orders"
+                 statement: "SELECT * FROM orders WHERE status = 'active'"
+                 parameters: []
+                 scope: personal
+                 createdAt: "2026-07-28T10:00:00Z"
+                 updatedAt: "2026-07-28T10:00:00Z"
         "400":
           description: Validation failed (bad request, unknown fields, invalid scope, missing name/statement)
           content:
@@ -3661,12 +3666,24 @@ components:
       enum:
         - personal
         - shared_template
+    QuerySavedStatementParameterDefinition:
+      type: object
+      required: [name, type]
+      additionalProperties: false
+      properties:
+        name:
+          type: string
+          pattern: "^[a-z][a-z0-9_]*$"
+          maxLength: 64
+        type:
+          type: string
+          enum: [string, integer, decimal, boolean]
     QuerySavedStatement:
       type: object
       description: >
         A governed saved statement for a query target. Never carries
         credentials, DSNs, or owner identity.
-      required: [id, targetResourceId, name, statement, scope, createdAt, updatedAt]
+      required: [id, targetResourceId, name, statement, parameters, scope, createdAt, updatedAt]
       properties:
         id:
           type: integer
@@ -3682,6 +3699,11 @@ components:
           type: string
           maxLength: 16384
           description: SQL statement text.
+        parameters:
+          type: array
+          maxItems: 20
+          items:
+            $ref: "#/components/schemas/QuerySavedStatementParameterDefinition"
         scope:
           $ref: "#/components/schemas/QuerySavedStatementScope"
         createdAt:
@@ -3710,6 +3732,11 @@ components:
           minLength: 1
           maxLength: 16384
           description: SQL statement text.
+        parameters:
+          type: array
+          maxItems: 20
+          items:
+            $ref: "#/components/schemas/QuerySavedStatementParameterDefinition"
         scope:
           $ref: "#/components/schemas/QuerySavedStatementScope"
     QuerySavedStatementUpdateRequest:
@@ -3730,6 +3757,11 @@ components:
           minLength: 1
           maxLength: 16384
           description: SQL statement text.
+        parameters:
+          type: array
+          maxItems: 20
+          items:
+            $ref: "#/components/schemas/QuerySavedStatementParameterDefinition"
     QuerySavedStatementListResponse:
       type: object
       required: [items, pageInfo, canManageSharedTemplates]
