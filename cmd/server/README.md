@@ -22,7 +22,7 @@ Application bootstrap and manual dependency injection.
 | Query Schema | QuerySchemaService | QueryExecutionRepository | 38I |
 | Query Explain | QueryExplainService | (none — reuses access resolver + audit repo) | 38N |
 | Query Disclosure | QueryDisclosureService | QueryDisclosureRepository | 38Q |
-| Query Saved Statement | QuerySavedStatementService | QuerySavedStatementRepository | 38R |
+| Query Saved Statement | QuerySavedStatementService | QuerySavedStatementRepository | 38W (personal typed declarations) |
 
 ## Shared Guards
 - `QueryGuard` is constructed once and reused by execution, explain, and saved-statement services.

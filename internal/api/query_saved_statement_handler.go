@@ -6,8 +6,11 @@
 package api
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"strconv"
 
@@ -89,7 +92,7 @@ func handleCreateSavedStatement(svc querySavedStatementAPI) http.HandlerFunc {
 		}
 
 		var req model.QuerySavedStatementCreateRequest
-		if err := decodeJSONBody(r, &req); err != nil {
+		if err := decodeSavedStatementJSONBody(r, &req); err != nil {
 			writeJSONError(w, http.StatusBadRequest, "validation_failed", "invalid request payload")
 			return
 		}
@@ -130,7 +133,7 @@ func handleUpdateSavedStatement(svc querySavedStatementAPI) http.HandlerFunc {
 		}
 
 		var req model.QuerySavedStatementUpdateRequest
-		if err := decodeJSONBody(r, &req); err != nil {
+		if err := decodeSavedStatementJSONBody(r, &req); err != nil {
 			writeJSONError(w, http.StatusBadRequest, "validation_failed", "invalid request payload")
 			return
 		}
@@ -145,6 +148,88 @@ func handleUpdateSavedStatement(svc querySavedStatementAPI) http.HandlerFunc {
 			return
 		}
 		w.WriteHeader(http.StatusNoContent)
+	}
+}
+
+func decodeSavedStatementJSONBody(r *http.Request, target any) error {
+	body, err := io.ReadAll(io.LimitReader(r.Body, int64(model.MaxSavedStatementSize+16*1024)))
+	if err != nil {
+		return err
+	}
+	if err := rejectDuplicateJSONFields(body); err != nil {
+		return err
+	}
+	decoder := json.NewDecoder(bytes.NewReader(body))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(target); err != nil {
+		return err
+	}
+	var extra any
+	if err := decoder.Decode(&extra); err != io.EOF {
+		if err == nil {
+			return errors.New("multiple JSON values are not allowed")
+		}
+		return err
+	}
+	return nil
+}
+
+func rejectDuplicateJSONFields(body []byte) error {
+	decoder := json.NewDecoder(bytes.NewReader(body))
+	if err := walkJSONValue(decoder); err != nil {
+		return err
+	}
+	var extra any
+	if err := decoder.Decode(&extra); err != io.EOF {
+		if err == nil {
+			return errors.New("multiple JSON values are not allowed")
+		}
+		return err
+	}
+	return nil
+}
+
+func walkJSONValue(decoder *json.Decoder) error {
+	token, err := decoder.Token()
+	if err != nil {
+		return err
+	}
+	delim, isDelim := token.(json.Delim)
+	if !isDelim {
+		return nil
+	}
+	switch delim {
+	case '{':
+		seen := map[string]struct{}{}
+		for decoder.More() {
+			keyToken, err := decoder.Token()
+			if err != nil {
+				return err
+			}
+			key, ok := keyToken.(string)
+			if !ok {
+				return errors.New("invalid JSON object field")
+			}
+			if _, exists := seen[key]; exists {
+				return errors.New("duplicate JSON field")
+			}
+			seen[key] = struct{}{}
+			if err := walkJSONValue(decoder); err != nil {
+				return err
+			}
+		}
+		_, err = decoder.Token()
+		return err
+	case '[':
+		for decoder.More() {
+			if err := walkJSONValue(decoder); err != nil {
+				return err
+			}
+		}
+		_, err = decoder.Token()
+		return err
+	default:
+		return nil
 	}
 }
 

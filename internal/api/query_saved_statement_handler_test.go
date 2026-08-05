@@ -99,16 +99,37 @@ func TestSavedStatement_CreateSuccess(t *testing.T) {
 	}
 	srv.Router = NewRouter(srv.deps)
 
-	body, _ := json.Marshal(map[string]string{
-		"name":      "Test",
-		"statement": "SELECT 1",
-		"scope":     "personal",
+	body, _ := json.Marshal(map[string]any{
+		"name":       "Test",
+		"statement":  "SELECT id FROM orders WHERE status = :status",
+		"scope":      "personal",
+		"parameters": []map[string]string{{"name": "status", "type": "string"}},
 	})
 	rec := httptest.NewRecorder()
 	srv.Router.ServeHTTP(rec, ssRequest(http.MethodPost, "/query-targets/22/saved-statements",
 		string(body), ssAdminToken(t)))
 	if rec.Code != http.StatusCreated {
 		t.Fatalf("expected 201, got %d: %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestSavedStatement_CreateRejectsDuplicateJSONFields(t *testing.T) {
+	srv := NewTestServer()
+	rec := httptest.NewRecorder()
+	srv.Router.ServeHTTP(rec, ssRequest(http.MethodPost, "/query-targets/22/saved-statements",
+		`{"name":"Test","name":"Other","statement":"SELECT 1","scope":"personal"}`, ssAdminToken(t)))
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 for duplicate field, got %d: %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestSavedStatement_CreateRejectsParameterValues(t *testing.T) {
+	srv := NewTestServer()
+	rec := httptest.NewRecorder()
+	srv.Router.ServeHTTP(rec, ssRequest(http.MethodPost, "/query-targets/22/saved-statements",
+		`{"name":"Test","statement":"SELECT 1","scope":"personal","parameters":[{"name":"status","type":"string","value":"paid"}]}`, ssAdminToken(t)))
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 for parameter value, got %d: %s", rec.Code, rec.Body.String())
 	}
 }
 
