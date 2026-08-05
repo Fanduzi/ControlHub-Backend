@@ -26,7 +26,7 @@ Business logic layer with interface-based repository dependencies. Each service 
 | query_disclosure_service.go | QueryDisclosureService — policy lookup, projection resolution, result transformation |
 | query_disclosure_projection.go | Column provenance resolution from SQL AST and FK metadata |
 | query_disclosure_mask.go | applyDisclosureMask for server-side value redaction |
-| query_saved_statement_service.go | QuerySavedStatementService — CRUD for target-scoped saved statements with authorization and guard validation |
+| query_saved_statement_service.go | QuerySavedStatementService — authorized target-scoped saved statement CRUD with typed declaration validation and guard validation |
 | auth_service_test.go | Auth service tests |
 | dictionary_service_test.go | Dictionary service tests |
 | query_disclosure_service_test.go | Disclosure service tests (Preflight, PreflightRelatedRecords, Apply) |
@@ -48,6 +48,7 @@ Business logic layer with interface-based repository dependencies. Each service 
 - `TemplateParameterDefinition`, `TemplateStatementInput`, `CompiledTemplateStatement`, `GuardedTemplateStatement` — compiler/guard seam values for governed execution
 - `QueryDatabaseExecutor.QueryTemplate` — executes only compiler-produced guarded SQL with positional values in a read-only transaction
 - `QuerySavedStatementReader`, `QuerySavedStatementWriter`, `SavedStatementGuard` — saved statement data access interfaces
+- Personal parameterized saved statements validate declarations against server-owned compiler placeholders; no parameter values or execution requests enter this service.
 - `QuerySavedStatementService.List/Create/Update/Delete` — authorized CRUD for target-scoped saved statements
 
 ## Phase 38S governed result paging

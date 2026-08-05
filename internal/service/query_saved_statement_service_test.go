@@ -30,15 +30,19 @@ func (f *fakeSavedStatementReader) GetByID(_ context.Context, _, _ uint64) (mode
 type fakeSavedStatementWriter struct {
 	createResp model.QuerySavedStatement
 	createErr  error
+	createReq  model.QuerySavedStatementCreateRequest
 	updateErr  error
+	updateReq  model.QuerySavedStatementUpdateRequest
 	deleteErr  error
 }
 
-func (f *fakeSavedStatementWriter) CreateWithAudit(_ context.Context, _, _ uint64, _ model.QuerySavedStatementCreateRequest) (model.QuerySavedStatement, error) {
+func (f *fakeSavedStatementWriter) CreateWithAudit(_ context.Context, _, _ uint64, req model.QuerySavedStatementCreateRequest) (model.QuerySavedStatement, error) {
+	f.createReq = req
 	return f.createResp, f.createErr
 }
 
-func (f *fakeSavedStatementWriter) UpdateWithAudit(_ context.Context, _, _, _ uint64, _ model.QuerySavedStatementUpdateRequest, _ bool) error {
+func (f *fakeSavedStatementWriter) UpdateWithAudit(_ context.Context, _, _, _ uint64, req model.QuerySavedStatementUpdateRequest, _ bool) error {
+	f.updateReq = req
 	return f.updateErr
 }
 
@@ -253,6 +257,57 @@ func TestQuerySavedStatementServiceCreate(t *testing.T) {
 			t.Fatalf("unexpected error: %v", err)
 		}
 	})
+
+	t.Run("persists declarations without accepting values", func(t *testing.T) {
+		writer := &fakeSavedStatementWriter{createResp: model.QuerySavedStatement{ID: 1}}
+		svc := NewQuerySavedStatementService(
+			&fakeSavedStatementReader{},
+			writer,
+			fakeTargetRepo{targets: []model.QueryTarget{{ResourceID: 22}}},
+			&fakeSavedStatementGuard{},
+		)
+
+		err := error(nil)
+		_, err = svc.Create(context.Background(), AuthenticatedUser{ID: 1, Role: "editor"}, 22, model.QuerySavedStatementCreateRequest{
+			Name:      "Status query",
+			Statement: "SELECT 1 WHERE status = :status",
+			Scope:     model.QuerySavedStatementPersonal,
+			Parameters: []model.QuerySavedStatementParameterDefinition{
+				{Name: "status", Type: model.QuerySavedStatementParameterString},
+			},
+		})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if len(writer.createReq.Parameters) != 1 || writer.createReq.Parameters[0].Name != "status" {
+			t.Fatalf("writer parameters = %#v, want status declaration", writer.createReq.Parameters)
+		}
+	})
+
+	t.Run("rejects undeclared placeholders before repository mutation", func(t *testing.T) {
+		writer := &fakeSavedStatementWriter{}
+		svc := NewQuerySavedStatementService(
+			&fakeSavedStatementReader{},
+			writer,
+			fakeTargetRepo{targets: []model.QueryTarget{{ResourceID: 22}}},
+			&fakeSavedStatementGuard{},
+		)
+
+		_, err := svc.Create(context.Background(), AuthenticatedUser{ID: 1, Role: "editor"}, 22, model.QuerySavedStatementCreateRequest{
+			Name:      "Invalid",
+			Statement: "SELECT 1 WHERE status = :status",
+			Scope:     model.QuerySavedStatementPersonal,
+			Parameters: []model.QuerySavedStatementParameterDefinition{
+				{Name: "other", Type: model.QuerySavedStatementParameterString},
+			},
+		})
+		if !errors.Is(err, ErrQueryValidationFailed) {
+			t.Fatalf("expected validation error, got %v", err)
+		}
+		if writer.createReq.Name != "" {
+			t.Fatal("repository mutation occurred after invalid placeholder declaration")
+		}
+	})
 }
 
 func TestQuerySavedStatementServiceUpdate(t *testing.T) {
@@ -357,6 +412,29 @@ func TestQuerySavedStatementServiceUpdate(t *testing.T) {
 		// Then: ErrQuerySavedStatementNotFound is returned (owner mismatch).
 		if !errors.Is(err, ErrQuerySavedStatementNotFound) {
 			t.Errorf("expected ErrQuerySavedStatementNotFound, got %v", err)
+		}
+	})
+
+	t.Run("admin cannot update another user's personal statement by role alone", func(t *testing.T) {
+		svc := NewQuerySavedStatementService(
+			&fakeSavedStatementReader{
+				getResp: model.QuerySavedStatement{
+					ID:          1,
+					OwnerUserID: 2,
+					Scope:       model.QuerySavedStatementPersonal,
+				},
+			},
+			&fakeSavedStatementWriter{},
+			fakeTargetRepo{targets: []model.QueryTarget{{ResourceID: 22}}},
+			&fakeSavedStatementGuard{},
+		)
+
+		err := svc.Update(context.Background(), AuthenticatedUser{ID: 1, Role: "admin"}, 22, 1, model.QuerySavedStatementUpdateRequest{
+			Name:      "Updated",
+			Statement: "SELECT 2",
+		})
+		if !errors.Is(err, ErrQuerySavedStatementNotFound) {
+			t.Fatalf("expected personal template to remain hidden from admin, got %v", err)
 		}
 	})
 

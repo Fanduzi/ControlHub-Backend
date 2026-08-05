@@ -40,10 +40,11 @@ type SavedStatementGuard interface {
 
 // QuerySavedStatementService manages saved statements with authorization.
 type QuerySavedStatementService struct {
-	reader  QuerySavedStatementReader
-	writer  QuerySavedStatementWriter
-	targets QueryTargetRepository
-	guard   SavedStatementGuard
+	reader   QuerySavedStatementReader
+	writer   QuerySavedStatementWriter
+	targets  QueryTargetRepository
+	guard    SavedStatementGuard
+	compiler *TemplateStatementCompiler
 }
 
 // NewQuerySavedStatementService constructs a QuerySavedStatementService.
@@ -54,10 +55,11 @@ func NewQuerySavedStatementService(
 	guard SavedStatementGuard,
 ) *QuerySavedStatementService {
 	return &QuerySavedStatementService{
-		reader:  reader,
-		writer:  writer,
-		targets: targets,
-		guard:   guard,
+		reader:   reader,
+		writer:   writer,
+		targets:  targets,
+		guard:    guard,
+		compiler: NewTemplateStatementCompiler(),
 	}
 }
 
@@ -101,7 +103,7 @@ func (s *QuerySavedStatementService) Create(ctx context.Context, actor Authentic
 		return model.QuerySavedStatement{}, err
 	}
 
-	if _, err := s.guard.GuardSavedStatement(req.Statement); err != nil {
+	if err := s.validateStatement(req.Statement, req.Parameters); err != nil {
 		return model.QuerySavedStatement{}, fmt.Errorf("%w: %v", ErrQueryValidationFailed, err)
 	}
 
@@ -137,7 +139,7 @@ func (s *QuerySavedStatementService) Update(ctx context.Context, actor Authentic
 	}
 
 	// Validate SQL statement.
-	if _, err := s.guard.GuardSavedStatement(req.Statement); err != nil {
+	if err := s.validateStatement(req.Statement, req.Parameters); err != nil {
 		return fmt.Errorf("%w: %v", ErrQueryValidationFailed, err)
 	}
 
@@ -199,4 +201,36 @@ func (s *QuerySavedStatementService) validateTargetExists(ctx context.Context, t
 		}
 	}
 	return ErrQueryTargetNotFound
+}
+
+func (s *QuerySavedStatementService) validateStatement(statement string, parameters []model.QuerySavedStatementParameterDefinition) error {
+	definitions := make([]TemplateParameterDefinition, len(parameters))
+	values := make(map[string]any, len(parameters))
+	for index, parameter := range parameters {
+		definition := TemplateParameterDefinition{
+			Name: parameter.Name,
+			Type: TemplateParameterType(parameter.Type),
+		}
+		definitions[index] = definition
+		switch definition.Type {
+		case TemplateParameterString:
+			values[definition.Name] = ""
+		case TemplateParameterInteger:
+			values[definition.Name] = int64(0)
+		case TemplateParameterDecimal:
+			values[definition.Name] = "0"
+		case TemplateParameterBoolean:
+			values[definition.Name] = false
+		}
+	}
+	compiled, err := s.compiler.Compile(TemplateStatementInput{
+		Statement:   statement,
+		Definitions: definitions,
+		Values:      values,
+	})
+	if err != nil {
+		return err
+	}
+	_, err = s.guard.GuardSavedStatement(compiled.Statement)
+	return err
 }
