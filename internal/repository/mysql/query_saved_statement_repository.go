@@ -287,6 +287,12 @@ func (r *MySQLQuerySavedStatementRepository) loadParameterDefinitions(ctx contex
 	if len(statements) == 0 {
 		return statements, nil
 	}
+	loadedStatements := make([]model.QuerySavedStatement, len(statements))
+	copy(loadedStatements, statements)
+	for index := range loadedStatements {
+		loadedStatements[index].Parameters = cloneParameterDefinitions(statements[index].Parameters)
+	}
+	statements = loadedStatements
 	placeholders := make([]string, len(statements))
 	args := make([]any, len(statements))
 	byID := make(map[uint64]int, len(statements))
