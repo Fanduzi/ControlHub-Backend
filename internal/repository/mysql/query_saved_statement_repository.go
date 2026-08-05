@@ -23,7 +23,7 @@ type QuerySavedStatementReader interface {
 
 // QuerySavedStatementWriter writes saved statements with atomic audit.
 type QuerySavedStatementWriter interface {
-	CreateWithAudit(ctx context.Context, ownerUserID uint64, req model.QuerySavedStatementCreateRequest) (model.QuerySavedStatement, error)
+	CreateWithAudit(ctx context.Context, ownerUserID, targetResourceID uint64, req model.QuerySavedStatementCreateRequest) (model.QuerySavedStatement, error)
 	UpdateWithAudit(ctx context.Context, actorUserID, targetResourceID, statementID uint64, req model.QuerySavedStatementUpdateRequest) error
 	DeleteWithAudit(ctx context.Context, actorUserID, targetResourceID, statementID uint64) error
 }
@@ -92,10 +92,16 @@ func (r *MySQLQuerySavedStatementRepository) ListVisible(ctx context.Context, qu
 			return model.QuerySavedStatementListResponse{}, fmt.Errorf("scan saved statement: %w", err)
 		}
 		s.Scope = model.QuerySavedStatementScope(scope)
+		s.Parameters = make([]model.QuerySavedStatementParameterDefinition, 0)
 		items = append(items, s)
 	}
 	if err := rows.Err(); err != nil {
 		return model.QuerySavedStatementListResponse{}, fmt.Errorf("iterate saved statements: %w", err)
+	}
+
+	items, err = r.loadParameterDefinitions(ctx, items)
+	if err != nil {
+		return model.QuerySavedStatementListResponse{}, err
 	}
 
 	return model.QuerySavedStatementListResponse{
@@ -122,6 +128,11 @@ func (r *MySQLQuerySavedStatementRepository) GetByID(ctx context.Context, target
 		return model.QuerySavedStatement{}, fmt.Errorf("get saved statement: %w", err)
 	}
 	s.Scope = model.QuerySavedStatementScope(scope)
+	loaded, err := r.loadParameterDefinitions(ctx, []model.QuerySavedStatement{s})
+	if err != nil {
+		return model.QuerySavedStatement{}, err
+	}
+	s = loaded[0]
 	return s, nil
 }
 
@@ -144,6 +155,9 @@ func (r *MySQLQuerySavedStatementRepository) CreateWithAudit(ctx context.Context
 	if err != nil {
 		return model.QuerySavedStatement{}, fmt.Errorf("saved statement last insert id: %w", err)
 	}
+	if err := insertParameterDefinitions(ctx, tx, uint64(id), req.Parameters); err != nil {
+		return model.QuerySavedStatement{}, err
+	}
 
 	const auditQ = `INSERT INTO audit_events (actor_user_id, target_resource_id, event_type, result)
 		VALUES (?, ?, 'query.saved_statement.created', 'success')`
@@ -162,6 +176,7 @@ func (r *MySQLQuerySavedStatementRepository) CreateWithAudit(ctx context.Context
 		Name:             req.Name,
 		Statement:        req.Statement,
 		Scope:            req.Scope,
+		Parameters:       cloneParameterDefinitions(req.Parameters),
 	}, nil
 }
 
@@ -182,8 +197,9 @@ func (r *MySQLQuerySavedStatementRepository) UpdateWithAudit(ctx context.Context
 	if isAdmin {
 		updateQ = `UPDATE query_saved_statements
 			SET name = ?, statement = ?, updated_at = CURRENT_TIMESTAMP(6)
-			WHERE target_resource_id = ? AND id = ?`
-		args = []any{req.Name, req.Statement, targetResourceID, statementID}
+			WHERE target_resource_id = ? AND id = ?
+			  AND (scope = 'shared_template' OR owner_user_id = ?)`
+		args = []any{req.Name, req.Statement, targetResourceID, statementID, actorUserID}
 	} else {
 		updateQ = `UPDATE query_saved_statements
 			SET name = ?, statement = ?, updated_at = CURRENT_TIMESTAMP(6)
@@ -200,6 +216,12 @@ func (r *MySQLQuerySavedStatementRepository) UpdateWithAudit(ctx context.Context
 	}
 	if n == 0 {
 		return sql.ErrNoRows
+	}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM query_saved_statement_parameters WHERE statement_id = ?`, statementID); err != nil {
+		return fmt.Errorf("delete saved statement parameters: %w", err)
+	}
+	if err := insertParameterDefinitions(ctx, tx, statementID, req.Parameters); err != nil {
+		return err
 	}
 
 	// Insert audit event
@@ -228,8 +250,9 @@ func (r *MySQLQuerySavedStatementRepository) DeleteWithAudit(ctx context.Context
 	var args []any
 	if isAdmin {
 		deleteQ = `DELETE FROM query_saved_statements
-			WHERE target_resource_id = ? AND id = ?`
-		args = []any{targetResourceID, statementID}
+			WHERE target_resource_id = ? AND id = ?
+			  AND (scope = 'shared_template' OR owner_user_id = ?)`
+		args = []any{targetResourceID, statementID, actorUserID}
 	} else {
 		deleteQ = `DELETE FROM query_saved_statements
 			WHERE target_resource_id = ? AND id = ? AND owner_user_id = ?`
@@ -246,6 +269,9 @@ func (r *MySQLQuerySavedStatementRepository) DeleteWithAudit(ctx context.Context
 	if n == 0 {
 		return sql.ErrNoRows
 	}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM query_saved_statement_parameters WHERE statement_id = ?`, statementID); err != nil {
+		return fmt.Errorf("delete saved statement parameters: %w", err)
+	}
 
 	// Insert audit event
 	const auditQ = `INSERT INTO audit_events (actor_user_id, target_resource_id, event_type, result)
@@ -255,4 +281,69 @@ func (r *MySQLQuerySavedStatementRepository) DeleteWithAudit(ctx context.Context
 	}
 
 	return tx.Commit()
+}
+
+func (r *MySQLQuerySavedStatementRepository) loadParameterDefinitions(ctx context.Context, statements []model.QuerySavedStatement) ([]model.QuerySavedStatement, error) {
+	if len(statements) == 0 {
+		return statements, nil
+	}
+	placeholders := make([]string, len(statements))
+	args := make([]any, len(statements))
+	byID := make(map[uint64]int, len(statements))
+	for index, statement := range statements {
+		placeholders[index] = "?"
+		args[index] = statement.ID
+		byID[statement.ID] = index
+		if statements[index].Parameters == nil {
+			statements[index].Parameters = make([]model.QuerySavedStatementParameterDefinition, 0)
+		}
+	}
+
+	query := fmt.Sprintf(`SELECT statement_id, name, type, ordinal
+		FROM query_saved_statement_parameters
+		WHERE statement_id IN (%s)
+		ORDER BY statement_id, ordinal`, strings.Join(placeholders, ", "))
+	rows, err := r.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("list saved statement parameters: %w", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var statementID uint64
+		var definition model.QuerySavedStatementParameterDefinition
+		var ordinal int
+		if err := rows.Scan(&statementID, &definition.Name, &definition.Type, &ordinal); err != nil {
+			return nil, fmt.Errorf("scan saved statement parameter: %w", err)
+		}
+		index, ok := byID[statementID]
+		if !ok {
+			return nil, fmt.Errorf("saved statement parameter references unknown statement")
+		}
+		if ordinal != len(statements[index].Parameters) {
+			return nil, fmt.Errorf("saved statement parameter order is invalid")
+		}
+		statements[index].Parameters = append(statements[index].Parameters, definition)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate saved statement parameters: %w", err)
+	}
+	return statements, nil
+}
+
+func insertParameterDefinitions(ctx context.Context, tx *sql.Tx, statementID uint64, parameters []model.QuerySavedStatementParameterDefinition) error {
+	const query = `INSERT INTO query_saved_statement_parameters (statement_id, name, type, ordinal)
+		VALUES (?, ?, ?, ?)`
+	for ordinal, parameter := range parameters {
+		if _, err := tx.ExecContext(ctx, query, statementID, parameter.Name, string(parameter.Type), ordinal); err != nil {
+			return fmt.Errorf("insert saved statement parameter: %w", err)
+		}
+	}
+	return nil
+}
+
+func cloneParameterDefinitions(parameters []model.QuerySavedStatementParameterDefinition) []model.QuerySavedStatementParameterDefinition {
+	if len(parameters) == 0 {
+		return make([]model.QuerySavedStatementParameterDefinition, 0)
+	}
+	return append([]model.QuerySavedStatementParameterDefinition(nil), parameters...)
 }

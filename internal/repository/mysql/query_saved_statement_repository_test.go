@@ -68,6 +68,9 @@ func TestListVisible_ReturnsSharedAndPersonalForOwner(t *testing.T) {
 	mock.ExpectQuery("SELECT id, target_resource_id").
 		WithArgs(uint64(10), uint64(1), 20, 0).
 		WillReturnRows(rows)
+	mock.ExpectQuery("SELECT statement_id, name, type, ordinal").
+		WithArgs(uint64(1), uint64(2)).
+		WillReturnRows(sqlmock.NewRows([]string{"statement_id", "name", "type", "ordinal"}))
 
 	resp, err := repo.ListVisible(t.Context(), model.QuerySavedStatementListQuery{
 		TargetResourceID: 10,
@@ -115,6 +118,9 @@ func TestListVisible_ExcludesOtherUsersPersonal(t *testing.T) {
 	mock.ExpectQuery("SELECT id, target_resource_id").
 		WithArgs(uint64(10), uint64(1), 20, 0).
 		WillReturnRows(rows)
+	mock.ExpectQuery("SELECT statement_id, name, type, ordinal").
+		WithArgs(uint64(2)).
+		WillReturnRows(sqlmock.NewRows([]string{"statement_id", "name", "type", "ordinal"}))
 
 	resp, err := repo.ListVisible(t.Context(), model.QuerySavedStatementListQuery{
 		TargetResourceID: 10,
@@ -192,6 +198,9 @@ func TestListVisible_Pagination(t *testing.T) {
 	mock.ExpectQuery("SELECT id, target_resource_id").
 		WithArgs(uint64(10), uint64(1), 10, 10).
 		WillReturnRows(rows)
+	mock.ExpectQuery("SELECT statement_id, name, type, ordinal").
+		WithArgs(uint64(3)).
+		WillReturnRows(sqlmock.NewRows([]string{"statement_id", "name", "type", "ordinal"}))
 
 	resp, err := repo.ListVisible(t.Context(), model.QuerySavedStatementListQuery{
 		TargetResourceID: 10,
@@ -257,6 +266,9 @@ func TestGetByID_Found(t *testing.T) {
 		WithArgs(uint64(10), uint64(1)).
 		WillReturnRows(sqlmock.NewRows([]string{"id", "target_resource_id", "owner_user_id", "name", "statement", "scope", "created_at", "updated_at"}).
 			AddRow(1, 10, 5, "my query", "SELECT 1", "personal", now, now))
+	mock.ExpectQuery("SELECT statement_id, name, type, ordinal").
+		WithArgs(uint64(1)).
+		WillReturnRows(sqlmock.NewRows([]string{"statement_id", "name", "type", "ordinal"}))
 
 	s, err := repo.GetByID(t.Context(), 10, 1)
 	if err != nil {
@@ -310,6 +322,45 @@ func TestCreateWithAudit_InsertsBoth(t *testing.T) {
 
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Errorf("unmet expectations: %v", err)
+	}
+}
+
+func TestCreateWithAudit_PersistsParameterDefinitionsBeforeAudit(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock.New: %v", err)
+	}
+	defer db.Close()
+	repo := NewQuerySavedStatementRepository(db)
+
+	mock.ExpectBegin()
+	mock.ExpectExec("INSERT INTO query_saved_statements").
+		WithArgs(uint64(10), uint64(1), "status query", "SELECT 1 WHERE status = :status", "personal").
+		WillReturnResult(sqlmock.NewResult(42, 1))
+	mock.ExpectExec("INSERT INTO query_saved_statement_parameters").
+		WithArgs(uint64(42), "status", "string", 0).
+		WillReturnResult(sqlmock.NewResult(1, 1))
+	mock.ExpectExec("INSERT INTO audit_events").
+		WithArgs(uint64(1), uint64(10)).
+		WillReturnResult(sqlmock.NewResult(1, 1))
+	mock.ExpectCommit()
+
+	statement, err := repo.CreateWithAudit(t.Context(), 1, 10, model.QuerySavedStatementCreateRequest{
+		Name:      "status query",
+		Statement: "SELECT 1 WHERE status = :status",
+		Scope:     model.QuerySavedStatementPersonal,
+		Parameters: []model.QuerySavedStatementParameterDefinition{
+			{Name: "status", Type: model.QuerySavedStatementParameterString},
+		},
+	})
+	if err != nil {
+		t.Fatalf("CreateWithAudit: %v", err)
+	}
+	if len(statement.Parameters) != 1 || statement.Parameters[0].Name != "status" {
+		t.Fatalf("created parameters = %#v, want status definition", statement.Parameters)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("unmet expectations: %v", err)
 	}
 }
 
@@ -423,6 +474,9 @@ func TestUpdateWithAudit_Success(t *testing.T) {
 	mock.ExpectExec("UPDATE query_saved_statements").
 		WithArgs("new name", "SELECT 2", uint64(10), uint64(1), uint64(1)).
 		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec("DELETE FROM query_saved_statement_parameters").
+		WithArgs(uint64(1)).
+		WillReturnResult(sqlmock.NewResult(0, 0))
 	mock.ExpectExec("INSERT INTO audit_events").
 		WithArgs(uint64(1), uint64(10)).
 		WillReturnResult(sqlmock.NewResult(1, 1))
@@ -453,6 +507,9 @@ func TestUpdateWithAudit_AuditFailureRollsBack(t *testing.T) {
 	mock.ExpectExec("UPDATE query_saved_statements").
 		WithArgs("new name", "SELECT 2", uint64(10), uint64(1), uint64(1)).
 		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec("DELETE FROM query_saved_statement_parameters").
+		WithArgs(uint64(1)).
+		WillReturnResult(sqlmock.NewResult(0, 0))
 	mock.ExpectExec("INSERT INTO audit_events").
 		WithArgs(uint64(1), uint64(10)).
 		WillReturnError(sql.ErrConnDone)
@@ -512,6 +569,9 @@ func TestDeleteWithAudit_Success(t *testing.T) {
 	mock.ExpectExec("DELETE FROM query_saved_statements").
 		WithArgs(uint64(10), uint64(1), uint64(1)).
 		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec("DELETE FROM query_saved_statement_parameters").
+		WithArgs(uint64(1)).
+		WillReturnResult(sqlmock.NewResult(0, 0))
 	mock.ExpectExec("INSERT INTO audit_events").
 		WithArgs(uint64(1), uint64(10)).
 		WillReturnResult(sqlmock.NewResult(1, 1))
@@ -539,6 +599,9 @@ func TestDeleteWithAudit_AuditFailureRollsBack(t *testing.T) {
 	mock.ExpectExec("DELETE FROM query_saved_statements").
 		WithArgs(uint64(10), uint64(1), uint64(1)).
 		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec("DELETE FROM query_saved_statement_parameters").
+		WithArgs(uint64(1)).
+		WillReturnResult(sqlmock.NewResult(0, 0))
 	mock.ExpectExec("INSERT INTO audit_events").
 		WithArgs(uint64(1), uint64(10)).
 		WillReturnError(sql.ErrConnDone)
