@@ -1,12 +1,13 @@
 // Package model provides domain entities for the resource management system.
 // input: fmt, time, unicode/utf8 packages
-// output: QuerySavedStatementScope, QuerySavedStatement, QuerySavedStatementCreateRequest, QuerySavedStatementUpdateRequest, QuerySavedStatementListQuery, QuerySavedStatementListResponse
+// output: QuerySavedStatementScope, QuerySavedStatementParameterType, QuerySavedStatementParameterDefinition, QuerySavedStatement, QuerySavedStatementCreateRequest, QuerySavedStatementUpdateRequest, QuerySavedStatementListQuery, QuerySavedStatementListResponse
 // pos: Governed saved statements for target-scoped query library
 // note: if this file changes, update header and README.md
 package model
 
 import (
 	"fmt"
+	"regexp"
 	"time"
 	"unicode/utf8"
 )
@@ -34,24 +35,45 @@ const MaxSavedStatementNameLength = 120
 // MaxSavedStatementSize bounds the statement text at 16 KiB.
 const MaxSavedStatementSize = 16 * 1024
 
+// MaxSavedStatementParameters bounds the number of declarations in one saved statement.
+const MaxSavedStatementParameters = 20
+
+// QuerySavedStatementParameterType is the scalar type of a template parameter.
+type QuerySavedStatementParameterType string
+
+const (
+	QuerySavedStatementParameterString  QuerySavedStatementParameterType = "string"
+	QuerySavedStatementParameterInteger QuerySavedStatementParameterType = "integer"
+	QuerySavedStatementParameterDecimal QuerySavedStatementParameterType = "decimal"
+	QuerySavedStatementParameterBoolean QuerySavedStatementParameterType = "boolean"
+)
+
+// QuerySavedStatementParameterDefinition declares one named template parameter.
+type QuerySavedStatementParameterDefinition struct {
+	Name string                           `json:"name"`
+	Type QuerySavedStatementParameterType `json:"type"`
+}
+
 // QuerySavedStatement is the persisted saved statement record.
 type QuerySavedStatement struct {
-	ID               uint64                   `json:"id"`
-	TargetResourceID uint64                   `json:"targetResourceId"`
-	OwnerUserID      uint64                   `json:"-"` // Never exposed in API
-	Name             string                   `json:"name"`
-	Statement        string                   `json:"statement"`
-	Scope            QuerySavedStatementScope `json:"scope"`
-	CreatedAt        time.Time                `json:"createdAt"`
-	UpdatedAt        time.Time                `json:"updatedAt"`
+	ID               uint64                                   `json:"id"`
+	TargetResourceID uint64                                   `json:"targetResourceId"`
+	OwnerUserID      uint64                                   `json:"-"` // Never exposed in API
+	Name             string                                   `json:"name"`
+	Statement        string                                   `json:"statement"`
+	Parameters       []QuerySavedStatementParameterDefinition `json:"parameters"`
+	Scope            QuerySavedStatementScope                 `json:"scope"`
+	CreatedAt        time.Time                                `json:"createdAt"`
+	UpdatedAt        time.Time                                `json:"updatedAt"`
 }
 
 // QuerySavedStatementCreateRequest is the body for creating a saved statement.
 // TargetResourceID comes from the URL path, not the request body.
 type QuerySavedStatementCreateRequest struct {
-	Name      string                   `json:"name"`
-	Statement string                   `json:"statement"`
-	Scope     QuerySavedStatementScope `json:"scope"`
+	Name       string                                   `json:"name"`
+	Statement  string                                   `json:"statement"`
+	Parameters []QuerySavedStatementParameterDefinition `json:"parameters,omitempty"`
+	Scope      QuerySavedStatementScope                 `json:"scope"`
 }
 
 // Validate checks all required fields and bounds.
@@ -68,14 +90,18 @@ func (r QuerySavedStatementCreateRequest) Validate() error {
 	if err := r.Scope.Validate(); err != nil {
 		return err
 	}
+	if err := validateSavedStatementParameters(r.Parameters); err != nil {
+		return err
+	}
 	return nil
 }
 
 // QuerySavedStatementUpdateRequest is the body for updating a saved statement.
 // Scope is immutable and never accepted on update.
 type QuerySavedStatementUpdateRequest struct {
-	Name      string `json:"name"`
-	Statement string `json:"statement"`
+	Name       string                                   `json:"name"`
+	Statement  string                                   `json:"statement"`
+	Parameters []QuerySavedStatementParameterDefinition `json:"parameters,omitempty"`
 }
 
 // Validate checks all required fields and bounds.
@@ -88,6 +114,9 @@ func (r QuerySavedStatementUpdateRequest) Validate() error {
 	}
 	if len(r.Statement) > MaxSavedStatementSize {
 		return fmt.Errorf("statement exceeds %d bytes", MaxSavedStatementSize)
+	}
+	if err := validateSavedStatementParameters(r.Parameters); err != nil {
+		return err
 	}
 	return nil
 }
@@ -135,4 +164,31 @@ func trimWhitespace(s string) string {
 		end--
 	}
 	return s[start:end]
+}
+
+var savedStatementParameterNamePattern = regexp.MustCompile(`^[a-z][a-z0-9_]*$`)
+
+func validateSavedStatementParameters(parameters []QuerySavedStatementParameterDefinition) error {
+	if len(parameters) > MaxSavedStatementParameters {
+		return fmt.Errorf("parameters exceed %d definitions", MaxSavedStatementParameters)
+	}
+	seen := make(map[string]struct{}, len(parameters))
+	for _, parameter := range parameters {
+		if !savedStatementParameterNamePattern.MatchString(parameter.Name) {
+			return fmt.Errorf("invalid parameter name")
+		}
+		if _, exists := seen[parameter.Name]; exists {
+			return fmt.Errorf("duplicate parameter name")
+		}
+		seen[parameter.Name] = struct{}{}
+		switch parameter.Type {
+		case QuerySavedStatementParameterString,
+			QuerySavedStatementParameterInteger,
+			QuerySavedStatementParameterDecimal,
+			QuerySavedStatementParameterBoolean:
+		default:
+			return fmt.Errorf("invalid parameter type")
+		}
+	}
+	return nil
 }

@@ -18,7 +18,7 @@ Domain structs, taxonomy constants, validation methods, and dictionary definitio
 | query_execution.go | Query execution request/response/history types, execution status enum, QueryEnvironmentPolicy enum + Validate, ValidateCredentialRef, QueryCredentialMetadata, ErrInvalidCredentialMetadata, Phase 38S governed-result-paging: QueryExecutePaginationRequest/Response, ValidatePagination |
 | query_credential.go | Phase 38A query credential metadata request/response/runtime-status types + Validate (metadata only; never DSN/password) |
 | query_disclosure.go | Phase 38Q governed result-disclosure policy: ResultDisclosureMode enum + Validate, ResultDisclosurePolicy, ResultDisclosurePolicyUpsertRequest + Validate, ResultDisclosurePolicyListQuery |
-| query_saved_statement.go | Phase 38R governed saved statements: QuerySavedStatementScope enum + Validate, QuerySavedStatement, QuerySavedStatementCreateRequest/UpdateRequest + Validate, QuerySavedStatementListQuery/Response |
+| query_saved_statement.go | Phase 38W governed saved statements: immutable scopes, typed parameter definitions, request validation, and list response types |
 | resource_test.go | Validation and dictionary completeness tests |
 | query_execution_test.go | Environment-policy, credential_ref fail-closed validator tests, Phase 38S governed-result-paging contract tests (ValidatePagination, JSON omitempty) |
 | query_credential_test.go | Runtime-status and upsert-request validation tests (fail-closed enum, all-environments confirmation) |
@@ -32,7 +32,7 @@ Domain structs, taxonomy constants, validation methods, and dictionary definitio
 - `QueryEnvironmentPolicy.Validate()`, `ValidateCredentialRef()` (query sandbox credential policy)
 - `QueryCredentialRuntimeStatus.Validate()` / `.IsResolved()`, `QueryCredentialUpsertRequest.Validate()` (Phase 38A credential metadata contract)
 - `ResultDisclosureMode.Validate()`, `ResultDisclosurePolicyUpsertRequest.Validate()` (Phase 38Q governed result-disclosure policy)
-- `QuerySavedStatementScope.Validate()`, `QuerySavedStatementCreateRequest.Validate()`, `QuerySavedStatementUpdateRequest.Validate()` (Phase 38R governed saved statements)
+- `QuerySavedStatementScope.Validate()`, typed parameter definitions, `QuerySavedStatementCreateRequest.Validate()`, `QuerySavedStatementUpdateRequest.Validate()` (Phase 38W governed saved statements)
 - `ValidatePagination()`, `QueryExecutePaginationRequest`, `QueryExecutePaginationResponse`, `AllowedPageSizes` (Phase 38S governed query-result paging)
 
 ## Phase 38S governed query-result paging

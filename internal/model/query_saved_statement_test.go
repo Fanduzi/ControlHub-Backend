@@ -1,6 +1,7 @@
 package model
 
 import (
+	"fmt"
 	"testing"
 )
 
@@ -34,9 +35,10 @@ func TestQuerySavedStatementCreateRequestValidate(t *testing.T) {
 		{
 			name: "valid personal",
 			req: QuerySavedStatementCreateRequest{
-				Name:      "Recent orders",
-				Statement: "SELECT id FROM orders",
-				Scope:     QuerySavedStatementPersonal,
+				Name:       "Recent orders",
+				Statement:  "SELECT id FROM orders",
+				Scope:      QuerySavedStatementPersonal,
+				Parameters: []QuerySavedStatementParameterDefinition{},
 			},
 			wantErr: false,
 		},
@@ -111,6 +113,65 @@ func TestQuerySavedStatementCreateRequestValidate(t *testing.T) {
 				t.Errorf("Validate() error = %v, wantErr %v", err, tt.wantErr)
 			}
 		})
+	}
+}
+
+func TestQuerySavedStatementParameterDefinitionsValidate(t *testing.T) {
+	valid := []QuerySavedStatementParameterDefinition{
+		{Name: "status", Type: QuerySavedStatementParameterString},
+		{Name: "minimum_total", Type: QuerySavedStatementParameterDecimal},
+	}
+	validRequest := QuerySavedStatementCreateRequest{
+		Name:       "Recent orders",
+		Statement:  "SELECT id FROM orders WHERE status = :status AND total >= :minimum_total",
+		Scope:      QuerySavedStatementPersonal,
+		Parameters: valid,
+	}
+	if err := validRequest.Validate(); err != nil {
+		t.Fatalf("valid parameter definitions rejected: %v", err)
+	}
+
+	tests := []struct {
+		name       string
+		statement  string
+		parameters []QuerySavedStatementParameterDefinition
+	}{
+		{
+			name:       "duplicate names",
+			statement:  "SELECT 1 WHERE id = :id",
+			parameters: []QuerySavedStatementParameterDefinition{{Name: "id", Type: QuerySavedStatementParameterInteger}, {Name: "id", Type: QuerySavedStatementParameterInteger}},
+		},
+		{
+			name:       "invalid name",
+			statement:  "SELECT 1 WHERE id = :Id",
+			parameters: []QuerySavedStatementParameterDefinition{{Name: "Id", Type: QuerySavedStatementParameterInteger}},
+		},
+		{
+			name:       "unsupported type",
+			statement:  "SELECT 1 WHERE id = :id",
+			parameters: []QuerySavedStatementParameterDefinition{{Name: "id", Type: QuerySavedStatementParameterType("json")}},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			req := validRequest
+			req.Statement = test.statement
+			req.Parameters = test.parameters
+			if err := req.Validate(); err == nil {
+				t.Fatal("expected invalid parameter definitions to be rejected")
+			}
+		})
+	}
+
+	tooMany := make([]QuerySavedStatementParameterDefinition, MaxSavedStatementParameters+1)
+	for index := range tooMany {
+		tooMany[index] = QuerySavedStatementParameterDefinition{Name: "parameter_" + fmt.Sprint(index), Type: QuerySavedStatementParameterString}
+	}
+	tooManyRequest := validRequest
+	tooManyRequest.Statement = "SELECT 1"
+	tooManyRequest.Parameters = tooMany
+	if err := tooManyRequest.Validate(); err == nil {
+		t.Fatal("expected parameter count limit to be enforced")
 	}
 }
 
