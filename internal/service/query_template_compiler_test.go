@@ -20,7 +20,7 @@ func TestTemplateStatementCompilerBindsValuesInSourceOrderAndPassesGuard(t *test
 
 	compiler := NewTemplateStatementCompiler()
 	compiled, err := compiler.Compile(TemplateStatementInput{
-		Statement: "select id from orders where status = :status and id > :minimum_id and status = :status",
+		Statement: "select id from orders where status = :status and id > :minimum_id",
 		Definitions: []TemplateParameterDefinition{
 			{Name: "status", Type: TemplateParameterString},
 			{Name: "minimum_id", Type: TemplateParameterInteger},
@@ -31,10 +31,10 @@ func TestTemplateStatementCompilerBindsValuesInSourceOrderAndPassesGuard(t *test
 		t.Fatalf("Compile error: %v", err)
 	}
 
-	if got, want := compiled.Statement, "select id from orders where `status` = ? and id > ? and `status` = ?"; got != want {
+	if got, want := compiled.Statement, "select id from orders where `status` = ? and id > ?"; got != want {
 		t.Fatalf("compiled statement = %q, want %q", got, want)
 	}
-	if want := []any{"paid", int64(42), "paid"}; !reflect.DeepEqual(compiled.Args, want) {
+	if want := []any{"paid", int64(42)}; !reflect.DeepEqual(compiled.Args, want) {
 		t.Fatalf("compiled args = %#v, want %#v", compiled.Args, want)
 	}
 	if strings.Contains(compiled.Statement, "paid") || strings.Contains(compiled.Statement, "42") {
@@ -47,6 +47,21 @@ func TestTemplateStatementCompilerBindsValuesInSourceOrderAndPassesGuard(t *test
 	}
 	if !strings.Contains(strings.ToLower(guarded.ExecutableSQL), "limit 101") {
 		t.Fatalf("guarded executable SQL = %q, want backend-owned limit 101", guarded.ExecutableSQL)
+	}
+}
+
+func TestTemplateStatementCompilerRejectsRepeatedPlaceholder(t *testing.T) {
+	t.Parallel()
+
+	_, err := NewTemplateStatementCompiler().Compile(TemplateStatementInput{
+		Statement: "select id from orders where status = :status or previous_status = :status",
+		Definitions: []TemplateParameterDefinition{
+			{Name: "status", Type: TemplateParameterString},
+		},
+		Values: map[string]any{"status": "paid"},
+	})
+	if !errors.Is(err, ErrTemplateParameterInvalid) {
+		t.Fatalf("Compile error = %v, want repeated placeholder rejection", err)
 	}
 }
 

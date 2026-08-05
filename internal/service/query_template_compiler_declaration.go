@@ -72,6 +72,9 @@ func (c *TemplateStatementCompiler) compileDeclaration(statement string, definit
 		if used[name] == 0 {
 			return templateStatementDeclaration{}, fmt.Errorf("%w: parameter %q has no placeholder", ErrTemplateParameterInvalid, name)
 		}
+		if used[name] != 1 {
+			return templateStatementDeclaration{}, fmt.Errorf("%w: parameter %q must have exactly one placeholder", ErrTemplateParameterInvalid, name)
+		}
 	}
 	return templateStatementDeclaration{
 		statement:   replaceTemplateBindLocations(parsedQuery),
