@@ -205,29 +205,13 @@ func (s *QuerySavedStatementService) validateTargetExists(ctx context.Context, t
 
 func (s *QuerySavedStatementService) validateStatement(statement string, parameters []model.QuerySavedStatementParameterDefinition) error {
 	definitions := make([]TemplateParameterDefinition, len(parameters))
-	values := make(map[string]any, len(parameters))
 	for index, parameter := range parameters {
-		definition := TemplateParameterDefinition{
+		definitions[index] = TemplateParameterDefinition{
 			Name: parameter.Name,
 			Type: TemplateParameterType(parameter.Type),
 		}
-		definitions[index] = definition
-		switch definition.Type {
-		case TemplateParameterString:
-			values[definition.Name] = ""
-		case TemplateParameterInteger:
-			values[definition.Name] = int64(0)
-		case TemplateParameterDecimal:
-			values[definition.Name] = "0"
-		case TemplateParameterBoolean:
-			values[definition.Name] = false
-		}
 	}
-	compiled, err := s.compiler.Compile(TemplateStatementInput{
-		Statement:   statement,
-		Definitions: definitions,
-		Values:      values,
-	})
+	compiled, err := s.compiler.validateDeclarations(statement, definitions)
 	if err != nil {
 		return err
 	}

@@ -70,75 +70,29 @@ func NewTemplateStatementCompiler() *TemplateStatementCompiler {
 }
 
 func (c *TemplateStatementCompiler) Compile(input TemplateStatementInput) (CompiledTemplateStatement, error) {
-	trimmed := strings.TrimSpace(input.Statement)
-	if trimmed == "" {
-		return CompiledTemplateStatement{}, ErrTemplateStatementInvalid
-	}
-	pieces, err := c.parser.SplitStatementToPieces(trimmed)
-	if err != nil {
-		return CompiledTemplateStatement{}, ErrTemplateStatementInvalid
-	}
-	nonEmptyPieces := 0
-	for _, piece := range pieces {
-		if strings.TrimSpace(piece) != "" {
-			nonEmptyPieces++
-		}
-	}
-	if nonEmptyPieces != 1 {
-		return CompiledTemplateStatement{}, ErrTemplateStatementInvalid
-	}
-	parsed, err := c.parser.Parse(trimmed)
-	if err != nil {
-		return CompiledTemplateStatement{}, ErrTemplateStatementInvalid
-	}
-	parsedQuery := sqlparser.NewParsedQuery(parsed)
-
-	declared, err := templateDeclarations(input.Definitions)
+	declaration, err := c.compileDeclaration(input.Statement, input.Definitions)
 	if err != nil {
 		return CompiledTemplateStatement{}, err
 	}
 	for name := range input.Values {
-		if _, ok := declared[name]; !ok {
+		if _, ok := declaration.definitions[name]; !ok {
 			return CompiledTemplateStatement{}, fmt.Errorf("%w: unknown parameter %q", ErrTemplateParameterInvalid, name)
 		}
 	}
-
-	used := make(map[string]int)
-	args := make([]any, 0, len(parsedQuery.BindLocations()))
-	for _, location := range parsedQuery.BindLocations() {
-		if location.Offset < 0 || location.Length < 2 || location.Offset+location.Length > len(parsedQuery.Query) {
-			return CompiledTemplateStatement{}, ErrTemplateStatementInvalid
-		}
-		marker := parsedQuery.Query[location.Offset : location.Offset+location.Length]
-		if strings.HasPrefix(marker, "::") {
-			return CompiledTemplateStatement{}, fmt.Errorf("%w: list parameters are unsupported", ErrTemplateParameterInvalid)
-		}
-		if !strings.HasPrefix(marker, ":") {
-			return CompiledTemplateStatement{}, ErrTemplateStatementInvalid
-		}
-		name := marker[1:]
-		definition, ok := declared[name]
+	args := make([]any, 0, len(declaration.bindings))
+	for _, definition := range declaration.bindings {
+		value, ok := input.Values[definition.Name]
 		if !ok {
-			return CompiledTemplateStatement{}, fmt.Errorf("%w: undeclared parameter %q", ErrTemplateParameterInvalid, name)
-		}
-		value, ok := input.Values[name]
-		if !ok {
-			return CompiledTemplateStatement{}, fmt.Errorf("%w: missing parameter %q", ErrTemplateParameterInvalid, name)
+			return CompiledTemplateStatement{}, fmt.Errorf("%w: missing parameter %q", ErrTemplateParameterInvalid, definition.Name)
 		}
 		bound, err := compileTemplateValue(definition, value)
 		if err != nil {
 			return CompiledTemplateStatement{}, err
 		}
-		used[name]++
 		args = append(args, bound)
 	}
-	for name := range declared {
-		if used[name] == 0 {
-			return CompiledTemplateStatement{}, fmt.Errorf("%w: parameter %q has no placeholder", ErrTemplateParameterInvalid, name)
-		}
-	}
 	return CompiledTemplateStatement{
-		Statement: replaceTemplateBindLocations(parsedQuery),
+		Statement: declaration.statement,
 		Args:      args,
 	}, nil
 }
