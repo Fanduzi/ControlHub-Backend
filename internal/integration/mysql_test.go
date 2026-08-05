@@ -32,13 +32,15 @@ func TestSchemaUsesBigintPrimaryKeysWithoutForeignKeys(t *testing.T) {
 	assertSchemaChainBaseline(t, db)
 
 	expectedUnsignedBigintIDs := map[string][]string{
-		"roles":              {"id"},
-		"users":              {"id", "role_id"},
-		"environments":       {"id"},
-		"owners":             {"id"},
-		"resources":          {"id", "environment_id", "owner_id", "archived_by"},
-		"resource_relations": {"id", "from_resource_id", "to_resource_id"},
-		"audit_events":       {"id", "actor_user_id", "target_resource_id"},
+		"roles":                            {"id"},
+		"users":                            {"id", "role_id"},
+		"environments":                     {"id"},
+		"owners":                           {"id"},
+		"resources":                        {"id", "environment_id", "owner_id", "archived_by"},
+		"resource_relations":               {"id", "from_resource_id", "to_resource_id"},
+		"query_saved_statements":           {"id", "target_resource_id", "owner_user_id"},
+		"query_saved_statement_parameters": {"id", "statement_id"},
+		"audit_events":                     {"id", "actor_user_id", "target_resource_id"},
 	}
 	for tableName, columns := range expectedUnsignedBigintIDs {
 		for _, columnName := range columns {
@@ -58,6 +60,8 @@ func TestSchemaUsesBigintPrimaryKeysWithoutForeignKeys(t *testing.T) {
 		"resource_profiles_database_instance",
 		"resource_profiles_database_cluster",
 		"resource_profiles_service",
+		"query_saved_statements",
+		"query_saved_statement_parameters",
 		"audit_events",
 	} {
 		assertNoForeignKeys(t, db, tableName)
