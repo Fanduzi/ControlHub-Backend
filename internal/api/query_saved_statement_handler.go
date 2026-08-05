@@ -159,19 +159,7 @@ func decodeSavedStatementJSONBody(r *http.Request, target any) error {
 	if err := rejectDuplicateJSONFields(body); err != nil {
 		return err
 	}
-	decoder := json.NewDecoder(bytes.NewReader(body))
-	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(target); err != nil {
-		return err
-	}
-	var extra any
-	if err := decoder.Decode(&extra); err != io.EOF {
-		if err == nil {
-			return errors.New("multiple JSON values are not allowed")
-		}
-		return err
-	}
-	return nil
+	return decodeJSON(bytes.NewReader(body), target)
 }
 
 func rejectDuplicateJSONFields(body []byte) error {

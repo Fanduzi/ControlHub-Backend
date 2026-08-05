@@ -17,6 +17,7 @@ HTTP handlers, chi routing, CORS middleware, and fake-repo test infrastructure.
 | query_credential_handler.go | Phase 38A credential metadata handlers (GET/PUT/DELETE) |
 | query_disclosure_handler.go | Phase 38Q disclosure policy CRUD handlers (admin-only writes) |
 | query_saved_statement_handler.go | Phase 38W saved statement CRUD handlers with strict typed parameter declaration decoding |
+| json_body.go | Shared strict JSON body decoding with unknown-field and multiple-value rejection |
 | test_server.go | Fake repositories and NewTestServer() for handler tests |
 | health_handler_test.go | Health endpoint tests |
 | resource_handler_test.go | Resource and profile endpoint tests |

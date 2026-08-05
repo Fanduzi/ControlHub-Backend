@@ -233,18 +233,6 @@ func parseUint64QueryValues(values []string, name string) ([]uint64, error) {
 	return result, nil
 }
 
-func decodeJSONBody(r *http.Request, target any) error {
-	decoder := json.NewDecoder(r.Body)
-	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(target); err != nil {
-		return err
-	}
-	if decoder.More() {
-		return errors.New("multiple JSON values are not allowed")
-	}
-	return nil
-}
-
 func writeJSON(w http.ResponseWriter, status int, payload any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
