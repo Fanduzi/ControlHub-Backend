@@ -151,6 +151,11 @@ func TestQuerySavedStatementParameterDefinitionsValidate(t *testing.T) {
 			statement:  "SELECT 1 WHERE id = :id",
 			parameters: []QuerySavedStatementParameterDefinition{{Name: "id", Type: QuerySavedStatementParameterType("json")}},
 		},
+		{
+			name:       "parameter name too long",
+			statement:  "SELECT 1 WHERE id = :aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+			parameters: []QuerySavedStatementParameterDefinition{{Name: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", Type: QuerySavedStatementParameterString}},
+		},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {

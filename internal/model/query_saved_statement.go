@@ -38,6 +38,9 @@ const MaxSavedStatementSize = 16 * 1024
 // MaxSavedStatementParameters bounds the number of declarations in one saved statement.
 const MaxSavedStatementParameters = 20
 
+// MaxSavedStatementParameterNameLength bounds one template parameter name.
+const MaxSavedStatementParameterNameLength = 64
+
 // QuerySavedStatementParameterType is the scalar type of a template parameter.
 type QuerySavedStatementParameterType string
 
@@ -174,6 +177,9 @@ func validateSavedStatementParameters(parameters []QuerySavedStatementParameterD
 	}
 	seen := make(map[string]struct{}, len(parameters))
 	for _, parameter := range parameters {
+		if utf8.RuneCountInString(parameter.Name) > MaxSavedStatementParameterNameLength {
+			return fmt.Errorf("parameter name exceeds %d characters", MaxSavedStatementParameterNameLength)
+		}
 		if !savedStatementParameterNamePattern.MatchString(parameter.Name) {
 			return fmt.Errorf("invalid parameter name")
 		}
