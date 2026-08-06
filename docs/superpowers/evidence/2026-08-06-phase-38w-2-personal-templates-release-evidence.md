@@ -104,3 +104,43 @@ branch). No candidate CI conclusion exists before the merge/push step. This docu
 commit intentionally omits its own SHA and does not pre-record merged or CI results; the authorized
 fast-forward merge, push, required CI verification, and issue #3 closing comment are recorded at closure
 time. Candidate worktrees and branches remain present for that sequence.
+
+## Post-Merge Closure
+
+Fast-forward merge and normal push range:
+
+- Backend: `9f68be108fdc393e0fcae118453709a5451460f4` to `6fe2a24c4366a71616cfc9e90acd2bb6f8f33b23` (`main`).
+- Frontend: `26172ac6dc2efae3d773ecf3885bba523bb7ff65` to `2797c226337f9b205c78950fea2a14945d44a42d` (`main`).
+
+Both roots: `git merge --ff-only <candidate-branch>` then `git push origin main`; `HEAD == origin/main`
+verified after push. Root dirty-path whitelists from the Root Preservation section were re-verified before
+and after the merge; no WIP was staged, stashed, reset, cleaned, relocated, or restored.
+
+Merged-root gates (commands re-run from the merged roots, matching CI jobs):
+
+- Backend root `make release-local-gates`: PASS (go test, vet, build, openapi-validate).
+- Frontend root `npm run release:local`: PASS (preflight, governance, tsc, lint 0 errors / 5 pre-existing
+  warnings, Vitest 87 files / 1359 tests, `next build`).
+
+CI:
+
+- Backend run [31070414945](https://github.com/Fanduzi/ControlHub-Backend/actions/runs/31070414945),
+  head `6fe2a24c4366a71616cfc9e90acd2bb6f8f33b23`, completed, conclusion success; required jobs
+  `release-local-gates` and `release-docker-gates` both success.
+- Frontend run [31070414967](https://github.com/Fanduzi/ControlHub-Frontend/actions/runs/31070414967),
+  head `2797c226337f9b205c78950fea2a14945d44a42d`, completed, conclusion success after one rerun; required
+  jobs `release-local` and `release-e2e` both success.
+
+First-attempt flake note: the initial frontend run failed on two tests in files outside the candidate
+changed-path set. (a) `tests/components/query-workbench.test.tsx` "Filter Apply triggers a replace fetch
+with filter params" — Radix Select option-render race; reproduced locally in isolation at 2/3 failure
+rate, passes in the full suite; test file and component byte-identical to the pre-candidate base.
+(b) `e2e/resource-archive.spec.ts:68` — test-created resource visibility race in a spec untouched by the
+candidate. The rerun passed 1359/1359 (release-local) and 143/143 (release-e2e). Neither failure was
+attributable to the candidate.
+
+Cleanup: candidate worktrees and branches are intentionally preserved; nothing was deleted. Pre-existing
+services (`:8080` backend root process, `controlhub-query-e2e-mysql` container, mac-connector) were not
+modified or stopped.
+
+The SHA of this documentation-only post-merge evidence update is intentionally omitted from this file.
