@@ -201,13 +201,7 @@ func (s *QueryExecutionService) Execute(ctx context.Context, actorUserID uint64,
 
 	// maxRows is always the overall release cap; the guard owns the 0-default
 	// and hard-cap clamping for both paged and non-paged execution.
-	maxRows := req.MaxRows
-
-	// Production requests are capped tighter before the guard applies its own
-	// default/hard-cap logic.
-	if isProductionEnvironment(target.ConnectionContext.Environment) && (maxRows == 0 || maxRows > productionHardMaxRows) {
-		maxRows = productionHardMaxRows
-	}
+	maxRows := clampProductionMaxRows(target.ConnectionContext.Environment, req.MaxRows)
 
 	var guarded GuardedQuery
 	if req.Pagination != nil {
@@ -240,6 +234,16 @@ func (s *QueryExecutionService) Execute(ctx context.Context, actorUserID uint64,
 		func(execCtx context.Context, dsn string) (QueryDatabaseResult, error) {
 			return s.executor.Query(execCtx, dsn, guarded)
 		}, page, pageSize, start)
+}
+
+// clampProductionMaxRows applies the tighter production release cap before the
+// guard applies its own default/hard-cap clamping. It is shared by Execute and
+// ExecuteSavedStatement so the cap policy cannot drift.
+func clampProductionMaxRows(environment string, requested int) int {
+	if isProductionEnvironment(environment) && (requested == 0 || requested > productionHardMaxRows) {
+		return productionHardMaxRows
+	}
+	return requested
 }
 
 // executeGuardedChain runs the post-guard governed chain: disclosure preflight,

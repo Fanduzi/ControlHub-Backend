@@ -95,10 +95,7 @@ func (s *QueryExecutionService) ExecuteSavedStatement(ctx context.Context, actor
 		return model.QueryExecuteResponse{}, valueErr
 	}
 
-	maxRows := req.MaxRows
-	if isProductionEnvironment(target.ConnectionContext.Environment) && (maxRows == 0 || maxRows > productionHardMaxRows) {
-		maxRows = productionHardMaxRows
-	}
+	maxRows := clampProductionMaxRows(target.ConnectionContext.Environment, req.MaxRows)
 
 	input := TemplateStatementInput{Statement: statement.Statement, Definitions: definitions, Values: values}
 	var guardedTemplate GuardedTemplateStatement
