@@ -238,6 +238,7 @@ Dependency flow (strict, one-directional): `cmd/server` → `api` → `service` 
 | GET | /health-statuses | List health status dictionary items |
 | GET | /query-targets/{id}/schema/table-definition | Get MySQL table definition (base tables only) |
 | POST | /query-targets/{id}/execute | Execute a governed read-only statement, with optional result paging for SELECT |
+| POST | /query-targets/{id}/saved-statements/{statementId}/execute | Execute a saved statement (governed template execution) through the existing governed chain |
 | GET | /openapi.yaml | Raw OpenAPI 3.1.0 spec |
 | GET | /docs | Scalar API Reference docs UI |
 

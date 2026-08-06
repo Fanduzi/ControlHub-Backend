@@ -2034,6 +2034,108 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/ErrorResponse"
+  /query-targets/{id}/saved-statements/{statementId}/execute:
+    post:
+      summary: Execute a saved statement (governed template execution)
+      operationId: executeSavedStatement
+      description: >
+        Phase 38W. Executes a saved statement through the existing governed
+        chain. The server re-reads and authorizes the latest saved statement,
+        validates the submitted typed values against the stored parameter
+        declarations, compiles placeholders into positional driver bindings,
+        and runs target access, read-only guard, disclosure preflight,
+        executor, response caps, history, and audit unchanged. Every template
+        page is a fresh execution; a disclosure-policy change takes effect on
+        later pages. The request accepts only values, maxRows, and optional
+        governed pagination. SQL text, parameter declarations, identities,
+        roles, credentials, DSNs, and policy/audit/result fields are rejected.
+        Parameter values are protected content and never appear in history,
+        audit, logs, errors, or the response. Requires a fresh Bearer token.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+            format: int64
+            minimum: 1
+          description: Query target resource ID.
+        - name: statementId
+          in: path
+          required: true
+          schema:
+            type: integer
+            format: int64
+            minimum: 1
+          description: Saved statement ID.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/QuerySavedStatementExecuteRequest"
+            example:
+              values:
+                status: paid
+                minimum_total: "100.50"
+              maxRows: 100
+              pagination:
+                page: 1
+                pageSize: 10
+      responses:
+        "200":
+          description: Governed execution result (existing execute envelope)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/QueryExecuteResponse"
+        "400":
+          description: >
+            Validation failed — malformed or unknown fields, duplicate keys,
+            oversized values, invalid pagination, or per-parameter value field
+            errors carried in details (missing/unknown/invalid/oversized).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "401":
+          description: Missing or invalid Bearer token (or token older than the TTL)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "403":
+          description: Query not allowed (target access, guard, or disclosure block)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "404":
+          description: Query target or saved statement not found (personal templates are owner-only)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "408":
+          description: Query timed out
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "502":
+          description: Target database backend failure
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "500":
+          description: Unexpected server failure
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
   /resources:
     get:
       summary: List resources
@@ -3762,6 +3864,40 @@ components:
           maxItems: 20
           items:
             $ref: "#/components/schemas/QuerySavedStatementParameterDefinition"
+    QuerySavedStatementExecuteRequest:
+      type: object
+      required: []
+      additionalProperties: false
+      description: >
+        Body of POST /query-targets/{id}/saved-statements/{statementId}/execute.
+        Only values, maxRows, and optional governed pagination are accepted;
+        SQL text, parameter declarations, identities, roles, credentials,
+        DSNs, and policy/audit/result fields are rejected by strict decoding.
+        Values are typed JSON: strings are JSON strings, integers JSON
+        integers, decimals JSON strings, booleans JSON booleans. The values
+        object is at most 16 KiB; a string or decimal value at most 4 KiB.
+        Values are protected content and are never persisted, logged,
+        audited, or returned in errors.
+      properties:
+        values:
+          type: object
+          additionalProperties: true
+          description: >
+            Typed parameter values keyed by author-declared parameter name.
+            Unknown keys and values that do not match the declared type are
+            rejected with controlled per-field details.
+        maxRows:
+          type: integer
+          minimum: 0
+          description: >
+            Optional row cap. Zero/omitted uses the backend default; negative
+            values are rejected. The backend caps this at its hard maximum.
+        pagination:
+          $ref: "#/components/schemas/QueryExecutePaginationRequest"
+          description: >
+            Optional governed result paging boundary. When present, page and
+            pageSize are validated strictly and each page is a fresh governed
+            execution through this route.
     QuerySavedStatementListResponse:
       type: object
       required: [items, pageInfo, canManageSharedTemplates]

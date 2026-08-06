@@ -1,7 +1,7 @@
 // Package main provides the ControlHub application entry point.
 // input: config.LoadDotEnv/Load, mysql repositories, api.NewRouter, service constructors
 // output: main() binary entry point
-// pos: Application bootstrap, manual DI container
+// pos: Application bootstrap, manual DI container; wires saved-statement template execution into the governed execution service
 // note: if wiring changes, update this header and cmd/server/README.md
 package main
 
@@ -73,6 +73,10 @@ func buildDependencies(db *sql.DB, cfg config.Config) api.Dependencies {
 
 	queryGuard := service.NewQueryGuard(service.QueryGuardConfig{DefaultMaxRows: 100, HardMaxRows: 500})
 
+	// The saved-statement repository also backs the template-execution route:
+	// the execution service re-reads the latest authorized statement per run.
+	querySavedStatementRepo := mysql.NewQuerySavedStatementRepository(db)
+
 	queryExecutionSvc := service.NewQueryExecutionService(
 		queryTargetRepo,
 		queryExecutionRepo,
@@ -82,7 +86,7 @@ func buildDependencies(db *sql.DB, cfg config.Config) api.Dependencies {
 		realClock{},
 		service.NewMySQLSchemaInspector(),
 		queryDisclosureSvc,
-	)
+	).WithTemplateExecution(querySavedStatementRepo, service.NewTemplateStatementCompiler())
 
 	accessResolver := service.NewTargetAccessResolver(queryTargetRepo, queryExecutionRepo, credentialResolver)
 	querySchemaSvc := service.NewQuerySchemaService(
@@ -95,7 +99,6 @@ func buildDependencies(db *sql.DB, cfg config.Config) api.Dependencies {
 
 	// Query saved statement service (Phase 38R) manages governed saved statements
 	// with personal and shared_template scopes.
-	querySavedStatementRepo := mysql.NewQuerySavedStatementRepository(db)
 	querySavedStatementSvc := service.NewQuerySavedStatementService(
 		querySavedStatementRepo,
 		querySavedStatementRepo,

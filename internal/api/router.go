@@ -169,8 +169,10 @@ func NewRouter(deps Dependencies) *chi.Mux {
 			r.Delete("/query-disclosure-policies", handleDeletePolicy(deps.QueryDisclosureService))
 		})
 	}
-	// Query saved statement routes (Phase 38R). All four require a fresh
-	// bearer token (same freshness policy as query execution).
+	// Query saved statement routes (Phase 38R). All require a fresh
+	// bearer token (same freshness policy as query execution). The
+	// template-execution route (Phase 38W) lives in this group and is
+	// registered only when the execution service is wired.
 	if deps.QuerySavedStatementService != nil {
 		router.Group(func(r chi.Router) {
 			r.Use(requireFreshQueryActor(deps.AuthService, deps.QueryExecutionAuth))
@@ -178,6 +180,9 @@ func NewRouter(deps Dependencies) *chi.Mux {
 			r.Post("/query-targets/{id}/saved-statements", handleCreateSavedStatement(deps.QuerySavedStatementService))
 			r.Put("/query-targets/{id}/saved-statements/{statementId}", handleUpdateSavedStatement(deps.QuerySavedStatementService))
 			r.Delete("/query-targets/{id}/saved-statements/{statementId}", handleDeleteSavedStatement(deps.QuerySavedStatementService))
+			if deps.QueryExecutionService != nil {
+				r.Post("/query-targets/{id}/saved-statements/{statementId}/execute", handleExecuteSavedStatement(deps.QueryExecutionService))
+			}
 		})
 	}
 	return router

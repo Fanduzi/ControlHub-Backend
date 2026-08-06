@@ -41,6 +41,11 @@ type stubQueryExec struct {
 	executeCalled bool
 	listCalled    bool
 	navCalled     bool
+	templateResp  model.QueryExecuteResponse
+	templateErr   error
+	templateReq   model.QuerySavedStatementExecuteRequest
+	templateStmt  uint64
+	templateCalled bool
 }
 
 func (s *stubQueryExec) Execute(_ context.Context, actorUserID uint64, targetID uint64, req model.QueryExecuteRequest) (model.QueryExecuteResponse, error) {
@@ -59,6 +64,15 @@ func (s *stubQueryExec) Execute(_ context.Context, actorUserID uint64, targetID 
 		}
 	}
 	return resp, s.executeErr
+}
+
+func (s *stubQueryExec) ExecuteSavedStatement(_ context.Context, actorUserID, targetID, statementID uint64, req model.QuerySavedStatementExecuteRequest) (model.QueryExecuteResponse, error) {
+	s.templateCalled = true
+	s.gotActor = actorUserID
+	s.gotTargetID = targetID
+	s.templateStmt = statementID
+	s.templateReq = req
+	return s.templateResp, s.templateErr
 }
 
 func (s *stubQueryExec) ListHistory(_ context.Context, actorUserID uint64, actorRole string, targetID uint64, q model.QueryExecutionListQuery) (*model.QueryExecutionCursorPage, error) {

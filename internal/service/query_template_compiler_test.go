@@ -2,6 +2,7 @@
 // input: errors, reflect, regexp, strconv, strings, testing, DATA-DOG/go-sqlmock
 // output: TestTemplateStatementCompiler* (source-order, guard, rejection, and driver-binding proofs)
 // pos: Test-first proof that server-owned named placeholders become positional driver bindings without bypassing the AST guard
+// note: if this file changes, update header and README.md
 package service
 
 import (
@@ -96,6 +97,28 @@ func TestTemplateStatementCompilerKeepsStaticStatementsValid(t *testing.T) {
 	}
 	if len(compiled.Args) != 0 {
 		t.Fatalf("compiled static args = %#v, want empty", compiled.Args)
+	}
+}
+
+func TestTemplateStatementCompilerGuardsPaginatedTemplateWindow(t *testing.T) {
+	t.Parallel()
+
+	guarded, err := NewTemplateStatementCompiler().CompileAndGuardPaginated(newTestGuard(), TemplateStatementInput{
+		Statement:   "select id from orders where status = :status",
+		Definitions: []TemplateParameterDefinition{{Name: "status", Type: TemplateParameterString}},
+		Values:      map[string]any{"status": "paid"},
+	}, 2, 10, 100)
+	if err != nil {
+		t.Fatalf("CompileAndGuardPaginated error: %v", err)
+	}
+	if got, want := guarded.query.ExecutableSQL, "select id from orders where `status` = ? limit 10, 11"; got != want {
+		t.Fatalf("guarded executable SQL = %q, want %q", got, want)
+	}
+	if want := []any{"paid"}; !reflect.DeepEqual(guarded.args, want) {
+		t.Fatalf("guarded args = %#v, want %#v", guarded.args, want)
+	}
+	if guarded.query.ResultLimit != 10 {
+		t.Fatalf("result limit = %d, want page window 10", guarded.query.ResultLimit)
 	}
 }
 

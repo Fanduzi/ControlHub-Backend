@@ -1,7 +1,8 @@
 // Package service provides the server-owned compiler for governed template statements.
 // input: encoding/json, errors, fmt, math, regexp, strings, vitess.io/vitess/go/vt/sqlparser
-// output: TemplateParameterType, TemplateParameterDefinition, TemplateStatementInput, CompiledTemplateStatement, GuardedTemplateStatement, TemplateStatementCompiler, NewTemplateStatementCompiler
+// output: TemplateParameterType, TemplateParameterDefinition, TemplateStatementInput, CompiledTemplateStatement, GuardedTemplateStatement, TemplateStatementCompiler, NewTemplateStatementCompiler, CompileAndGuardPaginated
 // pos: AST-recognized named placeholders become positional driver bindings without interpolating values or changing guard ownership
+// note: if this file changes, update header and README.md
 package service
 
 import (
@@ -103,6 +104,30 @@ func (c *TemplateStatementCompiler) CompileAndGuard(guard *QueryGuard, input Tem
 		return GuardedTemplateStatement{}, err
 	}
 	guarded, err := guard.Guard(compiled.Statement, requestedMaxRows)
+	if err != nil {
+		return GuardedTemplateStatement{}, err
+	}
+	guarded.ExecutableSQL, err = c.restorePositionalMarkers(guarded.ExecutableSQL, len(compiled.Args))
+	if err != nil {
+		return GuardedTemplateStatement{}, err
+	}
+	return GuardedTemplateStatement{query: guarded, args: append([]any(nil), compiled.Args...)}, nil
+}
+
+// CompileAndGuardPaginated is the paged form of CompileAndGuard. It applies the
+// guard's AST-owned page window to the compiled placeholder statement so each
+// template page is a fresh governed execution. Saved statements are always
+// bare SELECTs, but a metadata statement still falls back to the unpaged guard
+// via ErrQueryPaginationNotApplicable, mirroring the execute route.
+func (c *TemplateStatementCompiler) CompileAndGuardPaginated(guard *QueryGuard, input TemplateStatementInput, page, pageSize, requestedMaxRows int) (GuardedTemplateStatement, error) {
+	compiled, err := c.Compile(input)
+	if err != nil {
+		return GuardedTemplateStatement{}, err
+	}
+	guarded, err := guard.GuardPaginatedSelect(compiled.Statement, page, pageSize, requestedMaxRows)
+	if errors.Is(err, ErrQueryPaginationNotApplicable) {
+		guarded, err = guard.Guard(compiled.Statement, requestedMaxRows)
+	}
 	if err != nil {
 		return GuardedTemplateStatement{}, err
 	}

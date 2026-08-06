@@ -18,7 +18,7 @@ Application bootstrap and manual dependency injection.
 | Dictionary | EnvironmentService, OwnerService, RoleService, ResourceTypeService, RelationTypeService, LifecycleStatusService, HealthStatusService | DictionaryRepository | — |
 | Query Target | QueryTargetService | QueryTargetRepository | — |
 | Query Credential | QueryCredentialService | QueryTargetRepository, QueryExecutionRepository | 38A |
-| Query Execution | QueryExecutionService | QueryTargetRepository, QueryExecutionRepository | — |
+| Query Execution | QueryExecutionService | QueryTargetRepository, QueryExecutionRepository, QuerySavedStatementRepository (template execution) | 38W |
 | Query Schema | QuerySchemaService | QueryExecutionRepository | 38I |
 | Query Explain | QueryExplainService | (none — reuses access resolver + audit repo) | 38N |
 | Query Disclosure | QueryDisclosureService | QueryDisclosureRepository | 38Q |

@@ -1,14 +1,16 @@
 // Package api provides HTTP handlers and routing for the ControlHub REST API.
-// input: net/http, strconv, strings, chi, internal/model, internal/service
-// output: handleExecuteQuery, handleListQueryExecutions, writeQueryExecutionError, queryExecutionAPI interface
-// pos: HTTP handlers for POST /query-targets/{id}/execute and GET /query-targets/{id}/executions (Phase 37 read-only query sandbox, Phase 38S governed result paging)
+// input: bytes, context, errors, fmt, io, net/http, strconv, strings, time, chi, internal/model, internal/service
+// output: handleExecuteQuery, handleExecuteSavedStatement, handleListQueryExecutions, writeQueryExecutionError, writeTemplateExecutionError, queryExecutionAPI interface
+// pos: HTTP handlers for POST /query-targets/{id}/execute, POST /query-targets/{id}/saved-statements/{statementId}/execute, and GET /query-targets/{id}/executions (Phase 37 read-only query sandbox, Phase 38S governed result paging, Phase 38W template execution)
 // note: if this file changes, update header and README.md
 package api
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"strconv"
 	"strings"
@@ -26,6 +28,7 @@ import (
 // accepted from the request body — it is read from the auth middleware context.
 type queryExecutionAPI interface {
 	Execute(ctx context.Context, actorUserID uint64, targetID uint64, req model.QueryExecuteRequest) (model.QueryExecuteResponse, error)
+	ExecuteSavedStatement(ctx context.Context, actorUserID, targetID, statementID uint64, req model.QuerySavedStatementExecuteRequest) (model.QueryExecuteResponse, error)
 	ListHistory(ctx context.Context, actorUserID uint64, actorRole string, targetID uint64, q model.QueryExecutionListQuery) (*model.QueryExecutionCursorPage, error)
 	NavigateRelatedRecords(ctx context.Context, actorUserID uint64, targetID uint64, req model.RelatedRecordNavigationRequest) (model.RelatedRecordNavigationResponse, error)
 }
@@ -64,6 +67,90 @@ func handleExecuteQuery(svc queryExecutionAPI) http.HandlerFunc {
 		}
 		writeJSON(w, http.StatusOK, resp)
 	}
+}
+
+// decodeTemplateExecuteJSONBody strictly decodes a template-execution request:
+// only values, maxRows, and pagination survive; duplicate keys and unknown
+// fields (SQL text, declarations, identities, roles, credentials, DSNs, policy
+// and audit payloads) are rejected. The body is bounded so the 16 KiB values
+// limit is enforced by the model Validate.
+func decodeTemplateExecuteJSONBody(r *http.Request, target any) error {
+	body, err := io.ReadAll(io.LimitReader(r.Body, int64(model.MaxQuerySavedStatementExecuteValuesSize+2*1024)))
+	if err != nil {
+		return err
+	}
+	if err := rejectDuplicateJSONFields(body); err != nil {
+		return err
+	}
+	return decodeJSON(bytes.NewReader(body), target)
+}
+
+// handleExecuteSavedStatement handles
+// POST /query-targets/{id}/saved-statements/{statementId}/execute. The actor
+// comes from the verified token; the statement ID and values only from the
+// body/path. The server re-reads and authorizes the latest saved statement.
+func handleExecuteSavedStatement(svc queryExecutionAPI) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		targetID, err := parseUint64IDParam(chi.URLParam(r, "id"), "target id")
+		if err != nil {
+			writeJSONError(w, http.StatusBadRequest, "validation_failed", err.Error())
+			return
+		}
+		statementID, err := parseUint64IDParam(chi.URLParam(r, "statementId"), "statement id")
+		if err != nil {
+			writeJSONError(w, http.StatusBadRequest, "validation_failed", err.Error())
+			return
+		}
+		var req model.QuerySavedStatementExecuteRequest
+		if err := decodeTemplateExecuteJSONBody(r, &req); err != nil {
+			writeJSONError(w, http.StatusBadRequest, "validation_failed", "invalid request payload")
+			return
+		}
+		if err := req.Validate(); err != nil {
+			writeJSONError(w, http.StatusBadRequest, "validation_failed", err.Error())
+			return
+		}
+		actorUserID, ok := actorUserIDFromContext(r.Context())
+		if !ok {
+			writeJSONError(w, http.StatusInternalServerError, "internal_error", "authenticated actor missing")
+			return
+		}
+		resp, err := svc.ExecuteSavedStatement(r.Context(), actorUserID, targetID, statementID, req)
+		if err != nil {
+			writeTemplateExecutionError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, resp)
+	}
+}
+
+// writeJSONFieldError writes the error envelope with controlled per-field
+// details. Field keys are author-declared parameter names and values are fixed
+// codes; supplied parameter values are never included.
+func writeJSONFieldError(w http.ResponseWriter, status int, code, message string, fields map[string]string) {
+	writeJSON(w, status, map[string]any{
+		"error":   code,
+		"message": message,
+		"details": fields,
+	})
+}
+
+// writeTemplateExecutionError maps a template-execution service sentinel to a
+// controlled HTTP response. The common execute sentinels reuse the ordinary
+// execute mapper; only the template-specific cases (field codes and the
+// saved-statement 404) are handled here. Parameter-name field codes carry no
+// values.
+func writeTemplateExecutionError(w http.ResponseWriter, err error) {
+	var valueErr *service.TemplateValueValidationError
+	if errors.As(err, &valueErr) {
+		writeJSONFieldError(w, http.StatusBadRequest, "validation_failed", valueErr.Error(), valueErr.Fields)
+		return
+	}
+	if errors.Is(err, service.ErrQuerySavedStatementNotFound) {
+		writeJSONError(w, http.StatusNotFound, "saved_statement_not_found", err.Error())
+		return
+	}
+	writeQueryExecutionError(w, err)
 }
 
 func handleListQueryExecutions(svc queryExecutionAPI) http.HandlerFunc {

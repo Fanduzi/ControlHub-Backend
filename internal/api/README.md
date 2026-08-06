@@ -13,7 +13,7 @@ HTTP handlers, chi routing, CORS middleware, and fake-repo test infrastructure.
 | auth_handler.go | POST /auth/login handler |
 | dictionary_handler.go | Dictionary list handlers (environments, owners, roles, resource-types, relation-types, lifecycle-statuses, health-statuses) |
 | query_schema_handler.go | handleGetTableDefinition for MySQL table-definition requests |
-| query_execution_handler.go | POST execute and GET execution-history handlers, including optional governed result paging |
+| query_execution_handler.go | POST execute, POST saved-statement template execute, and GET execution-history handlers, including optional governed result paging |
 | query_credential_handler.go | Phase 38A credential metadata handlers (GET/PUT/DELETE) |
 | query_disclosure_handler.go | Phase 38Q disclosure policy CRUD handlers (admin-only writes) |
 | query_saved_statement_handler.go | Phase 38W saved statement CRUD handlers with strict typed parameter declaration decoding |
@@ -27,6 +27,7 @@ HTTP handlers, chi routing, CORS middleware, and fake-repo test infrastructure.
 | query_credential_handler_test.go | Credential metadata handler tests |
 | query_disclosure_handler_test.go | Disclosure policy handler tests |
 | query_saved_statement_handler_test.go | Saved statement handler tests |
+| query_saved_statement_execution_handler_test.go | Template-execution handler tests (strict request decoding, controlled field errors) |
 
 ## Routes
 | Method | Path | Description |
@@ -41,6 +42,7 @@ HTTP handlers, chi routing, CORS middleware, and fake-repo test infrastructure.
 | POST | /query-targets/{id}/saved-statements | Create a saved statement |
 | PUT | /query-targets/{id}/saved-statements/{statementId} | Update a saved statement |
 | DELETE | /query-targets/{id}/saved-statements/{statementId} | Delete a saved statement |
+| POST | /query-targets/{id}/saved-statements/{statementId}/execute | Execute a saved statement (governed template execution) |
 
 ## Exports
 - `Dependencies` struct — all service dependencies

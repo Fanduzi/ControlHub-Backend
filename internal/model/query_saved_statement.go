@@ -1,11 +1,12 @@
 // Package model provides domain entities for the resource management system.
-// input: fmt, time, unicode/utf8 packages
-// output: QuerySavedStatementScope, QuerySavedStatementParameterType, QuerySavedStatementParameterDefinition, QuerySavedStatement, QuerySavedStatementCreateRequest, QuerySavedStatementUpdateRequest, QuerySavedStatementListQuery, QuerySavedStatementListResponse
+// input: encoding/json, fmt, regexp, time, unicode/utf8 packages
+// output: QuerySavedStatementScope, QuerySavedStatementParameterType, QuerySavedStatementParameterDefinition, QuerySavedStatement, QuerySavedStatementCreateRequest, QuerySavedStatementUpdateRequest, QuerySavedStatementExecuteRequest, QuerySavedStatementListQuery, QuerySavedStatementListResponse
 // pos: Governed saved statements for target-scoped query library
 // note: if this file changes, update header and README.md
 package model
 
 import (
+	"encoding/json"
 	"fmt"
 	"regexp"
 	"time"
@@ -120,6 +121,48 @@ func (r QuerySavedStatementUpdateRequest) Validate() error {
 	}
 	if err := validateSavedStatementParameters(r.Parameters); err != nil {
 		return err
+	}
+	return nil
+}
+
+// MaxQuerySavedStatementExecuteValuesSize bounds the serialized `values`
+// object in a template-execution request at 16 KiB (spec limit).
+const MaxQuerySavedStatementExecuteValuesSize = 16 * 1024
+
+// QuerySavedStatementExecuteRequest is the body of
+// POST /query-targets/{id}/saved-statements/{statementId}/execute.
+// It carries typed parameter values only; SQL text, parameter declarations,
+// identities, roles, credentials, DSNs, and policy/audit/result fields are
+// rejected by strict decoding. Values are protected content: they are never
+// persisted, logged, audited, or returned in errors.
+type QuerySavedStatementExecuteRequest struct {
+	Values     map[string]json.RawMessage     `json:"values"`
+	MaxRows    int                            `json:"maxRows,omitempty"`
+	Pagination *QueryExecutePaginationRequest `json:"pagination,omitempty"`
+}
+
+// Validate enforces the request-level limits: non-negative maxRows, the
+// governed pagination contract, and the 16 KiB values-object size. Typed
+// value/declaration matching is enforced by the service against the stored
+// statement.
+func (r QuerySavedStatementExecuteRequest) Validate() error {
+	if r.MaxRows < 0 {
+		return fmt.Errorf("maxRows must not be negative")
+	}
+	if r.Pagination != nil {
+		if err := ValidatePagination(r.Pagination.Page, r.Pagination.PageSize); err != nil {
+			return err
+		}
+	}
+	if len(r.Values) == 0 {
+		return nil
+	}
+	raw, err := json.Marshal(r.Values)
+	if err != nil {
+		return fmt.Errorf("values are not valid JSON")
+	}
+	if len(raw) > MaxQuerySavedStatementExecuteValuesSize {
+		return fmt.Errorf("values exceed %d bytes", MaxQuerySavedStatementExecuteValuesSize)
 	}
 	return nil
 }

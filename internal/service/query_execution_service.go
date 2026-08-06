@@ -135,6 +135,10 @@ type QueryExecutionService struct {
 	access      *TargetAccessResolver
 	inspector   QuerySchemaInspector
 	disclosure  QueryDisclosurePlanner
+	// statements and compiler are wired via WithTemplateExecution for the
+	// saved-statement (template) execution route; nil until then.
+	statements QuerySavedStatementReader
+	compiler   *TemplateStatementCompiler
 }
 
 // NewQueryExecutionService wires the service. targets is reused from the query
@@ -194,7 +198,6 @@ func (s *QueryExecutionService) Execute(ctx context.Context, actorUserID uint64,
 	}
 
 	target := access.Target
-	engine := target.ConnectionContext.Engine
 
 	// maxRows is always the overall release cap; the guard owns the 0-default
 	// and hard-cap clamping for both paged and non-paged execution.
@@ -207,7 +210,6 @@ func (s *QueryExecutionService) Execute(ctx context.Context, actorUserID uint64,
 	}
 
 	var guarded GuardedQuery
-	pagedSelect := false
 	if req.Pagination != nil {
 		if err := model.ValidatePagination(req.Pagination.Page, req.Pagination.PageSize); err != nil {
 			return s.reject(ctx, target, actorUserID, &guarded, "validation_failed", err.Error(),
@@ -216,8 +218,6 @@ func (s *QueryExecutionService) Execute(ctx context.Context, actorUserID uint64,
 		guarded, err = s.guard.GuardPaginatedSelect(req.Statement, req.Pagination.Page, req.Pagination.PageSize, maxRows)
 		if errors.Is(err, ErrQueryPaginationNotApplicable) {
 			guarded, err = s.guard.Guard(req.Statement, maxRows)
-		} else if err == nil {
-			pagedSelect = true
 		}
 	} else {
 		guarded, err = s.guard.Guard(req.Statement, maxRows)
@@ -229,12 +229,39 @@ func (s *QueryExecutionService) Execute(ctx context.Context, actorUserID uint64,
 			fmt.Errorf("%w: %v", ErrQueryValidationFailed, err), start)
 	}
 
+	// The remaining governed chain — disclosure preflight, timed execution,
+	// disclosure apply, history/audit persist, and response build — is shared
+	// with template execution so the two paths cannot drift.
+	var page, pageSize int
+	if req.Pagination != nil {
+		page, pageSize = req.Pagination.Page, req.Pagination.PageSize
+	}
+	return s.executeGuardedChain(ctx, target, actorUserID, access.dsn, &guarded,
+		func(execCtx context.Context, dsn string) (QueryDatabaseResult, error) {
+			return s.executor.Query(execCtx, dsn, guarded)
+		}, page, pageSize, start)
+}
+
+// executeGuardedChain runs the post-guard governed chain: disclosure preflight,
+// a timed executor run, disclosure apply, and the history/audit persist, then
+// builds the response. It is shared by Execute and ExecuteSavedStatement so
+// template execution reuses the exact ordinary execution chain per page.
+func (s *QueryExecutionService) executeGuardedChain(
+	ctx context.Context,
+	target model.QueryTarget,
+	actorUserID uint64,
+	dsn string,
+	guarded *GuardedQuery,
+	run func(execCtx context.Context, dsn string) (QueryDatabaseResult, error),
+	page, pageSize int,
+	start time.Time,
+) (model.QueryExecuteResponse, error) {
 	// Disclosure preflight: resolve column provenance and check policies.
 	// Blocks if any projected column lacks an exact disclosure policy.
-	plan, err := s.disclosure.Preflight(ctx, access.dsn, target.ResourceID, guarded)
+	plan, err := s.disclosure.Preflight(ctx, dsn, target.ResourceID, *guarded)
 	if err != nil {
 		if errors.Is(err, ErrQueryDisclosureBlocked) {
-			return s.reject(ctx, target, actorUserID, &guarded, "query_result_disclosure_blocked", "query blocked by result disclosure policy",
+			return s.reject(ctx, target, actorUserID, guarded, "query_result_disclosure_blocked", "query blocked by result disclosure policy",
 				fmt.Errorf("%w: %v", ErrQueryNotAllowed, err), start)
 		}
 		return model.QueryExecuteResponse{}, err
@@ -247,12 +274,12 @@ func (s *QueryExecutionService) Execute(ctx context.Context, actorUserID uint64,
 	execCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
-	result, err := s.executor.Query(execCtx, access.dsn, guarded)
+	result, err := run(execCtx, dsn)
 	if err != nil {
 		status, sentinel, code, safeMsg := classifyExecutorError(err)
 		// safeMsg is a fixed string; the raw executor error (which may echo parts
 		// of the DSN from the driver) is recorded only internally, never returned.
-		if _, perr := s.persistAttempt(ctx, target, actorUserID, &guarded, status, 0, code, safeMsg, start); perr != nil {
+		if _, perr := s.persistAttempt(ctx, target, actorUserID, guarded, status, 0, code, safeMsg, start); perr != nil {
 			return model.QueryExecuteResponse{}, errPersistAttempt
 		}
 		return model.QueryExecuteResponse{}, fmt.Errorf("%w: %s", sentinel, safeMsg)
@@ -261,7 +288,7 @@ func (s *QueryExecutionService) Execute(ctx context.Context, actorUserID uint64,
 	columns, rows, applyErr := s.disclosure.Apply(plan, result.Columns, result.Rows)
 	if applyErr != nil {
 		status, sentinel, code, safeMsg := classifyExecutorError(applyErr)
-		if _, perr := s.persistAttempt(ctx, target, actorUserID, &guarded, status, 0, code, safeMsg, start); perr != nil {
+		if _, perr := s.persistAttempt(ctx, target, actorUserID, guarded, status, 0, code, safeMsg, start); perr != nil {
 			return model.QueryExecuteResponse{}, errPersistAttempt
 		}
 		return model.QueryExecuteResponse{}, fmt.Errorf("%w: %s", sentinel, safeMsg)
@@ -271,21 +298,21 @@ func (s *QueryExecutionService) Execute(ctx context.Context, actorUserID uint64,
 
 	// Success: record (history + audit) then return. A recording failure must
 	// not yield a success response, so execID is guaranteed non-zero here.
-	execID, perr := s.persistAttempt(ctx, target, actorUserID, &guarded, model.QueryExecutionSuccess, result.RowCount, "", "", start)
+	execID, perr := s.persistAttempt(ctx, target, actorUserID, guarded, model.QueryExecutionSuccess, result.RowCount, "", "", start)
 	if perr != nil {
 		return model.QueryExecuteResponse{}, errPersistAttempt
 	}
 
 	var pagination *model.QueryExecutePaginationResponse
-	if pagedSelect {
-		offset := (req.Pagination.Page - 1) * req.Pagination.PageSize
+	if guarded.ResultLimit > 0 {
+		offset := (page - 1) * pageSize
 		// ResultLimit is the guard-owned effective window; when the release cap
 		// truncates the requested pageSize, report the real window instead of
 		// overstating what was released.
 		pagination = &model.QueryExecutePaginationResponse{
-			Page:            req.Pagination.Page,
+			Page:            page,
 			PageSize:        guarded.ResultLimit,
-			HasPreviousPage: req.Pagination.Page > 1,
+			HasPreviousPage: page > 1,
 			HasNextPage:     result.Truncated && offset+guarded.ResultLimit < guarded.LimitApplied,
 		}
 	}
@@ -294,7 +321,7 @@ func (s *QueryExecutionService) Execute(ctx context.Context, actorUserID uint64,
 		ExecutionID:      execID,
 		Status:           model.QueryExecutionSuccess,
 		TargetResourceID: target.ResourceID,
-		Engine:           engine,
+		Engine:           target.ConnectionContext.Engine,
 		Columns:          result.Columns,
 		Rows:             result.Rows,
 		RowCount:         result.RowCount,
