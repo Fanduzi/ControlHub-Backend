@@ -90,4 +90,12 @@ Remaining P1/P2 count: **0**.
 
 ## Ticket
 
-Issue #5 remains open until this evidence commit is on `origin/main` and the independent verifier checklist passes; then a single closing comment with merged SHAs, this evidence path, and CI URLs is posted and the issue is closed.
+Issue #5 closed after independent verifier checklist passed:
+
+- Frontend merged SHA: `917b1389977447e6362d309f0fc2967466581232`
+- Backend feature merged SHA: `8564429bc717bac05f57d5aee1548389ca11989d`
+- Backend evidence HEAD: `4bb342ab25dc2f72cdeb9da0fab33a27cfb12c54` (includes this file + whitespace fix)
+- Evidence path: `docs/superpowers/evidence/2026-08-08-phase-38w-4-shared-templates-release-evidence.md`
+- Backend CI (feature): https://github.com/Fanduzi/ControlHub-Backend/actions/runs/31252495009
+- Frontend CI: https://github.com/Fanduzi/ControlHub-Frontend/actions/runs/31252491705
+- Parent Issue #1 remains OPEN.
