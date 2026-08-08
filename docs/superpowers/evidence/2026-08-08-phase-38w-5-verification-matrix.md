@@ -5,9 +5,9 @@ Issue: #6, `38W-5: Release-verify governed parameterized templates`
 Parent: #1
 
 This matrix maps every Issue #6 acceptance criterion to concrete proof at the
-candidate heads. Proof is existing unit/integration/OpenAPI/E2E coverage unless
-a gap required a new failing test. **No production-code gap was proven**; no
-product source changed in this delivery.
+candidate and merged-root heads. Proof is existing unit/integration/OpenAPI/E2E
+coverage unless a gap required a new failing test. **No production-code gap was
+proven**; no product source changed in this delivery.
 
 ## Candidate heads
 
@@ -23,7 +23,7 @@ product source changed in this delivery.
 | AC1 | Backend unit/integration/OpenAPI/fuzz cover strict requests, compiler rejection, visibility, no value persistence, governed paged execution | See BE rows below | n/a | n/a | **PASS** |
 | AC2 | Frontend type/lint/unit/build/preflight/governance cover request shape, value lifetime, accessibility, localization, no-side-effect loading | n/a | See FE rows below | n/a | **PASS** |
 | AC3 | Real Chromium desktop EN, 375px EN, desktop zh-CN; zero failures/skips; load inert; every template page governed | n/a | n/a | Template suite 23/23 x3; full suite 163/163 | **PASS** |
-| AC4 | Candidate and merged-root repeated E2E/release-evidence requirements | Candidate gates recorded in release evidence | Candidate gates recorded | Candidate E2E recorded; **merged-root deferred** to `$delivery-closure` | **PASS (candidate)** / deferred merge |
+| AC4 | Candidate and merged-root repeated E2E/release-evidence requirements | Candidate and merged-root gates recorded in release evidence | Candidate and merged-root gates recorded | Candidate template E2E 23/23 x3; candidate full 163/163; merged-root smoke 7/7, interaction 3/3, full 163/163 | **PASS** |
 | AC5 | Parameter-value evidence capture remains absent (no KMS/archive/retention UI/plaintext forensic store) | Prod grep: no evidence-capture code; ADR retained | No UI/API for evidence capture | Release evidence asserts absence | **PASS** |
 
 ## Detailed criterion to test map
@@ -129,7 +129,7 @@ product source changed in this delivery.
 2. No Go-native `FuzzXxx` for the compiler; OpenAPI Schemathesis covers the HTTP surface.
 3. Backend load side-effect absence is architectural (saved-statement read path never touches executor); request-level proof is frontend E2E.
 4. CodeGraph unavailable inside candidate worktrees (no `.codegraph/`); discovery used root index at identical base SHA + direct inspection of callers. GitNexus unavailable (intentionally uninstalled); scope verified manually via `git status`/`git diff` and test inventory.
-5. Merged-root re-runs and CI green after push are **deferred** to `$delivery-closure` (this run must not merge/push/close #6).
+5. Backend and frontend merged-root gates passed; exact-SHA CI evidence is in the companion release-evidence document.
 
 ## RED to GREEN corrections
 

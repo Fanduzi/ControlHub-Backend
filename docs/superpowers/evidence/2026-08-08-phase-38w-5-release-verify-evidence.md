@@ -3,8 +3,8 @@
 Date: 2026-08-08
 Issue: #6, `38W-5: Release-verify governed parameterized templates`
 Parent: #1 (remains OPEN)
-Status of this run: **candidate complete — ready for human review**
-Tracker action: **Issue #6 left OPEN** (no close, no merge, no push)
+Status of this run: **release closure verified; awaiting independent final verification**
+Tracker action: **Issue #6 remains OPEN until independent final verification**
 
 ## Candidates
 
@@ -14,7 +14,7 @@ Tracker action: **Issue #6 left OPEN** (no close, no merge, no push)
 | Candidate branch | `issue-6-38w5-20260808215659` | `issue-6-38w5-20260808215659` |
 | Candidate worktree | `/Users/fan/GolangProjects/ControlHub-issue6-38w5` | `/Users/fan/JsProjects/ControlHub-issue6-38w5` |
 | Candidate product SHA | `5388a8d0a572948efe3f39c23c7969eb3befe2ce` (no product source change) | `917b1389977447e6362d309f0fc2967466581232` (no product source change) |
-| Candidate docs SHA | evidence/matrix commits on backend branch (this delivery) | n/a (docs live in backend repo) |
+| Candidate docs SHA | `e7c5a327287a665ef7ace89f90edc3bc33209336` | n/a (docs live in backend repo) |
 | Product diff | **empty** (verification-only) | **empty** (verification-only) |
 
 ## Scope decision
@@ -44,7 +44,10 @@ Porcelain (unchanged): `M CLAUDE.md`, `M advisor-plans/README.md`; untracked
 `docs/superpowers/plans/2026-08-04-phase-38w-governed-parameterized-saved-templates-design.md`,
 `docs/superpowers/specs/2026-08-04-phase-38w-governed-parameterized-saved-templates.md`.
 
-`origin/main` stayed `5388a8d0a572948efe3f39c23c7969eb3befe2ce`.
+The docs-only candidate fast-forwarded from
+`5388a8d0a572948efe3f39c23c7969eb3befe2ce` to
+`e7c5a327287a665ef7ace89f90edc3bc33209336`; the dirty-path whitelist remained
+unchanged.
 SHA-256 snapshot files: `/tmp/38w5-be-root-sha256.txt` identical after-run.
 
 ### Frontend root (`/Users/fan/JsProjects/ControlHub`)
@@ -52,7 +55,9 @@ SHA-256 snapshot files: `/tmp/38w5-be-root-sha256.txt` identical after-run.
 Porcelain (unchanged): `M AGENTS.md`, `M CLAUDE.md`; untracked `.codegraph/`,
 `AGENTS.md.bak-pre-gitnexus-uninstall`, `CLAUDE.md.bak-pre-gitnexus-uninstall`.
 
-`origin/main` stayed `917b1389977447e6362d309f0fc2967466581232`.
+`origin/main` remained `917b1389977447e6362d309f0fc2967466581232`
+because Issue #6 introduced no frontend commit; the dirty-path whitelist
+remained unchanged.
 SHA-256 snapshot files: `/tmp/38w5-fe-root-sha256.txt` identical after-run.
 
 ### Foreign listeners left untouched
@@ -167,6 +172,41 @@ Covered blocks include:
 
 No route mocks, forced clicks, skips/fixmes, or global timeout relaxation were added.
 
+## Merged-root release gates and E2E
+
+The backend docs-only branch was fast-forwarded into backend `main`. The
+frontend had no candidate commit and remained at its existing `main` SHA.
+
+| Repo | Merged product/docs SHA used for gates | Merge result |
+|---|---|---|
+| Backend | `e7c5a327287a665ef7ace89f90edc3bc33209336` | fast-forward from `5388a8d0a572948efe3f39c23c7969eb3befe2ce` |
+| Frontend | `917b1389977447e6362d309f0fc2967466581232` | no-op; no Issue #6 frontend commit |
+
+Merged-root commands and results:
+
+| Repo | Command | Result |
+|---|---|---|
+| Backend | `make release-local-gates` | PASS: 10 Go packages, vet, build, OpenAPI validation |
+| Backend | `make release-docker-gates` | PASS: integration suite; Schemathesis 49/49 operations and 2089/2089 generated cases |
+| Frontend | `ASDF_NODEJS_VERSION=22.22.0 npm run release:local` | PASS: runtime check, governance, typecheck, lint 0 errors, 1382/1382 unit tests, build |
+| Frontend | `PLAYWRIGHT_PROXY_TARGET=http://localhost:8083 npm run release:e2e` | PASS: smoke 7/7, interaction 3/3, full Chromium 163/163; 0 failed, 0 skipped |
+
+Merged-root E2E service provenance:
+
+| Field | Value |
+|---|---|
+| Backend listener | PID `68647`, port `8083` |
+| Backend CWD | `/Users/fan/GolangProjects/ControlHub` |
+| Backend SHA | `e7c5a327287a665ef7ace89f90edc3bc33209336` (docs-only delta; product remains `5388a8d0a572948efe3f39c23c7969eb3befe2ce`) |
+| Backend health | `GET http://127.0.0.1:8083/health` returned `{"status":"ok"}` |
+| Frontend CWD/SHA | `/Users/fan/JsProjects/ControlHub` @ `917b1389977447e6362d309f0fc2967466581232` |
+| Proxy / frontend | Playwright-managed `:8081` to `:8083`; Next `:3100` |
+| Query fixture | existing `controlhub-query-e2e-mysql` on `:13306` |
+| Cleanup | task-owned backend stopped after E2E; `:8083`, `:8081`, and `:3100` released |
+
+Root `:8080`, foreign `:8082`, and the existing query fixture were not
+stopped or repurposed.
+
 ## RED to GREEN corrections
 
 **None.** No failing characterization test was required; the accepted end-to-end
@@ -211,28 +251,31 @@ standards/spec review is N/A.
 
 Remaining P1/P2 count: **0**.
 
-## Deferred merged-root / CI steps (`$delivery-closure`)
+## Push and CI
 
-Do **not** perform in this run:
+Backend `main` was pushed normally, without force, from
+`5388a8d0a572948efe3f39c23c7969eb3befe2ce` to the docs-only merged SHA
+`e7c5a327287a665ef7ace89f90edc3bc33209336`. Frontend required no push because
+Issue #6 introduced no frontend commit.
 
-1. Fast-forward merge of `issue-6-38w5-20260808215659` into backend `main`.
-2. Push to `origin/main` (backend and/or frontend).
-3. Merged-root re-run of release gates from root worktrees.
-4. CI confirmation on pushed SHAs.
-5. Close GitHub Issue #6.
-6. Delete candidate worktrees/branches.
+| Repo | Run | Exact head SHA | Required jobs | Conclusion |
+|---|---|---|---|---|
+| Backend | [31262384273](https://github.com/Fanduzi/ControlHub-Backend/actions/runs/31262384273) | `e7c5a327287a665ef7ace89f90edc3bc33209336` | `release-local-gates`, `release-docker-gates` | success |
+| Frontend | [31252491705](https://github.com/Fanduzi/ControlHub-Frontend/actions/runs/31252491705) | `917b1389977447e6362d309f0fc2967466581232` | `release-local`, `release-e2e` | success |
 
-Reproducible candidate commands are fully recorded above so delivery-closure
-can re-run without rediscovery.
+This evidence update is a separate docs-only closure commit and intentionally
+does not name its own commit SHA. The independent verifier records the final
+evidence-commit SHA and confirms its exact CI run, avoiding a self-referential
+SHA/documentation loop.
 
 ## Tracker
 
 | Item | State |
 |---|---|
-| Issue #6 | **OPEN** (this run) |
+| Issue #6 | **OPEN until independent final verification completes** |
 | Issue #1 parent | OPEN |
 | Issues #2–#5 | CLOSED (prior deliveries) |
 
 ## Final status
 
-**ready for human review**
+**release evidence complete; independent final verification required before ticket closure and cleanup**
