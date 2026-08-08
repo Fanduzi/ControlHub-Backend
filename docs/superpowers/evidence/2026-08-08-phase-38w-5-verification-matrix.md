@@ -1,8 +1,8 @@
 # Phase 38W-5 Verification Matrix
 
-Date: 2026-08-08  
-Issue: #6, `38W-5: Release-verify governed parameterized templates`  
-Parent: #1  
+Date: 2026-08-08
+Issue: #6, `38W-5: Release-verify governed parameterized templates`
+Parent: #1
 
 This matrix maps every Issue #6 acceptance criterion to concrete proof at the
 candidate heads. Proof is existing unit/integration/OpenAPI/E2E coverage unless
@@ -21,12 +21,12 @@ product source changed in this delivery.
 | ID | Criterion | Backend proof | Frontend proof | Real Chromium proof | Verdict |
 |---|---|---|---|---|---|
 | AC1 | Backend unit/integration/OpenAPI/fuzz cover strict requests, compiler rejection, visibility, no value persistence, governed paged execution | See BE rows below | n/a | n/a | **PASS** |
-| AC2 | Frontend type/lint/unit/build/preflight/governance cover request shape, value lifetime, a11y, localization, no-side-effect loading | n/a | See FE rows below | n/a | **PASS** |
-| AC3 | Real Chromium desktop EN, 375px EN, desktop zh-CN; zero failures/skips; load inert; every template page governed | n/a | n/a | Template suite 23/23 ×3; full suite 163/163 | **PASS** |
+| AC2 | Frontend type/lint/unit/build/preflight/governance cover request shape, value lifetime, accessibility, localization, no-side-effect loading | n/a | See FE rows below | n/a | **PASS** |
+| AC3 | Real Chromium desktop EN, 375px EN, desktop zh-CN; zero failures/skips; load inert; every template page governed | n/a | n/a | Template suite 23/23 x3; full suite 163/163 | **PASS** |
 | AC4 | Candidate and merged-root repeated E2E/release-evidence requirements | Candidate gates recorded in release evidence | Candidate gates recorded | Candidate E2E recorded; **merged-root deferred** to `$delivery-closure` | **PASS (candidate)** / deferred merge |
 | AC5 | Parameter-value evidence capture remains absent (no KMS/archive/retention UI/plaintext forensic store) | Prod grep: no evidence-capture code; ADR retained | No UI/API for evidence capture | Release evidence asserts absence | **PASS** |
 
-## Detailed criterion → test map
+## Detailed criterion to test map
 
 ### Strict execution requests (ID + values + maxRows + pagination only)
 
@@ -85,14 +85,26 @@ product source changed in this delivery.
 | FE unit | `query-saved-statements.test.tsx` / `query-editor-shell.test.tsx` — load does not fire execute/explain/schema |
 | E2E | `template load is inert: no execute/explain/schema/history/related/disclosure requests` |
 
+### Accessibility (parameter form a11y)
+
+| Seam | Test |
+|---|---|
+| FE unit field errors | `tests/components/query-editor-shell.test.tsx` — `shows localized accessible field errors and retains entered values` (`aria-invalid`, `aria-describedby`) |
+| FE unit zh-CN errors | same file — `renders template-mode field errors in zh-CN` |
+| E2E focus + validation | Issue #5 — `375px EN: load shared param template, controlled validation, focus, and execute` |
+| E2E controlled validation no leak | Phase 38W-3 — `controlled field validation shows a localized error without leaking the value` |
+| Mobile form scroll | `tests/components/query-saved-statements.test.tsx` — `keeps the mobile multi-parameter form scrollable` |
+
 ### Session disposal ADR (`2026-08-08-phase-38w-template-value-session-disposal.md`)
 
 | Rule | Proof |
 |---|---|
-| No standalone close-session control | Unit + E2E assert zero `close template session` buttons |
-| SQL edit (incl. format change) is only template-mode exit | Unit + E2E edit/format exit restore ordinary execute route |
-| Worksheet close/switch, target switch, refresh, sign-out discard values | Unit disposal suite + E2E refresh/sign-out |
-| All pages remain on `/query-targets/{id}/saved-statements/{statementId}/execute` while in template mode | Unit paging + E2E pagination + non-admin Next page |
+| No standalone close-session control | `query-editor-shell.test.tsx` asserts zero `close template session` buttons; E2E Issue #5 non-admin execute asserts `toHaveCount(0)` for that control |
+| SQL edit is only template-mode exit | Unit: `editing the SQL exits template mode and restores the ordinary run route`; `editing SQL exits template mode, clears values, invalidates stale response, and restores ordinary Run`; `formatting that changes SQL exits template mode and clears values`. E2E: matching Phase 38W-3 cases |
+| Worksheet close/switch discard | Unit: `clears template values on worksheet switch; returning keeps the session with empty values`; `closing a non-last worksheet destroys its template session` |
+| Target switch discard | Unit: `target switch creates a clean non-template worksheet and cannot restore old values` |
+| Refresh / sign-out discard | E2E: `refresh while template values are present discards values on reload`; `sign-out and re-login discards template values` |
+| All pages on template execute route while in template mode | Unit: `pages a template through the saved-statement execute route`. E2E: template pagination + non-admin Next page stay on `/query-targets/{id}/saved-statements/{statementId}/execute` |
 
 ### Desktop EN / 375px EN / desktop zh-CN
 
@@ -119,11 +131,11 @@ product source changed in this delivery.
 4. CodeGraph unavailable inside candidate worktrees (no `.codegraph/`); discovery used root index at identical base SHA + direct inspection of callers. GitNexus unavailable (intentionally uninstalled); scope verified manually via `git status`/`git diff` and test inventory.
 5. Merged-root re-runs and CI green after push are **deferred** to `$delivery-closure` (this run must not merge/push/close #6).
 
-## RED → GREEN corrections
+## RED to GREEN corrections
 
 None. Inventory + gates proved the contract true at the candidate heads without a failing regression that required production repair.
 
 ## Gate command index
 
-See companion file  
+See companion file
 `docs/superpowers/evidence/2026-08-08-phase-38w-5-release-verify-evidence.md`.

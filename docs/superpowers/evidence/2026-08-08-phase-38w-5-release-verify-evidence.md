@@ -1,9 +1,9 @@
 # Phase 38W-5 Release-Verify Evidence
 
-Date: 2026-08-08  
-Issue: #6, `38W-5: Release-verify governed parameterized templates`  
-Parent: #1 (remains OPEN)  
-Status of this run: **candidate complete — ready for human review**  
+Date: 2026-08-08
+Issue: #6, `38W-5: Release-verify governed parameterized templates`
+Parent: #1 (remains OPEN)
+Status of this run: **candidate complete — ready for human review**
 Tracker action: **Issue #6 left OPEN** (no close, no merge, no push)
 
 ## Candidates
@@ -14,7 +14,7 @@ Tracker action: **Issue #6 left OPEN** (no close, no merge, no push)
 | Candidate branch | `issue-6-38w5-20260808215659` | `issue-6-38w5-20260808215659` |
 | Candidate worktree | `/Users/fan/GolangProjects/ControlHub-issue6-38w5` | `/Users/fan/JsProjects/ControlHub-issue6-38w5` |
 | Candidate product SHA | `5388a8d0a572948efe3f39c23c7969eb3befe2ce` (no product source change) | `917b1389977447e6362d309f0fc2967466581232` (no product source change) |
-| Candidate docs SHA | evidence/matrix commit on backend branch (this delivery) | n/a (docs live in backend repo) |
+| Candidate docs SHA | evidence/matrix commits on backend branch (this delivery) | n/a (docs live in backend repo) |
 | Product diff | **empty** (verification-only) | **empty** (verification-only) |
 
 ## Scope decision
@@ -24,7 +24,7 @@ acceptance criterion to existing tests (see verification matrix) and running
 candidate gates against isolated worktrees:
 
 - **No concrete acceptance gap** required production repair.
-- **No RED→GREEN source change** was introduced.
+- **No RED to GREEN source change** was introduced.
 - Tracked changes are limited to Phase 38W-5 verification matrix + this
   release-evidence document under `docs/superpowers/evidence/`.
 - Historical Phase 38R / 38W-1..4 evidence files were **not** rewritten.
@@ -37,33 +37,23 @@ that is a regular file) matched post-run snapshots.
 
 ### Backend root (`/Users/fan/GolangProjects/ControlHub`)
 
-Porcelain (unchanged):
+Porcelain (unchanged): `M CLAUDE.md`, `M advisor-plans/README.md`; untracked
+`AGENTS.md.bak-pre-gitnexus-uninstall`, `CLAUDE.md.bak-pre-gitnexus-uninstall`,
+`CONTEXT.md`, `docs/agents/`,
+`docs/decisions/2026-08-04-parameter-value-evidence-retention.md`,
+`docs/superpowers/plans/2026-08-04-phase-38w-governed-parameterized-saved-templates-design.md`,
+`docs/superpowers/specs/2026-08-04-phase-38w-governed-parameterized-saved-templates.md`.
 
-- `M CLAUDE.md`
-- `M advisor-plans/README.md`
-- `?? AGENTS.md.bak-pre-gitnexus-uninstall`
-- `?? CLAUDE.md.bak-pre-gitnexus-uninstall`
-- `?? CONTEXT.md`
-- `?? docs/agents/`
-- `?? docs/decisions/2026-08-04-parameter-value-evidence-retention.md`
-- `?? docs/superpowers/plans/2026-08-04-phase-38w-governed-parameterized-saved-templates-design.md`
-- `?? docs/superpowers/specs/2026-08-04-phase-38w-governed-parameterized-saved-templates.md`
-
-`origin/main` stayed `5388a8d0a572948efe3f39c23c7969eb3befe2ce`.  
-SHA-256 snapshot files: `/tmp/38w5-be-root-sha256.txt` ≡ after-run.
+`origin/main` stayed `5388a8d0a572948efe3f39c23c7969eb3befe2ce`.
+SHA-256 snapshot files: `/tmp/38w5-be-root-sha256.txt` identical after-run.
 
 ### Frontend root (`/Users/fan/JsProjects/ControlHub`)
 
-Porcelain (unchanged):
+Porcelain (unchanged): `M AGENTS.md`, `M CLAUDE.md`; untracked `.codegraph/`,
+`AGENTS.md.bak-pre-gitnexus-uninstall`, `CLAUDE.md.bak-pre-gitnexus-uninstall`.
 
-- `M AGENTS.md`
-- `M CLAUDE.md`
-- `?? .codegraph/`
-- `?? AGENTS.md.bak-pre-gitnexus-uninstall`
-- `?? CLAUDE.md.bak-pre-gitnexus-uninstall`
-
-`origin/main` stayed `917b1389977447e6362d309f0fc2967466581232`.  
-SHA-256 snapshot files: `/tmp/38w5-fe-root-sha256.txt` ≡ after-run.
+`origin/main` stayed `917b1389977447e6362d309f0fc2967466581232`.
+SHA-256 snapshot files: `/tmp/38w5-fe-root-sha256.txt` identical after-run.
 
 ### Foreign listeners left untouched
 
@@ -99,9 +89,9 @@ Tracked path:
 `docs/superpowers/evidence/2026-08-08-phase-38w-5-verification-matrix.md`
 
 Every Issue #6 AC maps to existing backend unit/integration/OpenAPI/fuzz and
-frontend unit/E2E proof. Residual notes (no log-capture harness, no Go-native
-compiler fuzz, architectural load-side-effect proof) are non-blocking and do
-not falsify the contract.
+frontend unit/E2E proof, including an explicit accessibility section. Residual
+notes (no log-capture harness, no Go-native compiler fuzz, architectural
+load-side-effect proof) are non-blocking and do not falsify the contract.
 
 ## Candidate gates
 
@@ -109,7 +99,7 @@ not falsify the contract.
 
 | Command | Result |
 |---|---|
-| `git diff --check` | PASS (clean at base; docs-only commit after) |
+| `git diff --check` | PASS on product range; docs commits kept free of trailing whitespace |
 | `go vet ./...` | PASS |
 | `go build ./...` | PASS |
 | `go test -count=1 ./...` | PASS: **1418** tests, 0 failed |
@@ -153,7 +143,7 @@ npm run test:e2e
 | Duration | ~4.2m |
 | Log | `/tmp/38w5-e2e-full.txt` |
 
-### Template-focused suite ×3 (exact candidate heads)
+### Template-focused suite x3 (exact candidate heads)
 
 Grep (Playwright):
 
@@ -166,7 +156,8 @@ Grep (Playwright):
 | 3 | 23 | 23 | 0 | 0 | ~1.2m | `/tmp/38w5-e2e-template-run3.txt` |
 
 Service provenance identical for all four E2E entries: BE PID `28026`, port
-`8083`, CWD/SHA as above; FE worktree `917b138`; fixture `controlhub-query-e2e-mysql:13306`.
+`8083`, CWD/SHA as above; FE worktree `917b138`; fixture
+`controlhub-query-e2e-mysql:13306`.
 
 Covered blocks include:
 
@@ -176,7 +167,7 @@ Covered blocks include:
 
 No route mocks, forced clicks, skips/fixmes, or global timeout relaxation were added.
 
-## RED → GREEN corrections
+## RED to GREEN corrections
 
 **None.** No failing characterization test was required; the accepted end-to-end
 contract was already demonstrably true at the candidate heads.
@@ -201,11 +192,24 @@ contract was already demonstrably true at the candidate heads.
 
 ## Review
 
-Independent `/code-review` against each worktree merge-base runs after the
-docs commit on the backend candidate; frontend product range is empty so
-standards/spec review is N/A for product code (docs-only backend delta).
+Independent two-axis `/code-review` against backend merge-base `origin/main`
+(`5388a8d`) on the docs-only candidate range:
 
-Expected remaining P1/P2 after docs-only review: **0**.
+| Axis | Verdict | P1 | P2 | P3 |
+|---|---|---|---|---|
+| Standards | **APPROVE** | 0 | 0 | 2 (cosmetic title/list style vs 38W-4 prior art) |
+| Spec | **APPROVE** after follow-up | 0 | 0 | 0 |
+
+First Spec pass flagged P2: matrix omitted an explicit accessibility section
+despite AC2 naming a11y. Fixed in the follow-up docs commit by adding
+`### Accessibility (parameter form a11y)` with concrete unit/E2E names, plus
+named disposal tests. Trailing-whitespace/`git diff --check` noise from the
+first docs commit cleaned in the same follow-up.
+
+Frontend product range is empty (`917b138` == `origin/main`); product
+standards/spec review is N/A.
+
+Remaining P1/P2 count: **0**.
 
 ## Deferred merged-root / CI steps (`$delivery-closure`)
 
