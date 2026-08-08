@@ -49,7 +49,7 @@ Preserved byte-for-byte before, during, and after merge/push (identical `git sta
 
 ## Real Chromium E2E
 
-- Command (candidate worktree at `917b138`):  
+- Command (candidate worktree at `917b138`):
   `PLAYWRIGHT_PROXY_TARGET=http://localhost:8082 BACKEND_URL=http://localhost:8082 CONTROLHUB_API_BASE_URL=http://localhost:8081 CONTROLHUB_API_PROXY_URL=http://localhost:8081 npm run test:e2e`
 - Totals: **163 passed, 0 failed, 0 skipped** (~4.1m).
 - Issue #5 block alone: 11 passed (affordance, 375/zh-CN shared param session, non-admin execute+paging, disposal, pagination cleanup).
@@ -82,8 +82,8 @@ Remaining P1/P2 count: **0**.
 
 ## Cleanup And Preserved State
 
-- Issue #5 candidate worktrees and branches intentionally preserved:  
-  `/Users/fan/GolangProjects/ControlHub-issue5-38w4` @ `8564429` and  
+- Issue #5 candidate worktrees and branches intentionally preserved:
+  `/Users/fan/GolangProjects/ControlHub-issue5-38w4` @ `8564429` and
   `/Users/fan/JsProjects/ControlHub-issue5-38w4` @ `917b138` on `issue-5-38w4-20260807`.
 - Root dirty whitelist paths left untouched.
 - Local `:8082` Issue #5 backend process and `controlhub-query-e2e-mysql` fixture left running (not stopped by this delivery); root `:8080` never used for gates.
