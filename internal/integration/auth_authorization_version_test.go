@@ -1,15 +1,14 @@
 //go:build integration
 
-// Package integration provides real-MySQL coverage for Authorization Version invalidation.
-// input: context, crypto/hmac, database/sql, net/http, internal/api, internal/model, internal/repository/mysql, internal/service
+// Package integration provides real-MySQL coverage for Authorization Version
+// invalidation and governed-query freshness.
+// input: crypto/hmac, crypto/sha256, database/sql, encoding/base64, encoding/hex, encoding/json, net/http, internal/api, internal/repository/mysql, internal/service
 // output: TestAuthorizationVersion_* integration cases
-// pos: Proves an already-issued Backend Bearer Credential becomes invalid after role change, disablement, or password reset against real MySQL
+// pos: Proves an already-issued Backend Bearer Credential becomes invalid after role change, disablement, or password reset against real MySQL, and that governed-query freshness stays fixed at eight hours
 // note: if this file changes, update header and README.md
 package integration
 
 import (
-	"bytes"
-	"context"
 	"crypto/hmac"
 	"crypto/sha256"
 	"database/sql"
@@ -18,21 +17,14 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
-	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/fan/controlhub/internal/api"
-	"github.com/fan/controlhub/internal/model"
 	"github.com/fan/controlhub/internal/repository/mysql"
 	"github.com/fan/controlhub/internal/service"
 )
-
-const authzIntegrationSecret = "authz-integration-secret"
-
-// Same password hash as migration 0002 seed users.
-const seedPasswordHash = "fcf730b6d95236ecd3c9fc2d92d7b6b2bb061514961aec041d6c7a7192f592e4"
 
 // TestAuthorizationVersion_IssuedCredentialInvalidatedAfterRoleChange proves a
 // live Bearer credential is rejected with generic 401 after demotion on real MySQL.
@@ -182,63 +174,6 @@ func TestAuthorizationVersion_ValidEditorForbiddenOnAdminWrite(t *testing.T) {
 	}
 }
 
-func TestOperatorAccessBoundary(t *testing.T) {
-	db := setupTestDB(t)
-	resourceRepo := mysql.NewResourceRepository(db)
-	profileService := service.NewProfileService(resourceRepo, resourceRepo)
-	authService := service.NewAuthService(mysql.NewUserRepository(db), authzIntegrationSecret)
-	router := api.NewRouter(api.Dependencies{
-		ResourceService: service.NewResourceService(resourceRepo, profileService),
-		AuditService:    service.NewAuditService(mysql.NewAuditRepository(db)),
-		AuthService:     authService,
-		QueryTargetService: service.NewQueryTargetService(
-			mysql.NewQueryTargetRepository(db),
-		),
-	})
-
-	editorToken := mustLogin(t, router, "editor@example.com", "secret123")
-	adminToken := mustLogin(t, router, "admin@example.com", "secret123")
-	resourceBody := fmt.Sprintf(`{"resourceType":"host","resourceSubtype":"vm","name":"operator-boundary-%d","displayName":"Operator Boundary","environmentId":1,"ownerId":1,"lifecycleStatus":"running","healthStatus":"healthy","source":"manual","labels":{}}`, time.Now().UnixNano())
-	cases := []struct {
-		name       string
-		token      string
-		method     string
-		path       string
-		body       string
-		wantStatus int
-	}{
-		{"anonymous inventory", "", http.MethodGet, "/resources", "", http.StatusUnauthorized},
-		{"anonymous audit", "", http.MethodGet, "/audit-events", "", http.StatusUnauthorized},
-		{"anonymous resource audit", "", http.MethodGet, "/resources/1/audit-events", "", http.StatusUnauthorized},
-		{"anonymous query", "", http.MethodGet, "/query-targets", "", http.StatusUnauthorized},
-		{"editor inventory", editorToken, http.MethodGet, "/resources", "", http.StatusOK},
-		{"editor inventory mutation", editorToken, http.MethodPost, "/resources", resourceBody, http.StatusForbidden},
-		{"editor audit", editorToken, http.MethodGet, "/audit-events", "", http.StatusForbidden},
-		{"editor resource audit", editorToken, http.MethodGet, "/resources/1/audit-events", "", http.StatusForbidden},
-		{"editor query", editorToken, http.MethodGet, "/query-targets", "", http.StatusOK},
-		{"admin inventory mutation", adminToken, http.MethodPost, "/resources", resourceBody, http.StatusCreated},
-		{"admin audit", adminToken, http.MethodGet, "/audit-events", "", http.StatusOK},
-		{"admin resource audit", adminToken, http.MethodGet, "/resources/1/audit-events", "", http.StatusOK},
-	}
-
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			rec := httptest.NewRecorder()
-			req := httptest.NewRequest(tc.method, tc.path, strings.NewReader(tc.body))
-			if tc.body != "" {
-				req.Header.Set("Content-Type", "application/json")
-			}
-			if tc.token != "" {
-				req.Header.Set("Authorization", "Bearer "+tc.token)
-			}
-			router.ServeHTTP(rec, req)
-			if rec.Code != tc.wantStatus {
-				t.Fatalf("status = %d, want %d; body=%s", rec.Code, tc.wantStatus, rec.Body.String())
-			}
-		})
-	}
-}
-
 func newAuthzTestRouter(authSvc *service.AuthService) http.Handler {
 	return api.NewRouter(api.Dependencies{
 		AuthService: authSvc,
@@ -248,50 +183,6 @@ func newAuthzTestRouter(authSvc *service.AuthService) http.Handler {
 		},
 		QueryCredentialService: &authzCredStub{},
 	})
-}
-
-type authzCredStub struct{}
-
-func (authzCredStub) GetStatus(_ context.Context, _ uint64) (model.QueryCredentialStatusResponse, error) {
-	return model.QueryCredentialStatusResponse{
-		ResourceID:        1,
-		Configured:        false,
-		ExecutionEligible: false,
-		Message:           "No read-only credential reference is configured.",
-	}, nil
-}
-
-func (authzCredStub) Upsert(_ context.Context, _ service.AuthenticatedUser, _ uint64, _ model.QueryCredentialUpsertRequest) (model.QueryCredentialStatusResponse, error) {
-	return model.QueryCredentialStatusResponse{}, nil
-}
-
-func (authzCredStub) Delete(_ context.Context, _ service.AuthenticatedUser, _ uint64) error {
-	return nil
-}
-
-func insertAuthzTestUser(t *testing.T, db *sql.DB, email, roleName string) uint64 {
-	t.Helper()
-	res, err := db.Exec(`
-		insert into users (email, password_hash, display_name, role_id, is_active, authorization_version)
-		select ?, ?, 'Authz Test User', roles.id, 1, 1
-		from roles where roles.name = ?`,
-		email, seedPasswordHash, roleName,
-	)
-	if err != nil {
-		t.Fatalf("insert test user: %v", err)
-	}
-	id, err := res.LastInsertId()
-	if err != nil || id <= 0 {
-		t.Fatalf("last insert id: %v %d", err, id)
-	}
-	return uint64(id)
-}
-
-func deleteAuthzTestUser(t *testing.T, db *sql.DB, userID uint64) {
-	t.Helper()
-	if _, err := db.Exec(`delete from users where id = ?`, userID); err != nil {
-		t.Fatalf("cleanup user %d: %v", userID, err)
-	}
 }
 
 func assertUserAuthzColumns(t *testing.T, db *sql.DB) {
@@ -306,59 +197,6 @@ func assertUserAuthzColumns(t *testing.T, db *sql.DB) {
 	}
 	if !strings.Contains(strings.ToLower(dataType), "tinyint") && !strings.Contains(strings.ToLower(dataType), "int") {
 		t.Fatalf("is_active type = %q, want tinyint/int", dataType)
-	}
-}
-
-func mustLogin(t *testing.T, h http.Handler, email, password string) string {
-	t.Helper()
-	body, _ := json.Marshal(map[string]string{"email": email, "password": password})
-	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodPost, "/auth/login", bytes.NewReader(body))
-	req.Header.Set("Content-Type", "application/json")
-	h.ServeHTTP(rec, req)
-	if rec.Code != http.StatusOK {
-		t.Fatalf("login status = %d body=%s", rec.Code, rec.Body.String())
-	}
-	var resp struct {
-		Token string `json:"token"`
-	}
-	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil || resp.Token == "" {
-		t.Fatalf("login token: err=%v body=%s", err, rec.Body.String())
-	}
-	return resp.Token
-}
-
-func doBearer(t *testing.T, h http.Handler, method, path, token string) *httptest.ResponseRecorder {
-	t.Helper()
-	return doBearerWithBody(t, h, method, path, token, "")
-}
-
-func doBearerWithBody(t *testing.T, h http.Handler, method, path, token, body string) *httptest.ResponseRecorder {
-	t.Helper()
-	var rdr *bytes.Reader
-	if body == "" {
-		rdr = bytes.NewReader(nil)
-	} else {
-		rdr = bytes.NewReader([]byte(body))
-	}
-	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(method, path, rdr)
-	if body != "" {
-		req.Header.Set("Content-Type", "application/json")
-	}
-	req.Header.Set("Authorization", "Bearer "+token)
-	h.ServeHTTP(rec, req)
-	return rec
-}
-
-func assertAuthorized(t *testing.T, h http.Handler, token string) {
-	t.Helper()
-	rec := doBearer(t, h, http.MethodGet, "/query-targets/1/credential", token)
-	// WHY: "authorized" means the credential passed current-state verification and
-	// the stub handler ran — only 200 proves that. 403/404/500 would silently
-	// greenwash a broken auth path if we only rejected 401.
-	if rec.Code != http.StatusOK {
-		t.Fatalf("expected authorized 200, got %d body=%s", rec.Code, rec.Body.String())
 	}
 }
 

@@ -16,7 +16,7 @@ HTTP handlers, chi routing, CORS middleware, and fake-repo test infrastructure.
 | query_schema_handler.go | handleGetTableDefinition for MySQL table-definition requests |
 | query_execution_handler.go | POST execute, POST saved-statement template execute, and GET execution-history handlers, including optional governed result paging |
 | query_credential_handler.go | Phase 38A credential metadata handlers (GET/PUT/DELETE) |
-| query_disclosure_handler.go | Phase 38Q disclosure policy CRUD handlers (admin-only writes) |
+| query_disclosure_handler.go | Phase 38Q disclosure policy CRUD/list handlers (handler-admin) |
 | query_saved_statement_handler.go | Phase 38W saved statement CRUD handlers with strict typed parameter declaration decoding |
 | json_body.go | Shared strict JSON body decoding with unknown-field and multiple-value rejection |
 | test_server.go | Fake repositories and NewTestServer() with a default admin actor for handler tests |
@@ -29,17 +29,17 @@ HTTP handlers, chi routing, CORS middleware, and fake-repo test infrastructure.
 | query_disclosure_handler_test.go | Disclosure policy handler tests |
 | query_saved_statement_handler_test.go | Saved statement handler tests |
 | query_saved_statement_execution_handler_test.go | Template-execution handler tests (strict request decoding, controlled field errors) |
-| operator_access_boundary_test.go | Anonymous, editor, and admin router authorization matrix, including editor resource-detail reads |
+| operator_access_boundary_test.go | Anonymous, editor, and admin router authorization matrix driven by the shared operatoraccess policy, including 38R conditional saved statements |
 
 ## Routes
 | Method | Path | Description |
 |--------|------|-------------|
 | GET | /query-targets/{id}/schema/table-definition | Get MySQL table definition (base tables only) |
 | POST | /query-targets/{id}/execute | Execute a governed read-only statement, with optional page-number result paging for SELECT |
-| GET | /query-disclosure-policies | List disclosure policies for a query target |
-| POST | /query-disclosure-policies | Create a disclosure policy (admin-only) |
-| PUT | /query-disclosure-policies | Update a disclosure policy (admin-only) |
-| DELETE | /query-disclosure-policies | Delete a disclosure policy (admin-only) |
+| GET | /query-disclosure-policies | List disclosure policies (handler-admin) |
+| POST | /query-disclosure-policies | Create a disclosure policy (handler-admin) |
+| PUT | /query-disclosure-policies | Update a disclosure policy (handler-admin) |
+| DELETE | /query-disclosure-policies | Delete a disclosure policy (handler-admin) |
 | GET | /query-targets/{id}/saved-statements | List saved statements for a query target |
 | POST | /query-targets/{id}/saved-statements | Create a saved statement |
 | PUT | /query-targets/{id}/saved-statements/{statementId} | Update a saved statement |

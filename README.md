@@ -216,6 +216,7 @@ ControlHub is a read-heavy resource management backend exposing dictionary-drive
 | internal/config | Environment and .env configuration loading | [README](internal/config/README.md) |
 | internal/openapi | Embedded OpenAPI contract and validation | [README](internal/openapi/README.md) |
 | internal/integration | MySQL-backed Testcontainers coverage | [README](internal/integration/README.md) |
+| internal/testsupport | Test-only shared authorization metadata and fixtures | [README](internal/testsupport/README.md) |
 
 Dependency flow (strict, one-directional): `cmd/server` → `api` → `service` → `repository/mysql` → `model`. The `model` package has no upstream dependencies.
 
@@ -248,8 +249,15 @@ Dependency flow (strict, one-directional): `cmd/server` → `api` → `service` 
 
 `/health`, `/auth/login`, `/openapi.yaml`, and `/docs` are public. All
 operational APIs require a Backend Bearer Credential. Authenticated editors can
-read Inventory and use governed query capabilities; only admins can mutate
-Inventory or read audit events.
+read Inventory, dictionaries, query-target lists, saved-statement lists, and
+fresh governed query/schema surfaces. Router-admin operations cover Inventory
+mutations and audit reads; handler-admin operations cover credential writes and
+all disclosure-policy operations, including GET. Saved-statement mutations are
+not a router-wide admin gate: Phase 38R authorizes personal statements by owner
+and shared templates by admin role.
+
+The API, OpenAPI, and MySQL integration authorization tests consume the same
+test-only operation table at `internal/testsupport/operatoraccess/policy.go`.
 
 ### Governed query result paging
 

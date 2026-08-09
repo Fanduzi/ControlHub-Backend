@@ -1509,8 +1509,9 @@ paths:
       operationId: listDisclosurePolicies
       description: >
         Phase 38Q. Returns all per-column result disclosure policies for a
-        query target. Any authenticated actor with a fresh Bearer token may
-        read. Never returns credentials, DSNs, or secrets.
+        query target. Admin-only — policy scope and mode metadata is
+        governance-sensitive. Never returns credentials, DSNs, or secrets.
+        Requires a fresh Bearer token and the admin role.
       security:
         - bearerAuth: []
       parameters:
@@ -1547,6 +1548,12 @@ paths:
                 $ref: "#/components/schemas/ErrorResponse"
         "401":
           description: Missing or invalid Bearer token (or token older than the TTL)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "403":
+          description: Authenticated actor is not an admin
           content:
             application/json:
               schema:
@@ -1858,9 +1865,10 @@ paths:
       description: >
         Phase 38R. Creates a new saved statement for a query target. The
         actor is derived from the verified token and is never accepted in
-        the request body. The scope determines visibility: personal is
-        visible only to the creator, shared_template is visible to all.
-        Requires a fresh Bearer token.
+        the request body. The scope determines authorization: personal can
+        be created by any authenticated actor and is visible only to the
+        creator; shared_template can only be created by an admin and is
+        visible to all. Requires a fresh Bearer token.
       security:
         - bearerAuth: []
       parameters:
@@ -1913,6 +1921,12 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/ErrorResponse"
+        "403":
+          description: Authenticated actor is not an admin creating a shared_template
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
         "404":
           description: Query target not found
           content:
@@ -1932,8 +1946,10 @@ paths:
       description: >
         Phase 38R. Updates the name and/or statement text of an existing
         saved statement. Scope is immutable and never accepted on update.
-        The actor must own the statement or be an admin updating a shared
-        template. Requires a fresh Bearer token.
+        Authorization is conditional on scope and ownership: personal
+        statements can only be updated by their owner (any non-owner gets
+        404); shared_template can only be updated by an admin (a non-admin
+        gets 403). Requires a fresh Bearer token.
       security:
         - bearerAuth: []
       parameters:
@@ -1978,13 +1994,13 @@ paths:
               schema:
                 $ref: "#/components/schemas/ErrorResponse"
         "403":
-          description: Actor does not own the statement and is not an admin
+          description: A non-admin actor attempted to update a shared_template
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/ErrorResponse"
         "404":
-          description: Query target or saved statement not found
+          description: Query target or saved statement not found (personal statements are owner-only)
           content:
             application/json:
               schema:
@@ -1999,9 +2015,11 @@ paths:
       summary: Delete a saved statement
       operationId: deleteSavedStatement
       description: >
-        Phase 38R. Deletes a saved statement. The actor must own the
-        statement or be an admin deleting a shared template. Idempotent.
-        Requires a fresh Bearer token.
+        Phase 38R. Deletes a saved statement. Authorization is conditional on
+        scope and ownership: personal statements can only be deleted by their
+        owner (any non-owner gets 404); shared_template can only be deleted
+        by an admin (a non-admin gets 403). Idempotent. Requires a fresh
+        Bearer token.
       security:
         - bearerAuth: []
       parameters:
@@ -2037,13 +2055,13 @@ paths:
               schema:
                 $ref: "#/components/schemas/ErrorResponse"
         "403":
-          description: Actor does not own the statement and is not an admin
+          description: A non-admin actor attempted to delete a shared_template
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/ErrorResponse"
         "404":
-          description: Query target or saved statement not found
+          description: Query target or saved statement not found (personal statements are owner-only)
           content:
             application/json:
               schema:
@@ -2548,6 +2566,12 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/ErrorResponse"
+        "401":
+          description: Missing or invalid Bearer token
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
         "404":
           description: Resource not found
     put:
@@ -2699,6 +2723,12 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/ErrorResponse"
+        "401":
+          description: Missing or invalid Bearer token
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
   /resources/{id}/relations:
     get:
       summary: List relations for a resource
@@ -2740,6 +2770,12 @@ paths:
                         - $ref: "#/components/schemas/ResourceRelationView"
         "400":
           description: Invalid resource ID
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "401":
+          description: Missing or invalid Bearer token
           content:
             application/json:
               schema:
@@ -2980,6 +3016,12 @@ paths:
                     type: array
                     items:
                       $ref: "#/components/schemas/Environment"
+        "401":
+          description: Missing or invalid Bearer token
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
   /owners:
     get:
       summary: List owners
@@ -2997,6 +3039,12 @@ paths:
                     type: array
                     items:
                       $ref: "#/components/schemas/Owner"
+        "401":
+          description: Missing or invalid Bearer token
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
   /roles:
     get:
       summary: List roles
@@ -3014,6 +3062,12 @@ paths:
                     type: array
                     items:
                       $ref: "#/components/schemas/Role"
+        "401":
+          description: Missing or invalid Bearer token
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
   /resource-types:
     get:
       summary: List resource types
@@ -3031,6 +3085,12 @@ paths:
                     type: array
                     items:
                       $ref: "#/components/schemas/DictionaryItem"
+        "401":
+          description: Missing or invalid Bearer token
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
   /relation-types:
     get:
       summary: List relation types
@@ -3048,6 +3108,12 @@ paths:
                     type: array
                     items:
                       $ref: "#/components/schemas/DictionaryItem"
+        "401":
+          description: Missing or invalid Bearer token
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
   /lifecycle-statuses:
     get:
       summary: List lifecycle statuses
@@ -3065,6 +3131,12 @@ paths:
                     type: array
                     items:
                       $ref: "#/components/schemas/DictionaryItem"
+        "401":
+          description: Missing or invalid Bearer token
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
   /health-statuses:
     get:
       summary: List health statuses
@@ -3082,6 +3154,12 @@ paths:
                     type: array
                     items:
                       $ref: "#/components/schemas/DictionaryItem"
+        "401":
+          description: Missing or invalid Bearer token
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
   /resource-subtypes:
     get:
       summary: List resource subtypes for a given resource type
@@ -3110,6 +3188,12 @@ paths:
                       $ref: "#/components/schemas/DictionaryItem"
         "400":
           description: Missing or invalid resourceType parameter
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "401":
+          description: Missing or invalid Bearer token
           content:
             application/json:
               schema:
@@ -3221,6 +3305,12 @@ paths:
                       - 4000000000000000002
         "400":
           description: Invalid query parameters
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "401":
+          description: Missing or invalid Bearer token
           content:
             application/json:
               schema:
