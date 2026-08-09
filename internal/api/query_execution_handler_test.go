@@ -103,7 +103,7 @@ func (s *stubQueryExec) NavigateRelatedRecords(_ context.Context, actorUserID ui
 
 func newQueryExecRouter(stub queryExecutionAPI) *chi.Mux {
 	deps := Dependencies{
-		AuthService:           service.NewAuthService(nil, "qe-test-secret"),
+		AuthService:           service.NewAuthService(testAuthUsers, "qe-test-secret"),
 		QueryExecutionService: stub,
 		QueryExecutionAuth: QueryExecutionAuthConfig{
 			TokenMaxAge: 8 * time.Hour,

@@ -57,7 +57,7 @@ func (s *stubQueryCredential) Delete(_ context.Context, actor service.Authentica
 
 func newCredentialRouter(stub queryCredentialAPI) *chi.Mux {
 	deps := Dependencies{
-		AuthService:            service.NewAuthService(nil, "qc-test-secret"),
+		AuthService:            service.NewAuthService(testAuthUsers, "qc-test-secret"),
 		QueryCredentialService: stub,
 		QueryExecutionAuth: QueryExecutionAuthConfig{
 			TokenMaxAge: 8 * 60 * 60 * 1e9, // 8h, explicit so the helper has no hidden time import

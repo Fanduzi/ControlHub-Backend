@@ -8,7 +8,7 @@ Domain structs, taxonomy constants, validation methods, and dictionary definitio
 | resource.go | Resource struct, ResourceProfileResponse, ResourceType type |
 | relation.go | ResourceRelation struct, RelationType type |
 | audit.go | AuditEvent struct |
-| auth.go | UserCredential, LoginRequest, LoginResponse structs |
+| auth.go | UserCredential (incl. IsActive + AuthorizationVersion), LoginRequest, LoginResponse structs |
 | settings.go | Environment, Owner, Role structs |
 | pagination.go | PageInfo, ResourceListQuery, AuditListQuery, pagination helpers/constants |
 | dictionary.go | DictionaryItem struct (shared by all dictionaries) |

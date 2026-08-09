@@ -33,7 +33,7 @@ func TestSchemaUsesBigintPrimaryKeysWithoutForeignKeys(t *testing.T) {
 
 	expectedUnsignedBigintIDs := map[string][]string{
 		"roles":                            {"id"},
-		"users":                            {"id", "role_id"},
+		"users":                            {"id", "role_id", "authorization_version"},
 		"environments":                     {"id"},
 		"owners":                           {"id"},
 		"resources":                        {"id", "environment_id", "owner_id", "archived_by"},

@@ -818,24 +818,33 @@ func NewTestServer() *TestServer {
 	credentialStore := &fakeCredentialMetadataStore{}
 
 	deps := Dependencies{
-		ResourceService:        service.NewResourceService(resourceRepo, profileSvc),
-		RelationService:        service.NewRelationService(relationRepo),
-		TopologyService:        service.NewTopologyService(topologyRepo),
-		AuditService:           service.NewAuditService(fakeAuditRepo{}),
-		AuthService:            service.NewAuthService(fakeUserCredentialRepo{}, "test-secret"),
-		EnvironmentService:     service.NewEnvironmentService(fakeEnvironmentRepo{}),
-		OwnerService:           service.NewOwnerService(fakeOwnerRepo{}),
-		RoleService:            service.NewRoleService(fakeRoleRepo{}),
-		ResourceTypeService:    service.NewResourceTypeService(fakeResourceTypeRepo{}),
-		RelationTypeService:    service.NewRelationTypeService(fakeRelationTypeRepo{}),
-		LifecycleStatusService: service.NewLifecycleStatusService(fakeLifecycleStatusRepo{}),
-		HealthStatusService:    service.NewHealthStatusService(fakeHealthStatusRepo{}),
-		ResourceSubtypeService: service.NewResourceSubtypeService(),
-		ProfileService:         profileSvc,
-		QueryTargetService:     service.NewQueryTargetService(queryTargetRepo),
-		QueryCredentialService: service.NewQueryCredentialService(queryTargetRepo, credentialStore, service.NewEnvCredentialResolver()),
-		QuerySchemaService:     &fakeQuerySchema{},
-		QueryDisclosureService: &fakeQueryDisclosure{},
+		ResourceService: service.NewResourceService(resourceRepo, profileSvc),
+		RelationService: service.NewRelationService(relationRepo),
+		TopologyService: service.NewTopologyService(topologyRepo),
+		AuditService:    service.NewAuditService(fakeAuditRepo{}),
+		AuthService: service.NewAuthService(service.NewMemoryUserStore(
+			model.UserCredential{
+				ID: 1, Email: "admin@example.com", RoleName: "admin",
+				PasswordHash: "fcf730b6d95236ecd3c9fc2d92d7b6b2bb061514961aec041d6c7a7192f592e4",
+				IsActive:     true, AuthorizationVersion: 1,
+			},
+			model.UserCredential{ID: 7, RoleName: "editor", IsActive: true, AuthorizationVersion: 1},
+			model.UserCredential{ID: 42, RoleName: "admin", IsActive: true, AuthorizationVersion: 1},
+			model.UserCredential{ID: 43, RoleName: "viewer", IsActive: true, AuthorizationVersion: 1},
+		), "test-secret"),
+		EnvironmentService:         service.NewEnvironmentService(fakeEnvironmentRepo{}),
+		OwnerService:               service.NewOwnerService(fakeOwnerRepo{}),
+		RoleService:                service.NewRoleService(fakeRoleRepo{}),
+		ResourceTypeService:        service.NewResourceTypeService(fakeResourceTypeRepo{}),
+		RelationTypeService:        service.NewRelationTypeService(fakeRelationTypeRepo{}),
+		LifecycleStatusService:     service.NewLifecycleStatusService(fakeLifecycleStatusRepo{}),
+		HealthStatusService:        service.NewHealthStatusService(fakeHealthStatusRepo{}),
+		ResourceSubtypeService:     service.NewResourceSubtypeService(),
+		ProfileService:             profileSvc,
+		QueryTargetService:         service.NewQueryTargetService(queryTargetRepo),
+		QueryCredentialService:     service.NewQueryCredentialService(queryTargetRepo, credentialStore, service.NewEnvCredentialResolver()),
+		QuerySchemaService:         &fakeQuerySchema{},
+		QueryDisclosureService:     &fakeQueryDisclosure{},
 		QuerySavedStatementService: &fakeSavedStatementService{},
 		QueryExecutionAuth: QueryExecutionAuthConfig{
 			TokenMaxAge: 8 * 60 * 60 * 1e9, // 8h
@@ -844,15 +853,6 @@ func NewTestServer() *TestServer {
 	}
 
 	return &TestServer{Router: NewRouter(deps), deps: deps}
-}
-
-type fakeUserCredentialRepo struct{}
-
-func (fakeUserCredentialRepo) FindByEmail(email string) (*model.UserCredential, error) {
-	if email != "admin@example.com" {
-		return nil, nil
-	}
-	return &model.UserCredential{ID: 1, Email: "admin@example.com", RoleName: "admin", PasswordHash: "fcf730b6d95236ecd3c9fc2d92d7b6b2bb061514961aec041d6c7a7192f592e4"}, nil
 }
 
 type fakeEnvironmentRepo struct{}

@@ -20,7 +20,7 @@ import (
 
 func newTemplateExecRouter(stub queryExecutionAPI) *chi.Mux {
 	deps := Dependencies{
-		AuthService:                service.NewAuthService(nil, "qe-test-secret"),
+		AuthService:                service.NewAuthService(testAuthUsers, "qe-test-secret"),
 		QueryExecutionService:      stub,
 		QuerySavedStatementService: &fakeSavedStatementService{},
 		QueryExecutionAuth: QueryExecutionAuthConfig{

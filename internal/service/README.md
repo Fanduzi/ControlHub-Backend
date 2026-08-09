@@ -8,7 +8,7 @@ Business logic layer with interface-based repository dependencies. Each service 
 | resource_service.go | Resource listing, detail, profile projection |
 | relation_service.go | Relation listing by resource |
 | audit_service.go | Audit event listing (global and per-resource) |
-| auth_service.go | Login, token generation, credential validation |
+| auth_service.go | Login, versioned Backend Bearer issuance, current-state VerifyToken (Authorization Version), role/disable/password invalidation |
 | environment_service.go | Environment listing |
 | owner_service.go | Owner listing |
 | role_service.go | Role listing |
@@ -30,7 +30,8 @@ Business logic layer with interface-based repository dependencies. Each service 
 | query_disclosure_projection.go | Column provenance resolution from SQL AST and FK metadata |
 | query_disclosure_mask.go | applyDisclosureMask for server-side value redaction |
 | query_saved_statement_service.go | QuerySavedStatementService — authorized target-scoped saved statement CRUD with typed declaration validation and guard validation |
-| auth_service_test.go | Auth service tests |
+| auth_service_test.go | Auth service tests (login, versioned verify, invalidation causes, generic errors) |
+| memory_user_store.go | In-memory UserCredentialRepository for unit/handler tests |
 | dictionary_service_test.go | Dictionary service tests |
 | query_disclosure_service_test.go | Disclosure service tests (Preflight, PreflightRelatedRecords, Apply) |
 | query_disclosure_mask_test.go | Disclosure mask unit tests |
@@ -40,7 +41,8 @@ Business logic layer with interface-based repository dependencies. Each service 
 
 ## Exports
 - `NewXxxService(repo) *XxxService` constructors for all services
-- `ErrResourceNotFound`, `ErrInvalidCredentials`, `ErrQueryDisclosureBlocked` sentinel errors
+- `NewMemoryUserStore`, `AuthService.WithClock`, `AuthService.ChangeUserRole`/`SetUserActive`/`ResetUserPassword` — Authorization Version seams
+- `ErrResourceNotFound`, `ErrInvalidCredentials`, `ErrInvalidToken`, `ErrQueryDisclosureBlocked` sentinel errors
 - `ErrQuerySavedStatementNotFound`, `ErrQueryForbidden` — saved-statement service sentinel errors
 - `QueryDisclosureReader`, `QueryDisclosureWriter` — narrow disclosure policy access interfaces
 - `DisclosurePlan`, `ColumnDisclosure` — resolved per-column disclosure decisions

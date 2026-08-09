@@ -119,7 +119,8 @@ func handleDeleteQueryCredential(svc queryCredentialAPI) http.HandlerFunc {
 
 // actorFromContext builds the authenticated actor from the id and role stored by
 // the auth middleware. The role gates admin-only writes; the id is attributed to
-// audit rows. Both come from the verified token.
+// audit rows. Both come from VerifyToken current-state checks (Authorization
+// Version + active role), never from client-supplied identity headers.
 func actorFromContext(ctx context.Context) (service.AuthenticatedUser, bool) {
 	id, ok := actorUserIDFromContext(ctx)
 	if !ok {

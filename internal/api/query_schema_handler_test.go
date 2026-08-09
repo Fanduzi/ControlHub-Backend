@@ -112,7 +112,7 @@ func (s *stubQuerySchema) GetRelationshipMap(_ context.Context, actorID, targetI
 
 func newSchemaRouter(stub querySchemaAPI) *chi.Mux {
 	deps := Dependencies{
-		AuthService:        service.NewAuthService(nil, "qs-test-secret"),
+		AuthService:        service.NewAuthService(testAuthUsers, "qs-test-secret"),
 		QuerySchemaService: stub,
 		QueryExecutionAuth: QueryExecutionAuthConfig{
 			TokenMaxAge: 8 * time.Hour,

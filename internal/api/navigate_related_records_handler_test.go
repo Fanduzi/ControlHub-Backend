@@ -22,7 +22,7 @@ var navTestNow = time.Date(2026, 7, 14, 8, 0, 0, 0, time.UTC)
 
 func newNavRouter(stub queryExecutionAPI) *chi.Mux {
 	deps := Dependencies{
-		AuthService:           service.NewAuthService(nil, "nav-test-secret"),
+		AuthService:           service.NewAuthService(testAuthUsers, "nav-test-secret"),
 		QueryExecutionService: stub,
 		QueryExecutionAuth: QueryExecutionAuthConfig{
 			TokenMaxAge: 8 * time.Hour,

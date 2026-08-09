@@ -69,7 +69,7 @@ func (s *stubQueryDisclosure) DeletePolicy(_ context.Context, targetResourceID u
 
 func newDisclosureRouter(stub queryDisclosureAPI) *chi.Mux {
 	deps := Dependencies{
-		AuthService:            service.NewAuthService(nil, "qd-test-secret"),
+		AuthService:            service.NewAuthService(testAuthUsers, "qd-test-secret"),
 		QueryDisclosureService: stub,
 		QueryExecutionAuth: QueryExecutionAuthConfig{
 			TokenMaxAge: 8 * 60 * 60 * 1e9, // 8h

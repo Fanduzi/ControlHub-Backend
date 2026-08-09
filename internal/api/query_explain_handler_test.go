@@ -41,7 +41,7 @@ func (s *stubExplainAPI) Explain(_ context.Context, actor uint64, target uint64,
 
 func newExplainRouter(stub queryExplainAPI) *chi.Mux {
 	deps := Dependencies{
-		AuthService:        service.NewAuthService(nil, "qe-test-secret"),
+		AuthService:        service.NewAuthService(testAuthUsers, "qe-test-secret"),
 		QueryExplainService: stub,
 		QueryExecutionAuth: QueryExecutionAuthConfig{
 			TokenMaxAge: 8 * time.Hour,
