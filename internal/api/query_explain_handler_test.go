@@ -41,7 +41,7 @@ func (s *stubExplainAPI) Explain(_ context.Context, actor uint64, target uint64,
 
 func newExplainRouter(stub queryExplainAPI) *chi.Mux {
 	deps := Dependencies{
-		AuthService:        service.NewAuthService(testAuthUsers, "qe-test-secret"),
+		AuthService:         service.NewAuthService(testAuthUsers, "qe-test-secret"),
 		QueryExplainService: stub,
 		QueryExecutionAuth: QueryExecutionAuthConfig{
 			TokenMaxAge: 8 * time.Hour,
@@ -55,7 +55,7 @@ func TestQueryExplain_Success(t *testing.T) {
 	stub := &stubExplainAPI{resp: model.ExplainResponse{
 		TargetResourceID: 616,
 		Engine:           model.ExplainEngineMySQL,
-		FormatVersion:     model.ExplainFormatVersion,
+		FormatVersion:    model.ExplainFormatVersion,
 		Nodes:            []model.ExplainNode{{ID: "0", Operation: model.ExplainOpTableAccess, Access: model.ExplainAccessFullScan}},
 		Risks:            []model.ExplainRisk{{Code: model.ExplainRiskFullTableScan, Severity: model.ExplainSeverityWarning}},
 		Truncated:        false,

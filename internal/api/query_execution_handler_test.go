@@ -25,26 +25,26 @@ var qeTestNow = time.Date(2026, 6, 22, 8, 0, 0, 0, time.UTC)
 
 // stubQueryExec is a configurable queryExecutionAPI stub for handler tests.
 type stubQueryExec struct {
-	executeResp   model.QueryExecuteResponse
-	executeErr    error
-	listItems     []model.QueryExecutionRecord
-	listErr       error
-	navResp       model.RelatedRecordNavigationResponse
-	navErr        error
-	gotActor      uint64
-	gotRole       string
-	gotTargetID   uint64
-	gotMaxRows    int
-	gotPagination *model.QueryExecutePaginationRequest
-	gotNavRequest model.RelatedRecordNavigationRequest
-	gotQuery      model.QueryExecutionListQuery
-	executeCalled bool
-	listCalled    bool
-	navCalled     bool
-	templateResp  model.QueryExecuteResponse
-	templateErr   error
-	templateReq   model.QuerySavedStatementExecuteRequest
-	templateStmt  uint64
+	executeResp    model.QueryExecuteResponse
+	executeErr     error
+	listItems      []model.QueryExecutionRecord
+	listErr        error
+	navResp        model.RelatedRecordNavigationResponse
+	navErr         error
+	gotActor       uint64
+	gotRole        string
+	gotTargetID    uint64
+	gotMaxRows     int
+	gotPagination  *model.QueryExecutePaginationRequest
+	gotNavRequest  model.RelatedRecordNavigationRequest
+	gotQuery       model.QueryExecutionListQuery
+	executeCalled  bool
+	listCalled     bool
+	navCalled      bool
+	templateResp   model.QueryExecuteResponse
+	templateErr    error
+	templateReq    model.QuerySavedStatementExecuteRequest
+	templateStmt   uint64
 	templateCalled bool
 }
 

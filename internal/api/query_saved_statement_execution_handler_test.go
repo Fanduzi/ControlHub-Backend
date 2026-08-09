@@ -79,17 +79,17 @@ func TestTemplateExecute_Success(t *testing.T) {
 
 func TestTemplateExecute_RejectsUnknownAndForbiddenFields(t *testing.T) {
 	forbidden := map[string]string{
-		"SQL text":            `{"values":{"status":"paid"},"statement":"SELECT 1"}`,
-		"parameter defs":      `{"values":{"status":"paid"},"parameters":[{"name":"x","type":"string"}]}`,
-		"actor identity":      `{"values":{"status":"paid"},"actorUserId":42}`,
-		"role":                `{"values":{"status":"paid"},"role":"admin"}`,
-		"credential":          `{"values":{"status":"paid"},"credentialRef":"PROD"}`,
-		"DSN":                 `{"values":{"status":"paid"},"dsn":"user:pass@tcp(x:3306)/y"}`,
-		"disclosure policy":   `{"values":{"status":"paid"},"disclosurePolicy":"redact"}`,
-		"audit payload":       `{"values":{"status":"paid"},"audit":{"actor":"x"}}`,
-		"result fields":       `{"values":{"status":"paid"},"result":{"rows":[]}}`,
-		"owner":               `{"values":{"status":"paid"},"ownerUserId":1}`,
-		"target identity":     `{"values":{"status":"paid"},"targetResourceId":1}`,
+		"SQL text":          `{"values":{"status":"paid"},"statement":"SELECT 1"}`,
+		"parameter defs":    `{"values":{"status":"paid"},"parameters":[{"name":"x","type":"string"}]}`,
+		"actor identity":    `{"values":{"status":"paid"},"actorUserId":42}`,
+		"role":              `{"values":{"status":"paid"},"role":"admin"}`,
+		"credential":        `{"values":{"status":"paid"},"credentialRef":"PROD"}`,
+		"DSN":               `{"values":{"status":"paid"},"dsn":"user:pass@tcp(x:3306)/y"}`,
+		"disclosure policy": `{"values":{"status":"paid"},"disclosurePolicy":"redact"}`,
+		"audit payload":     `{"values":{"status":"paid"},"audit":{"actor":"x"}}`,
+		"result fields":     `{"values":{"status":"paid"},"result":{"rows":[]}}`,
+		"owner":             `{"values":{"status":"paid"},"ownerUserId":1}`,
+		"target identity":   `{"values":{"status":"paid"},"targetResourceId":1}`,
 	}
 	for name, body := range forbidden {
 		t.Run(name, func(t *testing.T) {
