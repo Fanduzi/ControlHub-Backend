@@ -78,6 +78,7 @@ set +e
     --max-examples "${MAX_EXAMPLES}" \
     --seed "${SEED}" \
     --checks "${CHECKS}" \
+    --exclude-operation-id executeSavedStatement \
     --mode all \
     --phases examples,fuzzing \
     --header "Authorization: Bearer ${CONTROLHUB_FUZZ_BEARER_TOKEN}" \

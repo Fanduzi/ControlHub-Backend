@@ -5,7 +5,7 @@ Embeds and validates the OpenAPI contract served by the API documentation route.
 ## Files
 | File | Responsibility |
 |------|---------------|
-| openapi.yaml | Source OpenAPI contract, including the Operator Access Boundary security default |
+| openapi.yaml | Source OpenAPI contract, including Operator Access Boundary security and schema-policy responses |
 | embed.go | Embeds the YAML for serving and tests |
 | openapi_test.go | Validates schema and authorization declarations |
 

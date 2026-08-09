@@ -37,8 +37,11 @@ func TestOpenAPIUsesTheOperatorAccessBoundary(t *testing.T) {
 		t.Fatalf("failed to parse openapi.yaml: %v", err)
 	}
 
-	if len(doc.Security) != 1 || len(doc.Security[0]["bearerAuth"]) != 0 {
+	if len(doc.Security) != 1 {
 		t.Fatalf("expected bearerAuth to protect operations by default, got %#v", doc.Security)
+	}
+	if scopes, ok := doc.Security[0]["bearerAuth"]; !ok || len(scopes) != 0 || len(doc.Security[0]) != 1 {
+		t.Fatalf("expected only bearerAuth with no scopes, got %#v", doc.Security)
 	}
 	for _, path := range []string{"/auth/login", "/health"} {
 		operation := doc.Paths.Value(path).Get
