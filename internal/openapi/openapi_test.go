@@ -57,6 +57,7 @@ func TestOpenAPIUsesTheOperatorAccessBoundary(t *testing.T) {
 		responses    []string
 	}{
 		{"/resources", "get", []string{"401"}},
+		{"/resources/{id}", "get", []string{"401"}},
 		{"/resources", "post", []string{"401", "403"}},
 		{"/resources/{id}", "patch", []string{"401", "403"}},
 		{"/resources/{id}/archive", "post", []string{"401", "403"}},
@@ -85,6 +86,9 @@ func TestOpenAPIUsesTheOperatorAccessBoundary(t *testing.T) {
 				t.Fatalf("%s %s must document %s", tc.method, tc.path, status)
 			}
 		}
+	}
+	if doc.Paths.Value("/resources/{id}").Get.Responses.Value("403") != nil {
+		t.Fatal("get /resources/{id} must not document an admin-only 403")
 	}
 }
 

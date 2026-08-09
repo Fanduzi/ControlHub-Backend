@@ -29,7 +29,7 @@ HTTP handlers, chi routing, CORS middleware, and fake-repo test infrastructure.
 | query_disclosure_handler_test.go | Disclosure policy handler tests |
 | query_saved_statement_handler_test.go | Saved statement handler tests |
 | query_saved_statement_execution_handler_test.go | Template-execution handler tests (strict request decoding, controlled field errors) |
-| operator_access_boundary_test.go | Anonymous, editor, and admin router authorization matrix |
+| operator_access_boundary_test.go | Anonymous, editor, and admin router authorization matrix, including editor resource-detail reads |
 
 ## Routes
 | Method | Path | Description |

@@ -37,6 +37,7 @@ func TestOperatorAccessBoundary(t *testing.T) {
 		{"anonymous resource audit read", "", http.MethodGet, "/resources/1/audit-events", "", http.StatusUnauthorized},
 		{"anonymous query surface", "", http.MethodGet, "/query-targets", "", http.StatusUnauthorized},
 		{"editor inventory read", editorToken, http.MethodGet, "/resources", "", http.StatusOK},
+		{"editor resource detail read", editorToken, http.MethodGet, "/resources/1", "", http.StatusOK},
 		{"editor inventory mutation", editorToken, http.MethodPost, "/resources", resourceBody, http.StatusForbidden},
 		{"editor audit read", editorToken, http.MethodGet, "/audit-events", "", http.StatusForbidden},
 		{"editor resource audit read", editorToken, http.MethodGet, "/resources/1/audit-events", "", http.StatusForbidden},
