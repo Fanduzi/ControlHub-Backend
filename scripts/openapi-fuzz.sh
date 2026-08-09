@@ -1,4 +1,8 @@
 #!/usr/bin/env bash
+# input: CONTROLHUB_FUZZ_BEARER_TOKEN, running ControlHub server, Schemathesis
+# output: authenticated OpenAPI fuzz report
+# pos: Exercises protected API operations against the OpenAPI contract
+# note: if this file changes, update scripts/README.md
 # openapi-fuzz.sh — Run Schemathesis against a ControlHub server.
 #
 # Usage: openapi-fuzz.sh <base_url>
@@ -63,6 +67,11 @@ mkdir -p "${REPORT_DIR}"
 echo "Starting fuzz run..."
 echo ""
 
+if [ -z "${CONTROLHUB_FUZZ_BEARER_TOKEN:-}" ]; then
+    echo "CONTROLHUB_FUZZ_BEARER_TOKEN is required for protected API fuzzing." >&2
+    exit 1
+fi
+
 set +e
 "$STH_BIN" --config-file "${CONFIG_FILE}" run "${OPENAPI_URL}" \
     --url "${BASE_URL}" \
@@ -71,6 +80,7 @@ set +e
     --checks "${CHECKS}" \
     --mode all \
     --phases examples,fuzzing \
+    --header "Authorization: Bearer ${CONTROLHUB_FUZZ_BEARER_TOKEN}" \
     --report junit \
     --report-dir "${REPORT_DIR}"
 STH_EXIT=$?

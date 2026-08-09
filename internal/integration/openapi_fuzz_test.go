@@ -1,5 +1,10 @@
 //go:build integration
 
+// Package integration provides MySQL-backed integration tests.
+// input: disposable MySQL, API router, Schemathesis CLI
+// output: OpenAPI fuzz integration coverage
+// pos: Verifies the served contract with authenticated generated requests
+// note: if this file changes, update header and README.md
 package integration
 
 import (
@@ -87,12 +92,13 @@ func TestOpenAPIFuzz(t *testing.T) {
 		service.NewExplainAuditRecorder(queryExecutionRepo),
 	)
 
+	authService := service.NewAuthService(mysql.NewUserRepository(db), "fuzz-test-jwt-secret")
 	deps := api.Dependencies{
 		ResourceService:        service.NewResourceService(resourceRepo, profileSvc),
 		RelationService:        service.NewRelationService(relationRepo),
 		TopologyService:        service.NewTopologyService(relationRepo),
 		AuditService:           service.NewAuditService(mysql.NewAuditRepository(db)),
-		AuthService:            service.NewAuthService(mysql.NewUserRepository(db), "fuzz-test-jwt-secret"),
+		AuthService:            authService,
 		ProfileService:         profileSvc,
 		EnvironmentService:     service.NewEnvironmentService(dictRepo),
 		OwnerService:           service.NewOwnerService(dictRepo),
@@ -148,6 +154,11 @@ func TestOpenAPIFuzz(t *testing.T) {
 	// Run Schemathesis via the shell wrapper.
 	t.Logf("Invoking Schemathesis against %s", baseURL)
 	cmd := exec.Command("/bin/bash", scriptPath, baseURL)
+	login, err := authService.Login("admin@example.com", "secret123")
+	if err != nil {
+		t.Fatalf("login fuzz admin: %v", err)
+	}
+	cmd.Env = append(os.Environ(), "CONTROLHUB_FUZZ_BEARER_TOKEN="+login.Token)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 

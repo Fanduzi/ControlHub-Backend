@@ -1,7 +1,7 @@
 // Package api provides HTTP handlers and routing for the ControlHub REST API.
 // input: context, net/http, strings, time, internal/service
-// output: QueryExecutionAuthConfig, requireAuthenticatedActor, requireFreshQueryActor, actorUserIDFromContext, actorRoleFromContext
-// pos: Bearer auth middleware — signature + current Authorization Version check; query routes also enforce fixed eight-hour freshness
+// output: QueryExecutionAuthConfig, requireAuthenticatedActor, requireAdminActor, requireFreshQueryActor, actorUserIDFromContext, actorRoleFromContext
+// pos: Bearer auth middleware — signature + current Authorization Version check; admin routes and query routes add role and freshness gates
 // note: if this file changes, update header and README.md
 package api
 
@@ -54,6 +54,17 @@ func requireAuthenticatedActor(authService *service.AuthService) func(http.Handl
 			next.ServeHTTP(w, r.WithContext(ctx))
 		})
 	}
+}
+
+func requireAdminActor(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		role, _ := actorRoleFromContext(r.Context())
+		if role != "admin" {
+			writeJSONError(w, http.StatusForbidden, "forbidden", "admin role is required")
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
 }
 
 // requireFreshQueryActor is the chi middleware factory mounted on query

@@ -1,3 +1,8 @@
+// Package openapi_test verifies the embedded OpenAPI contract.
+// input: embedded OpenAPI YAML, kin-openapi parser
+// output: OpenAPI schema and authorization contract tests
+// pos: Prevents documented API contracts from drifting from router behavior
+// note: if this file changes, update header and README.md
 package openapi_test
 
 import (
@@ -22,6 +27,27 @@ func TestOpenAPIYAMLIsValid(t *testing.T) {
 
 	if err := doc.Validate(context.Background()); err != nil {
 		t.Fatalf("openapi.yaml validation failed: %v", err)
+	}
+}
+
+func TestOpenAPIUsesTheOperatorAccessBoundary(t *testing.T) {
+	loader := openapi3.NewLoader()
+	doc, err := loader.LoadFromData(openapi.YAML)
+	if err != nil {
+		t.Fatalf("failed to parse openapi.yaml: %v", err)
+	}
+
+	if len(doc.Security) != 1 || len(doc.Security[0]["bearerAuth"]) != 0 {
+		t.Fatalf("expected bearerAuth to protect operations by default, got %#v", doc.Security)
+	}
+	for _, path := range []string{"/auth/login", "/health"} {
+		operation := doc.Paths.Value(path).Get
+		if path == "/auth/login" {
+			operation = doc.Paths.Value(path).Post
+		}
+		if operation.Security == nil || len(*operation.Security) != 0 {
+			t.Fatalf("%s must explicitly remain public, got %#v", path, operation.Security)
+		}
 	}
 }
 

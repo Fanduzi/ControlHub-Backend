@@ -1,5 +1,5 @@
 // Package api provides HTTP handlers and routing for the ControlHub REST API.
-// input: internal/api, internal/model, internal/service, net/http/httptest
+// input: internal/api, internal/model, internal/service, net/http
 // output: TestServer struct, NewTestServer
 // pos: Test infrastructure — fake repos and pre-wired router for handler tests
 // note: if this file changes, update header and README.md
@@ -9,17 +9,16 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"net/http"
 	"strings"
 	"time"
-
-	"github.com/go-chi/chi/v5"
 
 	"github.com/fan/controlhub/internal/model"
 	"github.com/fan/controlhub/internal/service"
 )
 
 type TestServer struct {
-	Router *chi.Mux
+	Router http.Handler
 	deps   Dependencies
 }
 
@@ -852,7 +851,32 @@ func NewTestServer() *TestServer {
 		},
 	}
 
-	return &TestServer{Router: NewRouter(deps), deps: deps}
+	login, err := deps.AuthService.Login("admin@example.com", "secret123")
+	if err != nil {
+		panic(fmt.Sprintf("test server admin login: %v", err))
+	}
+	return &TestServer{Router: authenticatedTestRouter(NewRouter(deps), login.Token), deps: deps}
+}
+
+func authenticatedTestRouter(next http.Handler, token string) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") == "" && testRouteNeedsDefaultActor(r.URL.Path) {
+			r.Header.Set("Authorization", "Bearer "+token)
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+func testRouteNeedsDefaultActor(path string) bool {
+	if path == "/resources" || strings.HasPrefix(path, "/resources/") || path == "/resource-relations" || strings.HasPrefix(path, "/resource-relations/") {
+		return true
+	}
+	switch path {
+	case "/audit-events", "/environments", "/owners", "/roles", "/resource-types", "/relation-types", "/lifecycle-statuses", "/health-statuses", "/resource-subtypes", "/query-targets":
+		return true
+	default:
+		return false
+	}
 }
 
 type fakeEnvironmentRepo struct{}

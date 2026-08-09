@@ -3,18 +3,19 @@ info:
   title: ControlHub API
   version: 0.1.0
   description: >
-    **Security note (Phase 1):** Write endpoints (POST, PATCH, DELETE) do not
-    enforce authentication or authorization. Any caller reaching the server can
-    create, modify, or delete resources and relations. This is acceptable for
-    local development only. An auth middleware gate must be added before any
-    network-accessible deployment.
+    The Operator Access Boundary requires a Backend Bearer Credential for all
+    operational APIs. Authenticated editors can read Inventory and use governed
+    query capabilities; only admins can mutate Inventory or read audit events.
 servers:
   - url: http://localhost:8080
+security:
+  - bearerAuth: []
 paths:
   /auth/login:
     post:
       summary: Login with local credentials
       operationId: login
+      security: []
       requestBody:
         required: true
         content:
@@ -47,6 +48,7 @@ paths:
     get:
       summary: Health check
       operationId: getHealth
+      security: []
       responses:
         "200":
           description: OK

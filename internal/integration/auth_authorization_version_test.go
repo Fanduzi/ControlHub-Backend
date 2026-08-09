@@ -182,6 +182,63 @@ func TestAuthorizationVersion_ValidEditorForbiddenOnAdminWrite(t *testing.T) {
 	}
 }
 
+func TestOperatorAccessBoundary(t *testing.T) {
+	db := setupTestDB(t)
+	resourceRepo := mysql.NewResourceRepository(db)
+	profileService := service.NewProfileService(resourceRepo, resourceRepo)
+	authService := service.NewAuthService(mysql.NewUserRepository(db), authzIntegrationSecret)
+	router := api.NewRouter(api.Dependencies{
+		ResourceService: service.NewResourceService(resourceRepo, profileService),
+		AuditService:    service.NewAuditService(mysql.NewAuditRepository(db)),
+		AuthService:     authService,
+		QueryTargetService: service.NewQueryTargetService(
+			mysql.NewQueryTargetRepository(db),
+		),
+	})
+
+	editorToken := mustLogin(t, router, "editor@example.com", "secret123")
+	adminToken := mustLogin(t, router, "admin@example.com", "secret123")
+	resourceBody := fmt.Sprintf(`{"resourceType":"host","resourceSubtype":"vm","name":"operator-boundary-%d","displayName":"Operator Boundary","environmentId":1,"ownerId":1,"lifecycleStatus":"running","healthStatus":"healthy","source":"manual","labels":{}}`, time.Now().UnixNano())
+	cases := []struct {
+		name       string
+		token      string
+		method     string
+		path       string
+		body       string
+		wantStatus int
+	}{
+		{"anonymous inventory", "", http.MethodGet, "/resources", "", http.StatusUnauthorized},
+		{"anonymous audit", "", http.MethodGet, "/audit-events", "", http.StatusUnauthorized},
+		{"anonymous resource audit", "", http.MethodGet, "/resources/1/audit-events", "", http.StatusUnauthorized},
+		{"anonymous query", "", http.MethodGet, "/query-targets", "", http.StatusUnauthorized},
+		{"editor inventory", editorToken, http.MethodGet, "/resources", "", http.StatusOK},
+		{"editor inventory mutation", editorToken, http.MethodPost, "/resources", resourceBody, http.StatusForbidden},
+		{"editor audit", editorToken, http.MethodGet, "/audit-events", "", http.StatusForbidden},
+		{"editor resource audit", editorToken, http.MethodGet, "/resources/1/audit-events", "", http.StatusForbidden},
+		{"editor query", editorToken, http.MethodGet, "/query-targets", "", http.StatusOK},
+		{"admin inventory mutation", adminToken, http.MethodPost, "/resources", resourceBody, http.StatusCreated},
+		{"admin audit", adminToken, http.MethodGet, "/audit-events", "", http.StatusOK},
+		{"admin resource audit", adminToken, http.MethodGet, "/resources/1/audit-events", "", http.StatusOK},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			rec := httptest.NewRecorder()
+			req := httptest.NewRequest(tc.method, tc.path, strings.NewReader(tc.body))
+			if tc.body != "" {
+				req.Header.Set("Content-Type", "application/json")
+			}
+			if tc.token != "" {
+				req.Header.Set("Authorization", "Bearer "+tc.token)
+			}
+			router.ServeHTTP(rec, req)
+			if rec.Code != tc.wantStatus {
+				t.Fatalf("status = %d, want %d; body=%s", rec.Code, tc.wantStatus, rec.Body.String())
+			}
+		})
+	}
+}
+
 func newAuthzTestRouter(authSvc *service.AuthService) http.Handler {
 	return api.NewRouter(api.Dependencies{
 		AuthService: authSvc,

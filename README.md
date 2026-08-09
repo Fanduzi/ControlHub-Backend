@@ -214,6 +214,8 @@ ControlHub is a read-heavy resource management backend exposing dictionary-drive
 | internal/repository/mysql | MySQL data access, SQL queries | [README](internal/repository/mysql/README.md) |
 | internal/model | Domain structs, taxonomy constants, validation | [README](internal/model/README.md) |
 | internal/config | Environment and .env configuration loading | [README](internal/config/README.md) |
+| internal/openapi | Embedded OpenAPI contract and validation | [README](internal/openapi/README.md) |
+| internal/integration | MySQL-backed Testcontainers coverage | [README](internal/integration/README.md) |
 
 Dependency flow (strict, one-directional): `cmd/server` → `api` → `service` → `repository/mysql` → `model`. The `model` package has no upstream dependencies.
 
@@ -241,6 +243,13 @@ Dependency flow (strict, one-directional): `cmd/server` → `api` → `service` 
 | POST | /query-targets/{id}/saved-statements/{statementId}/execute | Execute a saved statement (governed template execution) through the existing governed chain |
 | GET | /openapi.yaml | Raw OpenAPI 3.1.0 spec |
 | GET | /docs | Scalar API Reference docs UI |
+
+### Operator Access Boundary
+
+`/health`, `/auth/login`, `/openapi.yaml`, and `/docs` are public. All
+operational APIs require a Backend Bearer Credential. Authenticated editors can
+read Inventory and use governed query capabilities; only admins can mutate
+Inventory or read audit events.
 
 ### Governed query result paging
 
