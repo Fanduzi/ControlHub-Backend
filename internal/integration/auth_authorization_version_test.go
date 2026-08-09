@@ -297,8 +297,11 @@ func doBearerWithBody(t *testing.T, h http.Handler, method, path, token, body st
 func assertAuthorized(t *testing.T, h http.Handler, token string) {
 	t.Helper()
 	rec := doBearer(t, h, http.MethodGet, "/query-targets/1/credential", token)
-	if rec.Code == http.StatusUnauthorized {
-		t.Fatalf("expected authorized, got 401 body=%s", rec.Body.String())
+	// WHY: "authorized" means the credential passed current-state verification and
+	// the stub handler ran — only 200 proves that. 403/404/500 would silently
+	// greenwash a broken auth path if we only rejected 401.
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected authorized 200, got %d body=%s", rec.Code, rec.Body.String())
 	}
 }
 
