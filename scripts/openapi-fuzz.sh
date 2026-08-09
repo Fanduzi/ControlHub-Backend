@@ -69,7 +69,7 @@ echo ""
 
 if [ -z "${CONTROLHUB_FUZZ_BEARER_TOKEN:-}" ]; then
     echo "CONTROLHUB_FUZZ_BEARER_TOKEN is required for protected API fuzzing." >&2
-    exit 1
+    exit 2
 fi
 
 set +e

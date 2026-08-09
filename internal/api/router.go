@@ -121,7 +121,10 @@ func NewRouter(deps Dependencies) *chi.Mux {
 	// Query execution routes (Phase 37) require a fresh bearer token via
 	// requireFreshQueryActor (base signature/structure check + bounded TTL). The
 	// base requireAuthenticatedActor is NOT mounted here because it does not
-	// enforce token freshness. Existing read/list routes are unchanged.
+	// enforce token freshness. Inventory and dictionary read/list routes are
+	// unchanged authenticated reads: they remain wrapped in
+	// requireAuthenticatedActor (see the group above) and never sit behind the
+	// fresh-token middleware.
 	//
 	// The group is created when EITHER the execute or explain service is
 	// configured, so Explain does not accidentally depend on the execute

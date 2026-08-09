@@ -185,12 +185,13 @@ When to run which:
 
 ### OpenAPI Fuzz Testing
 
-Schemathesis-based fuzz testing exercises all API endpoints against a real server backed by disposable Testcontainers MySQL.
+Schemathesis-based fuzz testing exercises API endpoints against a real server backed by disposable Testcontainers MySQL.
 
 - **Requires Docker** and the **Schemathesis CLI** (`pip install schemathesis` or `pipx install schemathesis`).
 - Starts a disposable MySQL 8.0 container, runs goose migrations, starts the ControlHub HTTP server on a random port, and runs Schemathesis against `/openapi.yaml`.
 - Does **not** touch your daily `controlhub` database.
 - Writes are exercised freely (the database is disposable).
+- `executeSavedStatement` is excluded from fuzzing: the disposable fuzz DB has no stable saved-statement fixture data to execute against. Dedicated handler and template-execution tests cover that operation instead.
 
 ```bash
 make test-openapi-fuzz
