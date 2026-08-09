@@ -176,6 +176,12 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/ErrorResponse"
+        "401":
+          description: Missing or invalid Bearer token
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
   /query-targets/{id}/execute:
     post:
       summary: Execute a read-only SQL statement against a query target
@@ -2287,6 +2293,12 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/ErrorResponse"
+        "401":
+          description: Missing or invalid Bearer token
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
     post:
       summary: Create a resource
       operationId: createResource
@@ -2331,6 +2343,18 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/ErrorResponse"
+        "401":
+          description: Missing or invalid Bearer token
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "403":
+          description: Authenticated actor is not an admin
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
   /resources/{id}:
     get:
       summary: Get resource detail
@@ -2351,6 +2375,18 @@ paths:
                 $ref: "#/components/schemas/ResourceDetailResponse"
         "400":
           description: Invalid resource ID
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "401":
+          description: Missing or invalid Bearer token
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "403":
+          description: Authenticated actor is not an admin
           content:
             application/json:
               schema:
@@ -2405,6 +2441,8 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/ErrorResponse"
+        "401": {description: Missing or invalid Bearer token, content: {application/json: {schema: {$ref: "#/components/schemas/ErrorResponse"}}}}
+        "403": {description: Authenticated actor is not an admin, content: {application/json: {schema: {$ref: "#/components/schemas/ErrorResponse"}}}}
   /resources/{id}/archive:
     post:
       summary: Archive (soft-delete) a resource
@@ -2447,6 +2485,8 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/ErrorResponse"
+        "401": {description: Missing or invalid Bearer token, content: {application/json: {schema: {$ref: "#/components/schemas/ErrorResponse"}}}}
+        "403": {description: Authenticated actor is not an admin, content: {application/json: {schema: {$ref: "#/components/schemas/ErrorResponse"}}}}
   /resources/{id}/unarchive:
     post:
       summary: Restore an archived resource to active visibility
@@ -2482,6 +2522,8 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/ErrorResponse"
+        "401": {description: Missing or invalid Bearer token, content: {application/json: {schema: {$ref: "#/components/schemas/ErrorResponse"}}}}
+        "403": {description: Authenticated actor is not an admin, content: {application/json: {schema: {$ref: "#/components/schemas/ErrorResponse"}}}}
   /resources/{id}/profile:
     get:
       summary: Get resource typed profile projection
@@ -2552,6 +2594,8 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/ErrorResponse"
+        "401": {description: Missing or invalid Bearer token, content: {application/json: {schema: {$ref: "#/components/schemas/ErrorResponse"}}}}
+        "403": {description: Authenticated actor is not an admin, content: {application/json: {schema: {$ref: "#/components/schemas/ErrorResponse"}}}}
     patch:
       summary: Partially update typed profile fields for a resource
       operationId: patchResourceProfile
@@ -2590,6 +2634,8 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/ErrorResponse"
+        "401": {description: Missing or invalid Bearer token, content: {application/json: {schema: {$ref: "#/components/schemas/ErrorResponse"}}}}
+        "403": {description: Authenticated actor is not an admin, content: {application/json: {schema: {$ref: "#/components/schemas/ErrorResponse"}}}}
     delete:
       summary: Delete the typed profile row for a resource
       operationId: deleteResourceProfile
@@ -2621,6 +2667,8 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/ErrorResponse"
+        "401": {description: Missing or invalid Bearer token, content: {application/json: {schema: {$ref: "#/components/schemas/ErrorResponse"}}}}
+        "403": {description: Authenticated actor is not an admin, content: {application/json: {schema: {$ref: "#/components/schemas/ErrorResponse"}}}}
   /resources/{id}/members:
     get:
       summary: List cluster members
@@ -2746,6 +2794,8 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/ErrorResponse"
+        "401": {description: Missing or invalid Bearer token, content: {application/json: {schema: {$ref: "#/components/schemas/ErrorResponse"}}}}
+        "403": {description: Authenticated actor is not an admin, content: {application/json: {schema: {$ref: "#/components/schemas/ErrorResponse"}}}}
   /resource-relations/{id}:
     delete:
       summary: Delete a relation
@@ -2772,6 +2822,8 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/ErrorResponse"
+        "401": {description: Missing or invalid Bearer token, content: {application/json: {schema: {$ref: "#/components/schemas/ErrorResponse"}}}}
+        "403": {description: Authenticated actor is not an admin, content: {application/json: {schema: {$ref: "#/components/schemas/ErrorResponse"}}}}
   /resources/{id}/audit-events:
     get:
       summary: List audit events for a resource
@@ -2802,6 +2854,18 @@ paths:
                       $ref: "#/components/schemas/AuditEvent"
         "400":
           description: Invalid resource ID
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "401":
+          description: Missing or invalid Bearer token
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "403":
+          description: Authenticated actor is not an admin
           content:
             application/json:
               schema:
@@ -2889,6 +2953,18 @@ paths:
                   hasPreviousPage: false
         "400":
           description: Invalid query parameters
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "401":
+          description: Missing or invalid Bearer token
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "403":
+          description: Authenticated actor is not an admin
           content:
             application/json:
               schema:

@@ -52,6 +52,40 @@ func TestOpenAPIUsesTheOperatorAccessBoundary(t *testing.T) {
 			t.Fatalf("%s must explicitly remain public, got %#v", path, operation.Security)
 		}
 	}
+	for _, tc := range []struct {
+		path, method string
+		responses    []string
+	}{
+		{"/resources", "get", []string{"401"}},
+		{"/resources", "post", []string{"401", "403"}},
+		{"/resources/{id}", "patch", []string{"401", "403"}},
+		{"/resources/{id}/archive", "post", []string{"401", "403"}},
+		{"/resources/{id}/unarchive", "post", []string{"401", "403"}},
+		{"/resources/{id}/profile", "put", []string{"401", "403"}},
+		{"/resources/{id}/profile", "patch", []string{"401", "403"}},
+		{"/resources/{id}/profile", "delete", []string{"401", "403"}},
+		{"/resources/{id}/relations", "post", []string{"401", "403"}},
+		{"/resource-relations/{id}", "delete", []string{"401", "403"}},
+		{"/audit-events", "get", []string{"401", "403"}},
+		{"/resources/{id}/audit-events", "get", []string{"401", "403"}},
+	} {
+		operation := doc.Paths.Value(tc.path).Get
+		switch tc.method {
+		case "post":
+			operation = doc.Paths.Value(tc.path).Post
+		case "patch":
+			operation = doc.Paths.Value(tc.path).Patch
+		case "put":
+			operation = doc.Paths.Value(tc.path).Put
+		case "delete":
+			operation = doc.Paths.Value(tc.path).Delete
+		}
+		for _, status := range tc.responses {
+			if operation.Responses.Value(status) == nil {
+				t.Fatalf("%s %s must document %s", tc.method, tc.path, status)
+			}
+		}
+	}
 }
 
 func TestOpenAPINumericIDsUseInt64(t *testing.T) {
