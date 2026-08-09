@@ -116,16 +116,21 @@ curl -X POST http://localhost:8080/auth/login \
   -d '{"email":"admin@example.com","password":"secret123"}'
 ```
 
-Additional API smoke test:
+Additional API smoke test (authenticated — every operational endpoint requires
+a Backend Bearer Credential):
 
 ```bash
-curl http://localhost:8080/resources
-curl http://localhost:8080/resources/1/profile
-curl http://localhost:8080/environments
-curl http://localhost:8080/owners
-curl http://localhost:8080/roles
-curl http://localhost:8080/resource-types
-curl http://localhost:8080/relation-types
+# 1. Run the login curl above and copy the "token" value from its JSON response.
+TOKEN="<paste-token-here>"
+
+# 2. Smoke requests with the bearer token:
+curl -H "Authorization: Bearer $TOKEN" http://localhost:8080/resources
+curl -H "Authorization: Bearer $TOKEN" http://localhost:8080/resources/1/profile
+curl -H "Authorization: Bearer $TOKEN" http://localhost:8080/environments
+curl -H "Authorization: Bearer $TOKEN" http://localhost:8080/owners
+curl -H "Authorization: Bearer $TOKEN" http://localhost:8080/roles
+curl -H "Authorization: Bearer $TOKEN" http://localhost:8080/resource-types
+curl -H "Authorization: Bearer $TOKEN" http://localhost:8080/relation-types
 ```
 
 API documentation:

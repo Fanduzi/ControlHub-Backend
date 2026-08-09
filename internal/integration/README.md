@@ -16,7 +16,8 @@ MySQL-backed integration tests run against disposable Testcontainers databases.
 `operator_access_boundary_test.go` consumes `internal/testsupport/operatoraccess`,
 the same test-only operation table used by the API and OpenAPI tests. Saved
 statement mutations remain service-authorized by scope and ownership: personal
-statements are owner-only, while shared templates are admin-only.
+statements are owner-only (any role may create personal, including admin;
+update/delete require ownership), while shared templates are admin-only.
 
 ## Exports
 - Test-only helpers guarded by the `integration` build tag

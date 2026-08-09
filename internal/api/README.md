@@ -29,7 +29,7 @@ HTTP handlers, chi routing, CORS middleware, and fake-repo test infrastructure.
 | query_disclosure_handler_test.go | Disclosure policy handler tests |
 | query_saved_statement_handler_test.go | Saved statement handler tests |
 | query_saved_statement_execution_handler_test.go | Template-execution handler tests (strict request decoding, controlled field errors) |
-| operator_access_boundary_test.go | Anonymous, editor, and admin router authorization matrix driven by the shared operatoraccess policy, including 38R conditional saved statements |
+| operator_access_boundary_test.go | Anonymous, editor, and admin router authorization matrix driven by the shared operatoraccess policy, including 38R conditional saved statements (personal by owner — editor or admin — and shared templates admin-only) |
 
 ## Routes
 | Method | Path | Description |

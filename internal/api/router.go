@@ -164,9 +164,8 @@ func NewRouter(deps Dependencies) *chi.Mux {
 		})
 	}
 	// Query disclosure policy routes (Phase 38Q). All four require a fresh
-	// bearer token (same freshness policy as query execution). POST/PUT/DELETE
-	// enforce the admin role inside the handler; GET is available to any
-	// authenticated actor.
+	// bearer token (same freshness policy as query execution). All four,
+	// including GET, enforce the admin role inside the handler.
 	if deps.QueryDisclosureService != nil {
 		router.Group(func(r chi.Router) {
 			r.Use(requireFreshQueryActor(deps.AuthService, deps.QueryExecutionAuth))

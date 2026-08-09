@@ -161,6 +161,19 @@ func TestOperatorAccessBoundary(t *testing.T) {
 		if got, _ := doBoundaryRequest(t, router, http.MethodDelete, listPath+"/3", "", editorToken); got != http.StatusNoContent {
 			t.Fatalf("editor delete own personal = %d, want 204", got)
 		}
+		// Admin is also allowed to create personal statements (only the
+		// shared_template scope is admin-gated); as owner, admin may update
+		// and delete them like any other owner. The admin personal is the
+		// fourth created statement, hence id 4.
+		if got, _ := doBoundaryRequest(t, router, http.MethodPost, listPath, personal, adminToken); got != http.StatusCreated {
+			t.Fatalf("admin create personal = %d, want 201", got)
+		}
+		if got, _ := doBoundaryRequest(t, router, http.MethodPut, listPath+"/4", update, adminToken); got != http.StatusNoContent {
+			t.Fatalf("admin update own personal = %d, want 204", got)
+		}
+		if got, _ := doBoundaryRequest(t, router, http.MethodDelete, listPath+"/4", "", adminToken); got != http.StatusNoContent {
+			t.Fatalf("admin delete own personal = %d, want 204", got)
+		}
 	})
 }
 

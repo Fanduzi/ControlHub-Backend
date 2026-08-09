@@ -53,7 +53,10 @@ func deleteAuthzTestUser(t *testing.T, db *sql.DB, userID uint64) {
 
 func mustLogin(t *testing.T, h http.Handler, email, password string) string {
 	t.Helper()
-	body, _ := json.Marshal(map[string]string{"email": email, "password": password})
+	body, err := json.Marshal(map[string]string{"email": email, "password": password})
+	if err != nil {
+		t.Fatalf("marshal login body for %s: %v", email, err)
+	}
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/auth/login", bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
