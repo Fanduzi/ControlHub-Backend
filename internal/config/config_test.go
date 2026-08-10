@@ -1,13 +1,14 @@
 // Package config tests validate configuration loading behavior.
-// input: internal/config (Config, Load, LoadDotEnv)
+// input: internal/config (Config, Load, LoadDotEnv, ValidateJWTSecret)
 // output: TestConfig* test functions
-// pos: Validates config loading behavior
-// note: if config loading changes, update this header
+// pos: Validates config loading and signing-secret validation behavior
+// note: if config loading or validation changes, update this header
 package config
 
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -45,6 +46,48 @@ func TestLoadDotEnvLoadsMissingValuesWithoutOverridingExistingEnv(t *testing.T) 
 func TestLoadDotEnvIgnoresMissingFile(t *testing.T) {
 	if err := LoadDotEnv(filepath.Join(t.TempDir(), ".env")); err != nil {
 		t.Fatalf("expected missing .env to be ignored, got %v", err)
+	}
+}
+
+func TestValidateJWTSecret_RejectsBlankAndWhitespaceOnly(t *testing.T) {
+	for _, secret := range []string{"", "   ", "\t", "\n", " \t\n "} {
+		if err := ValidateJWTSecret(secret); err == nil {
+			t.Errorf("ValidateJWTSecret(%q) = nil, want error", secret)
+		}
+	}
+}
+
+func TestValidateJWTSecret_RejectsKnownPlaceholders(t *testing.T) {
+	// ADR phase-38x item 6: a deployed instance must not boot with a
+	// guessable signing key, so documented placeholders are hard errors.
+	for _, secret := range []string{"change-me", "CHANGE-ME", "ChangE-Me", "changeme", "secret", "SECRET", "your-secret-key", "override-secret", "OVERRIDE-SECRET", "oVeRrIdE-sEcReT", "<generated-hex-value>", "<GENERATED-HEX-VALUE>"} {
+		err := ValidateJWTSecret(secret)
+		if err == nil {
+			t.Errorf("ValidateJWTSecret(%q) = nil, want error", secret)
+			continue
+		}
+		// The error must be the fixed sentinel: rejection text never varies
+		// with (and so never echoes) the rejected secret.
+		if err != ErrInvalidJWTSecret {
+			t.Errorf("ValidateJWTSecret(%q) = %v, want ErrInvalidJWTSecret", secret, err)
+		}
+	}
+}
+
+func TestValidateJWTSecret_AcceptsNonPlaceholderSecrets(t *testing.T) {
+	for _, secret := range []string{strings.Repeat("a", 32), "9f8a7b6c5d4e3f2a1b0c9d8e7f6a5b4c3d2e1f0a9b8c7d6e5f4a3b2c1d0e9f8a7"} {
+		if err := ValidateJWTSecret(secret); err != nil {
+			t.Errorf("ValidateJWTSecret(%q) = %v, want nil", secret, err)
+		}
+	}
+}
+
+func TestValidateJWTSecret_RejectsShortSecrets(t *testing.T) {
+	for _, secret := range []string{"test-secret", "ci-e2e-secret", strings.Repeat("a", 31)} {
+		err := ValidateJWTSecret(secret)
+		if err != ErrInvalidJWTSecret {
+			t.Errorf("ValidateJWTSecret(%q) = %v, want ErrInvalidJWTSecret", secret, err)
+		}
 	}
 }
 
