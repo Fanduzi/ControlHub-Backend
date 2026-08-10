@@ -5,13 +5,15 @@ Environment variable and .env file loading with sensible defaults.
 ## Files
 | File | Responsibility |
 |------|---------------|
-| config.go | LoadDotEnv (.env loader), Load (reads env vars into Config), Config struct with HTTPAddress helper |
-| config_test.go | Config loading tests |
+| config.go | LoadDotEnv (.env loader), Load (reads env vars into Config), Config struct with HTTPAddress helper, ValidateJWTSecret (rejects blank/whitespace/short/placeholder signing secrets) |
+| config_test.go | Config loading and signing-secret validation tests |
 
 ## Exports
 - `LoadDotEnv() error` — loads .env (graceful if missing)
 - `Load() Config` — reads APP_PORT, DATABASE_DSN, JWT_SECRET from environment
 - `Config` struct with `HTTPAddress()` method
+- `ValidateJWTSecret(string) error` — rejects blank, whitespace-only, secrets shorter than 32 UTF-8 bytes, and known placeholders (change-me, changeme, secret, your-secret-key, override-secret, <generated-hex-value>); fixed error text never echoes the secret
+- `ErrInvalidJWTSecret` — sentinel error returned by ValidateJWTSecret
 
 ## Dependencies
 - Upstream: `github.com/joho/godotenv`, `os`
