@@ -23,6 +23,16 @@ make migrate-up
 
 # 4. Copy .env and adjust DSN if needed
 cp .env.example .env
+
+# 5. Generate a real JWT_SECRET and record it in .env (startup rejects blank or placeholder values)
+openssl rand -hex 32
+
+# 6. Bootstrap the operator admin with deployment-supplied credentials.
+#    No seeded login ships with the app; migration 00016 retired the old example.com accounts.
+#    Requires DATABASE_DSN (from .env), BOOTSTRAP_ADMIN_EMAIL, and BOOTSTRAP_ADMIN_PASSWORD.
+BOOTSTRAP_ADMIN_EMAIL="<operator-email>" \
+BOOTSTRAP_ADMIN_PASSWORD="<operator-password>" \
+go run ./cmd/bootstrap-admin
 ```
 
 ### Local Bigint Cutover With Historical Import
@@ -89,7 +99,7 @@ You can still override local defaults inline for a single run:
 
 ```bash
 DATABASE_DSN="controlhub:controlhub_dev@tcp(127.0.0.1:3306)/controlhub?parseTime=true&charset=utf8mb4" \
-JWT_SECRET="override-secret" \
+JWT_SECRET="$(openssl rand -hex 32)" \
 make run
 ```
 
@@ -103,17 +113,21 @@ Health check:
 curl http://localhost:8080/health
 ```
 
-Seeded login credentials:
+Bootstrap an admin account before logging in (no seeded login ships with the
+app; the old example.com accounts were retired by migration 00016):
 
-- `admin@example.com` / `secret123`
-- `editor@example.com` / `secret123`
+```bash
+BOOTSTRAP_ADMIN_EMAIL="<operator-email>" \
+BOOTSTRAP_ADMIN_PASSWORD="<operator-password>" \
+go run ./cmd/bootstrap-admin
+```
 
-Login smoke test:
+Login smoke test with the bootstrapped credentials:
 
 ```bash
 curl -X POST http://localhost:8080/auth/login \
   -H "Content-Type: application/json" \
-  -d '{"email":"admin@example.com","password":"secret123"}'
+  -d '{"email":"<operator-email>","password":"<operator-password>"}'
 ```
 
 Additional API smoke test (authenticated — every operational endpoint requires
