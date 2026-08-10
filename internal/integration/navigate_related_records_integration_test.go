@@ -32,6 +32,12 @@ func setupNavigateFixture(t *testing.T) (string, uint64, *sql.DB) {
 	db := setupTestDB(t)
 	ctx := context.Background()
 
+	// Provision this test's own admin actor: the 0002 seed users are disabled
+	// by the seed-credential remediation migration and must not be assumed
+	// active by any test.
+	navAdminID := insertAuthzTestUser(t, db, "nav-admin@example.com", "admin")
+	t.Cleanup(func() { deleteAuthzTestUser(t, db, navAdminID) })
+
 	// Create the FK fixture tables.
 	mustExec(t, db, "CREATE DATABASE IF NOT EXISTS query_e2e_aux")
 	mustExec(t, db, "DROP VIEW IF EXISTS query_e2e_aux.schema_parent_summary")
@@ -169,7 +175,8 @@ func setupNavigateFixture(t *testing.T) (string, uint64, *sql.DB) {
 
 func navLogin(t *testing.T, baseURL string) string {
 	t.Helper()
-	body := `{"email":"admin@example.com","password":"secret123"}`
+	// The fixture admin provisioned by setupNavigateFixture.
+	body := `{"email":"nav-admin@example.com","password":"secret123"}`
 	resp, err := http.Post(baseURL+"/auth/login", "application/json", bytes.NewBufferString(body))
 	if err != nil {
 		t.Fatalf("login request: %v", err)

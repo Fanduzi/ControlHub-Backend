@@ -77,12 +77,19 @@ func TestOperatorAccessBoundary(t *testing.T) {
 	// does not depend on fuzz-mutable seed profiles.
 	targetID := createBoundaryQueryTarget(t, resourceRepo)
 
-	editorToken := mustLogin(t, router, "editor@example.com", "secret123")
-	adminToken := mustLogin(t, router, "admin@example.com", "secret123")
+	// The boundary provisions its own admin/editor actors: the 0002 seed
+	// users are disabled by the seed-credential remediation migration and
+	// must not be assumed active by any test.
+	adminID := insertAuthzTestUser(t, db, "authz-boundary-admin@example.com", "admin")
+	t.Cleanup(func() { deleteAuthzTestUser(t, db, adminID) })
+	adminToken := mustLogin(t, router, "authz-boundary-admin@example.com", "secret123")
+	editorID := insertAuthzTestUser(t, db, "authz-boundary-editor@example.com", "editor")
+	t.Cleanup(func() { deleteAuthzTestUser(t, db, editorID) })
+	editorToken := mustLogin(t, router, "authz-boundary-editor@example.com", "secret123")
 	// A second editor provides the personal non-owner actor for 38R cases.
-	editor2ID := insertAuthzTestUser(t, db, "authz-boundary-editor@example.com", "editor")
+	editor2ID := insertAuthzTestUser(t, db, "authz-boundary-editor2@example.com", "editor")
 	t.Cleanup(func() { deleteAuthzTestUser(t, db, editor2ID) })
-	editor2Token := mustLogin(t, router, "authz-boundary-editor@example.com", "secret123")
+	editor2Token := mustLogin(t, router, "authz-boundary-editor2@example.com", "secret123")
 
 	// Anonymous: every protected operation rejects with 401.
 	for _, op := range operatoraccess.All() {

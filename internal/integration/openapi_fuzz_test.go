@@ -154,7 +154,11 @@ func TestOpenAPIFuzz(t *testing.T) {
 	// Run Schemathesis via the shell wrapper.
 	t.Logf("Invoking Schemathesis against %s", baseURL)
 	cmd := exec.Command("/bin/bash", scriptPath, baseURL)
-	login, err := authService.Login("admin@example.com", "secret123")
+	// Provision this test's own admin actor on the fuzz DB: the 0002 seed
+	// users are disabled by the seed-credential remediation migration.
+	fuzzAdminID := insertAuthzTestUser(t, db, "fuzz-admin@example.com", "admin")
+	t.Cleanup(func() { deleteAuthzTestUser(t, db, fuzzAdminID) })
+	login, err := authService.Login("fuzz-admin@example.com", "secret123")
 	if err != nil {
 		t.Fatalf("login fuzz admin: %v", err)
 	}
