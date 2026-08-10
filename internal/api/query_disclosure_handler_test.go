@@ -1,10 +1,15 @@
 // Package api provides tests for the Phase 38Q query disclosure policy
 // handlers: bearer-required access, admin-only writes, strict request decoding,
 // validation, and error mapping.
+// input: net/http, net/http/httptest, testing, chi router, internal/model, internal/service
+// output: TestDisclosure_* handler tests
+// pos: Verifies bearer/admin authorization, strict decoding, and 400/403/404/409 error mapping
+// note: if this file changes, update header and README.md
 package api
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -403,6 +408,55 @@ func TestDisclosure_CreateValidationFailed(t *testing.T) {
 		disclosureAdminToken(t)))
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("validation failed = %d, want 400", rec.Code)
+	}
+}
+
+// TestDisclosure_CreateConflict proves a duplicate-scope create maps to 409
+// with the disclosure_policy_conflict error code. WHY: a second policy for the
+// same column must not be a 500; the conflict is a predictable client error.
+func TestDisclosure_CreateConflict(t *testing.T) {
+	stub := &stubQueryDisclosure{createErr: service.ErrQueryDisclosurePolicyConflict}
+	router := newDisclosureRouter(stub)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, disclosureRequest(http.MethodPost, "/query-disclosure-policies",
+		`{"targetResourceId":22,"databaseName":"orders","objectName":"users","columnName":"email","mode":"raw_copy_allowed"}`,
+		disclosureAdminToken(t)))
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("conflict = %d, want 409; body=%s", rec.Code, rec.Body.String())
+	}
+	var body struct {
+		Error string `json:"error"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode body: %v", err)
+	}
+	if body.Error != "disclosure_policy_conflict" {
+		t.Fatalf("error code = %q, want disclosure_policy_conflict", body.Error)
+	}
+}
+
+// TestDisclosure_UpdateNotFound proves updating a scope with no existing
+// policy maps to 404 with the disclosure_policy_not_found error code. WHY: a
+// missing policy is not a server failure; callers must be able to distinguish
+// it from 500.
+func TestDisclosure_UpdateNotFound(t *testing.T) {
+	stub := &stubQueryDisclosure{updateErr: service.ErrQueryDisclosurePolicyNotFound}
+	router := newDisclosureRouter(stub)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, disclosureRequest(http.MethodPut, "/query-disclosure-policies",
+		`{"targetResourceId":22,"databaseName":"orders","objectName":"users","columnName":"email","mode":"masked_no_copy"}`,
+		disclosureAdminToken(t)))
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("update not found = %d, want 404; body=%s", rec.Code, rec.Body.String())
+	}
+	var body struct {
+		Error string `json:"error"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode body: %v", err)
+	}
+	if body.Error != "disclosure_policy_not_found" {
+		t.Fatalf("error code = %q, want disclosure_policy_not_found", body.Error)
 	}
 }
 

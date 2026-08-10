@@ -1,4 +1,8 @@
 // Package service provides tests for QueryDisclosureService.
+// input: testing, internal/model, fakeDisclosureReader, fakeDisclosureWriter, fakeSchemaInspector, fakeTargetRepo
+// output: TestPreflight*, TestPreflightRelatedRecords*, TestApply*, TestUpdatePolicy*, TestCreatePolicy* functions
+// pos: Verifies fail-closed preflight/apply behavior and policy CRUD sentinel mapping
+// note: if this file changes, update header and README.md
 package service
 
 import (
@@ -40,13 +44,16 @@ func disclosureScopeKey(database, object, column string) string {
 }
 
 // fakeDisclosureWriter implements QueryDisclosureWriter (no-op for tests).
-type fakeDisclosureWriter struct{}
+type fakeDisclosureWriter struct {
+	insertErr error
+	updateErr error
+}
 
 func (f *fakeDisclosureWriter) Insert(_ context.Context, _ model.ResultDisclosurePolicyUpsertRequest) (uint64, error) {
-	return 1, nil
+	return 1, f.insertErr
 }
 func (f *fakeDisclosureWriter) Update(_ context.Context, _ model.ResultDisclosurePolicyUpsertRequest) error {
-	return nil
+	return f.updateErr
 }
 func (f *fakeDisclosureWriter) Delete(_ context.Context, _ uint64, _, _, _ string) error {
 	return nil
@@ -672,4 +679,45 @@ func TestPreflight_SelectLiteralStillAllowed(t *testing.T) {
 
 func isDisclosureBlocked(err error) bool {
 	return errors.Is(err, ErrQueryDisclosureBlocked)
+}
+
+// TestUpdatePolicy_NotFoundMapsToSentinel proves that updating a scope with no
+// existing policy maps sql.ErrNoRows to ErrQueryDisclosurePolicyNotFound.
+// WHY: the HTTP layer must answer 404 for a missing policy, not 500.
+func TestUpdatePolicy_NotFoundMapsToSentinel(t *testing.T) {
+	t.Parallel()
+
+	targets := &fakeTargetRepo{targets: []model.QueryTarget{{ResourceID: 1}}}
+	svc := NewQueryDisclosureService(&fakeDisclosureReader{}, &fakeDisclosureWriter{updateErr: sql.ErrNoRows}, nil, targets)
+	req := model.ResultDisclosurePolicyUpsertRequest{
+		TargetResourceID: 1,
+		DatabaseName:     "orders_db",
+		ObjectName:       "customers",
+		ColumnName:       "email",
+		Mode:             model.ResultDisclosureMaskedNoCopy,
+	}
+	err := svc.UpdatePolicy(context.Background(), req)
+	if !errors.Is(err, ErrQueryDisclosurePolicyNotFound) {
+		t.Fatalf("UpdatePolicy error = %v, want ErrQueryDisclosurePolicyNotFound", err)
+	}
+}
+
+// TestCreatePolicy_ConflictSentinelPassesThrough proves CreatePolicy forwards
+// the repository conflict sentinel unchanged. WHY: the handler relies on the
+// seam translating a duplicate scope into HTTP 409.
+func TestCreatePolicy_ConflictSentinelPassesThrough(t *testing.T) {
+	t.Parallel()
+
+	targets := &fakeTargetRepo{targets: []model.QueryTarget{{ResourceID: 1}}}
+	svc := NewQueryDisclosureService(&fakeDisclosureReader{}, &fakeDisclosureWriter{insertErr: ErrQueryDisclosurePolicyConflict}, nil, targets)
+	req := model.ResultDisclosurePolicyUpsertRequest{
+		TargetResourceID: 1,
+		DatabaseName:     "orders_db",
+		ObjectName:       "customers",
+		ColumnName:       "email",
+		Mode:             model.ResultDisclosureMaskedNoCopy,
+	}
+	if _, err := svc.CreatePolicy(context.Background(), req); !errors.Is(err, ErrQueryDisclosurePolicyConflict) {
+		t.Fatalf("CreatePolicy error = %v, want ErrQueryDisclosurePolicyConflict", err)
+	}
 }

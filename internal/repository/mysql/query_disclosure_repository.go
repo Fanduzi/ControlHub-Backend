@@ -1,5 +1,5 @@
 // Package mysql provides MySQL-backed repository implementations.
-// input: database/sql, context, errors, fmt, internal/model
+// input: database/sql, context, errors, fmt, internal/model, internal/service, github.com/go-sql-driver/mysql
 // output: NewQueryDisclosureRepository, MySQLQueryDisclosureRepository (QueryDisclosureReader, QueryDisclosureWriter)
 // pos: MySQL data access for Phase 38Q governed result-disclosure policy CRUD
 // note: if this file changes, update header and README.md
@@ -11,7 +11,10 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/go-sql-driver/mysql"
+
 	"github.com/fan/controlhub/internal/model"
+	"github.com/fan/controlhub/internal/service"
 )
 
 // QueryDisclosureReader reads disclosure policies.
@@ -94,9 +97,10 @@ func (r *MySQLQueryDisclosureRepository) GetByScope(ctx context.Context, targetR
 	return p, nil
 }
 
-// Insert creates a new disclosure policy. Returns the new row ID. Returns an
-// error if a policy with the same scope already exists (UNIQUE constraint on
-// target_resource_id, database_name, object_name, column_name).
+// Insert creates a new disclosure policy. Returns the new row ID. Returns
+// service.ErrQueryDisclosurePolicyConflict if a policy with the same scope
+// already exists (UNIQUE constraint on target_resource_id, database_name,
+// object_name, column_name).
 func (r *MySQLQueryDisclosureRepository) Insert(ctx context.Context, req model.ResultDisclosurePolicyUpsertRequest) (uint64, error) {
 	const q = `insert into query_result_disclosure_policies
 	           (target_resource_id, database_name, object_name, column_name, mode)
@@ -105,6 +109,10 @@ func (r *MySQLQueryDisclosureRepository) Insert(ctx context.Context, req model.R
 		req.TargetResourceID, req.DatabaseName, req.ObjectName, req.ColumnName, string(req.Mode),
 	)
 	if err != nil {
+		var mysqlErr *mysql.MySQLError
+		if errors.As(err, &mysqlErr) && mysqlErr.Number == 1062 {
+			return 0, service.ErrQueryDisclosurePolicyConflict
+		}
 		return 0, fmt.Errorf("insert disclosure policy: %w", err)
 	}
 	id, err := res.LastInsertId()

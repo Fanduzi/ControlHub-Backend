@@ -1633,6 +1633,12 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/ErrorResponse"
+        "409":
+          description: A disclosure policy already exists for the requested scope
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
         "500":
           description: Unexpected server failure
           content:
@@ -1684,7 +1690,7 @@ paths:
               schema:
                 $ref: "#/components/schemas/ErrorResponse"
         "404":
-          description: Query target not found
+          description: Query target not found, or the disclosure policy does not exist
           content:
             application/json:
               schema:

@@ -188,6 +188,10 @@ func writeDisclosureError(w http.ResponseWriter, err error) {
 		writeJSONError(w, http.StatusForbidden, "query_result_disclosure_blocked", err.Error())
 	case errors.Is(err, service.ErrQueryValidationFailed):
 		writeJSONError(w, http.StatusBadRequest, "validation_failed", err.Error())
+	case errors.Is(err, service.ErrQueryDisclosurePolicyConflict):
+		writeJSONError(w, http.StatusConflict, "disclosure_policy_conflict", err.Error())
+	case errors.Is(err, service.ErrQueryDisclosurePolicyNotFound):
+		writeJSONError(w, http.StatusNotFound, "disclosure_policy_not_found", err.Error())
 	default:
 		writeJSONError(w, http.StatusInternalServerError, "internal_error", "an internal error occurred")
 	}

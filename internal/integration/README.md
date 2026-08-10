@@ -10,6 +10,7 @@ MySQL-backed integration tests run against disposable Testcontainers databases.
 | operator_access_boundary_test.go | Proves the complete Operator Access Boundary matrix against current database state using the shared operatoraccess policy |
 | authz_test_support_test.go | Shared authorization constants, login/bearer/user helpers, and query handler stubs |
 | seed_credential_remediation_test.go | Regression guard for the forward-only seed-disable migration: proves the published seed users are inactive and their credentials rejected |
+| query_disclosure_repository_test.go | Proves MySQL disclosure policy repository behavior: CRUD lifecycle, duplicate-scope insert mapped to the conflict sentinel, not-found cases (`sql.ErrNoRows`), idempotent delete, empty list, and deterministic list ordering |
 | bootstrap_admin_command_test.go | Runs the operator bootstrap-admin CLI against MySQL and verifies authentication-compatible creation, reactivation, version rotation, and cleanup |
 | *_test.go | Exercises repository, API, and migration behavior against MySQL |
 

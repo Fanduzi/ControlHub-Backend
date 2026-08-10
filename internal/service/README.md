@@ -44,6 +44,7 @@ Business logic layer with interface-based repository dependencies. Each service 
 - `NewMemoryUserStore`, `AuthService.WithClock`, `AuthService.ChangeUserRole`/`SetUserActive`/`ResetUserPassword` — Authorization Version seams
 - `ErrResourceNotFound`, `ErrInvalidCredentials`, `ErrInvalidToken`, `ErrQueryDisclosureBlocked` sentinel errors
 - `ErrQuerySavedStatementNotFound`, `ErrQueryForbidden` — saved-statement service sentinel errors
+- `ErrQueryDisclosurePolicyConflict`, `ErrQueryDisclosurePolicyNotFound` — disclosure policy CRUD sentinel errors (duplicate scope → 409, missing scope on update → 404)
 - `QueryDisclosureReader`, `QueryDisclosureWriter` — narrow disclosure policy access interfaces
 - `DisclosurePlan`, `ColumnDisclosure` — resolved per-column disclosure decisions
 - `ColumnProvenance`, `ProjectionPlan` — column source identity from SQL/AST or FK metadata

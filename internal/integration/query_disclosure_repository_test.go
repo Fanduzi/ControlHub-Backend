@@ -3,6 +3,10 @@
 // Package integration provides Testcontainers-backed tests for the Phase 38Q
 // disclosure policy repository operations: CRUD lifecycle, duplicate insert
 // rejection, not-found cases, and idempotent delete.
+// input: testing, database/sql, internal/model, internal/repository/mysql, internal/service
+// output: TestQueryDisclosureRepository_* integration tests
+// pos: Proves MySQL disclosure policy CRUD, duplicate conflict sentinel, not-found, and idempotent delete against real MySQL
+// note: if this file changes, update header and README.md
 package integration
 
 import (
@@ -13,6 +17,7 @@ import (
 
 	"github.com/fan/controlhub/internal/model"
 	"github.com/fan/controlhub/internal/repository/mysql"
+	"github.com/fan/controlhub/internal/service"
 )
 
 // newDisclosureRepoTestDB returns a clean DB connection plus a disclosure
@@ -96,9 +101,10 @@ func TestQueryDisclosureRepository_CRUDLifecycle(t *testing.T) {
 }
 
 // TestQueryDisclosureRepository_DuplicateInsertRejected proves that inserting a
-// policy with a scope that already exists returns an error (UNIQUE constraint on
-// target_resource_id, database_name, object_name, column_name). WHY: the scope
-// uniqueness invariant prevents conflicting policies for the same column.
+// policy with a scope that already exists returns the disclosure conflict
+// sentinel (UNIQUE constraint on target_resource_id, database_name,
+// object_name, column_name). WHY: the API layer must answer 409 for a
+// duplicate scope, and the sentinel is the seam that makes that possible.
 func TestQueryDisclosureRepository_DuplicateInsertRejected(t *testing.T) {
 	_, repo := newDisclosureRepoTestDB(t)
 	ctx := context.Background()
@@ -114,9 +120,9 @@ func TestQueryDisclosureRepository_DuplicateInsertRejected(t *testing.T) {
 	if _, err := repo.Insert(ctx, req); err != nil {
 		t.Fatalf("first insert: %v", err)
 	}
-	// Second insert with the same scope must fail.
-	if _, err := repo.Insert(ctx, req); err == nil {
-		t.Fatal("duplicate insert must be rejected")
+	// Second insert with the same scope must map MySQL 1062 to the conflict sentinel.
+	if _, err := repo.Insert(ctx, req); !errors.Is(err, service.ErrQueryDisclosurePolicyConflict) {
+		t.Fatalf("duplicate insert err = %v, want service.ErrQueryDisclosurePolicyConflict", err)
 	}
 }
 

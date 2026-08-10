@@ -2,6 +2,10 @@
 // results. It resolves column provenance from SQL AST or FK metadata, looks up
 // per-column policies, and transforms result rows server-side before
 // serialization. Absence of an exact matching policy is blocked (fail-closed).
+// input: context, database/sql, errors, fmt, mysql DSN, internal/model, QuerySchemaInspector, QueryTargetRepository
+// output: QueryDisclosureService, DisclosurePlan, ColumnDisclosure, QueryDisclosureReader/Writer, ErrQueryDisclosure* sentinels
+// pos: fail-closed disclosure governance for governed query results (Phase 38Q)
+// note: if this file changes, update header and README.md
 package service
 
 import (
@@ -18,6 +22,14 @@ import (
 // ErrQueryDisclosureBlocked is returned when any column in a query's
 // projection lacks an exact disclosure policy. It is the fail-closed default.
 var ErrQueryDisclosureBlocked = errors.New("query blocked by result disclosure policy")
+
+// ErrQueryDisclosurePolicyConflict is returned when a policy already exists
+// for the requested scope (UNIQUE scope invariant).
+var ErrQueryDisclosurePolicyConflict = errors.New("disclosure policy already exists for scope")
+
+// ErrQueryDisclosurePolicyNotFound is returned when an update targets a scope
+// with no existing policy.
+var ErrQueryDisclosurePolicyNotFound = errors.New("disclosure policy not found")
 
 // QueryDisclosureReader reads disclosure policies.
 type QueryDisclosureReader interface {
@@ -97,7 +109,13 @@ func (s *QueryDisclosureService) UpdatePolicy(ctx context.Context, req model.Res
 	if err := s.validateTargetExists(ctx, req.TargetResourceID); err != nil {
 		return err
 	}
-	return s.writer.Update(ctx, req)
+	if err := s.writer.Update(ctx, req); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return ErrQueryDisclosurePolicyNotFound
+		}
+		return err
+	}
+	return nil
 }
 
 // DeletePolicy removes a disclosure policy by scope. It is idempotent.

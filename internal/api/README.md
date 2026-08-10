@@ -40,6 +40,10 @@ HTTP handlers, chi routing, CORS middleware, and fake-repo test infrastructure.
 | POST | /query-disclosure-policies | Create a disclosure policy (handler-admin) |
 | PUT | /query-disclosure-policies | Update a disclosure policy (handler-admin) |
 | DELETE | /query-disclosure-policies | Delete a disclosure policy (handler-admin) |
+
+Disclosure policy error mapping: a duplicate-scope POST answers `409` with the
+`disclosure_policy_conflict` code, and updating a scope with no existing policy
+answers `404` with `disclosure_policy_not_found`.
 | GET | /query-targets/{id}/saved-statements | List saved statements for a query target |
 | POST | /query-targets/{id}/saved-statements | Create a saved statement |
 | PUT | /query-targets/{id}/saved-statements/{statementId} | Update a saved statement |
