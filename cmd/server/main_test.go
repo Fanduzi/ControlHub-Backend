@@ -2,13 +2,14 @@ package main
 
 import (
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/fan/controlhub/internal/config"
 )
 
 func TestBuildDependencies_WiresProfileServiceIntoResourceService(t *testing.T) {
-	deps := buildDependencies(nil, config.Config{JWTSecret: "test-secret"})
+	deps := buildDependencies(nil, config.Config{JWTSecret: strings.Repeat("a", 32)})
 	if deps.ProfileService == nil {
 		t.Fatal("ProfileService is nil")
 	}

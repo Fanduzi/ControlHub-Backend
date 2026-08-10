@@ -1,8 +1,8 @@
 // Package main provides the ControlHub application entry point.
-// input: config.LoadDotEnv/Load, mysql repositories, api.NewRouter, service constructors
+// input: config.LoadDotEnv/Load/ValidateJWTSecret, mysql repositories, api.NewRouter, service constructors
 // output: main() binary entry point
-// pos: Application bootstrap, manual DI container; wires saved-statement template execution into the governed execution service
-// note: if wiring changes, update this header and cmd/server/README.md
+// pos: Application bootstrap, manual DI container; validates the signing secret before opening the database, then wires saved-statement template execution into the governed execution service
+// note: if wiring or startup validation changes, update this header and cmd/server/README.md
 package main
 
 import (
@@ -25,6 +25,10 @@ func main() {
 	}
 
 	cfg := config.Load()
+
+	if err := config.ValidateJWTSecret(cfg.JWTSecret); err != nil {
+		log.Fatalf("config: %v", err)
+	}
 
 	db, err := sql.Open("mysql", cfg.DatabaseDSN)
 	if err != nil {
