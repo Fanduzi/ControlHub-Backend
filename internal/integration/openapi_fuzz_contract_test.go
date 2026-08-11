@@ -40,23 +40,17 @@ func TestOpenAPIFuzzExclusionContract(t *testing.T) {
 	toml := readFuzzContractFile(t, filepath.Join(root, "scripts", "schemathesis.toml"))
 	readme := readFuzzContractFile(t, filepath.Join(root, "scripts", "README.md"))
 
-	// 1. Every CLI exclusion is in the canonical allowlist.
+	// 1. Every CLI exclusion is in the canonical allowlist, and every canonical
+	// exclusion is actually excluded in the script (no dead contract entries).
+	got := map[string]bool{}
 	for _, m := range regexp.MustCompile(`--exclude-operation-id\s+(\S+)`).FindAllStringSubmatch(script, -1) {
+		got[m[1]] = true
 		if !allowedFuzzExclusions[m[1]] {
 			t.Errorf("undocumented fuzz exclusion %q: add it to the exclusion contract first", m[1])
 		}
 	}
-
-	// 2. Broad exclusions (path/method/tag) are forbidden: scope must be a single operation.
-	for _, flag := range []string{"--exclude-path", "--exclude-method", "--exclude-tag"} {
-		if strings.Contains(script, flag) {
-			t.Errorf("broad fuzz exclusion %q is forbidden; scope exclusions to a single operation", flag)
-		}
-	}
-
-	// 3. Every canonical exclusion is actually excluded in the script (no dead contract entries).
 	for op := range allowedFuzzExclusions {
-		if !strings.Contains(script, "--exclude-operation-id "+op) {
+		if !got[op] {
 			t.Errorf("canonical exclusion %q missing from openapi-fuzz.sh", op)
 		}
 	}

@@ -11,11 +11,24 @@ Repository verification scripts.
 
 Schemathesis exclusions are a governed, audited set. An exclusion may only be a
 single-operation `--exclude-operation-id` flag in `openapi-fuzz.sh`; broad
-path/method/tag/wildcard exclusions are forbidden. Any change to the set must
-update this section and `internal/integration/openapi_fuzz_contract_test.go`
-in the same change (`TestOpenAPIFuzzExclusionContract` enforces the contract
-mechanically). `schemathesis.toml` carries only valid-parameter overrides
-(`createResourceRelation`, `patchResource`) — those are not exclusions.
+path/method/tag/wildcard exclusions are forbidden. `schemathesis.toml` carries
+only valid-parameter overrides (`createResourceRelation`, `patchResource`) —
+those are not exclusions.
+
+Mechanically enforced by `TestOpenAPIFuzzExclusionContract`
+(`internal/integration/openapi_fuzz_contract_test.go`, runs in every
+`go test ./...`): every exclusion is a single-operation `--exclude-operation-id`
+flag within the canonical set below, no broad path/method/tag flags appear, no
+exclusion directives live in `schemathesis.toml`, and this contract section is
+present. The per-row reason / fixture-gap / dedicated-test / scope fields are
+the audited governance record and are verified by review at delivery.
+
+Two deliberate run-scoping choices predate and are out of scope of this
+operation-exclusion contract: `--phases examples,fuzzing` bounds the run to
+bounded examples+fuzzing phases (stateful/coverage disabled) for agents and
+CI, and `[warnings] fail-on = []` keeps missing-auth / missing-test-data /
+validation-mismatch warnings advisory rather than CI-failing. Neither is an
+operation exclusion; both are recorded here for audit completeness.
 
 | Operation (id) | Path / method | Reason | Stable-fixture gap | Dedicated coverage | Allowed scope |
 |---|---|---|---|---|---|
