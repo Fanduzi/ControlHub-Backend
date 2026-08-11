@@ -185,8 +185,9 @@ func TestParseDisposableDSN_AcceptsLoopbackDisposableDatabase(t *testing.T) {
 }
 
 func TestParseDisposableDSN_RejectsEmptyOrMalformed(t *testing.T) {
-	for _, dsn := range []string{"", "not-a-dsn", "controlhub:pass@tcp(127.0.0.1:3306)/"} {
-		t.Run(dsn, func(t *testing.T) {
+	dsns := []string{"", "not-a-dsn", "controlhub:pass@tcp(127.0.0.1:3306)/"}
+	for i, dsn := range dsns {
+		t.Run(fmt.Sprintf("malformed-%d", i), func(t *testing.T) {
 			if _, err := parseDisposableDSN(dsn); err == nil {
 				t.Fatal("expected rejection of empty/malformed DSN")
 			}
@@ -394,4 +395,66 @@ func TestUpsertFixtures_PropagatesFailureWithoutPartialOutcomes(t *testing.T) {
 	}
 	// The caller (runFixtureBootstrap) rolls back on this error, so no
 	// partial outcome set is ever returned.
+}
+
+// fakeTxStarter records transaction lifecycle for runFixtureBootstrap.
+type fakeTxStarter struct {
+	exec       *fakeExecutor
+	committed  bool
+	rolledBack bool
+}
+
+func (f *fakeTxStarter) BeginTx(_ context.Context, _ *sql.TxOptions) (fixtureTransaction, error) {
+	return &fakeTx{starter: f}, nil
+}
+
+type fakeTx struct {
+	starter *fakeTxStarter
+}
+
+func (t *fakeTx) Commit() error   { t.starter.committed = true; return nil }
+func (t *fakeTx) Rollback() error { t.starter.rolledBack = true; return nil }
+func (t *fakeTx) ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error) {
+	return t.starter.exec.ExecContext(ctx, query, args...)
+}
+func (t *fakeTx) QueryRowContext(ctx context.Context, query string, args ...any) rowScanner {
+	return t.starter.exec.QueryRowContext(ctx, query, args...)
+}
+
+func TestRunFixtureBootstrap_CommitsWhenBothUpsertsSucceed(t *testing.T) {
+	starter := &fakeTxStarter{exec: &fakeExecutor{
+		roleIDs:  map[string]uint64{"admin": 1, "editor": 2},
+		affected: map[string]int64{"admin@fixture.invalid": 1, "editor@fixture.invalid": 1},
+	}}
+	set := fixtureSet{
+		Admin:  fixtureCredential{Email: "admin@fixture.invalid", Password: "pw", Role: "admin"},
+		Editor: fixtureCredential{Email: "editor@fixture.invalid", Password: "pw", Role: "editor"},
+	}
+	if _, err := runFixtureBootstrap(context.Background(), starter, set); err != nil {
+		t.Fatalf("err: %v", err)
+	}
+	if !starter.committed || starter.rolledBack {
+		t.Fatal("expected commit without rollback on success")
+	}
+}
+
+func TestRunFixtureBootstrap_RollsBackWhenAnUpsertFails(t *testing.T) {
+	starter := &fakeTxStarter{exec: &fakeExecutor{
+		roleIDs:  map[string]uint64{"admin": 1, "editor": 2},
+		affected: map[string]int64{"admin@fixture.invalid": 1},
+		failExec: true,
+	}}
+	set := fixtureSet{
+		Admin:  fixtureCredential{Email: "admin@fixture.invalid", Password: "pw", Role: "admin"},
+		Editor: fixtureCredential{Email: "editor@fixture.invalid", Password: "pw", Role: "editor"},
+	}
+	if _, err := runFixtureBootstrap(context.Background(), starter, set); err == nil {
+		t.Fatal("expected the upsert failure to propagate")
+	}
+	if starter.committed {
+		t.Fatal("must not commit after a failed upsert")
+	}
+	if !starter.rolledBack {
+		t.Fatal("expected rollback after a failed upsert — a partial fixture administrator must never persist")
+	}
 }

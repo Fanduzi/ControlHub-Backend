@@ -142,7 +142,7 @@ func main() {
 		log.Fatalf("fixture database verification failed: %v", err)
 	}
 
-	outcomes, err := runFixtureBootstrap(context.Background(), db, cfg.Fixtures)
+	outcomes, err := runFixtureBootstrap(context.Background(), dbTxStarter{db}, cfg.Fixtures)
 	if err != nil {
 		log.Fatalf("fixture bootstrap: %v", err)
 	}
@@ -342,27 +342,52 @@ type dmlExecutor interface {
 	QueryRowContext(ctx context.Context, query string, args ...any) rowScanner
 }
 
-// txAdapter adapts *sql.Tx to dmlExecutor for unit-testability.
-type txAdapter struct{ tx *sql.Tx }
-
-func (a txAdapter) ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error) {
-	return a.tx.ExecContext(ctx, query, args...)
+// fixtureTransaction is the transaction surface runFixtureBootstrap needs:
+// commit/rollback plus the upsert executor.
+type fixtureTransaction interface {
+	Commit() error
+	Rollback() error
+	dmlExecutor
 }
 
-func (a txAdapter) QueryRowContext(ctx context.Context, query string, args ...any) rowScanner {
-	return a.tx.QueryRowContext(ctx, query, args...)
+// fixtureTxStarter begins a fixture transaction; dbTxStarter bridges *sql.DB.
+type fixtureTxStarter interface {
+	BeginTx(ctx context.Context, opts *sql.TxOptions) (fixtureTransaction, error)
+}
+
+// dbTxStarter adapts *sql.DB to fixtureTxStarter.
+type dbTxStarter struct{ db *sql.DB }
+
+func (s dbTxStarter) BeginTx(ctx context.Context, opts *sql.TxOptions) (fixtureTransaction, error) {
+	tx, err := s.db.BeginTx(ctx, opts)
+	if err != nil {
+		return nil, err
+	}
+	return txWrapper{tx}, nil
+}
+
+// txWrapper adapts *sql.Tx to fixtureTransaction (rowScanner return).
+type txWrapper struct{ tx *sql.Tx }
+
+func (w txWrapper) Commit() error   { return w.tx.Commit() }
+func (w txWrapper) Rollback() error { return w.tx.Rollback() }
+func (w txWrapper) ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error) {
+	return w.tx.ExecContext(ctx, query, args...)
+}
+func (w txWrapper) QueryRowContext(ctx context.Context, query string, args ...any) rowScanner {
+	return w.tx.QueryRowContext(ctx, query, args...)
 }
 
 // runFixtureBootstrap upserts both fixture identities (admin / editor) in ONE
 // transaction: either both persist or neither does, so a partial failure can
 // never leave a usable fixture administrator behind. Reactivation rotates
 // authorization_version so previously issued Bearer Credentials die.
-func runFixtureBootstrap(ctx context.Context, db *sql.DB, set fixtureSet) (map[string]bootstrapOutcome, error) {
-	tx, err := db.BeginTx(ctx, nil)
+func runFixtureBootstrap(ctx context.Context, starter fixtureTxStarter, set fixtureSet) (map[string]bootstrapOutcome, error) {
+	tx, err := starter.BeginTx(ctx, nil)
 	if err != nil {
 		return nil, fmt.Errorf("begin fixture transaction: %w", err)
 	}
-	outcomes, err := upsertFixtures(ctx, txAdapter{tx}, set)
+	outcomes, err := upsertFixtures(ctx, tx, set)
 	if err != nil {
 		_ = tx.Rollback()
 		return nil, err
