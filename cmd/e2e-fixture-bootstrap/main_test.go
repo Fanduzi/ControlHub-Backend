@@ -1,16 +1,22 @@
 // Package main tests the test/CI-only fixture provisioning command's seams:
-// auth-compatible hashing, mandatory fixture credentials, legacy-seed refusal,
-// and password-safe reporting.
-// input: testing, bytes, strings, os
-// output: TestHashPassword_*, TestResolveFixtureConfig_*, TestLegacySeedRefusal_*, TestPrintReport_* unit tests
+// auth-compatible hashing, mandatory fixture credentials, the explicit
+// test-mode capability, the disposable-DSN isolation gate, migration-00016
+// verification, legacy-seed refusal, and password-safe reporting.
+// input: testing, bytes, strings, context, database/sql, os
+// output: TestHashPassword_*, TestResolveFixtureConfig_*, TestParseDisposableDSN_*,
+// TestVerifyFixtureDatabase_*, TestPrintReport_* unit tests
 // pos: Locks the command contract: SHA-256 hashing stays login-compatible, every
-// fixture credential is mandatory with no defaults, the published 0002 seed
-// identities are refused, and neither password nor hash ever reaches output.
+// fixture credential and the test-mode capability are mandatory with no
+// defaults, the metadata DSN must be a loopback disposable *_e2e database,
+// migration 00016 must be applied with retired seeds inactive, the published
+// 0002 seed identities are refused, and neither password nor hash ever reaches
+// output.
 // note: if this file changes, update header and README.md
 package main
 
 import (
 	"bytes"
+	"context"
 	"strings"
 	"testing"
 )
@@ -34,6 +40,27 @@ func TestHashPassword_IsNotTheRawPassword(t *testing.T) {
 	}
 }
 
+func TestResolveFixtureConfig_RequiresExplicitTestMode(t *testing.T) {
+	for _, mode := range []string{"", "   ", "0", "yes", "true", "2"} {
+		t.Run("mode="+mode, func(t *testing.T) {
+			t.Setenv("CONTROLHUB_E2E_FIXTURE_MODE", mode)
+			stubFixtureCredentials(t)
+			if _, err := resolveFixtureConfig(); err == nil {
+				t.Fatal("expected refusal without CONTROLHUB_E2E_FIXTURE_MODE=1")
+			}
+		})
+	}
+}
+
+func TestResolveFixtureConfig_RequiresDedicatedE2EDSN(t *testing.T) {
+	t.Setenv("CONTROLHUB_E2E_FIXTURE_MODE", "1")
+	t.Setenv("E2E_FIXTURE_DATABASE_DSN", "")
+	stubFixtureCredentials(t)
+	if _, err := resolveFixtureConfig(); err == nil || !strings.Contains(err.Error(), "E2E_FIXTURE_DATABASE_DSN") {
+		t.Fatalf("expected dedicated-DSN error, got %v", err)
+	}
+}
+
 func TestResolveFixtureConfig_RequiresAllFourCredentials(t *testing.T) {
 	cases := []struct {
 		name           string
@@ -53,6 +80,8 @@ func TestResolveFixtureConfig_RequiresAllFourCredentials(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("CONTROLHUB_E2E_FIXTURE_MODE", "1")
+			t.Setenv("E2E_FIXTURE_DATABASE_DSN", "controlhub:pass@tcp(127.0.0.1:3306)/controlhub_e2e?parseTime=true")
 			t.Setenv("E2E_FIXTURE_ADMIN_EMAIL", tc.adminEmail)
 			t.Setenv("E2E_FIXTURE_ADMIN_PASSWORD", tc.adminPassword)
 			t.Setenv("E2E_FIXTURE_EDITOR_EMAIL", tc.editorEmail)
@@ -64,29 +93,9 @@ func TestResolveFixtureConfig_RequiresAllFourCredentials(t *testing.T) {
 	}
 }
 
-func TestResolveFixtureConfig_RejectsNonInvalidFixtureEmails(t *testing.T) {
-	cases := []struct {
-		name  string
-		email string
-	}{
-		{"real-looking operator email", "ops@example.com"},
-		{"production-looking email", "admin@controlhub.io"},
-		{"no tld", "e2e-admin@localhost"},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			t.Setenv("E2E_FIXTURE_ADMIN_EMAIL", tc.email)
-			t.Setenv("E2E_FIXTURE_ADMIN_PASSWORD", "admin-pw")
-			t.Setenv("E2E_FIXTURE_EDITOR_EMAIL", "editor@fixture.invalid")
-			t.Setenv("E2E_FIXTURE_EDITOR_PASSWORD", "editor-pw")
-			if _, err := resolveFixtureConfig(); err == nil {
-				t.Fatal("expected refusal of a non-.invalid fixture email")
-			}
-		})
-	}
-}
-
 func TestResolveFixtureConfig_NormalizesEmailsOnly(t *testing.T) {
+	t.Setenv("CONTROLHUB_E2E_FIXTURE_MODE", "1")
+	t.Setenv("E2E_FIXTURE_DATABASE_DSN", "controlhub:pass@tcp(127.0.0.1:3306)/controlhub_e2e?parseTime=true")
 	t.Setenv("E2E_FIXTURE_ADMIN_EMAIL", "  E2E.Admin@Fixture.INVALID  ")
 	t.Setenv("E2E_FIXTURE_ADMIN_PASSWORD", "admin-pw")
 	t.Setenv("E2E_FIXTURE_EDITOR_EMAIL", "  e2e.Editor@Fixture.Invalid  ")
@@ -95,13 +104,13 @@ func TestResolveFixtureConfig_NormalizesEmailsOnly(t *testing.T) {
 	if err != nil {
 		t.Fatalf("err: %v", err)
 	}
-	if cfg.Admin.Email != "e2e.admin@fixture.invalid" {
-		t.Fatalf("admin email = %q, want lowercased and trimmed", cfg.Admin.Email)
+	if cfg.Fixtures.Admin.Email != "e2e.admin@fixture.invalid" {
+		t.Fatalf("admin email = %q, want lowercased and trimmed", cfg.Fixtures.Admin.Email)
 	}
-	if cfg.Editor.Email != "e2e.editor@fixture.invalid" {
-		t.Fatalf("editor email = %q, want lowercased and trimmed", cfg.Editor.Email)
+	if cfg.Fixtures.Editor.Email != "e2e.editor@fixture.invalid" {
+		t.Fatalf("editor email = %q, want lowercased and trimmed", cfg.Fixtures.Editor.Email)
 	}
-	if cfg.Admin.Password != "admin-pw" || cfg.Editor.Password != "editor-pw" {
+	if cfg.Fixtures.Admin.Password != "admin-pw" || cfg.Fixtures.Editor.Password != "editor-pw" {
 		t.Fatal("passwords must be preserved byte-for-byte")
 	}
 }
@@ -114,6 +123,8 @@ func TestResolveFixtureConfig_RefusesLegacySeedEmails(t *testing.T) {
 		"  editor@example.com ",
 	} {
 		t.Run(email, func(t *testing.T) {
+			t.Setenv("CONTROLHUB_E2E_FIXTURE_MODE", "1")
+			t.Setenv("E2E_FIXTURE_DATABASE_DSN", "controlhub:pass@tcp(127.0.0.1:3306)/controlhub_e2e?parseTime=true")
 			t.Setenv("E2E_FIXTURE_ADMIN_EMAIL", email)
 			t.Setenv("E2E_FIXTURE_ADMIN_PASSWORD", "admin-pw")
 			t.Setenv("E2E_FIXTURE_EDITOR_EMAIL", "editor@fixture.invalid")
@@ -126,6 +137,8 @@ func TestResolveFixtureConfig_RefusesLegacySeedEmails(t *testing.T) {
 }
 
 func TestResolveFixtureConfig_RefusesLegacySeedPassword(t *testing.T) {
+	t.Setenv("CONTROLHUB_E2E_FIXTURE_MODE", "1")
+	t.Setenv("E2E_FIXTURE_DATABASE_DSN", "controlhub:pass@tcp(127.0.0.1:3306)/controlhub_e2e?parseTime=true")
 	t.Setenv("E2E_FIXTURE_ADMIN_EMAIL", "admin@fixture.invalid")
 	t.Setenv("E2E_FIXTURE_ADMIN_PASSWORD", "secret123")
 	t.Setenv("E2E_FIXTURE_EDITOR_EMAIL", "editor@fixture.invalid")
@@ -137,6 +150,8 @@ func TestResolveFixtureConfig_RefusesLegacySeedPassword(t *testing.T) {
 
 func TestResolveFixtureConfig_ErrorsNeverLeakPasswords(t *testing.T) {
 	password := "hunter2-very-secret"
+	t.Setenv("CONTROLHUB_E2E_FIXTURE_MODE", "1")
+	t.Setenv("E2E_FIXTURE_DATABASE_DSN", "controlhub:pass@tcp(127.0.0.1:3306)/controlhub_e2e?parseTime=true")
 	t.Setenv("E2E_FIXTURE_ADMIN_PASSWORD", password)
 	t.Setenv("E2E_FIXTURE_EDITOR_PASSWORD", "editor-pw")
 
@@ -144,6 +159,131 @@ func TestResolveFixtureConfig_ErrorsNeverLeakPasswords(t *testing.T) {
 	t.Setenv("E2E_FIXTURE_EDITOR_EMAIL", "editor@fixture.invalid")
 	if _, err := resolveFixtureConfig(); err == nil || strings.Contains(err.Error(), password) {
 		t.Fatalf("missing-email error leaks the password: %v", err)
+	}
+}
+
+func TestParseDisposableDSN_AcceptsLoopbackDisposableDatabase(t *testing.T) {
+	for _, dsn := range []string{
+		"controlhub:pass@tcp(127.0.0.1:3306)/controlhub_e2e?parseTime=true",
+		"controlhub:pass@tcp(localhost:3306)/controlhub_issue15_e2e",
+		"controlhub:pass@tcp([::1]:3306)/ops_e2e",
+		"controlhub:pass@tcp(127.0.0.1)/controlhub_e2e",
+	} {
+		t.Run(dsn, func(t *testing.T) {
+			if _, err := parseDisposableDSN(dsn); err != nil {
+				t.Fatalf("expected valid disposable DSN, got %v", err)
+			}
+		})
+	}
+}
+
+func TestParseDisposableDSN_RejectsEmptyOrMalformed(t *testing.T) {
+	for _, dsn := range []string{"", "not-a-dsn", "controlhub:pass@tcp(127.0.0.1:3306)/"} {
+		t.Run(dsn, func(t *testing.T) {
+			if _, err := parseDisposableDSN(dsn); err == nil {
+				t.Fatal("expected rejection of empty/malformed DSN")
+			}
+		})
+	}
+}
+
+func TestParseDisposableDSN_RejectsRemoteOrProductionLikeHosts(t *testing.T) {
+	for _, dsn := range []string{
+		"controlhub:pass@tcp(db.example.com:3306)/controlhub_e2e",
+		"controlhub:pass@tcp(10.0.0.5:3306)/controlhub_e2e",
+		"controlhub:pass@tcp(192.168.1.10:3306)/controlhub_e2e",
+		"controlhub:pass@tcp(172.17.0.2:3306)/controlhub_e2e",
+		"controlhub:pass@tcp(host.docker.internal:3306)/controlhub_e2e",
+	} {
+		t.Run(dsn, func(t *testing.T) {
+			if _, err := parseDisposableDSN(dsn); err == nil {
+				t.Fatal("expected rejection of remote/production-like host")
+			}
+		})
+	}
+}
+
+func TestParseDisposableDSN_RejectsDefaultOrNonDisposableDatabaseNames(t *testing.T) {
+	for _, dsn := range []string{
+		"controlhub:pass@tcp(127.0.0.1:3306)/controlhub",
+		"controlhub:pass@tcp(127.0.0.1:3306)/controlhub_test",
+		"controlhub:pass@tcp(127.0.0.1:3306)/production",
+		"controlhub:pass@tcp(127.0.0.1:3306)/ControlHub_E2E",
+	} {
+		t.Run(dsn, func(t *testing.T) {
+			if _, err := parseDisposableDSN(dsn); err == nil {
+				t.Fatal("expected rejection of non-disposable database name")
+			}
+		})
+	}
+}
+
+// fakeProbe implements fixtureProbe with canned per-query results.
+type fakeProbe struct {
+	rows map[string]fakeRow
+}
+
+type fakeRow struct {
+	values []any
+	err    error
+}
+
+func (f *fakeProbe) QueryRowContext(_ context.Context, query string, args ...any) rowScanner {
+	key := query
+	for _, a := range args {
+		key += "|" + strings.ToLower(a.(string))
+	}
+	row := f.rows[key]
+	return &fakeRow{values: row.values, err: row.err}
+}
+
+func (f *fakeRow) Scan(dest ...any) error {
+	if f.err != nil {
+		return f.err
+	}
+	for i, d := range dest {
+		switch v := d.(type) {
+		case *int64:
+			*v = f.values[i].(int64)
+		case *int:
+			*v = f.values[i].(int)
+		default:
+			panic("unhandled scan type")
+		}
+	}
+	return nil
+}
+
+func TestVerifyFixtureDatabase_RejectsUnmigratedDatabase(t *testing.T) {
+	probe := &fakeProbe{rows: map[string]fakeRow{
+		"select max(version_id) from goose_db_version": {values: []any{int64(15)}},
+	}}
+	err := verifyFixtureDatabase(context.Background(), probe)
+	if err == nil || !strings.Contains(err.Error(), "00016") {
+		t.Fatalf("expected migration-00016 refusal, got %v", err)
+	}
+}
+
+func TestVerifyFixtureDatabase_RejectsActiveRetiredSeeds(t *testing.T) {
+	probe := &fakeProbe{rows: map[string]fakeRow{
+		"select max(version_id) from goose_db_version":                   {values: []any{int64(16)}},
+		"select is_active from users where email = ?|admin@example.com":  {values: []any{1}},
+		"select is_active from users where email = ?|editor@example.com": {values: []any{0}},
+	}}
+	err := verifyFixtureDatabase(context.Background(), probe)
+	if err == nil || !strings.Contains(err.Error(), "admin@example.com") {
+		t.Fatalf("expected active-seed refusal, got %v", err)
+	}
+}
+
+func TestVerifyFixtureDatabase_AcceptsMigratedDatabaseWithInactiveSeeds(t *testing.T) {
+	probe := &fakeProbe{rows: map[string]fakeRow{
+		"select max(version_id) from goose_db_version":                   {values: []any{int64(16)}},
+		"select is_active from users where email = ?|admin@example.com":  {values: []any{0}},
+		"select is_active from users where email = ?|editor@example.com": {values: []any{0}},
+	}}
+	if err := verifyFixtureDatabase(context.Background(), probe); err != nil {
+		t.Fatalf("expected acceptance, got %v", err)
 	}
 }
 
@@ -168,4 +308,12 @@ func TestPrintReport_NeverContainsPasswordOrHash(t *testing.T) {
 			t.Fatalf("output leaks %q:\n%s", bad, out)
 		}
 	}
+}
+
+func stubFixtureCredentials(t *testing.T) {
+	t.Helper()
+	t.Setenv("E2E_FIXTURE_ADMIN_EMAIL", "admin@fixture.invalid")
+	t.Setenv("E2E_FIXTURE_ADMIN_PASSWORD", "admin-pw")
+	t.Setenv("E2E_FIXTURE_EDITOR_EMAIL", "editor@fixture.invalid")
+	t.Setenv("E2E_FIXTURE_EDITOR_PASSWORD", "editor-pw")
 }

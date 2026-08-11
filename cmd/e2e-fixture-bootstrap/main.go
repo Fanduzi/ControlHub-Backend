@@ -1,20 +1,37 @@
 // Package main is an explicit TEST/CI-ONLY fixture provisioning command.
 //
 // input: os, strings, errors, context, database/sql, crypto/sha256, encoding/hex, fmt, io, log, internal/config, go-sql-driver/mysql
-// output: main() — explicit one-shot binary (go run ./cmd/e2e-fixture-bootstrap), runFixtureBootstrap seam, resolveFixtureConfig, hashPassword, printReport
+// output: main() — explicit one-shot binary (go run ./cmd/e2e-fixture-bootstrap), runFixtureBootstrap seam, resolveFixtureConfig, parseDisposableDSN, verifyFixtureDatabase, hashPassword, printReport
 // pos: Creates or reactivates admin AND editor fixture identities for isolated
-// E2E runs from operator-supplied env; requires .invalid fixture emails (RFC
-// 2606) and refuses the published 0002 seed identities; never invoked at
+// E2E runs, gated by an explicit test-mode capability, a dedicated disposable
+// metadata DSN (loopback host + *_e2e database name), migration-00016
+// verification with retired seeds inactive, .invalid fixture emails (RFC
+// 2606), and refusal of the published 0002 seed identities. Never invoked at
 // server startup, never logs passwords.
 // note: if this file changes, update header and README.md
 //
-// This command exists ONLY to provision throwaway operator identities for
-// isolated frontend E2E runs (local and CI). It is the counterpart of
-// cmd/bootstrap-admin for the editor role and adds a hard guard: it refuses
-// to recreate the published seed accounts (admin@example.com / editor@example.com
-// / secret123) that migration 00016 disabled. Production authorization
-// semantics are untouched — the identities it creates are ordinary users
-// subject to the same server-enforced role matrix.
+// SAFETY BOUNDARY (the primary production guard):
+//
+// This command cannot mutate a production database by accident. It requires
+// ALL of the following before any SQL runs:
+//
+//  1. CONTROLHUB_E2E_FIXTURE_MODE=1 — an explicit test-only capability;
+//     missing or any other value fails loudly.
+//  2. E2E_FIXTURE_DATABASE_DSN — a DEDICATED E2E metadata DSN. The generic
+//     DATABASE_DSN is never read. The DSN must parse, its host must be a
+//     loopback address (127.0.0.1 / localhost / ::1), and its database name
+//     must match the disposable naming rule ^[a-z0-9_]+_e2e$ (the default
+//     `controlhub` database and any production-like name are rejected).
+//  3. The database must be migrated to at least 00016 AND the retired 0002
+//     seed accounts (admin@example.com / editor@example.com) must both exist
+//     and be inactive; otherwise provisioning refuses to run.
+//  4. Fixture emails must end with `.invalid` (RFC 2606 reserved TLD) and the
+//     retired seed identities are refused.
+//
+// The `.invalid` email rule is an ADDITIONAL guard — it is NOT the primary
+// production-safety boundary. A misconfigured production DSN cannot even be
+// accepted by the dedicated-DSN gate (loopback + disposable name), and the
+// migration/seed verification runs before any mutation.
 package main
 
 import (
@@ -27,9 +44,10 @@ import (
 	"io"
 	"log"
 	"os"
+	"regexp"
 	"strings"
 
-	_ "github.com/go-sql-driver/mysql"
+	"github.com/go-sql-driver/mysql"
 
 	"github.com/fan/controlhub/internal/config"
 )
@@ -58,6 +76,32 @@ const (
 	outcomeReactivated bootstrapOutcome = "reactivated"
 )
 
+const (
+	// fixtureModeEnv is the explicit test-only capability. Any value other
+	// than "1" refuses to run.
+	fixtureModeEnv = "CONTROLHUB_E2E_FIXTURE_MODE"
+	// fixtureModeRequired is the only accepted capability value.
+	fixtureModeRequired = "1"
+	// fixtureDSNEnv is the DEDICATED E2E metadata DSN. The generic
+	// DATABASE_DSN is intentionally never read by this command.
+	fixtureDSNEnv = "E2E_FIXTURE_DATABASE_DSN"
+)
+
+// disposableDatabaseNameRE is the strict disposable-database naming rule:
+// lowercase alphanumerics and underscores, ending in `_e2e`. The default
+// `controlhub` database and production-like names never match.
+var disposableDatabaseNameRE = regexp.MustCompile(`^[a-z0-9_]+_e2e$`)
+
+// loopbackHosts are the only acceptable metadata database hosts: loopback
+// addresses (including Testcontainers' host-port mappings, which surface on
+// 127.0.0.1). Anything else — remote, container-network, or DNS hostnames —
+// is refused.
+var loopbackHosts = map[string]bool{
+	"127.0.0.1": true,
+	"localhost": true,
+	"::1":       true,
+}
+
 // legacySeedEmails are the 0002-published accounts migration 00016 disabled.
 // This seam must never recreate them — E2E must use explicit per-run fixtures.
 var legacySeedEmails = map[string]bool{
@@ -67,6 +111,10 @@ var legacySeedEmails = map[string]bool{
 
 // legacySeedPassword is the 0002-published shared password.
 const legacySeedPassword = "secret123"
+
+// migration00016 is the seed-credential remediation migration that must be
+// applied before fixtures can be provisioned.
+const migration00016 = 16
 
 func main() {
 	if err := config.LoadDotEnv(); err != nil {
@@ -78,37 +126,56 @@ func main() {
 		log.Fatalf("%v", err)
 	}
 
-	dsn := strings.TrimSpace(os.Getenv("DATABASE_DSN"))
-	if dsn == "" {
-		log.Fatal("DATABASE_DSN is not set (set it in .env or export it)")
-	}
-	db, err := sql.Open("mysql", dsn)
+	db, err := sql.Open("mysql", cfg.DSN)
 	if err != nil {
-		log.Fatalf("open controlhub db: %v", err)
+		log.Fatalf("open controlhub e2e db: %v", err)
 	}
 	defer db.Close()
 
-	outcomes, err := runFixtureBootstrap(context.Background(), db, cfg)
+	if err := verifyFixtureDatabase(context.Background(), dbAdapter{db}); err != nil {
+		log.Fatalf("fixture database verification failed: %v", err)
+	}
+
+	outcomes, err := runFixtureBootstrap(context.Background(), db, cfg.Fixtures)
 	if err != nil {
 		log.Fatalf("fixture bootstrap: %v", err)
 	}
-	printReport(os.Stdout, cfg, outcomes)
+	printReport(os.Stdout, cfg.Fixtures, outcomes)
 }
 
-// resolveFixtureConfig requires ALL FOUR credentials from the environment.
-// A missing or blank value is a hard error — the command never invents a
-// default identity or password. The published 0002 seed identities are
-// refused outright so E2E can never silently regress to them.
-func resolveFixtureConfig() (fixtureSet, error) {
+// fixtureConfig is the fully validated command configuration.
+type fixtureConfig struct {
+	DSN      string
+	Fixtures fixtureSet
+}
+
+// resolveFixtureConfig requires the explicit test-mode capability, the
+// dedicated disposable E2E DSN, and ALL FOUR fixture credentials from the
+// environment. Missing or blank values are hard errors — the command never
+// invents a default identity, password, or database. Every gate runs before
+// any database connection or mutation.
+func resolveFixtureConfig() (fixtureConfig, error) {
+	if os.Getenv(fixtureModeEnv) != fixtureModeRequired {
+		return fixtureConfig{}, fmt.Errorf("%s=%s is required (explicit test-only capability; refusing to run without it)", fixtureModeEnv, fixtureModeRequired)
+	}
+
+	dsn := strings.TrimSpace(os.Getenv(fixtureDSNEnv))
+	if dsn == "" {
+		return fixtureConfig{}, fmt.Errorf("%s is not set (supply the dedicated disposable E2E metadata DSN; the generic DATABASE_DSN is never read)", fixtureDSNEnv)
+	}
+	if _, err := parseDisposableDSN(dsn); err != nil {
+		return fixtureConfig{}, err
+	}
+
 	admin, err := resolveCredential("E2E_FIXTURE_ADMIN", "admin")
 	if err != nil {
-		return fixtureSet{}, err
+		return fixtureConfig{}, err
 	}
 	editor, err := resolveCredential("E2E_FIXTURE_EDITOR", "editor")
 	if err != nil {
-		return fixtureSet{}, err
+		return fixtureConfig{}, err
 	}
-	return fixtureSet{Admin: admin, Editor: editor}, nil
+	return fixtureConfig{DSN: dsn, Fixtures: fixtureSet{Admin: admin, Editor: editor}}, nil
 }
 
 func resolveCredential(prefix, role string) (fixtureCredential, error) {
@@ -122,9 +189,9 @@ func resolveCredential(prefix, role string) (fixtureCredential, error) {
 	}
 	email = strings.ToLower(email)
 	if !strings.HasSuffix(email, ".invalid") {
-		// RFC 2606 reserved TLD: a fixture identity can never collide with a
-		// real operator account, so an accidental production DATABASE_DSN
-		// cannot take over an existing operator.
+		// RFC 2606 reserved TLD: an additional guard so a fixture identity can
+		// never collide with a real operator account. This is NOT the primary
+		// production-safety boundary — the dedicated-DSN gate is.
 		return fixtureCredential{}, fmt.Errorf("E2E fixture %s email %q must end with .invalid (RFC 2606 reserved TLD; fixtures must never collide with real operator accounts)", role, email)
 	}
 	if legacySeedEmails[email] {
@@ -134,6 +201,118 @@ func resolveCredential(prefix, role string) (fixtureCredential, error) {
 		return fixtureCredential{}, fmt.Errorf("refusing the published seed password for the E2E %s fixture: migration 00016 disabled the 0002 accounts; provision an explicit per-run password", role)
 	}
 	return fixtureCredential{Email: email, Password: password, Role: role}, nil
+}
+
+// disposableDSN is a parsed, validated E2E metadata DSN.
+type disposableDSN struct {
+	// Addr is the canonical loopback host:port (e.g. "127.0.0.1:3306").
+	Addr string
+	// DBName is the validated disposable database name (matches *_e2e).
+	DBName string
+}
+
+// parseDisposableDSN validates the dedicated E2E metadata DSN:
+//   - parses with the MySQL driver's parser (rejects malformed DSNs);
+//   - host must be a loopback address (127.0.0.1 / localhost / ::1);
+//   - database name must match the disposable naming rule ^[a-z0-9_]+_e2e$;
+//   - the default `controlhub` database and empty names are rejected.
+//
+// This is the PRIMARY production-safety boundary: a misconfigured production
+// DSN (remote host or production database name) is refused before any
+// connection or mutation.
+func parseDisposableDSN(dsn string) (disposableDSN, error) {
+	cfg, err := mysql.ParseDSN(dsn)
+	if err != nil {
+		return disposableDSN{}, fmt.Errorf("E2E fixture DSN is malformed: %v", err)
+	}
+	if cfg.Net != "tcp" {
+		return disposableDSN{}, fmt.Errorf("E2E fixture DSN must use tcp (got %q)", cfg.Net)
+	}
+	host, _, err := splitHostPort(cfg.Addr)
+	if err != nil || !loopbackHosts[host] {
+		return disposableDSN{}, fmt.Errorf("E2E fixture DSN host %q is not a loopback address (127.0.0.1 / localhost / ::1); refusing a non-local metadata database", cfg.Addr)
+	}
+	if cfg.DBName == "" {
+		return disposableDSN{}, fmt.Errorf("E2E fixture DSN has no database name")
+	}
+	if cfg.DBName == "controlhub" {
+		return disposableDSN{}, fmt.Errorf("E2E fixture DSN must not use the default %q database; provision a dedicated disposable database", cfg.DBName)
+	}
+	if !disposableDatabaseNameRE.MatchString(cfg.DBName) {
+		return disposableDSN{}, fmt.Errorf("E2E fixture DSN database name %q does not match the disposable naming rule ^[a-z0-9_]+_e2e$", cfg.DBName)
+	}
+	return disposableDSN{Addr: cfg.Addr, DBName: cfg.DBName}, nil
+}
+
+// splitHostPort splits "host" or "host:port" (bracketed IPv6 allowed).
+func splitHostPort(addr string) (host string, port string, err error) {
+	if strings.HasPrefix(addr, "[") {
+		end := strings.Index(addr, "]")
+		if end == -1 {
+			return "", "", errors.New("unterminated IPv6 bracket")
+		}
+		host = addr[1:end]
+		rest := addr[end+1:]
+		if rest != "" {
+			if !strings.HasPrefix(rest, ":") {
+				return "", "", errors.New("malformed address")
+			}
+			port = rest[1:]
+		}
+		return host, port, nil
+	}
+	if idx := strings.LastIndex(addr, ":"); idx != -1 {
+		return addr[:idx], addr[idx+1:], nil
+	}
+	return addr, "", nil
+}
+
+// rowScanner is the minimal scan surface verifyFixtureDatabase needs, so the
+// migration/seed verification is unit-testable without a live database.
+type rowScanner interface {
+	Scan(dest ...any) error
+}
+
+// fixtureProbe is the database surface used by verifyFixtureDatabase.
+// dbAdapter bridges *sql.DB (whose QueryRowContext returns *sql.Row).
+type fixtureProbe interface {
+	QueryRowContext(ctx context.Context, query string, args ...any) rowScanner
+}
+
+// dbAdapter adapts *sql.DB to fixtureProbe for unit-testability.
+type dbAdapter struct{ db *sql.DB }
+
+func (a dbAdapter) QueryRowContext(ctx context.Context, query string, args ...any) rowScanner {
+	return a.db.QueryRowContext(ctx, query, args...)
+}
+
+// verifyFixtureDatabase refuses to provision unless the E2E metadata
+// database is migrated to at least 00016 AND both retired 0002 seed accounts
+// exist and are inactive. Runs before any mutation.
+func verifyFixtureDatabase(ctx context.Context, db fixtureProbe) error {
+	var version int64
+	err := db.QueryRowContext(ctx, `select max(version_id) from goose_db_version`).Scan(&version)
+	if err != nil {
+		return fmt.Errorf("read migration state: %w", err)
+	}
+	if version < migration00016 {
+		return fmt.Errorf("E2E fixture database is at migration %d; migration 00016 (retired seed remediation) must be applied before provisioning", version)
+	}
+
+	for _, email := range []string{"admin@example.com", "editor@example.com"} {
+		var active int
+		err := db.QueryRowContext(ctx, `select is_active from users where email = ?`, email).Scan(&active)
+		if errors.Is(err, sql.ErrNoRows) {
+			return fmt.Errorf("retired seed account %s is missing from the E2E fixture database; it must be seeded (migration 0002) and disabled (migration 00016)", email)
+		}
+		if err != nil {
+			return fmt.Errorf("read retired seed account %s: %w", email, err)
+		}
+		if active != 0 {
+			return fmt.Errorf("retired seed account %s is active; migration 00016 must leave the published seeds disabled", email)
+		}
+	}
+	return nil
 }
 
 // hashPassword hashes with the exact SHA-256 hex scheme internal/service uses
@@ -197,8 +376,8 @@ func upsertFixtureUser(ctx context.Context, db *sql.DB, cred fixtureCredential) 
 	}
 }
 
-// printReport prints ONLY identities, roles, and outcomes. Passwords and
-// hashes are never part of the report.
+// printReport prints ONLY identities, roles, and outcomes. Passwords, hashes,
+// and the DSN are never part of the report.
 func printReport(w io.Writer, set fixtureSet, outcomes map[string]bootstrapOutcome) {
 	fmt.Fprintln(w, "e2e-fixture-bootstrap (test/CI-only provisioning)")
 	for _, cred := range []fixtureCredential{set.Admin, set.Editor} {
