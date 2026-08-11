@@ -17,6 +17,9 @@ package main
 import (
 	"bytes"
 	"context"
+	"database/sql"
+	"errors"
+	"fmt"
 	"strings"
 	"testing"
 )
@@ -54,10 +57,13 @@ func TestResolveFixtureConfig_RequiresExplicitTestMode(t *testing.T) {
 
 func TestResolveFixtureConfig_RequiresDedicatedE2EDSN(t *testing.T) {
 	t.Setenv("CONTROLHUB_E2E_FIXTURE_MODE", "1")
+	// The generic DATABASE_DSN is set to a perfectly valid disposable DSN: a
+	// regression to reading it must FAIL this test.
+	t.Setenv("DATABASE_DSN", "controlhub:pass@tcp(127.0.0.1:3306)/controlhub_e2e")
 	t.Setenv("E2E_FIXTURE_DATABASE_DSN", "")
 	stubFixtureCredentials(t)
 	if _, err := resolveFixtureConfig(); err == nil || !strings.Contains(err.Error(), "E2E_FIXTURE_DATABASE_DSN") {
-		t.Fatalf("expected dedicated-DSN error, got %v", err)
+		t.Fatalf("expected dedicated-DSN error even with a valid generic DATABASE_DSN present, got %v", err)
 	}
 }
 
@@ -163,13 +169,14 @@ func TestResolveFixtureConfig_ErrorsNeverLeakPasswords(t *testing.T) {
 }
 
 func TestParseDisposableDSN_AcceptsLoopbackDisposableDatabase(t *testing.T) {
-	for _, dsn := range []string{
+	dsns := []string{
 		"controlhub:pass@tcp(127.0.0.1:3306)/controlhub_e2e?parseTime=true",
-		"controlhub:pass@tcp(localhost:3306)/controlhub_issue15_e2e",
-		"controlhub:pass@tcp([::1]:3306)/ops_e2e",
+		"controlhub:pass@tcp(127.0.0.1:3306)/controlhub_issue15_e2e",
+		"controlhub:pass@tcp([::1]:3306)/controlhub_e2e",
 		"controlhub:pass@tcp(127.0.0.1)/controlhub_e2e",
-	} {
-		t.Run(dsn, func(t *testing.T) {
+	}
+	for i, dsn := range dsns {
+		t.Run(fmt.Sprintf("loopback-disposable-%d", i), func(t *testing.T) {
 			if _, err := parseDisposableDSN(dsn); err != nil {
 				t.Fatalf("expected valid disposable DSN, got %v", err)
 			}
@@ -188,14 +195,16 @@ func TestParseDisposableDSN_RejectsEmptyOrMalformed(t *testing.T) {
 }
 
 func TestParseDisposableDSN_RejectsRemoteOrProductionLikeHosts(t *testing.T) {
-	for _, dsn := range []string{
+	dsns := []string{
 		"controlhub:pass@tcp(db.example.com:3306)/controlhub_e2e",
 		"controlhub:pass@tcp(10.0.0.5:3306)/controlhub_e2e",
 		"controlhub:pass@tcp(192.168.1.10:3306)/controlhub_e2e",
 		"controlhub:pass@tcp(172.17.0.2:3306)/controlhub_e2e",
 		"controlhub:pass@tcp(host.docker.internal:3306)/controlhub_e2e",
-	} {
-		t.Run(dsn, func(t *testing.T) {
+		"controlhub:pass@tcp(localhost:3306)/controlhub_e2e",
+	}
+	for i, dsn := range dsns {
+		t.Run(fmt.Sprintf("non-loopback-host-%d", i), func(t *testing.T) {
 			if _, err := parseDisposableDSN(dsn); err == nil {
 				t.Fatal("expected rejection of remote/production-like host")
 			}
@@ -204,13 +213,16 @@ func TestParseDisposableDSN_RejectsRemoteOrProductionLikeHosts(t *testing.T) {
 }
 
 func TestParseDisposableDSN_RejectsDefaultOrNonDisposableDatabaseNames(t *testing.T) {
-	for _, dsn := range []string{
+	dsns := []string{
 		"controlhub:pass@tcp(127.0.0.1:3306)/controlhub",
 		"controlhub:pass@tcp(127.0.0.1:3306)/controlhub_test",
 		"controlhub:pass@tcp(127.0.0.1:3306)/production",
+		"controlhub:pass@tcp(127.0.0.1:3306)/production_e2e",
+		"controlhub:pass@tcp(127.0.0.1:3306)/ops_e2e",
 		"controlhub:pass@tcp(127.0.0.1:3306)/ControlHub_E2E",
-	} {
-		t.Run(dsn, func(t *testing.T) {
+	}
+	for i, dsn := range dsns {
+		t.Run(fmt.Sprintf("non-disposable-dbname-%d", i), func(t *testing.T) {
 			if _, err := parseDisposableDSN(dsn); err == nil {
 				t.Fatal("expected rejection of non-disposable database name")
 			}
@@ -245,6 +257,8 @@ func (f *fakeRow) Scan(dest ...any) error {
 		switch v := d.(type) {
 		case *int64:
 			*v = f.values[i].(int64)
+		case *uint64:
+			*v = f.values[i].(uint64)
 		case *int:
 			*v = f.values[i].(int)
 		default:
@@ -256,7 +270,7 @@ func (f *fakeRow) Scan(dest ...any) error {
 
 func TestVerifyFixtureDatabase_RejectsUnmigratedDatabase(t *testing.T) {
 	probe := &fakeProbe{rows: map[string]fakeRow{
-		"select max(version_id) from goose_db_version": {values: []any{int64(15)}},
+		"select coalesce(max(version_id), 0) from goose_db_version where is_applied = 1": {values: []any{int64(15)}},
 	}}
 	err := verifyFixtureDatabase(context.Background(), probe)
 	if err == nil || !strings.Contains(err.Error(), "00016") {
@@ -266,9 +280,9 @@ func TestVerifyFixtureDatabase_RejectsUnmigratedDatabase(t *testing.T) {
 
 func TestVerifyFixtureDatabase_RejectsActiveRetiredSeeds(t *testing.T) {
 	probe := &fakeProbe{rows: map[string]fakeRow{
-		"select max(version_id) from goose_db_version":                   {values: []any{int64(16)}},
-		"select is_active from users where email = ?|admin@example.com":  {values: []any{1}},
-		"select is_active from users where email = ?|editor@example.com": {values: []any{0}},
+		"select coalesce(max(version_id), 0) from goose_db_version where is_applied = 1": {values: []any{int64(16)}},
+		"select is_active from users where email = ?|admin@example.com":                  {values: []any{1}},
+		"select is_active from users where email = ?|editor@example.com":                 {values: []any{0}},
 	}}
 	err := verifyFixtureDatabase(context.Background(), probe)
 	if err == nil || !strings.Contains(err.Error(), "admin@example.com") {
@@ -278,9 +292,9 @@ func TestVerifyFixtureDatabase_RejectsActiveRetiredSeeds(t *testing.T) {
 
 func TestVerifyFixtureDatabase_AcceptsMigratedDatabaseWithInactiveSeeds(t *testing.T) {
 	probe := &fakeProbe{rows: map[string]fakeRow{
-		"select max(version_id) from goose_db_version":                   {values: []any{int64(16)}},
-		"select is_active from users where email = ?|admin@example.com":  {values: []any{0}},
-		"select is_active from users where email = ?|editor@example.com": {values: []any{0}},
+		"select coalesce(max(version_id), 0) from goose_db_version where is_applied = 1": {values: []any{int64(16)}},
+		"select is_active from users where email = ?|admin@example.com":                  {values: []any{0}},
+		"select is_active from users where email = ?|editor@example.com":                 {values: []any{0}},
 	}}
 	if err := verifyFixtureDatabase(context.Background(), probe); err != nil {
 		t.Fatalf("expected acceptance, got %v", err)
@@ -316,4 +330,68 @@ func stubFixtureCredentials(t *testing.T) {
 	t.Setenv("E2E_FIXTURE_ADMIN_PASSWORD", "admin-pw")
 	t.Setenv("E2E_FIXTURE_EDITOR_EMAIL", "editor@fixture.invalid")
 	t.Setenv("E2E_FIXTURE_EDITOR_PASSWORD", "editor-pw")
+}
+
+// fakeExecutor records upsert traffic for the transactional provisioning body.
+type fakeExecutor struct {
+	roleIDs   map[string]uint64
+	affected  map[string]int64
+	failExec  bool
+	execCalls int
+}
+
+func (f *fakeExecutor) ExecContext(_ context.Context, query string, args ...any) (sql.Result, error) {
+	f.execCalls++
+	if f.failExec {
+		return nil, errors.New("injected upsert failure")
+	}
+	email := args[0].(string)
+	return fakeResult{affected: f.affected[email]}, nil
+}
+
+func (f *fakeExecutor) QueryRowContext(_ context.Context, query string, args ...any) rowScanner {
+	return &fakeRow{values: []any{f.roleIDs[args[0].(string)]}}
+}
+
+type fakeResult struct{ affected int64 }
+
+func (r fakeResult) LastInsertId() (int64, error) { return 0, nil }
+func (r fakeResult) RowsAffected() (int64, error) { return r.affected, nil }
+
+func TestUpsertFixtures_BothIdentitiesInOneUnit(t *testing.T) {
+	exec := &fakeExecutor{
+		roleIDs:  map[string]uint64{"admin": 1, "editor": 2},
+		affected: map[string]int64{"admin@fixture.invalid": 1, "editor@fixture.invalid": 1},
+	}
+	set := fixtureSet{
+		Admin:  fixtureCredential{Email: "admin@fixture.invalid", Password: "pw", Role: "admin"},
+		Editor: fixtureCredential{Email: "editor@fixture.invalid", Password: "pw", Role: "editor"},
+	}
+	outcomes, err := upsertFixtures(context.Background(), exec, set)
+	if err != nil {
+		t.Fatalf("err: %v", err)
+	}
+	if outcomes["admin@fixture.invalid"] != outcomeCreated || outcomes["editor@fixture.invalid"] != outcomeCreated {
+		t.Fatalf("unexpected outcomes: %v", outcomes)
+	}
+	if exec.execCalls != 2 {
+		t.Fatalf("expected exactly two upserts, got %d", exec.execCalls)
+	}
+}
+
+func TestUpsertFixtures_PropagatesFailureWithoutPartialOutcomes(t *testing.T) {
+	exec := &fakeExecutor{
+		roleIDs:  map[string]uint64{"admin": 1, "editor": 2},
+		affected: map[string]int64{"admin@fixture.invalid": 1},
+		failExec: true,
+	}
+	set := fixtureSet{
+		Admin:  fixtureCredential{Email: "admin@fixture.invalid", Password: "pw", Role: "admin"},
+		Editor: fixtureCredential{Email: "editor@fixture.invalid", Password: "pw", Role: "editor"},
+	}
+	if _, err := upsertFixtures(context.Background(), exec, set); err == nil {
+		t.Fatal("expected the upsert failure to propagate")
+	}
+	// The caller (runFixtureBootstrap) rolls back on this error, so no
+	// partial outcome set is ever returned.
 }

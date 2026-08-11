@@ -10,20 +10,23 @@ untouched.
 
 ## Safety Boundary (primary production guard)
 
-A misconfigured production `DATABASE_DSN` must never let this command create a
-production administrator. The command therefore refuses to run unless ALL of
-the following hold, **before any database connection or mutation**:
+The command guards against accidental misconfiguration: a production DSN
+cannot create a production administrator by accident. It refuses to run
+unless ALL of the following hold, **before any mutation**:
 
 1. **Explicit test-mode capability**: `CONTROLHUB_E2E_FIXTURE_MODE=1`.
    Missing or any other value fails loudly.
 2. **Dedicated E2E metadata DSN**: `E2E_FIXTURE_DATABASE_DSN`. The generic
-   `DATABASE_DSN` is never read. The DSN must parse, the host must be a
-   loopback address (`127.0.0.1` / `localhost` / `::1` — including
-   Testcontainers' host-port mappings), and the database name must match the
-   disposable naming rule `^[a-z0-9_]+_e2e$`. The default `controlhub`
-   database, empty names, and production-like names are rejected.
+   `DATABASE_DSN` is never read. The DSN must parse (driver errors are never
+   echoed — they can carry secret-bearing parameter values), the host must be
+   a literal loopback address (`127.0.0.1` / `::1`; hostnames such as
+   `localhost` are refused because their resolution cannot be verified
+   locally), and the database name must match the disposable naming rule
+   `^controlhub_[a-z0-9_]*e2e$` (e.g. `controlhub_e2e`). The default
+   `controlhub` database, empty names, and production-like names are
+   rejected.
 3. **Migrated disposable database**: the database must be migrated to at
-   least 00016 AND both retired 0002 seed accounts
+   least 00016 (applied rows only) AND both retired 0002 seed accounts
    (`admin@example.com` / `editor@example.com`) must exist and be inactive;
    otherwise provisioning refuses to run.
 4. **Fixture identity guards** (additional, NOT the primary boundary):
@@ -32,7 +35,9 @@ the following hold, **before any database connection or mutation**:
    seed identities are refused outright.
 
 The `.invalid` email rule is an additional guard only — production safety is
-provided by the dedicated-DSN + capability gates.
+provided by the dedicated-DSN + capability gates. Provisioning is
+transactional: a partial failure never leaves a usable fixture administrator
+behind.
 
 ## Files
 | File | Responsibility |

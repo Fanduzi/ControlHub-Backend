@@ -18,20 +18,25 @@
 //  1. CONTROLHUB_E2E_FIXTURE_MODE=1 — an explicit test-only capability;
 //     missing or any other value fails loudly.
 //  2. E2E_FIXTURE_DATABASE_DSN — a DEDICATED E2E metadata DSN. The generic
-//     DATABASE_DSN is never read. The DSN must parse, its host must be a
-//     loopback address (127.0.0.1 / localhost / ::1), and its database name
-//     must match the disposable naming rule ^[a-z0-9_]+_e2e$ (the default
-//     `controlhub` database and any production-like name are rejected).
-//  3. The database must be migrated to at least 00016 AND the retired 0002
-//     seed accounts (admin@example.com / editor@example.com) must both exist
-//     and be inactive; otherwise provisioning refuses to run.
+//     DATABASE_DSN is never read. The DSN must parse (driver errors are never
+//     echoed), its host must be a literal loopback address (127.0.0.1 / ::1 —
+//     hostnames such as `localhost` are refused because their resolution
+//     cannot be verified locally), and its database name must match the
+//     disposable naming rule ^controlhub_[a-z0-9_]*e2e$ (the default
+//     `controlhub` database and production-like names are rejected).
+//  3. The database must be migrated to at least 00016 (applied rows only)
+//     AND the retired 0002 seed accounts (admin@example.com /
+//     editor@example.com) must both exist and be inactive; otherwise
+//     provisioning refuses to run.
 //  4. Fixture emails must end with `.invalid` (RFC 2606 reserved TLD) and the
 //     retired seed identities are refused.
 //
 // The `.invalid` email rule is an ADDITIONAL guard — it is NOT the primary
-// production-safety boundary. A misconfigured production DSN cannot even be
-// accepted by the dedicated-DSN gate (loopback + disposable name), and the
-// migration/seed verification runs before any mutation.
+// production-safety boundary. The gates above protect against accidental
+// misconfiguration: a production DSN cannot be accepted by the dedicated-DSN
+// gate (literal loopback + disposable name) and the migration/seed
+// verification runs before any mutation. Provisioning is transactional: a
+// partial failure never leaves a usable fixture administrator behind.
 package main
 
 import (
@@ -88,17 +93,18 @@ const (
 )
 
 // disposableDatabaseNameRE is the strict disposable-database naming rule:
-// lowercase alphanumerics and underscores, ending in `_e2e`. The default
-// `controlhub` database and production-like names never match.
-var disposableDatabaseNameRE = regexp.MustCompile(`^[a-z0-9_]+_e2e$`)
+// the ControlHub project prefix and an `e2e` ending (e.g.
+// controlhub_e2e, controlhub_issue15_e2e). The default `controlhub`
+// database and production-like names never match.
+var disposableDatabaseNameRE = regexp.MustCompile(`^controlhub_[a-z0-9_]*e2e$`)
 
-// loopbackHosts are the only acceptable metadata database hosts: loopback
-// addresses (including Testcontainers' host-port mappings, which surface on
-// 127.0.0.1). Anything else — remote, container-network, or DNS hostnames —
-// is refused.
+// loopbackHosts are the only acceptable metadata database hosts: literal
+// loopback addresses (including Testcontainers' host-port mappings, which
+// surface on 127.0.0.1). Hostnames (including `localhost`) are NOT accepted:
+// a name's resolution cannot be verified locally, so a tunneled
+// production-like target can never sneak in under a hostname.
 var loopbackHosts = map[string]bool{
 	"127.0.0.1": true,
-	"localhost": true,
 	"::1":       true,
 }
 
@@ -212,9 +218,14 @@ type disposableDSN struct {
 }
 
 // parseDisposableDSN validates the dedicated E2E metadata DSN:
-//   - parses with the MySQL driver's parser (rejects malformed DSNs);
-//   - host must be a loopback address (127.0.0.1 / localhost / ::1);
-//   - database name must match the disposable naming rule ^[a-z0-9_]+_e2e$;
+//   - parses with the MySQL driver's parser (rejects malformed DSNs; the
+//     driver's raw error is never echoed — it can carry secret-bearing
+//     parameter values);
+//   - host must be a literal loopback address (127.0.0.1 / ::1); hostnames
+//     such as `localhost` are refused because their resolution cannot be
+//     verified locally;
+//   - database name must match the disposable naming rule
+//     ^controlhub_[a-z0-9_]*e2e$;
 //   - the default `controlhub` database and empty names are rejected.
 //
 // This is the PRIMARY production-safety boundary: a misconfigured production
@@ -223,7 +234,7 @@ type disposableDSN struct {
 func parseDisposableDSN(dsn string) (disposableDSN, error) {
 	cfg, err := mysql.ParseDSN(dsn)
 	if err != nil {
-		return disposableDSN{}, fmt.Errorf("E2E fixture DSN is malformed: %v", err)
+		return disposableDSN{}, errors.New("E2E fixture DSN is malformed (rejected by the MySQL driver parser)")
 	}
 	if cfg.Net != "tcp" {
 		return disposableDSN{}, fmt.Errorf("E2E fixture DSN must use tcp (got %q)", cfg.Net)
@@ -239,7 +250,7 @@ func parseDisposableDSN(dsn string) (disposableDSN, error) {
 		return disposableDSN{}, fmt.Errorf("E2E fixture DSN must not use the default %q database; provision a dedicated disposable database", cfg.DBName)
 	}
 	if !disposableDatabaseNameRE.MatchString(cfg.DBName) {
-		return disposableDSN{}, fmt.Errorf("E2E fixture DSN database name %q does not match the disposable naming rule ^[a-z0-9_]+_e2e$", cfg.DBName)
+		return disposableDSN{}, fmt.Errorf("E2E fixture DSN database name %q does not match the disposable naming rule ^controlhub_[a-z0-9_]*e2e$", cfg.DBName)
 	}
 	return disposableDSN{Addr: cfg.Addr, DBName: cfg.DBName}, nil
 }
@@ -287,11 +298,12 @@ func (a dbAdapter) QueryRowContext(ctx context.Context, query string, args ...an
 }
 
 // verifyFixtureDatabase refuses to provision unless the E2E metadata
-// database is migrated to at least 00016 AND both retired 0002 seed accounts
-// exist and are inactive. Runs before any mutation.
+// database is migrated to at least 00016 (is_applied rows only) AND both
+// retired 0002 seed accounts exist and are inactive. Runs before any
+// mutation.
 func verifyFixtureDatabase(ctx context.Context, db fixtureProbe) error {
 	var version int64
-	err := db.QueryRowContext(ctx, `select max(version_id) from goose_db_version`).Scan(&version)
+	err := db.QueryRowContext(ctx, `select coalesce(max(version_id), 0) from goose_db_version where is_applied = 1`).Scan(&version)
 	if err != nil {
 		return fmt.Errorf("read migration state: %w", err)
 	}
@@ -323,13 +335,50 @@ func hashPassword(password string) string {
 	return hex.EncodeToString(sum[:])
 }
 
-// runFixtureBootstrap upserts both fixture identities with their server roles
-// (admin / editor), reactivating when present while rotating
+// dmlExecutor is the write surface used by the upsert path; txAdapter
+// bridges *sql.Tx (whose QueryRowContext returns *sql.Row).
+type dmlExecutor interface {
+	ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error)
+	QueryRowContext(ctx context.Context, query string, args ...any) rowScanner
+}
+
+// txAdapter adapts *sql.Tx to dmlExecutor for unit-testability.
+type txAdapter struct{ tx *sql.Tx }
+
+func (a txAdapter) ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error) {
+	return a.tx.ExecContext(ctx, query, args...)
+}
+
+func (a txAdapter) QueryRowContext(ctx context.Context, query string, args ...any) rowScanner {
+	return a.tx.QueryRowContext(ctx, query, args...)
+}
+
+// runFixtureBootstrap upserts both fixture identities (admin / editor) in ONE
+// transaction: either both persist or neither does, so a partial failure can
+// never leave a usable fixture administrator behind. Reactivation rotates
 // authorization_version so previously issued Bearer Credentials die.
 func runFixtureBootstrap(ctx context.Context, db *sql.DB, set fixtureSet) (map[string]bootstrapOutcome, error) {
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, fmt.Errorf("begin fixture transaction: %w", err)
+	}
+	outcomes, err := upsertFixtures(ctx, txAdapter{tx}, set)
+	if err != nil {
+		_ = tx.Rollback()
+		return nil, err
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, fmt.Errorf("commit fixture transaction: %w", err)
+	}
+	return outcomes, nil
+}
+
+// upsertFixtures performs the per-identity upserts against an executor
+// (inside the caller's transaction).
+func upsertFixtures(ctx context.Context, exec dmlExecutor, set fixtureSet) (map[string]bootstrapOutcome, error) {
 	outcomes := make(map[string]bootstrapOutcome, 2)
 	for _, cred := range []fixtureCredential{set.Admin, set.Editor} {
-		outcome, err := upsertFixtureUser(ctx, db, cred)
+		outcome, err := upsertFixtureUser(ctx, exec, cred)
 		if err != nil {
 			return nil, err
 		}
@@ -338,9 +387,9 @@ func runFixtureBootstrap(ctx context.Context, db *sql.DB, set fixtureSet) (map[s
 	return outcomes, nil
 }
 
-func upsertFixtureUser(ctx context.Context, db *sql.DB, cred fixtureCredential) (bootstrapOutcome, error) {
+func upsertFixtureUser(ctx context.Context, exec dmlExecutor, cred fixtureCredential) (bootstrapOutcome, error) {
 	var roleID uint64
-	err := db.QueryRowContext(ctx, `select id from roles where name = ? limit 1`, cred.Role).Scan(&roleID)
+	err := exec.QueryRowContext(ctx, `select id from roles where name = ? limit 1`, cred.Role).Scan(&roleID)
 	if errors.Is(err, sql.ErrNoRows) {
 		return "", fmt.Errorf("role %q not found in roles table", cred.Role)
 	}
@@ -348,7 +397,7 @@ func upsertFixtureUser(ctx context.Context, db *sql.DB, cred fixtureCredential) 
 		return "", fmt.Errorf("look up role %q: %w", cred.Role, err)
 	}
 
-	res, err := db.ExecContext(ctx, `
+	res, err := exec.ExecContext(ctx, `
 		insert into users (email, password_hash, display_name, role_id)
 		values (?, ?, ?, ?)
 		on duplicate key update

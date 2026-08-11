@@ -21,25 +21,29 @@ with existing real mailboxes; they do not prevent creating a new one.
 ## Decision
 
 `cmd/e2e-fixture-bootstrap` refuses to run unless ALL of the following hold
-before any database connection or mutation:
+before any mutation:
 
 1. `CONTROLHUB_E2E_FIXTURE_MODE=1` — an explicit test-only capability;
    missing or any other value fails loudly.
 2. `E2E_FIXTURE_DATABASE_DSN` — a dedicated E2E metadata DSN; the generic
-   `DATABASE_DSN` is never read. The DSN must parse (MySQL driver parser),
-   the host must be a loopback address (`127.0.0.1` / `localhost` / `::1`,
-   covering Testcontainers' host-port mappings), and the database name must
-   match the disposable naming rule `^[a-z0-9_]+_e2e$`. The default
-   `controlhub` database and production-like names are rejected.
-3. The database must be migrated to at least 00016, and both retired seed
-   accounts must exist and be inactive; otherwise provisioning refuses.
+   `DATABASE_DSN` is never read. The DSN must parse (MySQL driver parser,
+   errors never echoed), the host must be a literal loopback address
+   (`127.0.0.1` / `::1`; hostnames such as `localhost` are refused because
+   their resolution cannot be verified locally), and the database name must
+   match the disposable naming rule `^controlhub_[a-z0-9_]*e2e$`. The
+   default `controlhub` database and production-like names are rejected.
+3. The database must be migrated to at least 00016 (applied rows only), and
+   both retired seed accounts must exist and be inactive; otherwise
+   provisioning refuses.
 4. Fixture emails must end with `.invalid` and the retired seed identities
    are refused — additional guards only, not the primary boundary.
 
-All gates are pure/verifiable: DSN and capability validation happen before
-opening a connection, and migration/seed verification happens before the
-first upsert, so a misconfigured production-like DSN produces no user
-mutation.
+All gates are verifiable: DSN/capability validation happens before opening a
+connection, migration/seed verification happens before the first upsert, and
+the upserts are transactional (a partial failure rolls back), so a
+misconfigured production-like DSN produces no user mutation. The boundary
+protects against accidental misconfiguration; it is not an adversarial
+capability claim.
 
 ## Consequences
 
