@@ -229,6 +229,7 @@ ControlHub is a read-heavy resource management backend exposing dictionary-drive
 | Module | Description | Doc |
 |--------|-------------|-----|
 | cmd/server | Application entry point, dependency wiring | [README](cmd/server/README.md) |
+| cmd/e2e-fixture-bootstrap | TEST/CI-ONLY admin+editor fixture provisioning for isolated E2E runs; refuses the retired 0002 seed identities | [README](cmd/e2e-fixture-bootstrap/README.md) |
 | internal/api | HTTP handlers, routing, CORS, test server | [README](internal/api/README.md) |
 | internal/service | Business logic, repository interfaces | [README](internal/service/README.md) |
 | internal/repository/mysql | MySQL data access, SQL queries | [README](internal/repository/mysql/README.md) |
