@@ -55,13 +55,20 @@ func TestOpenAPIFuzzExclusionContract(t *testing.T) {
 		}
 	}
 
-	// 4. Exclusions have a single source of truth: the script. Config overrides
+	// 2. Broad exclusions (path/method/tag) are forbidden: scope must be a single operation.
+	for _, flag := range []string{"--exclude-path", "--exclude-method", "--exclude-tag"} {
+		if strings.Contains(script, flag) {
+			t.Errorf("broad fuzz exclusion %q is forbidden; scope exclusions to a single operation", flag)
+		}
+	}
+
+	// 3. Exclusions have a single source of truth: the script. Config overrides
 	// (include-operation-id) stay in schemathesis.toml but exclusion directives do not.
 	if strings.Contains(toml, "exclude-operation-id") {
 		t.Error("schemathesis.toml must not carry exclusion directives; they belong in openapi-fuzz.sh")
 	}
 
-	// 5. The README carries a dedicated exclusion-contract section that
+	// 4. The README carries a dedicated exclusion-contract section that
 	// documents every canonical exclusion (heading is the drift marker).
 	const contractHeading = "OpenAPI Fuzz Exclusion Contract"
 	if !strings.Contains(readme, contractHeading) {
