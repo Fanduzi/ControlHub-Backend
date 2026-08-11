@@ -3,6 +3,7 @@
 # output: authenticated OpenAPI fuzz report
 # pos: Exercises protected API operations against the OpenAPI contract
 # note: if this file changes, update scripts/README.md
+# note: fuzz exclusions are a governed contract — see the OpenAPI Fuzz Exclusion Contract in scripts/README.md
 # openapi-fuzz.sh — Run Schemathesis against a ControlHub server.
 #
 # Usage: openapi-fuzz.sh <base_url>
@@ -72,6 +73,10 @@ if [ -z "${CONTROLHUB_FUZZ_BEARER_TOKEN:-}" ]; then
     exit 2
 fi
 
+# executeSavedStatement is excluded per the OpenAPI Fuzz Exclusion Contract
+# (scripts/README.md): no stable disposable fuzz fixture can construct a valid
+# governed execution, and fuzzed values must never reach a real query target.
+# Narrow single-operation scope only; TestOpenAPIFuzzExclusionContract enforces it.
 set +e
 "$STH_BIN" --config-file "${CONFIG_FILE}" run "${OPENAPI_URL}" \
     --url "${BASE_URL}" \

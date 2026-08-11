@@ -12,6 +12,7 @@ MySQL-backed integration tests run against disposable Testcontainers databases.
 | seed_credential_remediation_test.go | Regression guard for the forward-only seed-disable migration: proves the published seed users are inactive and their credentials rejected |
 | query_disclosure_repository_test.go | Proves MySQL disclosure policy repository behavior: CRUD lifecycle, duplicate-scope insert mapped to the conflict sentinel, not-found cases (`sql.ErrNoRows`), idempotent delete, empty list, and deterministic list ordering |
 | bootstrap_admin_command_test.go | Runs the operator bootstrap-admin CLI against MySQL and verifies authentication-compatible creation, reactivation, version rotation, and cleanup |
+| openapi_fuzz_contract_test.go | Enforces the OpenAPI Fuzz Exclusion Contract (no build tag): Schemathesis exclusions must be narrow single-operation `--exclude-operation-id` flags in openapi-fuzz.sh, within the canonical documented set, with no broad path/method/tag exclusions, no exclusion directives in schemathesis.toml, and a matching contract section in scripts/README.md |
 | *_test.go | Exercises repository, API, and migration behavior against MySQL |
 
 ## Operator access coverage
