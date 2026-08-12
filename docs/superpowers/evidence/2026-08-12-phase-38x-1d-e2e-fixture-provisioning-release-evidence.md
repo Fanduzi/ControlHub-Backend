@@ -15,8 +15,9 @@ publish #15. #15 remains OPEN.
 - Candidate branch: `e2e-fixture-bootstrap-20260811`
   (worktree `/Users/fan/GolangProjects/ControlHub-wt-issue-15-e2e-fixtures-20260811`)
 - Candidate HEAD at gate time: `c4b40d33acf284dd5b90deced8e69b149c80d7ed`
-- Candidate diff vs base: 7 commits, all in scope (new command, its tests,
-  integration coverage, module/decision docs, root README module table)
+- Candidate diff vs base (`4bd661db..c4b40d3`): 9 commits, all in scope
+  (new command, its tests, integration coverage, module/decision docs, root
+  README module table)
 - Candidate worktree clean at gate time; candidate diff and the backend-root
   WIP manifest share no paths
 
@@ -146,6 +147,10 @@ transient subagent artifacts were removed immediately.
 - Backend CI on the pushed SHA `3b00aa73e46ca7186254ef41e98390b957a7ffb4`:
   workflow run `31563215280`
   (https://github.com/Fanduzi/ControlHub-Backend/actions/runs/31563215280),
+  jobs `release-local-gates` and `release-docker-gates` both `success`.
+- Backend CI on the docs-only follow-up SHA `2fb1ca4b11c43ca555045b7c9718671ae1d4370c`:
+  workflow run `31563410216`
+  (https://github.com/Fanduzi/ControlHub-Backend/actions/runs/31563410216),
   jobs `release-local-gates` and `release-docker-gates` both `success`.
 - Backend-root WIP manifest remained byte-identical before merge, after
   merge, and after push (whitelist preserved).
