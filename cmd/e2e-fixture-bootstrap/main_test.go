@@ -168,6 +168,22 @@ func TestResolveFixtureConfig_ErrorsNeverLeakPasswords(t *testing.T) {
 	}
 }
 
+func TestResolveFixtureConfig_RefusesNonASCIIEmails(t *testing.T) {
+	for _, email := range []string{"e2e-àdmin@fixture.invalid", "e2e-admin@fïxture.invalid", "e2e-admin@fixture.ïnvalid"} {
+		t.Run(email, func(t *testing.T) {
+			t.Setenv("CONTROLHUB_E2E_FIXTURE_MODE", "1")
+			t.Setenv("E2E_FIXTURE_DATABASE_DSN", "controlhub:pass@tcp(127.0.0.1:3306)/controlhub_e2e?parseTime=true")
+			t.Setenv("E2E_FIXTURE_ADMIN_EMAIL", email)
+			t.Setenv("E2E_FIXTURE_ADMIN_PASSWORD", "admin-pw")
+			t.Setenv("E2E_FIXTURE_EDITOR_EMAIL", "editor@fixture.invalid")
+			t.Setenv("E2E_FIXTURE_EDITOR_PASSWORD", "editor-pw")
+			if _, err := resolveFixtureConfig(); err == nil || !strings.Contains(err.Error(), "ASCII-only") {
+				t.Fatalf("expected ASCII-only refusal for %q, got %v", email, err)
+			}
+		})
+	}
+}
+
 func TestResolveFixtureConfig_RefusesIdenticalAdminEditorEmails(t *testing.T) {
 	t.Setenv("CONTROLHUB_E2E_FIXTURE_MODE", "1")
 	t.Setenv("E2E_FIXTURE_DATABASE_DSN", "controlhub:pass@tcp(127.0.0.1:3306)/controlhub_e2e?parseTime=true")

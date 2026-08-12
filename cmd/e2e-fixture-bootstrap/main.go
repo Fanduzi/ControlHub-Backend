@@ -5,9 +5,9 @@
 // pos: Creates or reactivates admin AND editor fixture identities for isolated
 // E2E runs, gated by an explicit test-mode capability, a dedicated disposable
 // metadata DSN (loopback host + *_e2e database name), migration-00016
-// verification with retired seeds inactive, .invalid fixture emails (RFC
-// 2606), and refusal of the published 0002 seed identities. Never invoked at
-// server startup, never logs passwords.
+// verification with retired seeds inactive, ASCII-only .invalid fixture emails
+// (RFC 2606), and refusal of the published 0002 seed identities. Never invoked
+// at server startup, never logs passwords.
 // note: if this file changes, update header and README.md
 //
 // SAFETY BOUNDARY (the primary production guard):
@@ -28,9 +28,9 @@
 //     AND the retired 0002 seed accounts (admin@example.com /
 //     editor@example.com) must both exist and be inactive; otherwise
 //     provisioning refuses to run.
-//  4. Fixture emails must end with `.invalid` (RFC 2606 reserved TLD), the
-//     retired seed identities are refused, and the admin and editor fixture
-//     emails must be distinct.
+//  4. Fixture emails must be ASCII-only and end with `.invalid` (RFC 2606
+//     reserved TLD), the retired seed identities are refused, and the admin
+//     and editor fixture emails must be distinct.
 //
 // The `.invalid` email rule is an ADDITIONAL guard — it is NOT the primary
 // production-safety boundary. The gates above protect against accidental
@@ -188,6 +188,18 @@ func resolveFixtureConfig() (fixtureConfig, error) {
 	return fixtureConfig{DSN: dsn, Fixtures: fixtureSet{Admin: admin, Editor: editor}}, nil
 }
 
+// isASCII reports whether every byte of s is in the ASCII range, so fixture
+// identities never collide under MySQL's accent-insensitive collation.
+func isASCII(s string) bool {
+	for i := 0; i < len(s); i++ {
+		if s[i] >= 0x80 {
+			return false
+		}
+	}
+	return true
+}
+
+// resolveCredential validates one fixture identity.
 func resolveCredential(prefix, role string) (fixtureCredential, error) {
 	email := strings.TrimSpace(os.Getenv(prefix + "_EMAIL"))
 	if email == "" {
@@ -198,6 +210,13 @@ func resolveCredential(prefix, role string) (fixtureCredential, error) {
 		return fixtureCredential{}, fmt.Errorf("%s_PASSWORD is not set (supply the E2E fixture %s password explicitly)", prefix, role)
 	}
 	email = strings.ToLower(email)
+	if !isASCII(email) {
+		// users.email is unique under MySQL's utf8mb4_0900_ai_ci collation
+		// (accent- and case-insensitive), which Go string equality cannot
+		// replicate; restricting fixtures to ASCII keeps the distinct-identity
+		// gate equivalent to the database key.
+		return fixtureCredential{}, fmt.Errorf("E2E fixture %s email %q must be ASCII-only (the users.email unique key uses MySQL utf8mb4_0900_ai_ci; non-ASCII identities can collide silently)", role, email)
+	}
 	if !strings.HasSuffix(email, ".invalid") {
 		// RFC 2606 reserved TLD: an additional guard so a fixture identity can
 		// never collide with a real operator account. This is NOT the primary

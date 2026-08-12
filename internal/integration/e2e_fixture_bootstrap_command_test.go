@@ -6,8 +6,8 @@
 // pos: Proves the test/CI-only fixture CLI provisions BOTH fixture operators on a
 // disposable controlhub_*_e2e database, keeps the retired 0002 seeds inactive,
 // reactivates idempotently with authorization_version rotation, never leaks
-// secrets, and rolls back the whole transaction when one identity cannot be
-// provisioned.
+// secrets, refuses non-ASCII fixture identities, and rolls back the whole
+// transaction when one identity cannot be provisioned.
 // note: if this file changes, update header and README.md
 package integration
 
@@ -100,6 +100,15 @@ func TestE2EFixtureBootstrapCommandProvisionsAndRollsBackAgainstMySQL(t *testing
 	adminVer1 := fixtureAuthorizationVersion(t, fxdb, adminEmail)
 	editorVer1 := fixtureAuthorizationVersion(t, fxdb, editorEmail)
 
+	// Disable both fixtures so the re-run must prove inactive-to-active
+	// reactivation (not just a no-op on already-active users).
+	if _, err := fxdb.Exec(`update users set is_active = 0 where email in (?, ?)`, adminEmail, editorEmail); err != nil {
+		t.Fatalf("disable fixtures before reactivation: %v", err)
+	}
+	if _, err := auth.Login(adminEmail, adminPw1); err != service.ErrInvalidCredentials {
+		t.Fatalf("disabled admin login error = %v, want %v", err, service.ErrInvalidCredentials)
+	}
+
 	// When: re-provision with rotated credentials
 	adminPw2 := fmt.Sprintf("e2e-admin-pw2-%d", os.Getpid())
 	editorPw2 := fmt.Sprintf("e2e-editor-pw2-%d", os.Getpid())
@@ -143,6 +152,14 @@ func TestE2EFixtureBootstrapCommandProvisionsAndRollsBackAgainstMySQL(t *testing
 	}
 	assertRetiredSeedsInactive(t, fxdb)
 	adminVer2 := fixtureAuthorizationVersion(t, fxdb, adminEmail)
+
+	// Non-ASCII fixture identities are refused at config time: the users.email
+	// unique key uses MySQL utf8mb4_0900_ai_ci (accent-insensitive), which Go
+	// string equality cannot replicate, so fixtures are ASCII-only.
+	accentedAdmin := fmt.Sprintf("e2e-àdmin-%d@controlhub-e2e.invalid", os.Getpid())
+	if out, err := runE2EFixtureCommand(t, fixtureDSN, accentedAdmin, adminPw2, editorEmail, editorPw2); err == nil {
+		t.Fatalf("expected ASCII-only refusal, command succeeded:\n%s", out)
+	}
 
 	// When: the editor identity cannot be provisioned (role lookup fails)
 	rollbackAdmin := fmt.Sprintf("e2e-admin-%d-rollback@controlhub-e2e.invalid", os.Getpid())
