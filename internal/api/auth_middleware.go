@@ -92,6 +92,7 @@ func requireFreshQueryActor(authService *service.AuthService, cfg QueryExecution
 				return
 			}
 			if cfg.TokenMaxAge <= 0 || clock().Sub(user.IssuedAt) > cfg.TokenMaxAge {
+				emitter.EmitAuthAudit("auth.bearer", "rejected", &user.ID, nil)
 				writeJSONError(w, http.StatusUnauthorized, "unauthorized", controlledUnauthorizedMessage)
 				return
 			}

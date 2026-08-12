@@ -24,7 +24,9 @@ func NewAuthAuditEmitter(db *sql.DB) *AuthAuditEmitter {
 }
 
 // EmitAuthAudit inserts one auth audit row. actorUserID and targetResourceID
-// may be nil. Fail-open: errors are logged, never returned.
+// may be nil. Fail-open: errors are logged at a fixed category, never
+// propagated. The log line never contains identity, request values, DSN,
+// password, credential material, or raw DB error internals.
 func (e *AuthAuditEmitter) EmitAuthAudit(eventType, result string, actorUserID *uint64, targetResourceID *uint64) error {
 	_, err := e.db.ExecContext(context.Background(),
 		`insert into audit_events (actor_user_id, target_resource_id, event_type, result)
@@ -32,8 +34,10 @@ func (e *AuthAuditEmitter) EmitAuthAudit(eventType, result string, actorUserID *
 		actorUserID, targetResourceID, eventType, result,
 	)
 	if err != nil {
-		// Fixed-category operational signal: no identity, no request values, no secrets.
-		log.Printf("auth_audit_emit_fail event=%s result=%s err=%v", eventType, result, err)
+		// Fixed-category operational signal: fixed label + safe error class.
+		// Never use %v on the error — it may contain DSN, connection strings,
+		// or internal DB driver details. Use only the error class name.
+		log.Printf("auth_audit_emit_fail event=%s result=%s error_class=audit_persistence_failure", eventType, result)
 	}
 	return nil // fail-open: never return error
 }

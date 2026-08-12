@@ -33,11 +33,9 @@ func handleLogin(authService *service.AuthService, emitter service.AuthAuditEmit
 			return
 		}
 
-		// Succeeded login: emit event. The actor user id is intentionally omitted
-		// from the audit record because the Login response already returns the
-		// token; operators correlate via timestamp + email from the login request
-		// log. No identity or credential data is written to the audit row.
-		emitter.EmitAuthAudit("auth.login", "succeeded", nil, nil)
+		// Succeeded login: emit event with the verified actor ID. The user was
+		// authenticated by the service layer; this is a trusted, verified identity.
+		emitter.EmitAuthAudit("auth.login", "succeeded", &resp.UserID, nil)
 		writeJSON(w, http.StatusOK, resp)
 	}
 }

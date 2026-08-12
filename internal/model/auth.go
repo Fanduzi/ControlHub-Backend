@@ -24,6 +24,7 @@ type LoginRequest struct {
 }
 
 type LoginResponse struct {
-	Token string `json:"token"`
-	Role  string `json:"role"`
+	Token  string `json:"token"`
+	Role   string `json:"role"`
+	UserID uint64 `json:"userId"`
 }

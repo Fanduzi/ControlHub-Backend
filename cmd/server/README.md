@@ -15,6 +15,7 @@ Application bootstrap and manual dependency injection.
 | Topology | TopologyService | RelationRepository | — |
 | Audit | AuditService | AuditRepository | — |
 | Auth | AuthService | UserRepository | — |
+| Auth Audit | AuthAuditEmitter | AuthAuditEmitter (MySQL) | 38X-2B |
 | Dictionary | EnvironmentService, OwnerService, RoleService, ResourceTypeService, RelationTypeService, LifecycleStatusService, HealthStatusService | DictionaryRepository | — |
 | Query Target | QueryTargetService | QueryTargetRepository | — |
 | Query Credential | QueryCredentialService | QueryTargetRepository, QueryExecutionRepository | 38A |

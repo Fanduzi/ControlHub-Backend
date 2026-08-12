@@ -24,7 +24,7 @@ import (
 )
 
 // TestAuthAudit_LoginSucceeded proves a successful login emits auth.login succeeded
-// with no actor user id (login outcome is actor-agnostic).
+// with the verified actor user id.
 func TestAuthAudit_LoginSucceeded(t *testing.T) {
 	db := setupTestDB(t)
 	assertSchemaChainBaseline(t, db)
@@ -47,7 +47,7 @@ func TestAuthAudit_LoginSucceeded(t *testing.T) {
 
 	_ = mustLogin(t, router, "audit-login-ok@example.com", "secret123")
 
-	// Verify auth.login succeeded row exists with no actor
+	// Verify auth.login succeeded row exists with verified actor
 	var eventType, result string
 	var actorUserID sql.NullInt64
 	err := db.QueryRow(
@@ -61,8 +61,11 @@ func TestAuthAudit_LoginSucceeded(t *testing.T) {
 	if eventType != "auth.login" || result != "succeeded" {
 		t.Fatalf("unexpected event: type=%s result=%s", eventType, result)
 	}
-	if actorUserID.Valid {
-		t.Fatalf("expected no actor on login succeeded, got %d", actorUserID.Int64)
+	if !actorUserID.Valid {
+		t.Fatal("expected actor on login succeeded, got NULL")
+	}
+	if uint64(actorUserID.Int64) != userID {
+		t.Fatalf("actor = %d, want %d", actorUserID.Int64, userID)
 	}
 }
 
@@ -254,6 +257,66 @@ func TestAuthAudit_FailOpenOnDBError(t *testing.T) {
 	rec := doBearer(t, router, http.MethodGet, "/query-targets/1/credential", "garbage-token")
 	if rec.Code != http.StatusUnauthorized {
 		t.Fatalf("expected 401 despite audit failure, got %d", rec.Code)
+	}
+}
+
+// TestAuthAudit_FreshnessRejectionEmitsBearerRejected proves that a valid
+// but stale bearer token (exceeding the 8h freshness gate) emits
+// auth.bearer rejected with the verified actor id.
+func TestAuthAudit_FreshnessRejectionEmitsBearerRejected(t *testing.T) {
+	db := setupTestDB(t)
+	assertSchemaChainBaseline(t, db)
+
+	userID := insertAuthzTestUser(t, db, "audit-fresh@example.com", "admin")
+	t.Cleanup(func() { deleteAuthzTestUser(t, db, userID) })
+
+	userRepo := mysql.NewUserRepository(db)
+	user, err := userRepo.FindByID(userID)
+	if err != nil || user == nil {
+		t.Fatalf("FindByID: %v %#v", err, user)
+	}
+
+	now := time.Date(2026, 8, 12, 12, 0, 0, 0, time.UTC)
+	authSvc := service.NewAuthService(userRepo, authzIntegrationSecret)
+	emitter := mysql.NewAuthAuditEmitter(db)
+	router := api.NewRouter(api.Dependencies{
+		AuthService:      authSvc,
+		AuthAuditEmitter: emitter,
+		QueryExecutionAuth: api.QueryExecutionAuthConfig{
+			TokenMaxAge: 8 * time.Hour,
+			Clock:       func() time.Time { return now },
+		},
+		QueryCredentialService: &authzCredStub{},
+	})
+
+	// Mint a token that is 9h old — exceeds freshness gate
+	stale := mintIntegrationToken(t, user.ID, user.AuthorizationVersion, now.Add(-9*time.Hour))
+	rec := doBearer(t, router, http.MethodGet, "/query-targets/1/credential", stale)
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("stale token status = %d, want 401; body=%s", rec.Code, rec.Body.String())
+	}
+
+	// Query for the freshness-rejection event: must have a non-NULL actor
+	// (the verified user who presented the stale token).
+	var eventType, result string
+	var actorUserID sql.NullInt64
+	err = db.QueryRow(
+		`select event_type, result, actor_user_id from audit_events
+		 where event_type = 'auth.bearer' and result = 'rejected'
+		   and actor_user_id is not null
+		 order by created_at desc limit 1`,
+	).Scan(&eventType, &result, &actorUserID)
+	if err != nil {
+		t.Fatalf("query auth.bearer rejected with actor: %v", err)
+	}
+	if eventType != "auth.bearer" || result != "rejected" {
+		t.Fatalf("unexpected event: type=%s result=%s", eventType, result)
+	}
+	if !actorUserID.Valid {
+		t.Fatal("expected actor on freshness rejection, got NULL")
+	}
+	if uint64(actorUserID.Int64) != userID {
+		t.Fatalf("actor = %d, want %d", actorUserID.Int64, userID)
 	}
 }
 

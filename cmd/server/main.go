@@ -128,6 +128,7 @@ func buildDependencies(db *sql.DB, cfg config.Config) api.Dependencies {
 		TopologyService:            service.NewTopologyService(relationRepo),
 		AuditService:               service.NewAuditService(mysql.NewAuditRepository(db)),
 		AuthService:                service.NewAuthService(mysql.NewUserRepository(db), cfg.JWTSecret),
+		AuthAuditEmitter:           mysql.NewAuthAuditEmitter(db),
 		EnvironmentService:         service.NewEnvironmentService(dictRepo),
 		OwnerService:               service.NewOwnerService(dictRepo),
 		RoleService:                service.NewRoleService(dictRepo),

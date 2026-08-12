@@ -77,8 +77,9 @@ func (s *AuthService) Login(email string, password string) (*model.LoginResponse
 	}
 
 	return &model.LoginResponse{
-		Token: s.issueToken(user),
-		Role:  user.RoleName,
+		Token:  s.issueToken(user),
+		Role:   user.RoleName,
+		UserID: user.ID,
 	}, nil
 }
 
