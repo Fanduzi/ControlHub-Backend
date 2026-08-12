@@ -1,3 +1,8 @@
+// Package main provides the local bigint cutover CLI entry point.
+// input: config.LoadDotEnv/Load/ErrQueryExecutionTokenMaxAgeRejected, cutover.RunLocalPreserveThenImport, flag
+// output: local preserve-then-import cutover binary
+// pos: Operator-invoked CLI that preserves legacy UUID tables and rebuilds with bigint schema
+// note: if cutover logic or config loading changes, update this header and cmd/cutover-local/README.md
 package main
 
 import (

@@ -109,6 +109,21 @@ func TestLoadRejectsQueryExecutionTokenMaxAgeEnvVar(t *testing.T) {
 	}
 }
 
+func TestLoadRejectsExplicitlyEmptyQueryExecutionTokenMaxAgeEnvVar(t *testing.T) {
+	// WHY: an explicitly empty QUERY_EXECUTION_TOKEN_MAX_AGE (="") must be
+	// rejected the same as a non-empty value. The variable is removed; its
+	// mere presence signals a stale deployment config.
+	t.Setenv("QUERY_EXECUTION_TOKEN_MAX_AGE", "")
+	unsetEnv(t, "APP_PORT")
+	unsetEnv(t, "DATABASE_DSN")
+	unsetEnv(t, "JWT_SECRET")
+
+	_, err := Load()
+	if err != ErrQueryExecutionTokenMaxAgeRejected {
+		t.Fatalf("Load() with QUERY_EXECUTION_TOKEN_MAX_AGE=\"\": err = %v, want ErrQueryExecutionTokenMaxAgeRejected", err)
+	}
+}
+
 func TestLoadAcceptsMissingQueryExecutionTokenMaxAgeEnvVar(t *testing.T) {
 	// WHY: the eight-hour constant is hardcoded in the middleware; Load() must
 	// succeed when the deprecated env var is absent.

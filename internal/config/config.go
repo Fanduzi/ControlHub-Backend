@@ -1,5 +1,5 @@
 // Package config loads environment variables into a typed Config struct.
-// input: os.Getenv, godotenv, time
+// input: os.LookupEnv, os.Getenv, godotenv
 // output: LoadDotEnv, Load, Config struct, HTTPAddress, ValidateJWTSecret, ErrInvalidJWTSecret, ErrQueryExecutionTokenMaxAgeRejected
 // pos: Configuration loading and signing-secret validation layer
 // note: if config vars or validation change, update this header and internal/config/README.md
@@ -43,7 +43,7 @@ func LoadDotEnv(filenames ...string) error {
 var ErrQueryExecutionTokenMaxAgeRejected = errors.New("QUERY_EXECUTION_TOKEN_MAX_AGE is removed; the eight-hour freshness bound is a fixed backend contract")
 
 func Load() (Config, error) {
-	if os.Getenv("QUERY_EXECUTION_TOKEN_MAX_AGE") != "" {
+	if _, ok := os.LookupEnv("QUERY_EXECUTION_TOKEN_MAX_AGE"); ok {
 		return Config{}, ErrQueryExecutionTokenMaxAgeRejected
 	}
 
