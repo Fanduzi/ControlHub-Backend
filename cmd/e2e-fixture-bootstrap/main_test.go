@@ -241,11 +241,15 @@ func TestParseDisposableDSN_AcceptsLoopbackDisposableDatabase(t *testing.T) {
 }
 
 func TestParseDisposableDSN_RejectsEmptyOrMalformed(t *testing.T) {
-	dsns := []string{"", "not-a-dsn", "controlhub:pass@tcp(127.0.0.1:3306)/"}
+	dsns := []string{"", "not-a-dsn-with-sekret-value-42", "controlhub:pass@tcp(127.0.0.1:3306)/"}
 	for i, dsn := range dsns {
 		t.Run(fmt.Sprintf("malformed-%d", i), func(t *testing.T) {
-			if _, err := parseDisposableDSN(dsn); err == nil {
+			_, err := parseDisposableDSN(dsn)
+			if err == nil {
 				t.Fatal("expected rejection of empty/malformed DSN")
+			}
+			if strings.Contains(err.Error(), "sekret") {
+				t.Fatalf("malformed-DSN error echoes a secret-bearing token: %v", err)
 			}
 		})
 	}
@@ -330,14 +334,21 @@ func (f *fakeRow) Scan(dest ...any) error {
 }
 
 func TestVerifyFixtureDatabase_RejectsMissingRetiredSeed(t *testing.T) {
-	probe := &fakeProbe{rows: map[string]fakeRow{
-		"select count(*) from goose_db_version where version_id = ? and is_applied = 1|16": {values: []any{1}},
-		"select is_active from users where email = ?|admin@example.com":                    {err: sql.ErrNoRows},
-		"select is_active from users where email = ?|editor@example.com":                   {values: []any{0}},
-	}}
-	err := verifyFixtureDatabase(context.Background(), probe)
-	if err == nil || !strings.Contains(err.Error(), "missing") || !strings.Contains(err.Error(), "admin@example.com") {
-		t.Fatalf("expected missing-seed refusal, got %v", err)
+	for _, seed := range []struct{ missing, present string }{
+		{"admin@example.com", "editor@example.com"},
+		{"editor@example.com", "admin@example.com"},
+	} {
+		t.Run(seed.missing, func(t *testing.T) {
+			probe := &fakeProbe{rows: map[string]fakeRow{
+				"select count(*) from goose_db_version where version_id = ? and is_applied = 1|16": {values: []any{1}},
+				"select is_active from users where email = ?|" + seed.missing:                      {err: sql.ErrNoRows},
+				"select is_active from users where email = ?|" + seed.present:                      {values: []any{0}},
+			}}
+			err := verifyFixtureDatabase(context.Background(), probe)
+			if err == nil || !strings.Contains(err.Error(), "missing") || !strings.Contains(err.Error(), seed.missing) {
+				t.Fatalf("expected missing-seed refusal for %s, got %v", seed.missing, err)
+			}
+		})
 	}
 }
 
@@ -365,14 +376,21 @@ func TestVerifyFixtureDatabase_RejectsUnappliedMigration16(t *testing.T) {
 }
 
 func TestVerifyFixtureDatabase_RejectsActiveRetiredSeeds(t *testing.T) {
-	probe := &fakeProbe{rows: map[string]fakeRow{
-		"select count(*) from goose_db_version where version_id = ? and is_applied = 1|16": {values: []any{1}},
-		"select is_active from users where email = ?|admin@example.com":                    {values: []any{1}},
-		"select is_active from users where email = ?|editor@example.com":                   {values: []any{0}},
-	}}
-	err := verifyFixtureDatabase(context.Background(), probe)
-	if err == nil || !strings.Contains(err.Error(), "admin@example.com") {
-		t.Fatalf("expected active-seed refusal, got %v", err)
+	for _, seed := range []struct{ active, inactive string }{
+		{"admin@example.com", "editor@example.com"},
+		{"editor@example.com", "admin@example.com"},
+	} {
+		t.Run(seed.active, func(t *testing.T) {
+			probe := &fakeProbe{rows: map[string]fakeRow{
+				"select count(*) from goose_db_version where version_id = ? and is_applied = 1|16": {values: []any{1}},
+				"select is_active from users where email = ?|" + seed.active:                       {values: []any{1}},
+				"select is_active from users where email = ?|" + seed.inactive:                     {values: []any{0}},
+			}}
+			err := verifyFixtureDatabase(context.Background(), probe)
+			if err == nil || !strings.Contains(err.Error(), "is active") || !strings.Contains(err.Error(), seed.active) {
+				t.Fatalf("expected active-seed refusal for %s, got %v", seed.active, err)
+			}
+		})
 	}
 }
 
@@ -388,10 +406,12 @@ func TestVerifyFixtureDatabase_AcceptsMigratedDatabaseWithInactiveSeeds(t *testi
 }
 
 func TestPrintReport_NeverContainsPasswordOrHash(t *testing.T) {
+	adminPw := "report-admin-pw-1"
+	editorPw := "report-editor-pw-2"
 	var buf bytes.Buffer
 	printReport(&buf, fixtureSet{
-		Admin:  fixtureCredential{Email: "admin@fixture.invalid", Role: "admin"},
-		Editor: fixtureCredential{Email: "editor@fixture.invalid", Role: "editor"},
+		Admin:  fixtureCredential{Email: "admin@fixture.invalid", Password: adminPw, Role: "admin"},
+		Editor: fixtureCredential{Email: "editor@fixture.invalid", Password: editorPw, Role: "editor"},
 	}, map[string]bootstrapOutcome{
 		"admin@fixture.invalid":  outcomeCreated,
 		"editor@fixture.invalid": outcomeReactivated,
@@ -403,7 +423,7 @@ func TestPrintReport_NeverContainsPasswordOrHash(t *testing.T) {
 			t.Fatalf("output missing %q:\n%s", needle, out)
 		}
 	}
-	for _, bad := range []string{"password", "secret", "hash", "E2E_FIXTURE", "hunter2"} {
+	for _, bad := range []string{adminPw, editorPw, hashPassword(adminPw), hashPassword(editorPw), "password", "secret", "hash", "E2E_FIXTURE", "hunter2"} {
 		if strings.Contains(out, bad) {
 			t.Fatalf("output leaks %q:\n%s", bad, out)
 		}

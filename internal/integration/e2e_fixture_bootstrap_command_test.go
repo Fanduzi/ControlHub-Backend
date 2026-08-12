@@ -13,7 +13,9 @@ package integration
 
 import (
 	"context"
+	"crypto/sha256"
 	"database/sql"
+	"encoding/hex"
 	"fmt"
 	"os"
 	"os/exec"
@@ -262,9 +264,14 @@ func fixtureAuthorizationVersion(t *testing.T, db *sql.DB, email string) uint64 
 
 func assertFixtureReportHasNoSecrets(t *testing.T, output, dsn, adminPw, editorPw string) {
 	t.Helper()
-	for _, needle := range []string{dsn, adminPw, editorPw, "root:test", "password", "secret", "hash"} {
+	for _, needle := range []string{dsn, adminPw, editorPw, sha256Hex(adminPw), sha256Hex(editorPw), "root:test", "password", "secret", "hash"} {
 		if strings.Contains(output, needle) {
 			t.Fatalf("fixture command output leaks %q:\n%s", needle, output)
 		}
 	}
+}
+
+func sha256Hex(s string) string {
+	sum := sha256.Sum256([]byte(s))
+	return hex.EncodeToString(sum[:])
 }
