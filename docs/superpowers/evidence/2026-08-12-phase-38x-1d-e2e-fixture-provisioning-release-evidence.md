@@ -129,5 +129,23 @@ transient subagent artifacts were removed immediately.
 
 ## Post-merge facts
 
-Added by a follow-up docs-only commit after the ff-only merge and push, once
-the exact merged SHA and CI results were known.
+- Merge type: fast-forward only (`git merge --ff-only`), `4bd661db..3b00aa7`
+  on `main`; push range `4bd661db..3b00aa7` (no force push).
+- Merged/pushed HEAD: `3b00aa73e46ca7186254ef41e98390b957a7ffb4`
+  (`origin/main` equals local `HEAD` after push).
+- Release gates re-run from the merged backend root
+  (CWD `/Users/fan/GolangProjects/ControlHub`, SHA `3b00aa73e46ca7186254ef41e98390b957a7ffb4`):
+  `git diff --check`, `gofmt -d`, `go vet ./...`, `go build ./...`,
+  `go test -count=1 ./...` (13 packages), `go test -race -count=1 ./...`
+  (13 packages), `make openapi-validate`, `make test-integration`, and the
+  three-level documentation check all PASS.
+- Minimal real CLI verification from the merged root (disposable MySQL,
+  CWD and SHA above): missing-mode refusal, `.invalid` admin+editor
+  provisioned, secret-free output, idempotent re-run reactivated with
+  `authorization_version` rotated 1 -> 2. Result: 5/5 PASS.
+- Backend CI on the pushed SHA `3b00aa73e46ca7186254ef41e98390b957a7ffb4`:
+  workflow run `31563215280`
+  (https://github.com/Fanduzi/ControlHub-Backend/actions/runs/31563215280),
+  jobs `release-local-gates` and `release-docker-gates` both `success`.
+- Backend-root WIP manifest remained byte-identical before merge, after
+  merge, and after push (whitelist preserved).
