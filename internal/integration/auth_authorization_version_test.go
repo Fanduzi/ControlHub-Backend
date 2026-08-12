@@ -129,8 +129,7 @@ func TestAuthorizationVersion_QueryFreshnessRemainsEightHours(t *testing.T) {
 	router := api.NewRouter(api.Dependencies{
 		AuthService: authSvc,
 		QueryExecutionAuth: api.QueryExecutionAuthConfig{
-			TokenMaxAge: 8 * time.Hour,
-			Clock:       func() time.Time { return now },
+			Clock: func() time.Time { return now },
 		},
 		QueryCredentialService: &authzCredStub{},
 	})
@@ -178,8 +177,7 @@ func newAuthzTestRouter(authSvc *service.AuthService) http.Handler {
 	return api.NewRouter(api.Dependencies{
 		AuthService: authSvc,
 		QueryExecutionAuth: api.QueryExecutionAuthConfig{
-			TokenMaxAge: 8 * time.Hour,
-			Clock:       time.Now,
+			Clock: time.Now,
 		},
 		QueryCredentialService: &authzCredStub{},
 	})

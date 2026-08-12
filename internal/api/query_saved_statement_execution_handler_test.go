@@ -1,5 +1,5 @@
 // Package api provides tests for the template-execution handler.
-// input: encoding/json, errors, net/http, net/http/httptest, strings, testing, time, chi, internal/model, internal/service
+// input: encoding/json, errors, net/http, net/http/httptest, strings, testing, chi, internal/model, internal/service
 // output: TestTemplateExecute_* (strict request decoding, controlled field errors, error mapping, actor from token)
 // pos: Handler + auth coverage for POST /query-targets/{id}/saved-statements/{statementId}/execute (Phase 38W)
 package api
@@ -10,7 +10,6 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/go-chi/chi/v5"
 
@@ -24,8 +23,7 @@ func newTemplateExecRouter(stub queryExecutionAPI) *chi.Mux {
 		QueryExecutionService:      stub,
 		QuerySavedStatementService: &fakeSavedStatementService{},
 		QueryExecutionAuth: QueryExecutionAuthConfig{
-			TokenMaxAge: 8 * time.Hour,
-			Clock:       fixedClock(qeTestNow),
+			Clock: fixedClock(qeTestNow),
 		},
 	}
 	return NewRouter(deps)

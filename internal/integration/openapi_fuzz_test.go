@@ -126,8 +126,7 @@ func TestOpenAPIFuzz(t *testing.T) {
 			queryTargetRepo,
 		),
 		QueryExecutionAuth: api.QueryExecutionAuthConfig{
-			TokenMaxAge: 8 * time.Hour,
-			Clock:       time.Now,
+			Clock: time.Now,
 		},
 	}
 	router := api.NewRouter(deps)

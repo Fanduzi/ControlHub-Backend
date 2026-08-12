@@ -5,7 +5,7 @@ Application bootstrap and manual dependency injection.
 ## Files
 | File | Responsibility |
 |------|---------------|
-| main.go | Load config, validate JWT_SECRET before opening the DB, wire all services into api.Dependencies, start HTTP server |
+| main.go | Load config (rejects removed QUERY_EXECUTION_TOKEN_MAX_AGE), validate JWT_SECRET before opening the DB, wire all services into api.Dependencies, start HTTP server |
 
 ## Modules Wired
 | Module | Service | Repository | Phase |

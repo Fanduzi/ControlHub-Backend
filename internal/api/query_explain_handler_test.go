@@ -13,7 +13,6 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/go-chi/chi/v5"
 
@@ -44,8 +43,7 @@ func newExplainRouter(stub queryExplainAPI) *chi.Mux {
 		AuthService:         service.NewAuthService(testAuthUsers, "qe-test-secret"),
 		QueryExplainService: stub,
 		QueryExecutionAuth: QueryExecutionAuthConfig{
-			TokenMaxAge: 8 * time.Hour,
-			Clock:       fixedClock(qeTestNow),
+			Clock: fixedClock(qeTestNow),
 		},
 	}
 	return NewRouter(deps)

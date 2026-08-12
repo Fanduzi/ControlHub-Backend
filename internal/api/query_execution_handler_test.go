@@ -106,8 +106,7 @@ func newQueryExecRouter(stub queryExecutionAPI) *chi.Mux {
 		AuthService:           service.NewAuthService(testAuthUsers, "qe-test-secret"),
 		QueryExecutionService: stub,
 		QueryExecutionAuth: QueryExecutionAuthConfig{
-			TokenMaxAge: 8 * time.Hour,
-			Clock:       fixedClock(qeTestNow),
+			Clock: fixedClock(qeTestNow),
 		},
 	}
 	return NewRouter(deps)

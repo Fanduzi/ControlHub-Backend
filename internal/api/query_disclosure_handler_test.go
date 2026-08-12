@@ -77,8 +77,7 @@ func newDisclosureRouter(stub queryDisclosureAPI) *chi.Mux {
 		AuthService:            service.NewAuthService(testAuthUsers, "qd-test-secret"),
 		QueryDisclosureService: stub,
 		QueryExecutionAuth: QueryExecutionAuthConfig{
-			TokenMaxAge: 8 * 60 * 60 * 1e9, // 8h
-			Clock:       fixedClock(qeTestNow),
+			Clock: fixedClock(qeTestNow),
 		},
 	}
 	return NewRouter(deps)

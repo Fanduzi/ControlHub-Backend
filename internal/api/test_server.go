@@ -846,8 +846,7 @@ func NewTestServer() *TestServer {
 		QueryDisclosureService:     &fakeQueryDisclosure{},
 		QuerySavedStatementService: &fakeSavedStatementService{},
 		QueryExecutionAuth: QueryExecutionAuthConfig{
-			TokenMaxAge: 8 * 60 * 60 * 1e9, // 8h
-			Clock:       func() time.Time { return time.Date(2026, 6, 22, 8, 0, 0, 0, time.UTC) },
+			Clock: func() time.Time { return time.Date(2026, 6, 22, 8, 0, 0, 0, time.UTC) },
 		},
 	}
 

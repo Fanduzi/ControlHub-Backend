@@ -85,7 +85,7 @@ func NewRouter(deps Dependencies) *chi.Mux {
 	router.Get("/openapi.yaml", handleOpenAPIYAML)
 	router.Get("/docs", handleDocs)
 	router.Group(func(r chi.Router) {
-		r.Use(requireAuthenticatedActor(deps.AuthService))
+		r.Use(requireAuthenticatedActor(deps.AuthService, deps.QueryExecutionAuth))
 		r.Get("/resources", handleListResources(deps.ResourceService))
 		r.Get("/resources/{id}", handleGetResource(deps.ResourceService))
 		r.Get("/resources/{id}/profile", handleGetResourceProfile(deps.ResourceService))
@@ -119,12 +119,9 @@ func NewRouter(deps Dependencies) *chi.Mux {
 	})
 
 	// Query execution routes (Phase 37) require a fresh bearer token via
-	// requireFreshQueryActor (base signature/structure check + bounded TTL). The
-	// base requireAuthenticatedActor is NOT mounted here because it does not
-	// enforce token freshness. Inventory and dictionary read/list routes are
-	// unchanged authenticated reads: they remain wrapped in
-	// requireAuthenticatedActor (see the group above) and never sit behind the
-	// fresh-token middleware.
+	// requireFreshQueryActor (base signature/structure check + bounded TTL).
+	// All protected routes, including inventory and dictionary reads above,
+	// enforce the fixed MaxQueryTokenAge freshness bound (Issue #21).
 	//
 	// The group is created when EITHER the execute or explain service is
 	// configured, so Explain does not accidentally depend on the execute

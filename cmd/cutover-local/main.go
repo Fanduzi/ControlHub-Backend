@@ -14,7 +14,10 @@ func main() {
 		log.Fatalf("load .env: %v", err)
 	}
 
-	cfg := config.Load()
+	cfg, err := config.Load()
+	if err != nil {
+		log.Fatalf("config: %v", err)
+	}
 	preserveDB := flag.String("preserve-db", "", "database name used to preserve the legacy UUID-backed runtime tables (default: <target-db>_v1)")
 	targetDB := flag.String("target-db", "controlhub", "database name to rebuild with bigint schema")
 	resume := flag.Bool("resume", false, "continue a previously preserved local cutover using an existing non-empty preserve database")
