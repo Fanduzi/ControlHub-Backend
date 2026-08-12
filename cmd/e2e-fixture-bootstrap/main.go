@@ -188,11 +188,12 @@ func resolveFixtureConfig() (fixtureConfig, error) {
 	return fixtureConfig{DSN: dsn, Fixtures: fixtureSet{Admin: admin, Editor: editor}}, nil
 }
 
-// isASCII reports whether every byte of s is in the ASCII range, so fixture
-// identities never collide under MySQL's accent-insensitive collation.
-func isASCII(s string) bool {
+// isPrintableASCII reports whether every byte of s is printable ASCII
+// (0x21..0x7E, excluding space and control bytes), so fixture identities never
+// collide under MySQL's accent-insensitive collation.
+func isPrintableASCII(s string) bool {
 	for i := 0; i < len(s); i++ {
-		if s[i] >= 0x80 {
+		if s[i] < 0x21 || s[i] > 0x7e {
 			return false
 		}
 	}
@@ -210,12 +211,14 @@ func resolveCredential(prefix, role string) (fixtureCredential, error) {
 		return fixtureCredential{}, fmt.Errorf("%s_PASSWORD is not set (supply the E2E fixture %s password explicitly)", prefix, role)
 	}
 	email = strings.ToLower(email)
-	if !isASCII(email) {
+	if !isPrintableASCII(email) {
 		// users.email is unique under MySQL's utf8mb4_0900_ai_ci collation
 		// (accent- and case-insensitive), which Go string equality cannot
-		// replicate; restricting fixtures to ASCII keeps the distinct-identity
-		// gate equivalent to the database key.
-		return fixtureCredential{}, fmt.Errorf("E2E fixture %s email %q must be ASCII-only (the users.email unique key uses MySQL utf8mb4_0900_ai_ci; non-ASCII identities can collide silently)", role, email)
+		// replicate; restricting fixtures to printable ASCII keeps the
+		// distinct-identity gate equivalent to the database key. Control
+		// bytes must be rejected too: MySQL treats them as ignorable, so
+		// e2e-a\x01@... and e2e-a\x02@... would collide as one key.
+		return fixtureCredential{}, fmt.Errorf("E2E fixture %s email %q must be printable ASCII only (the users.email unique key uses MySQL utf8mb4_0900_ai_ci; non-ASCII or control-byte identities can collide silently)", role, email)
 	}
 	if !strings.HasSuffix(email, ".invalid") {
 		// RFC 2606 reserved TLD: an additional guard so a fixture identity can

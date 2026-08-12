@@ -155,10 +155,16 @@ func TestE2EFixtureBootstrapCommandProvisionsAndRollsBackAgainstMySQL(t *testing
 
 	// Non-ASCII fixture identities are refused at config time: the users.email
 	// unique key uses MySQL utf8mb4_0900_ai_ci (accent-insensitive), which Go
-	// string equality cannot replicate, so fixtures are ASCII-only.
+	// string equality cannot replicate, so fixtures are printable-ASCII only.
 	accentedAdmin := fmt.Sprintf("e2e-àdmin-%d@controlhub-e2e.invalid", os.Getpid())
 	if out, err := runE2EFixtureCommand(t, fixtureDSN, accentedAdmin, adminPw2, editorEmail, editorPw2); err == nil {
-		t.Fatalf("expected ASCII-only refusal, command succeeded:\n%s", out)
+		t.Fatalf("expected ASCII refusal, command succeeded:\n%s", out)
+	}
+	// Control bytes are ignorable in utf8mb4_0900_ai_ci (e.g. \x01 vs \x02
+	// collide as one key), so they must also be refused before any mutation.
+	ctrlAdmin := fmt.Sprintf("e2e-a\x01-%d@controlhub-e2e.invalid", os.Getpid())
+	if out, err := runE2EFixtureCommand(t, fixtureDSN, ctrlAdmin, adminPw2, editorEmail, editorPw2); err == nil {
+		t.Fatalf("expected control-byte refusal, command succeeded:\n%s", out)
 	}
 
 	// When: the editor identity cannot be provisioned (role lookup fails)

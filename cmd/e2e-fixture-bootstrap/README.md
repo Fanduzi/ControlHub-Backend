@@ -31,13 +31,15 @@ unless ALL of the following hold, **before any mutation**:
    accounts (`admin@example.com` / `editor@example.com`) must exist and be
    inactive; otherwise provisioning refuses to run.
 4. **Fixture identity guards** (additional, NOT the primary boundary):
-   fixture emails must be ASCII-only and end with `.invalid` (RFC 2606
-   reserved TLD, so a fixture can never collide with a real operator
-   account), the retired seed identities are refused outright, and the
-   admin and editor fixture emails must be distinct (identical emails
-   would silently drop the administrator). The ASCII-only rule mirrors the
-   `users.email` unique key's `utf8mb4_0900_ai_ci` collation, which Go
-   string equality cannot replicate.
+   fixture emails must be printable-ASCII-only (control bytes
+   are ignorable in MySQL collation, so they could collide) and end with
+   `.invalid` (RFC 2606 reserved TLD, so a fixture can never collide with
+   a real operator account), the retired seed identities are refused
+   outright, and the admin and editor fixture emails must be distinct
+   (identical emails would silently drop the administrator). The
+   printable-ASCII rule mirrors the `users.email` unique key's
+   `utf8mb4_0900_ai_ci` collation, which Go string equality cannot
+   replicate.
 
 The `.invalid` email rule is an additional guard only — production safety is
 provided by the dedicated-DSN + capability gates. Provisioning is
@@ -48,7 +50,7 @@ behind.
 | File | Responsibility |
 |------|---------------|
 | main.go | Env+DSN CLI: requires the capability flag, the dedicated disposable DSN, and all four fixture credentials; verifies migration 00016 has an applied row + inactive retired seeds before upserting (reactivate + rotate authorization_version); refuses the 0002 seed identities and identical admin/editor emails; password-safe report |
-| main_test.go | Hash-compatibility (vs the published 0002 seed hash), mandatory capability/DSN/credentials, distinct ASCII-only admin/editor emails, DSN isolation gate (loopback + `*_e2e` naming), migration-00016 applied-row verification, legacy-seed refusal, and no-password-leak unit tests |
+| main_test.go | Hash-compatibility (vs the published 0002 seed hash), mandatory capability/DSN/credentials, distinct printable-ASCII admin/editor emails, DSN isolation gate (loopback + `*_e2e` naming), migration-00016 applied-row verification, legacy-seed refusal, and no-password-leak unit tests |
 
 ## Seams
 Package-internal functions exercised by the unit and integration tests (not

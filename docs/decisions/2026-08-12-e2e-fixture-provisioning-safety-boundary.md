@@ -36,13 +36,14 @@ before any mutation:
    16 itself, `is_applied = 1`; a later applied version does not satisfy the
    gate), and both retired seed accounts must exist and be inactive;
    otherwise provisioning refuses.
-4. Fixture emails must be ASCII-only and end with `.invalid`, the retired
-   seed identities are refused, and the admin and editor fixture emails
-   must be distinct (identical emails would silently drop the
-   administrator) — additional guards only, not the primary boundary. The
-   ASCII-only rule mirrors the `users.email` unique key's
-   `utf8mb4_0900_ai_ci` collation, which Go string equality cannot
-   replicate.
+4. Fixture emails must be printable-ASCII-only (control bytes are
+   ignorable in MySQL collation, so they could collide) and end with
+   `.invalid`, the retired seed identities are refused, and the admin and
+   editor fixture emails must be distinct (identical emails would
+   silently drop the administrator) — additional guards only, not the
+   primary boundary. The printable-ASCII rule mirrors the `users.email`
+   unique key's `utf8mb4_0900_ai_ci` collation, which Go string equality
+   cannot replicate.
 
 All gates are verifiable: DSN/capability validation happens before opening a
 connection, migration/seed verification happens before the first upsert, and

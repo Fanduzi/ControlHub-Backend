@@ -177,8 +177,24 @@ func TestResolveFixtureConfig_RefusesNonASCIIEmails(t *testing.T) {
 			t.Setenv("E2E_FIXTURE_ADMIN_PASSWORD", "admin-pw")
 			t.Setenv("E2E_FIXTURE_EDITOR_EMAIL", "editor@fixture.invalid")
 			t.Setenv("E2E_FIXTURE_EDITOR_PASSWORD", "editor-pw")
-			if _, err := resolveFixtureConfig(); err == nil || !strings.Contains(err.Error(), "ASCII-only") {
-				t.Fatalf("expected ASCII-only refusal for %q, got %v", email, err)
+			if _, err := resolveFixtureConfig(); err == nil || !strings.Contains(err.Error(), "printable ASCII") {
+				t.Fatalf("expected printable-ASCII refusal for %q, got %v", email, err)
+			}
+		})
+	}
+}
+
+func TestResolveFixtureConfig_RefusesControlByteEmails(t *testing.T) {
+	for _, email := range []string{"e2e-a\x01dmin@fixture.invalid", "e2e-b\x02@fixture.invalid", "e2e-c\x7f@fixture.invalid", "e2e-d @fixture.invalid"} {
+		t.Run(fmt.Sprintf("ctrl-%d", len(email)), func(t *testing.T) {
+			t.Setenv("CONTROLHUB_E2E_FIXTURE_MODE", "1")
+			t.Setenv("E2E_FIXTURE_DATABASE_DSN", "controlhub:pass@tcp(127.0.0.1:3306)/controlhub_e2e?parseTime=true")
+			t.Setenv("E2E_FIXTURE_ADMIN_EMAIL", email)
+			t.Setenv("E2E_FIXTURE_ADMIN_PASSWORD", "admin-pw")
+			t.Setenv("E2E_FIXTURE_EDITOR_EMAIL", "editor@fixture.invalid")
+			t.Setenv("E2E_FIXTURE_EDITOR_PASSWORD", "editor-pw")
+			if _, err := resolveFixtureConfig(); err == nil || !strings.Contains(err.Error(), "printable ASCII") {
+				t.Fatalf("expected printable-ASCII refusal for %q, got %v", email, err)
 			}
 		})
 	}
@@ -299,6 +315,31 @@ func (f *fakeRow) Scan(dest ...any) error {
 		}
 	}
 	return nil
+}
+
+func TestVerifyFixtureDatabase_RejectsMissingRetiredSeed(t *testing.T) {
+	probe := &fakeProbe{rows: map[string]fakeRow{
+		"select count(*) from goose_db_version where version_id = ? and is_applied = 1|16": {values: []any{1}},
+		"select is_active from users where email = ?|admin@example.com":                    {err: sql.ErrNoRows},
+		"select is_active from users where email = ?|editor@example.com":                   {values: []any{0}},
+	}}
+	err := verifyFixtureDatabase(context.Background(), probe)
+	if err == nil || !strings.Contains(err.Error(), "missing") || !strings.Contains(err.Error(), "admin@example.com") {
+		t.Fatalf("expected missing-seed refusal, got %v", err)
+	}
+}
+
+func TestParseDisposableDSN_RejectsNonTCP(t *testing.T) {
+	dsns := []string{
+		"controlhub:pass@unix(/tmp/mysql.sock)/controlhub_e2e",
+	}
+	for i, dsn := range dsns {
+		t.Run(fmt.Sprintf("non-tcp-%d", i), func(t *testing.T) {
+			if _, err := parseDisposableDSN(dsn); err == nil || !strings.Contains(err.Error(), "tcp") {
+				t.Fatalf("expected non-TCP refusal, got %v", err)
+			}
+		})
+	}
 }
 
 func TestVerifyFixtureDatabase_RejectsUnappliedMigration16(t *testing.T) {
