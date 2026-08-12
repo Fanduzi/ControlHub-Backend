@@ -220,14 +220,17 @@ func resolveCredential(prefix, role string) (fixtureCredential, error) {
 		// e2e-a\x01@... and e2e-a\x02@... would collide as one key.
 		return fixtureCredential{}, fmt.Errorf("E2E fixture %s email %q must be printable ASCII only (the users.email unique key uses MySQL utf8mb4_0900_ai_ci; non-ASCII or control-byte identities can collide silently)", role, email)
 	}
+	if legacySeedEmails[email] {
+		// Checked BEFORE the .invalid rule so the explicit retired-seed guard
+		// is the actual rejection path for the 0002 identities, not a shadow
+		// of the generic .invalid gate.
+		return fixtureCredential{}, fmt.Errorf("refusing published seed email %q for the E2E %s fixture: migration 00016 disabled the 0002 accounts; provision an explicit per-run identity", email, role)
+	}
 	if !strings.HasSuffix(email, ".invalid") {
 		// RFC 2606 reserved TLD: an additional guard so a fixture identity can
 		// never collide with a real operator account. This is NOT the primary
 		// production-safety boundary — the dedicated-DSN gate is.
 		return fixtureCredential{}, fmt.Errorf("E2E fixture %s email %q must end with .invalid (RFC 2606 reserved TLD; fixtures must never collide with real operator accounts)", role, email)
-	}
-	if legacySeedEmails[email] {
-		return fixtureCredential{}, fmt.Errorf("refusing published seed email %q for the E2E %s fixture: migration 00016 disabled the 0002 accounts; provision an explicit per-run identity", email, role)
 	}
 	if password == legacySeedPassword {
 		return fixtureCredential{}, fmt.Errorf("refusing the published seed password for the E2E %s fixture: migration 00016 disabled the 0002 accounts; provision an explicit per-run password", role)

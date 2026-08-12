@@ -135,10 +135,22 @@ func TestResolveFixtureConfig_RefusesLegacySeedEmails(t *testing.T) {
 			t.Setenv("E2E_FIXTURE_ADMIN_PASSWORD", "admin-pw")
 			t.Setenv("E2E_FIXTURE_EDITOR_EMAIL", "editor@fixture.invalid")
 			t.Setenv("E2E_FIXTURE_EDITOR_PASSWORD", "editor-pw")
-			if _, err := resolveFixtureConfig(); err == nil {
-				t.Fatal("expected refusal of the published seed email")
+			if _, err := resolveFixtureConfig(); err == nil || !strings.Contains(err.Error(), "refusing published seed email") {
+				t.Fatalf("expected the explicit retired-seed refusal (not the .invalid gate), got %v", err)
 			}
 		})
+	}
+}
+
+func TestResolveFixtureConfig_RefusesNonInvalidTLDIndependently(t *testing.T) {
+	t.Setenv("CONTROLHUB_E2E_FIXTURE_MODE", "1")
+	t.Setenv("E2E_FIXTURE_DATABASE_DSN", "controlhub:pass@tcp(127.0.0.1:3306)/controlhub_e2e?parseTime=true")
+	t.Setenv("E2E_FIXTURE_ADMIN_EMAIL", "someone@example.org")
+	t.Setenv("E2E_FIXTURE_ADMIN_PASSWORD", "admin-pw")
+	t.Setenv("E2E_FIXTURE_EDITOR_EMAIL", "editor@fixture.invalid")
+	t.Setenv("E2E_FIXTURE_EDITOR_PASSWORD", "editor-pw")
+	if _, err := resolveFixtureConfig(); err == nil || !strings.Contains(err.Error(), ".invalid") || strings.Contains(err.Error(), "refusing published seed") {
+		t.Fatalf("expected the .invalid gate to reject independently of the seed guard, got %v", err)
 	}
 }
 
