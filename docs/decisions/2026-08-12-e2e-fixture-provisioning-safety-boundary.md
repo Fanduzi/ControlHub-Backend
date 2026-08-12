@@ -32,11 +32,14 @@ before any mutation:
    their resolution cannot be verified locally), and the database name must
    match the disposable naming rule `^controlhub_[a-z0-9_]*e2e$`. The
    default `controlhub` database and production-like names are rejected.
-3. The database must be migrated to at least 00016 (applied rows only), and
-   both retired seed accounts must exist and be inactive; otherwise
-   provisioning refuses.
-4. Fixture emails must end with `.invalid` and the retired seed identities
-   are refused — additional guards only, not the primary boundary.
+3. Migration 00016 must have an applied row in `goose_db_version` (version
+   16 itself, `is_applied = 1`; a later applied version does not satisfy the
+   gate), and both retired seed accounts must exist and be inactive;
+   otherwise provisioning refuses.
+4. Fixture emails must end with `.invalid`, the retired seed identities are
+   refused, and the admin and editor fixture emails must be distinct
+   (identical emails would silently drop the administrator) — additional
+   guards only, not the primary boundary.
 
 All gates are verifiable: DSN/capability validation happens before opening a
 connection, migration/seed verification happens before the first upsert, and

@@ -168,6 +168,18 @@ func TestResolveFixtureConfig_ErrorsNeverLeakPasswords(t *testing.T) {
 	}
 }
 
+func TestResolveFixtureConfig_RefusesIdenticalAdminEditorEmails(t *testing.T) {
+	t.Setenv("CONTROLHUB_E2E_FIXTURE_MODE", "1")
+	t.Setenv("E2E_FIXTURE_DATABASE_DSN", "controlhub:pass@tcp(127.0.0.1:3306)/controlhub_e2e?parseTime=true")
+	t.Setenv("E2E_FIXTURE_ADMIN_EMAIL", "shared@fixture.invalid")
+	t.Setenv("E2E_FIXTURE_ADMIN_PASSWORD", "admin-pw")
+	t.Setenv("E2E_FIXTURE_EDITOR_EMAIL", "  Shared@Fixture.Invalid  ")
+	t.Setenv("E2E_FIXTURE_EDITOR_PASSWORD", "editor-pw")
+	if _, err := resolveFixtureConfig(); err == nil || !strings.Contains(err.Error(), "must be distinct") {
+		t.Fatalf("expected refusal of identical admin/editor emails, got %v", err)
+	}
+}
+
 func TestParseDisposableDSN_AcceptsLoopbackDisposableDatabase(t *testing.T) {
 	dsns := []string{
 		"controlhub:pass@tcp(127.0.0.1:3306)/controlhub_e2e?parseTime=true",
@@ -244,7 +256,11 @@ type fakeRow struct {
 func (f *fakeProbe) QueryRowContext(_ context.Context, query string, args ...any) rowScanner {
 	key := query
 	for _, a := range args {
-		key += "|" + strings.ToLower(a.(string))
+		if s, ok := a.(string); ok {
+			key += "|" + strings.ToLower(s)
+		} else {
+			key += "|" + fmt.Sprint(a)
+		}
 	}
 	row := f.rows[key]
 	return &fakeRow{values: row.values, err: row.err}
@@ -269,9 +285,9 @@ func (f *fakeRow) Scan(dest ...any) error {
 	return nil
 }
 
-func TestVerifyFixtureDatabase_RejectsUnmigratedDatabase(t *testing.T) {
+func TestVerifyFixtureDatabase_RejectsUnappliedMigration16(t *testing.T) {
 	probe := &fakeProbe{rows: map[string]fakeRow{
-		"select coalesce(max(version_id), 0) from goose_db_version where is_applied = 1": {values: []any{int64(15)}},
+		"select count(*) from goose_db_version where version_id = ? and is_applied = 1|16": {values: []any{0}},
 	}}
 	err := verifyFixtureDatabase(context.Background(), probe)
 	if err == nil || !strings.Contains(err.Error(), "00016") {
@@ -281,9 +297,9 @@ func TestVerifyFixtureDatabase_RejectsUnmigratedDatabase(t *testing.T) {
 
 func TestVerifyFixtureDatabase_RejectsActiveRetiredSeeds(t *testing.T) {
 	probe := &fakeProbe{rows: map[string]fakeRow{
-		"select coalesce(max(version_id), 0) from goose_db_version where is_applied = 1": {values: []any{int64(16)}},
-		"select is_active from users where email = ?|admin@example.com":                  {values: []any{1}},
-		"select is_active from users where email = ?|editor@example.com":                 {values: []any{0}},
+		"select count(*) from goose_db_version where version_id = ? and is_applied = 1|16": {values: []any{1}},
+		"select is_active from users where email = ?|admin@example.com":                    {values: []any{1}},
+		"select is_active from users where email = ?|editor@example.com":                   {values: []any{0}},
 	}}
 	err := verifyFixtureDatabase(context.Background(), probe)
 	if err == nil || !strings.Contains(err.Error(), "admin@example.com") {
@@ -293,9 +309,9 @@ func TestVerifyFixtureDatabase_RejectsActiveRetiredSeeds(t *testing.T) {
 
 func TestVerifyFixtureDatabase_AcceptsMigratedDatabaseWithInactiveSeeds(t *testing.T) {
 	probe := &fakeProbe{rows: map[string]fakeRow{
-		"select coalesce(max(version_id), 0) from goose_db_version where is_applied = 1": {values: []any{int64(16)}},
-		"select is_active from users where email = ?|admin@example.com":                  {values: []any{0}},
-		"select is_active from users where email = ?|editor@example.com":                 {values: []any{0}},
+		"select count(*) from goose_db_version where version_id = ? and is_applied = 1|16": {values: []any{1}},
+		"select is_active from users where email = ?|admin@example.com":                    {values: []any{0}},
+		"select is_active from users where email = ?|editor@example.com":                   {values: []any{0}},
 	}}
 	if err := verifyFixtureDatabase(context.Background(), probe); err != nil {
 		t.Fatalf("expected acceptance, got %v", err)

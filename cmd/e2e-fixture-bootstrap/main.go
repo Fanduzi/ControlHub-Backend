@@ -28,8 +28,9 @@
 //     AND the retired 0002 seed accounts (admin@example.com /
 //     editor@example.com) must both exist and be inactive; otherwise
 //     provisioning refuses to run.
-//  4. Fixture emails must end with `.invalid` (RFC 2606 reserved TLD) and the
-//     retired seed identities are refused.
+//  4. Fixture emails must end with `.invalid` (RFC 2606 reserved TLD), the
+//     retired seed identities are refused, and the admin and editor fixture
+//     emails must be distinct.
 //
 // The `.invalid` email rule is an ADDITIONAL guard — it is NOT the primary
 // production-safety boundary. The gates above protect against accidental
@@ -181,6 +182,9 @@ func resolveFixtureConfig() (fixtureConfig, error) {
 	if err != nil {
 		return fixtureConfig{}, err
 	}
+	if admin.Email == editor.Email {
+		return fixtureConfig{}, fmt.Errorf("E2E fixture admin and editor emails must be distinct (both resolved to %q); identical identities would silently drop the administrator", admin.Email)
+	}
 	return fixtureConfig{DSN: dsn, Fixtures: fixtureSet{Admin: admin, Editor: editor}}, nil
 }
 
@@ -241,7 +245,7 @@ func parseDisposableDSN(dsn string) (disposableDSN, error) {
 	}
 	host, _, err := splitHostPort(cfg.Addr)
 	if err != nil || !loopbackHosts[host] {
-		return disposableDSN{}, fmt.Errorf("E2E fixture DSN host %q is not a loopback address (127.0.0.1 / localhost / ::1); refusing a non-local metadata database", cfg.Addr)
+		return disposableDSN{}, fmt.Errorf("E2E fixture DSN host %q is not a literal loopback address (only 127.0.0.1 / ::1 are accepted; hostnames such as localhost are refused because their resolution cannot be verified locally)", cfg.Addr)
 	}
 	if cfg.DBName == "" {
 		return disposableDSN{}, fmt.Errorf("E2E fixture DSN has no database name")
@@ -298,17 +302,17 @@ func (a dbAdapter) QueryRowContext(ctx context.Context, query string, args ...an
 }
 
 // verifyFixtureDatabase refuses to provision unless the E2E metadata
-// database is migrated to at least 00016 (is_applied rows only) AND both
-// retired 0002 seed accounts exist and are inactive. Runs before any
-// mutation.
+// database has an APPLIED row for migration 00016 (version 16 itself, not a
+// later version) AND both retired 0002 seed accounts exist and are inactive.
+// Runs before any mutation.
 func verifyFixtureDatabase(ctx context.Context, db fixtureProbe) error {
-	var version int64
-	err := db.QueryRowContext(ctx, `select coalesce(max(version_id), 0) from goose_db_version where is_applied = 1`).Scan(&version)
+	var applied int
+	err := db.QueryRowContext(ctx, `select count(*) from goose_db_version where version_id = ? and is_applied = 1`, migration00016).Scan(&applied)
 	if err != nil {
 		return fmt.Errorf("read migration state: %w", err)
 	}
-	if version < migration00016 {
-		return fmt.Errorf("E2E fixture database is at migration %d; migration 00016 (retired seed remediation) must be applied before provisioning", version)
+	if applied == 0 {
+		return fmt.Errorf("E2E fixture database has no applied row for migration 00016 (retired seed remediation); provisioning refuses until it is applied")
 	}
 
 	for _, email := range []string{"admin@example.com", "editor@example.com"} {

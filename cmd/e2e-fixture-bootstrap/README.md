@@ -25,14 +25,17 @@ unless ALL of the following hold, **before any mutation**:
    `^controlhub_[a-z0-9_]*e2e$` (e.g. `controlhub_e2e`). The default
    `controlhub` database, empty names, and production-like names are
    rejected.
-3. **Migrated disposable database**: the database must be migrated to at
-   least 00016 (applied rows only) AND both retired 0002 seed accounts
-   (`admin@example.com` / `editor@example.com`) must exist and be inactive;
-   otherwise provisioning refuses to run.
+3. **Migrated disposable database**: migration 00016 must have an APPLIED
+   row in `goose_db_version` (version 16 itself, `is_applied = 1`; a later
+   applied version does not satisfy the gate) AND both retired 0002 seed
+   accounts (`admin@example.com` / `editor@example.com`) must exist and be
+   inactive; otherwise provisioning refuses to run.
 4. **Fixture identity guards** (additional, NOT the primary boundary):
    fixture emails must end with `.invalid` (RFC 2606 reserved TLD, so a
-   fixture can never collide with a real operator account), and the retired
-   seed identities are refused outright.
+   fixture can never collide with a real operator account), the retired
+   seed identities are refused outright, and the admin and editor fixture
+   emails must be distinct (identical emails would silently drop the
+   administrator).
 
 The `.invalid` email rule is an additional guard only — production safety is
 provided by the dedicated-DSN + capability gates. Provisioning is
@@ -42,14 +45,16 @@ behind.
 ## Files
 | File | Responsibility |
 |------|---------------|
-| main.go | Env+DSN CLI: requires the capability flag, the dedicated disposable DSN, and all four fixture credentials; verifies migration 00016 + inactive retired seeds before upserting (reactivate + rotate authorization_version); refuses the 0002 seed identities; password-safe report |
-| main_test.go | Hash-compatibility (vs the published 0002 seed hash), mandatory capability/DSN/credentials, DSN isolation gate (loopback + `*_e2e` naming), migration-00016 verification, legacy-seed refusal, and no-password-leak unit tests |
+| main.go | Env+DSN CLI: requires the capability flag, the dedicated disposable DSN, and all four fixture credentials; verifies migration 00016 has an applied row + inactive retired seeds before upserting (reactivate + rotate authorization_version); refuses the 0002 seed identities and identical admin/editor emails; password-safe report |
+| main_test.go | Hash-compatibility (vs the published 0002 seed hash), mandatory capability/DSN/credentials, distinct admin/editor emails, DSN isolation gate (loopback + `*_e2e` naming), migration-00016 applied-row verification, legacy-seed refusal, and no-password-leak unit tests |
 
-## Exports
+## Seams
+Package-internal functions exercised by the unit and integration tests (not
+publicly exported symbols):
 - `main()` — binary entry point (`go run ./cmd/e2e-fixture-bootstrap`)
 - `resolveFixtureConfig()` — env seam (capability + DSN + credentials, all mandatory)
 - `parseDisposableDSN(dsn)` — the loopback/`*_e2e` DSN isolation gate
-- `verifyFixtureDatabase(ctx, db)` — migration-00016 + retired-seed verification
+- `verifyFixtureDatabase(ctx, db)` — migration-00016 applied-row + retired-seed verification
 - `runFixtureBootstrap(ctx, db, set)` — upsert seam returning per-identity outcomes
 - `hashPassword(password)` — auth-compatible SHA-256 hex (same scheme as `internal/service` Login)
 - `printReport(w, set, outcomes)` — CLI seam (identities/roles/outcomes only)
