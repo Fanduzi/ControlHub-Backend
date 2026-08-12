@@ -108,12 +108,12 @@ func (n *nullableUint64) Scan(value any) error {
 			return fmt.Errorf("scan nullable uint64: negative value %d", v)
 		}
 		n.Uint64 = uint64(v)
-		case []byte:
-			parsed, err := strconv.ParseUint(string(v), 10, 64)
-			if err != nil {
-				return fmt.Errorf("scan nullable uint64 from bytes: %w", err)
-			}
-			n.Uint64 = parsed
+	case []byte:
+		parsed, err := strconv.ParseUint(string(v), 10, 64)
+		if err != nil {
+			return fmt.Errorf("scan nullable uint64 from bytes: %w", err)
+		}
+		n.Uint64 = parsed
 	case string:
 		parsed, err := strconv.ParseUint(v, 10, 64)
 		if err != nil {
@@ -133,15 +133,20 @@ func scanAuditEventsRows(rows *sql.Rows, total int) ([]model.AuditEvent, int, er
 	for rows.Next() {
 		var item model.AuditEvent
 		var targetResourceID nullableUint64
+		var actorUserID nullableUint64
 		if err := rows.Scan(
 			&item.ID,
-			&item.ActorUserID,
+			&actorUserID,
 			&targetResourceID,
 			&item.EventType,
 			&item.Result,
 			&item.CreatedAt,
 		); err != nil {
 			return nil, 0, err
+		}
+		if actorUserID.Valid {
+			aid := actorUserID.Uint64
+			item.ActorUserID = &aid
 		}
 		if targetResourceID.Valid {
 			targetID := targetResourceID.Uint64

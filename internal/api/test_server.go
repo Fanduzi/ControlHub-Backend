@@ -497,9 +497,11 @@ type fakeAuditRepo struct{}
 
 func (fakeAuditRepo) ListAuditEvents(_ context.Context, q model.AuditListQuery) ([]model.AuditEvent, int, error) {
 	targetResourceID := uint64(1)
+	actor1 := uint64(1)
+	actor2 := uint64(2)
 	all := []model.AuditEvent{
-		{ID: 1, ActorUserID: 1, TargetResourceID: &targetResourceID, EventType: "resource.updated", Result: "success", CreatedAt: time.Date(2026, 4, 11, 21, 0, 0, 0, time.UTC)},
-		{ID: 2, ActorUserID: 2, TargetResourceID: nil, EventType: "resource.created", Result: "failure", CreatedAt: time.Date(2026, 4, 11, 22, 0, 0, 0, time.UTC)},
+		{ID: 1, ActorUserID: &actor1, TargetResourceID: &targetResourceID, EventType: "resource.updated", Result: "success", CreatedAt: time.Date(2026, 4, 11, 21, 0, 0, 0, time.UTC)},
+		{ID: 2, ActorUserID: &actor2, TargetResourceID: nil, EventType: "resource.created", Result: "failure", CreatedAt: time.Date(2026, 4, 11, 22, 0, 0, 0, time.UTC)},
 	}
 
 	filtered := make([]model.AuditEvent, 0)
@@ -531,7 +533,8 @@ func (fakeAuditRepo) ListAuditEvents(_ context.Context, q model.AuditListQuery) 
 }
 
 func (fakeAuditRepo) ListByResourceID(resourceID uint64) ([]model.AuditEvent, error) {
-	return []model.AuditEvent{{ID: 1, ActorUserID: 1, TargetResourceID: &resourceID, EventType: "resource.updated", Result: "success", CreatedAt: time.Date(2026, 4, 11, 21, 0, 0, 0, time.UTC)}}, nil
+	actor := uint64(1)
+	return []model.AuditEvent{{ID: 1, ActorUserID: &actor, TargetResourceID: &resourceID, EventType: "resource.updated", Result: "success", CreatedAt: time.Date(2026, 4, 11, 21, 0, 0, 0, time.UTC)}}, nil
 }
 
 // fakeQueryTargetRow pairs a raw query target with the environment id used for

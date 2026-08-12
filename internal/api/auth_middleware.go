@@ -42,10 +42,10 @@ const controlledUnauthorizedMessage = "unauthorized"
 // check: verify token structure/signature and current Authorization Version,
 // then store the actor user id and current role in context. It does NOT enforce
 // TTL; query execute/history routes mount requireFreshQueryActor instead.
-func requireAuthenticatedActor(authService *service.AuthService) func(http.Handler) http.Handler {
+func requireAuthenticatedActor(authService *service.AuthService, emitter service.AuthAuditEmitter) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			user, ok := verifyBearer(authService, w, r)
+			user, ok := verifyBearer(authService, emitter, w, r)
 			if !ok {
 				return
 			}
@@ -56,15 +56,23 @@ func requireAuthenticatedActor(authService *service.AuthService) func(http.Handl
 	}
 }
 
-func requireAdminActor(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		role, _ := actorRoleFromContext(r.Context())
-		if role != "admin" {
-			writeJSONError(w, http.StatusForbidden, "forbidden", "admin role is required")
-			return
-		}
-		next.ServeHTTP(w, r)
-	})
+func requireAdminActor(emitter service.AuthAuditEmitter) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			role, _ := actorRoleFromContext(r.Context())
+			if role != "admin" {
+				// Actor is authenticated but lacks admin role: emit auth.authorization denied.
+				var actorID *uint64
+				if id, ok := actorUserIDFromContext(r.Context()); ok {
+					actorID = &id
+				}
+				emitter.EmitAuthAudit("auth.authorization", "denied", actorID, nil)
+				writeJSONError(w, http.StatusForbidden, "forbidden", "admin role is required")
+				return
+			}
+			next.ServeHTTP(w, r)
+		})
+	}
 }
 
 // requireFreshQueryActor is the chi middleware factory mounted on query
@@ -72,20 +80,17 @@ func requireAdminActor(next http.Handler) http.Handler {
 // additionally rejects credentials whose embedded issuedAt is older than
 // cfg.TokenMaxAge (fixed eight-hour freshness for governed query). Expiry uses
 // the same generic 401 as other auth failures.
-func requireFreshQueryActor(authService *service.AuthService, cfg QueryExecutionAuthConfig) func(http.Handler) http.Handler {
+func requireFreshQueryActor(authService *service.AuthService, cfg QueryExecutionAuthConfig, emitter service.AuthAuditEmitter) func(http.Handler) http.Handler {
 	clock := cfg.Clock
 	if clock == nil {
 		clock = time.Now
 	}
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			user, ok := verifyBearer(authService, w, r)
+			user, ok := verifyBearer(authService, emitter, w, r)
 			if !ok {
 				return
 			}
-			// WHY: query execution is a higher-risk surface than read/list routes,
-			// so token freshness is bounded here. A zero/unset TokenMaxAge fails
-			// closed (reject) rather than silently allowing every token.
 			if cfg.TokenMaxAge <= 0 || clock().Sub(user.IssuedAt) > cfg.TokenMaxAge {
 				writeJSONError(w, http.StatusUnauthorized, "unauthorized", controlledUnauthorizedMessage)
 				return
@@ -101,20 +106,23 @@ func requireFreshQueryActor(authService *service.AuthService, cfg QueryExecution
 // it via the auth service (signature + current Authorization Version + active
 // state), and writes a generic 401 on any failure. On success it returns the
 // authenticated user with the current server-owned role.
-func verifyBearer(authService *service.AuthService, w http.ResponseWriter, r *http.Request) (*service.AuthenticatedUser, bool) {
+func verifyBearer(authService *service.AuthService, emitter service.AuthAuditEmitter, w http.ResponseWriter, r *http.Request) (*service.AuthenticatedUser, bool) {
 	const prefix = "Bearer "
 	header := r.Header.Get("Authorization")
 	if len(header) < len(prefix) || !strings.EqualFold(header[:len(prefix)], prefix) {
+		emitter.EmitAuthAudit("auth.bearer", "rejected", nil, nil)
 		writeJSONError(w, http.StatusUnauthorized, "unauthorized", controlledUnauthorizedMessage)
 		return nil, false
 	}
 	token := strings.TrimSpace(header[len(prefix):])
 	if token == "" {
+		emitter.EmitAuthAudit("auth.bearer", "rejected", nil, nil)
 		writeJSONError(w, http.StatusUnauthorized, "unauthorized", controlledUnauthorizedMessage)
 		return nil, false
 	}
 	user, err := authService.VerifyToken(token)
 	if err != nil {
+		emitter.EmitAuthAudit("auth.bearer", "rejected", nil, nil)
 		writeJSONError(w, http.StatusUnauthorized, "unauthorized", controlledUnauthorizedMessage)
 		return nil, false
 	}

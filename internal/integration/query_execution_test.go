@@ -1560,7 +1560,7 @@ func TestQueryExecution_PaginatedSelectRecordsEachPageInHistoryAndAudit(t *testi
 		t.Fatalf("page audit items = %d, want 2", len(auditItems))
 	}
 	for _, item := range auditItems {
-		if item.EventType != "query.executed" || item.Result != "success" || item.ActorUserID != ownerDBA {
+		if item.EventType != "query.executed" || item.Result != "success" || item.ActorUserID == nil || *item.ActorUserID != ownerDBA {
 			t.Fatalf("page audit item = %+v, want attributed success", item)
 		}
 	}

@@ -7,9 +7,12 @@ package model
 
 import "time"
 
+// AuditEvent is an append-only record for resource changes and authentication
+// outcomes. ActorUserID is nil for unauthenticated events (failed login,
+// rejected Bearer) where no verified identity exists.
 type AuditEvent struct {
 	ID               uint64    `json:"id"`
-	ActorUserID      uint64    `json:"actorUserId"`
+	ActorUserID      *uint64   `json:"actorUserId"`
 	TargetResourceID *uint64   `json:"targetResourceId"`
 	EventType        string    `json:"eventType"`
 	Result           string    `json:"result"`

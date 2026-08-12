@@ -9,6 +9,7 @@ Business logic layer with interface-based repository dependencies. Each service 
 | relation_service.go | Relation listing by resource |
 | audit_service.go | Audit event listing (global and per-resource) |
 | auth_service.go | Login, versioned Backend Bearer issuance, current-state VerifyToken (Authorization Version), role/disable/password invalidation |
+| auth_audit_emitter.go | AuthAuditEmitter interface and NoopEmitter for fail-open auth/authz audit event emission |
 | environment_service.go | Environment listing |
 | owner_service.go | Owner listing |
 | role_service.go | Role listing |
@@ -42,6 +43,7 @@ Business logic layer with interface-based repository dependencies. Each service 
 ## Exports
 - `NewXxxService(repo) *XxxService` constructors for all services
 - `NewMemoryUserStore`, `AuthService.WithClock`, `AuthService.ChangeUserRole`/`SetUserActive`/`ResetUserPassword` — Authorization Version seams
+- `AuthAuditEmitter`, `NoopEmitter` — fail-open authentication/authorization audit emission interface and discard implementation
 - `ErrResourceNotFound`, `ErrInvalidCredentials`, `ErrInvalidToken`, `ErrQueryDisclosureBlocked` sentinel errors
 - `ErrQuerySavedStatementNotFound`, `ErrQueryForbidden` — saved-statement service sentinel errors
 - `ErrQueryDisclosurePolicyConflict`, `ErrQueryDisclosurePolicyNotFound` — disclosure policy CRUD sentinel errors (duplicate scope → 409, missing scope on update → 404)

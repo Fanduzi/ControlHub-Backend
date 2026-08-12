@@ -60,6 +60,9 @@ type Dependencies struct {
 	// *service.QuerySavedStatementService satisfies it. All four routes require
 	// a fresh bearer token (same freshness policy as query execution).
 	QuerySavedStatementService querySavedStatementAPI
+	// AuthAuditEmitter records authentication and authorization outcomes.
+	// Nil is treated as NoopEmitter; fail-open semantics apply.
+	AuthAuditEmitter service.AuthAuditEmitter
 }
 
 func corsLocalDev(next http.Handler) http.Handler {
@@ -78,14 +81,19 @@ func corsLocalDev(next http.Handler) http.Handler {
 }
 
 func NewRouter(deps Dependencies) *chi.Mux {
+	emitter := deps.AuthAuditEmitter
+	if emitter == nil {
+		emitter = service.NoopEmitter{}
+	}
+
 	router := chi.NewRouter()
 	router.Use(corsLocalDev)
 	router.Get("/health", handleHealth)
-	router.Post("/auth/login", handleLogin(deps.AuthService))
+	router.Post("/auth/login", handleLogin(deps.AuthService, emitter))
 	router.Get("/openapi.yaml", handleOpenAPIYAML)
 	router.Get("/docs", handleDocs)
 	router.Group(func(r chi.Router) {
-		r.Use(requireAuthenticatedActor(deps.AuthService))
+		r.Use(requireAuthenticatedActor(deps.AuthService, emitter))
 		r.Get("/resources", handleListResources(deps.ResourceService))
 		r.Get("/resources/{id}", handleGetResource(deps.ResourceService))
 		r.Get("/resources/{id}/profile", handleGetResourceProfile(deps.ResourceService))
@@ -103,7 +111,7 @@ func NewRouter(deps Dependencies) *chi.Mux {
 		r.Get("/query-targets", handleListQueryTargets(deps.QueryTargetService))
 
 		r.Group(func(r chi.Router) {
-			r.Use(requireAdminActor)
+			r.Use(requireAdminActor(emitter))
 			r.Post("/resources", handleCreateResource(deps.ResourceService))
 			r.Patch("/resources/{id}", handlePatchResource(deps.ResourceService))
 			r.Post("/resources/{id}/archive", handleArchiveResource(deps.ResourceService))
@@ -131,7 +139,7 @@ func NewRouter(deps Dependencies) *chi.Mux {
 	// service being wired (Oracle P2.9).
 	if deps.QueryExecutionService != nil || deps.QueryExplainService != nil {
 		router.Group(func(r chi.Router) {
-			r.Use(requireFreshQueryActor(deps.AuthService, deps.QueryExecutionAuth))
+			r.Use(requireFreshQueryActor(deps.AuthService, deps.QueryExecutionAuth, emitter))
 			if deps.QueryExecutionService != nil {
 				r.Post("/query-targets/{id}/execute", handleExecuteQuery(deps.QueryExecutionService))
 				r.Get("/query-targets/{id}/executions", handleListQueryExecutions(deps.QueryExecutionService))
@@ -148,17 +156,20 @@ func NewRouter(deps Dependencies) *chi.Mux {
 	// actor. The response/contract carries metadata only — never a DSN.
 	if deps.QueryCredentialService != nil {
 		router.Group(func(r chi.Router) {
-			r.Use(requireFreshQueryActor(deps.AuthService, deps.QueryExecutionAuth))
+			r.Use(requireFreshQueryActor(deps.AuthService, deps.QueryExecutionAuth, emitter))
 			r.Get("/query-targets/{id}/credential", handleGetQueryCredential(deps.QueryCredentialService))
-			r.Put("/query-targets/{id}/credential", handlePutQueryCredential(deps.QueryCredentialService))
-			r.Delete("/query-targets/{id}/credential", handleDeleteQueryCredential(deps.QueryCredentialService))
+			r.Group(func(r chi.Router) {
+				r.Use(requireAdminActor(emitter))
+				r.Put("/query-targets/{id}/credential", handlePutQueryCredential(deps.QueryCredentialService))
+				r.Delete("/query-targets/{id}/credential", handleDeleteQueryCredential(deps.QueryCredentialService))
+			})
 		})
 	}
 	// Query schema metadata routes (Phase 38I). All three require a fresh
 	// bearer token (same freshness policy as query execution).
 	if deps.QuerySchemaService != nil {
 		router.Group(func(r chi.Router) {
-			r.Use(requireFreshQueryActor(deps.AuthService, deps.QueryExecutionAuth))
+			r.Use(requireFreshQueryActor(deps.AuthService, deps.QueryExecutionAuth, emitter))
 			r.Get("/query-targets/{id}/schema/databases", handleListSchemaDatabases(deps.QuerySchemaService))
 			r.Get("/query-targets/{id}/schema/objects", handleListSchemaObjects(deps.QuerySchemaService))
 			r.Get("/query-targets/{id}/schema/object-details", handleGetObjectDetails(deps.QuerySchemaService))
@@ -171,7 +182,7 @@ func NewRouter(deps Dependencies) *chi.Mux {
 	// including GET, enforce the admin role inside the handler.
 	if deps.QueryDisclosureService != nil {
 		router.Group(func(r chi.Router) {
-			r.Use(requireFreshQueryActor(deps.AuthService, deps.QueryExecutionAuth))
+			r.Use(requireFreshQueryActor(deps.AuthService, deps.QueryExecutionAuth, emitter))
 			r.Get("/query-disclosure-policies", handleListPolicies(deps.QueryDisclosureService))
 			r.Post("/query-disclosure-policies", handleCreatePolicy(deps.QueryDisclosureService))
 			r.Put("/query-disclosure-policies", handleUpdatePolicy(deps.QueryDisclosureService))
@@ -184,7 +195,7 @@ func NewRouter(deps Dependencies) *chi.Mux {
 	// registered only when the execution service is wired.
 	if deps.QuerySavedStatementService != nil {
 		router.Group(func(r chi.Router) {
-			r.Use(requireFreshQueryActor(deps.AuthService, deps.QueryExecutionAuth))
+			r.Use(requireFreshQueryActor(deps.AuthService, deps.QueryExecutionAuth, emitter))
 			r.Get("/query-targets/{id}/saved-statements", handleListSavedStatements(deps.QuerySavedStatementService))
 			r.Post("/query-targets/{id}/saved-statements", handleCreateSavedStatement(deps.QuerySavedStatementService))
 			r.Put("/query-targets/{id}/saved-statements/{statementId}", handleUpdateSavedStatement(deps.QuerySavedStatementService))

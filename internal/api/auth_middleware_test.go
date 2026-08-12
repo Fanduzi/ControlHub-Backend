@@ -56,7 +56,7 @@ func newMiddlewareAuthService(secret string) *service.AuthService {
 
 func TestAuthenticatedActorRejectsMissingBearerToken(t *testing.T) {
 	svc := newMiddlewareAuthService("test-secret")
-	h := requireAuthenticatedActor(svc)(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	h := requireAuthenticatedActor(svc, service.NoopEmitter{})(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		t.Error("handler must not run without a bearer token")
 	}))
 
@@ -72,7 +72,7 @@ func TestAuthenticatedActorRejectsMissingBearerToken(t *testing.T) {
 
 func TestAuthenticatedActorRejectsInvalidBearerToken(t *testing.T) {
 	svc := newMiddlewareAuthService("test-secret")
-	h := requireAuthenticatedActor(svc)(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	h := requireAuthenticatedActor(svc, service.NoopEmitter{})(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		t.Error("handler must not run with an invalid token")
 	}))
 
@@ -94,7 +94,7 @@ func TestAuthenticatedActorStoresActorInContext(t *testing.T) {
 
 	var capturedID uint64
 	var capturedOK bool
-	h := requireAuthenticatedActor(svc)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	h := requireAuthenticatedActor(svc, service.NoopEmitter{})(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		capturedID, capturedOK = actorUserIDFromContext(r.Context())
 		w.WriteHeader(http.StatusOK)
 	}))
@@ -120,7 +120,7 @@ func TestFreshQueryActorRejectsMissingBearer(t *testing.T) {
 	now := time.Date(2026, 6, 21, 8, 0, 0, 0, time.UTC)
 	cfg := QueryExecutionAuthConfig{TokenMaxAge: 8 * time.Hour, Clock: fixedClock(now)}
 
-	h := requireFreshQueryActor(svc, cfg)(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	h := requireFreshQueryActor(svc, cfg, service.NoopEmitter{})(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		t.Error("handler must not run without a bearer token")
 	}))
 
@@ -139,7 +139,7 @@ func TestFreshQueryActorRejectsMalformedBearer(t *testing.T) {
 	now := time.Date(2026, 6, 21, 8, 0, 0, 0, time.UTC)
 	cfg := QueryExecutionAuthConfig{TokenMaxAge: 8 * time.Hour, Clock: fixedClock(now)}
 
-	h := requireFreshQueryActor(svc, cfg)(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	h := requireFreshQueryActor(svc, cfg, service.NoopEmitter{})(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		t.Error("handler must not run with a malformed token")
 	}))
 
@@ -161,7 +161,7 @@ func TestFreshQueryActorRejectsBadSignature(t *testing.T) {
 
 	token := mintToken(t, "wrong-secret", 1, "admin", now)
 
-	h := requireFreshQueryActor(svc, cfg)(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	h := requireFreshQueryActor(svc, cfg, service.NoopEmitter{})(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		t.Error("handler must not run with a bad-signature token")
 	}))
 
@@ -184,7 +184,7 @@ func TestFreshQueryActorAcceptsTokenWithinTTL(t *testing.T) {
 	token := mintToken(t, "test-secret", 7, "editor", now.Add(-1*time.Hour))
 
 	called := false
-	h := requireFreshQueryActor(svc, cfg)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	h := requireFreshQueryActor(svc, cfg, service.NoopEmitter{})(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		called = true
 		id, ok := actorUserIDFromContext(r.Context())
 		if !ok || id != 7 {
@@ -215,7 +215,7 @@ func TestFreshQueryActorRejectsTokenOlderThanTTL(t *testing.T) {
 	// credential is a generic 401, same as other auth failures.
 	token := mintToken(t, "test-secret", 7, "editor", now.Add(-9*time.Hour))
 
-	h := requireFreshQueryActor(svc, cfg)(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	h := requireFreshQueryActor(svc, cfg, service.NoopEmitter{})(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		t.Error("handler must not run for an expired token")
 	}))
 
@@ -240,7 +240,7 @@ func TestFreshQueryActorStoresCurrentRole(t *testing.T) {
 
 	var capturedRole string
 	var capturedOK bool
-	h := requireFreshQueryActor(svc, cfg)(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+	h := requireFreshQueryActor(svc, cfg, service.NoopEmitter{})(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
 		capturedRole, capturedOK = actorRoleFromContext(r.Context())
 	}))
 	rec := httptest.NewRecorder()
@@ -271,7 +271,7 @@ func TestFreshQueryActorRejectsStaleAuthorizationVersion(t *testing.T) {
 		t.Fatalf("ChangeUserRole: %v", err)
 	}
 
-	h := requireFreshQueryActor(svc, cfg)(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+	h := requireFreshQueryActor(svc, cfg, service.NoopEmitter{})(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
 		t.Error("handler must not run after Authorization Version bump")
 	}))
 	rec := httptest.NewRecorder()
@@ -299,7 +299,7 @@ func TestFreshQueryActorRejectsDisabledUser(t *testing.T) {
 		t.Fatalf("SetUserActive: %v", err)
 	}
 
-	h := requireFreshQueryActor(svc, cfg)(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+	h := requireFreshQueryActor(svc, cfg, service.NoopEmitter{})(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
 		t.Error("handler must not run for disabled user")
 	}))
 	rec := httptest.NewRecorder()
@@ -322,7 +322,7 @@ func TestGeneric401EquivalenceAcrossAuthFailures(t *testing.T) {
 	svc := service.NewAuthService(store, "test-secret")
 	now := time.Date(2026, 8, 9, 10, 0, 0, 0, time.UTC)
 	cfg := QueryExecutionAuthConfig{TokenMaxAge: 8 * time.Hour, Clock: fixedClock(now)}
-	h := requireFreshQueryActor(svc, cfg)(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+	h := requireFreshQueryActor(svc, cfg, service.NoopEmitter{})(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
 		t.Error("handler must not run")
 	}))
 

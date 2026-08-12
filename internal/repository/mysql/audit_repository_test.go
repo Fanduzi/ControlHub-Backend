@@ -34,9 +34,10 @@ func TestNullableUint64ScanUint64StringAndNil(t *testing.T) {
 }
 
 func TestAuditEventJSON_NullTargetResourceID(t *testing.T) {
+	actorID := uint64(2)
 	event := model.AuditEvent{
 		ID:          1,
-		ActorUserID: 2,
+		ActorUserID: &actorID,
 		EventType:   "resource.updated",
 		Result:      "success",
 		CreatedAt:   time.Date(2026, 4, 11, 21, 0, 0, 0, time.UTC),

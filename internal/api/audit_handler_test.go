@@ -201,6 +201,7 @@ func TestListAuditEvents_NullTargetResourceIDRendersAsJSONNull(t *testing.T) {
 	var resp struct {
 		Items []struct {
 			ID               uint64  `json:"id"`
+			ActorUserID      *uint64 `json:"actorUserId"`
 			TargetResourceID *uint64 `json:"targetResourceId"`
 		} `json:"items"`
 	}
@@ -284,7 +285,6 @@ func TestListResourceAuditEvents_RejectsZeroID(t *testing.T) {
 		t.Fatalf("expected positive integer message, got %q", resp.Message)
 	}
 }
-
 
 // --- Phase 12.5: Multi-select audit filter tests ---
 
