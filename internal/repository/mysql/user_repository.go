@@ -1,7 +1,7 @@
 // Package mysql provides MySQL-backed repository implementations.
 // input: database/sql, context, errors, internal/model
 // output: NewUserRepository, UserRepository struct
-// pos: MySQL data access for users table — credential lookup and Authorization Version mutators
+// pos: MySQL data access for users table — credential lookup, Authorization Version mutators, UpgradePasswordHash for legacy migration, CountLegacyHashUsers
 // note: if this file changes, update header and README.md
 package mysql
 
@@ -131,6 +131,7 @@ func (r *UserRepository) SetActive(userID uint64, active bool) error {
 }
 
 // UpdatePasswordHash replaces password_hash and bumps authorization_version.
+// Used for password resets where prior tokens must be invalidated.
 func (r *UserRepository) UpdatePasswordHash(userID uint64, passwordHash string) error {
 	res, err := r.db.ExecContext(context.Background(), `
 		update users
@@ -150,4 +151,41 @@ func (r *UserRepository) UpdatePasswordHash(userID uint64, passwordHash string) 
 		return fmt.Errorf("update password hash: user not found")
 	}
 	return nil
+}
+
+// UpgradePasswordHash replaces password_hash without bumping
+// authorization_version. Used for transparent legacy SHA-256 to Argon2id
+// migration at login time where the user just authenticated and no prior
+// tokens need invalidation.
+func (r *UserRepository) UpgradePasswordHash(userID uint64, passwordHash string) error {
+	res, err := r.db.ExecContext(context.Background(), `
+		update users
+		set password_hash = ?
+		where id = ?`,
+		passwordHash, userID,
+	)
+	if err != nil {
+		return fmt.Errorf("upgrade password hash: %w", err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if n == 0 {
+		return fmt.Errorf("upgrade password hash: user not found")
+	}
+	return nil
+}
+
+// CountLegacyHashUsers returns the count of users whose password_hash does
+// not start with the Argon2id encoded prefix. The query carries no
+// identity-bearing information beyond the integer count.
+func (r *UserRepository) CountLegacyHashUsers() (int64, error) {
+	var count int64
+	err := r.db.QueryRowContext(context.Background(),
+		`SELECT COUNT(*) FROM users WHERE password_hash NOT LIKE '$argon2id$%'`).Scan(&count)
+	if err != nil {
+		return 0, fmt.Errorf("count legacy hash users: %w", err)
+	}
+	return count, nil
 }

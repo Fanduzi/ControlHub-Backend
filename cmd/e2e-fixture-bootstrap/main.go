@@ -42,9 +42,7 @@ package main
 
 import (
 	"context"
-	"crypto/sha256"
 	"database/sql"
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -56,6 +54,7 @@ import (
 	"github.com/go-sql-driver/mysql"
 
 	"github.com/fan/controlhub/internal/config"
+	"github.com/fan/controlhub/internal/service"
 )
 
 // fixtureCredential carries one role's operator-supplied fixture identity.
@@ -356,12 +355,9 @@ func verifyFixtureDatabase(ctx context.Context, db fixtureProbe) error {
 	return nil
 }
 
-// hashPassword hashes with the exact SHA-256 hex scheme internal/service uses
-// for password authentication, so a fixture-created credential signs in
-// without any change to existing hashes.
+// hashPassword uses Argon2id via internal/service for fixture credentials.
 func hashPassword(password string) string {
-	sum := sha256.Sum256([]byte(password))
-	return hex.EncodeToString(sum[:])
+	return service.HashPasswordArgon2id(password)
 }
 
 // dmlExecutor is the write surface used by the upsert path; txAdapter

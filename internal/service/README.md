@@ -8,7 +8,8 @@ Business logic layer with interface-based repository dependencies. Each service 
 | resource_service.go | Resource listing, detail, profile projection |
 | relation_service.go | Relation listing by resource |
 | audit_service.go | Audit event listing (global and per-resource) |
-| auth_service.go | Login, versioned Backend Bearer issuance, current-state VerifyToken (Authorization Version), role/disable/password invalidation |
+| auth_service.go | Login, versioned Backend Bearer issuance, current-state VerifyToken (Authorization Version), role/disable/password invalidation, legacy-to-Argon2id transparent migration |
+| password_hasher.go | Argon2id password hashing, legacy SHA-256 verification, hash format detection, resource budget enforcement |
 | environment_service.go | Environment listing |
 | owner_service.go | Owner listing |
 | role_service.go | Role listing |
@@ -42,6 +43,8 @@ Business logic layer with interface-based repository dependencies. Each service 
 ## Exports
 - `NewXxxService(repo) *XxxService` constructors for all services
 - `NewMemoryUserStore`, `AuthService.WithClock`, `AuthService.ChangeUserRole`/`SetUserActive`/`ResetUserPassword` — Authorization Version seams
+- `HashPasswordArgon2id`, `VerifyPassword`, `IsLegacyHash`, `IsArgon2idHash` — password hashing and format detection
+- `AuthService.LegacyHashCount` — non-identity-bearing count of remaining legacy-hash accounts
 - `ErrResourceNotFound`, `ErrInvalidCredentials`, `ErrInvalidToken`, `ErrQueryDisclosureBlocked` sentinel errors
 - `ErrQuerySavedStatementNotFound`, `ErrQueryForbidden` — saved-statement service sentinel errors
 - `ErrQueryDisclosurePolicyConflict`, `ErrQueryDisclosurePolicyNotFound` — disclosure policy CRUD sentinel errors (duplicate scope → 409, missing scope on update → 404)
