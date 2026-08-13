@@ -252,3 +252,77 @@ func TestOpenAPIExecutions400DocumentsValidationExamples(t *testing.T) {
 		}
 	}
 }
+
+// TestOpenAPIAuditEventActorUserIdNullable proves the AuditEvent schema allows
+// null for actorUserId. Unauthenticated auth audit events (failed login,
+// rejected Bearer) persist with no actor; the schema must not require it.
+func TestOpenAPIAuditEventActorUserIdNullable(t *testing.T) {
+	loader := openapi3.NewLoader()
+	doc, err := loader.LoadFromData(openapi.YAML)
+	if err != nil {
+		t.Fatalf("failed to parse openapi.yaml: %v", err)
+	}
+
+	schemaRef := doc.Components.Schemas["AuditEvent"]
+	if schemaRef == nil || schemaRef.Value == nil {
+		t.Fatal("AuditEvent schema not found")
+	}
+	schema := schemaRef.Value
+
+	// actorUserId must NOT be in the required list.
+	for _, field := range schema.Required {
+		if field == "actorUserId" {
+			t.Fatalf("actorUserId must not be required in AuditEvent schema; required = %v", schema.Required)
+		}
+	}
+
+	// The property must be nullable (OpenAPI 3.1).
+	prop := schema.Properties["actorUserId"]
+	if prop == nil || prop.Value == nil {
+		t.Fatal("actorUserId property not found in AuditEvent schema")
+	}
+	if !prop.Value.Nullable {
+		t.Fatal("actorUserId must be nullable in AuditEvent schema")
+	}
+}
+
+// TestOpenAPILoginResponseHasUserId proves the LoginResponse schema includes
+// the userId field (always returned by the handler) as required.
+func TestOpenAPILoginResponseHasUserId(t *testing.T) {
+	loader := openapi3.NewLoader()
+	doc, err := loader.LoadFromData(openapi.YAML)
+	if err != nil {
+		t.Fatalf("failed to parse openapi.yaml: %v", err)
+	}
+
+	schemaRef := doc.Components.Schemas["LoginResponse"]
+	if schemaRef == nil || schemaRef.Value == nil {
+		t.Fatal("LoginResponse schema not found")
+	}
+	schema := schemaRef.Value
+
+	// userId must be present as a property.
+	if _, ok := schema.Properties["userId"]; !ok {
+		t.Fatalf("LoginResponse schema missing userId property; properties = %v", keys(schema.Properties))
+	}
+
+	// userId must be in the required list (always returned).
+	found := false
+	for _, field := range schema.Required {
+		if field == "userId" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("userId must be required in LoginResponse schema; required = %v", schema.Required)
+	}
+}
+
+func keys(m map[string]*openapi3.SchemaRef) []string {
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	return out
+}
