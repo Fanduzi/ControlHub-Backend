@@ -215,6 +215,58 @@ func TestAuthAudit_AuthorizationDenied(t *testing.T) {
 	}
 }
 
+// TestAuthAudit_ResourceScopedDeniedEmitsTargetID proves that an editor
+// denied on a resource-scoped admin mutation (PATCH /resources/{id}) emits
+// exactly one auth.authorization denied event with target_resource_id set
+// to that resource ID and actor_user_id set to the editor.
+func TestAuthAudit_ResourceScopedDeniedEmitsTargetID(t *testing.T) {
+	db := setupTestDB(t)
+	assertSchemaChainBaseline(t, db)
+
+	userID := insertAuthzTestUser(t, db, "audit-resource-denied@example.com", "editor")
+	t.Cleanup(func() { deleteAuthzTestUser(t, db, userID) })
+
+	userRepo := mysql.NewUserRepository(db)
+	authSvc := service.NewAuthService(userRepo, authzIntegrationSecret)
+	emitter := mysql.NewAuthAuditEmitter(db)
+	router := api.NewRouter(api.Dependencies{
+		AuthService:      authSvc,
+		AuthAuditEmitter: emitter,
+		QueryExecutionAuth: api.QueryExecutionAuthConfig{
+			Clock: time.Now,
+		},
+	})
+
+	token := mustLogin(t, router, "audit-resource-denied@example.com", "secret123")
+
+	// PATCH /resources/7 — admin-only; editor gets 403 before handler runs.
+	body := `{"displayName":"should-not-apply"}`
+	rec := doBearerWithBody(t, router, http.MethodPatch, "/resources/7", token, body)
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("editor PATCH status = %d, want 403", rec.Code)
+	}
+
+	// Query for the specific denied event: must have actor = editor, target = 7.
+	var actorUserID sql.NullInt64
+	var targetResourceID sql.NullInt64
+	err := db.QueryRow(
+		`select actor_user_id, target_resource_id from audit_events
+		 where event_type = 'auth.authorization' and result = 'denied'
+		   and actor_user_id = ?
+		 order by created_at desc limit 1`,
+		userID,
+	).Scan(&actorUserID, &targetResourceID)
+	if err != nil {
+		t.Fatalf("query auth.authorization denied for editor: %v", err)
+	}
+	if !actorUserID.Valid || uint64(actorUserID.Int64) != userID {
+		t.Fatalf("actor_user_id = %v, want %d", actorUserID, userID)
+	}
+	if !targetResourceID.Valid || uint64(targetResourceID.Int64) != 7 {
+		t.Fatalf("target_resource_id = %v, want 7", targetResourceID)
+	}
+}
+
 // TestAuthAudit_FailOpenOnDBError proves that when the audit emitter's INSERT
 // fails (simulated by a broken DB connection), the authentication/authorization
 // decision is unchanged.
