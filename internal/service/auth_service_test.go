@@ -491,6 +491,48 @@ type failingUpgradeRepo struct {
 	UserCredentialRepository
 }
 
-func (r *failingUpgradeRepo) UpgradePasswordHash(uint64, string) error {
+func (r *failingUpgradeRepo) UpgradePasswordHash(uint64, string, string) error {
 	return fmt.Errorf("simulated write failure")
+}
+
+// TestLoginCASRejectsStaleUpgrade proves that if the stored hash changes
+// between the password verification read and the CAS upgrade write, the
+// upgrade is rejected and no token is issued. This simulates the race:
+// 1. User A reads legacy hash
+// 2. Admin resets User A's password (hash changes to Argon2id)
+// 3. User A's stale CAS upgrade fails (old hash no longer matches)
+func TestLoginCASRejectsStaleUpgrade(t *testing.T) {
+	store := NewMemoryUserStore(activeAdmin(40))
+	svc := NewAuthService(store, "test-secret")
+
+	// Precondition: legacy hash.
+	u, _ := store.FindByID(40)
+	if !IsLegacyHash(u.PasswordHash) {
+		t.Fatal("precondition: stored hash should be legacy")
+	}
+
+	// Simulate external change: admin resets the password between our
+	// read and our CAS write. The hash is now Argon2id.
+	store.Put(model.UserCredential{
+		ID:                   40,
+		Email:                "admin@example.com",
+		RoleName:             "admin",
+		PasswordHash:         HashPasswordArgon2id("admin-reset-pw"),
+		IsActive:             true,
+		AuthorizationVersion: 2,
+	})
+
+	// Login with the old password should verify (legacy hash was correct)
+	// but the CAS upgrade must fail because the hash no longer matches.
+	_, err := svc.Login("admin@example.com", "secret123")
+	if !errors.Is(err, ErrInvalidCredentials) {
+		t.Fatalf("expected ErrInvalidCredentials on CAS failure, got %v", err)
+	}
+
+	// Postcondition: hash must be the Argon2id from the reset, not a
+	// stale overwrite.
+	u2, _ := store.FindByID(40)
+	if !IsArgon2idHash(u2.PasswordHash) {
+		t.Fatal("hash should remain Argon2id from reset, not overwritten by stale CAS")
+	}
 }

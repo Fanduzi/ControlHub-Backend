@@ -11,6 +11,7 @@ package integration
 import (
 	"database/sql"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -177,6 +178,144 @@ func TestArgon2idMigration_LegacyHashCountIsNonIdentity(t *testing.T) {
 	// Seed users (0002) + our legacy user = at least 3 legacy hashes.
 	// The exact count depends on migration state, but it should be > 0.
 	t.Logf("legacy hash count: %d (includes seed users)", count)
+}
+
+// TestArgon2idMigration_ExistingArgon2idLoginWorks proves that a user
+// who already has an Argon2id hash can log in without triggering an
+// upgrade on real MySQL.
+func TestArgon2idMigration_ExistingArgon2idLoginWorks(t *testing.T) {
+	db := setupTestDB(t)
+	argonHash := service.HashPasswordArgon2id("existing-argon-pw")
+	res, err := db.Exec(`
+		insert into users (email, password_hash, display_name, role_id, is_active, authorization_version)
+		select ?, ?, 'Argon2id Login Test', roles.id, 1, 1
+		from roles where roles.name = 'admin'`,
+		"argon-existing@example.com", argonHash,
+	)
+	if err != nil {
+		t.Fatalf("insert user: %v", err)
+	}
+	id, _ := res.LastInsertId()
+	t.Cleanup(func() { db.Exec(`delete from users where id = ?`, id) })
+
+	userRepo := mysql.NewUserRepository(db)
+	authSvc := service.NewAuthService(userRepo, "argon-test-secret")
+
+	resp, err := authSvc.Login("argon-existing@example.com", "existing-argon-pw")
+	if err != nil {
+		t.Fatalf("login: %v", err)
+	}
+	if resp.Token == "" {
+		t.Fatal("expected token")
+	}
+
+	// Hash must remain unchanged (no re-hashing).
+	assertRawPasswordHashEqual(t, db, uint64(id), argonHash)
+}
+
+// TestArgon2idMigration_MalformedHashFailsClosed proves that a user with
+// a malformed or unsupported Argon2id hash cannot log in, and the hash
+// is never replaced on real MySQL.
+func TestArgon2idMigration_MalformedHashFailsClosed(t *testing.T) {
+	db := setupTestDB(t)
+
+	// Insert users with various malformed hashes.
+	cases := []struct {
+		desc  string
+		hash  string
+		pw    string
+		email string
+	}{
+		{"low-memory argon2id", "$argon2id$v=19$m=1,t=3,p=1$AAAAAAAAAAAAAAAAAAAAAA$AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=", "pw", "argon-malformed-lowmem@example.com"},
+		{"wrong-version argon2id", "$argon2id$v=18$m=65536,t=3,p=1$AAAAAAAAAAAAAAAAAAAAAA$AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=", "pw", "argon-malformed-ver@example.com"},
+		{"garbage hash", "not-a-valid-hash", "pw", "argon-malformed-garbage@example.com"},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.desc, func(t *testing.T) {
+			res, err := db.Exec(`
+				insert into users (email, password_hash, display_name, role_id, is_active, authorization_version)
+				select ?, ?, 'Malformed Test', roles.id, 1, 1
+				from roles where roles.name = 'admin'`,
+				tc.email, tc.hash,
+			)
+			if err != nil {
+				t.Fatalf("insert: %v", err)
+			}
+			id, _ := res.LastInsertId()
+			t.Cleanup(func() { db.Exec(`delete from users where id = ?`, id) })
+
+			userRepo := mysql.NewUserRepository(db)
+			authSvc := service.NewAuthService(userRepo, "argon-test-secret")
+
+			_, err = authSvc.Login(tc.email, tc.pw)
+			if !errors.Is(err, service.ErrInvalidCredentials) {
+				t.Fatalf("expected ErrInvalidCredentials for %s, got %v", tc.desc, err)
+			}
+
+			// Hash must be unchanged.
+			assertRawPasswordHashEqual(t, db, uint64(id), tc.hash)
+		})
+	}
+}
+
+// TestArgon2idMigration_CASRejectsStaleUpgrade proves that a password
+// reset between legacy verification and CAS upgrade write causes the
+// upgrade to fail, and the reset hash is preserved on real MySQL.
+//
+// The test uses a CAS-intercepting repository wrapper that performs the
+// external hash change (simulating a concurrent admin reset) between
+// FindByEmail and UpgradePasswordHash, forcing the CAS check to fail.
+func TestArgon2idMigration_CASRejectsStaleUpgrade(t *testing.T) {
+	db := setupTestDB(t)
+	userID := insertAuthzTestUser(t, db, "argon-cas@example.com", "admin")
+	t.Cleanup(func() { deleteAuthzTestUser(t, db, userID) })
+
+	realRepo := mysql.NewUserRepository(db)
+	resetHash := service.HashPasswordArgon2id("admin-reset-pw")
+
+	// casIntercept wraps the real repo. On the first UpgradePasswordHash
+	// call, it changes the hash in MySQL to resetHash BEFORE delegating
+	// to the real repo, so the CAS WHERE clause sees the new hash and
+	// returns zero rows.
+	intercepted := &casInterceptRepo{
+		UserCredentialRepository: realRepo,
+		db:                       db,
+		userID:                   userID,
+		resetHash:                resetHash,
+	}
+	authSvc := service.NewAuthService(intercepted, "argon-test-secret")
+
+	_, err := authSvc.Login("argon-cas@example.com", "secret123")
+	if !errors.Is(err, service.ErrInvalidCredentials) {
+		t.Fatalf("expected ErrInvalidCredentials on CAS failure, got %v", err)
+	}
+
+	// Postcondition: hash must be the Argon2id from the simulated reset.
+	assertPasswordHashPrefix(t, db, userID, "$argon2id$")
+	assertRawPasswordHashEqual(t, db, userID, resetHash)
+}
+
+// casInterceptRepo wraps a real repository and performs an external hash
+// change on the first UpgradePasswordHash call, simulating a concurrent
+// password reset between read and CAS write.
+type casInterceptRepo struct {
+	service.UserCredentialRepository
+	db        *sql.DB
+	userID    uint64
+	resetHash string
+	done      bool
+}
+
+func (r *casInterceptRepo) UpgradePasswordHash(userID uint64, expectedOldHash, newPasswordHash string) error {
+	if !r.done {
+		r.done = true
+		// Simulate admin reset: change the hash in MySQL before the CAS write.
+		if _, err := r.db.Exec(`UPDATE users SET password_hash = ? WHERE id = ?`, r.resetHash, r.userID); err != nil {
+			return fmt.Errorf("simulate reset: %w", err)
+		}
+	}
+	return r.UserCredentialRepository.UpgradePasswordHash(userID, expectedOldHash, newPasswordHash)
 }
 
 // --- test helpers ---

@@ -153,16 +153,18 @@ func (r *UserRepository) UpdatePasswordHash(userID uint64, passwordHash string) 
 	return nil
 }
 
-// UpgradePasswordHash replaces password_hash without bumping
-// authorization_version. Used for transparent legacy SHA-256 to Argon2id
-// migration at login time where the user just authenticated and no prior
-// tokens need invalidation.
-func (r *UserRepository) UpgradePasswordHash(userID uint64, passwordHash string) error {
+// UpgradePasswordHash atomically replaces password_hash without bumping
+// authorization_version, but only if the current hash matches
+// expectedOldHash (compare-and-swap). This prevents a stale login from
+// overwriting a password reset or concurrent change. Zero rows affected
+// returns an error; callers treat this as a failed upgrade.
+func (r *UserRepository) UpgradePasswordHash(userID uint64, expectedOldHash, newPasswordHash string) error {
 	res, err := r.db.ExecContext(context.Background(), `
 		update users
 		set password_hash = ?
-		where id = ?`,
-		passwordHash, userID,
+		where id = ?
+		  and password_hash = ?`,
+		newPasswordHash, userID, expectedOldHash,
 	)
 	if err != nil {
 		return fmt.Errorf("upgrade password hash: %w", err)
@@ -172,7 +174,7 @@ func (r *UserRepository) UpgradePasswordHash(userID uint64, passwordHash string)
 		return err
 	}
 	if n == 0 {
-		return fmt.Errorf("upgrade password hash: user not found")
+		return fmt.Errorf("upgrade password hash: CAS failed — hash changed since read")
 	}
 	return nil
 }

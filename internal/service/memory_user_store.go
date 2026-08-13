@@ -143,16 +143,20 @@ func (s *MemoryUserStore) UpdatePasswordHash(userID uint64, passwordHash string)
 	return nil
 }
 
-// UpgradePasswordHash replaces the password hash without bumping
-// authorization_version. Used for transparent legacy migration at login time.
-func (s *MemoryUserStore) UpgradePasswordHash(userID uint64, passwordHash string) error {
+// UpgradePasswordHash atomically replaces the password hash without bumping
+// authorization_version, but only if the current hash matches
+// expectedOldHash (compare-and-swap).
+func (s *MemoryUserStore) UpgradePasswordHash(userID uint64, expectedOldHash, newPasswordHash string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	u, ok := s.byID[userID]
 	if !ok {
 		return fmt.Errorf("user not found")
 	}
-	u.PasswordHash = passwordHash
+	if u.PasswordHash != expectedOldHash {
+		return fmt.Errorf("upgrade password hash: CAS failed — hash changed since read")
+	}
+	u.PasswordHash = newPasswordHash
 	return nil
 }
 

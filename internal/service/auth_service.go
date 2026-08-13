@@ -41,10 +41,12 @@ type UserCredentialRepository interface {
 	// UpdatePasswordHash replaces the password hash and bumps Authorization Version.
 	// Use for password resets where prior tokens must be invalidated.
 	UpdatePasswordHash(userID uint64, passwordHash string) error
-	// UpgradePasswordHash replaces the password hash without bumping
-	// Authorization Version. Use for transparent legacy migration where
-	// the user just authenticated and no prior tokens need invalidation.
-	UpgradePasswordHash(userID uint64, passwordHash string) error
+	// UpgradePasswordHash atomically replaces the password hash without
+	// bumping Authorization Version, but only if the current hash matches
+	// expectedOldHash (compare-and-swap). This prevents a stale login from
+	// overwriting a password reset or concurrent change. Returns nil on
+	// success; returns an error (including when zero rows match) on failure.
+	UpgradePasswordHash(userID uint64, expectedOldHash, newPasswordHash string) error
 	// CountLegacyHashUsers returns the number of users whose stored password
 	// hash is not Argon2id. The count carries no identity-bearing information.
 	CountLegacyHashUsers() (int64, error)
@@ -97,7 +99,11 @@ func (s *AuthService) Login(email string, password string) (*model.LoginResponse
 	// is all-or-nothing.
 	if IsLegacyHash(user.PasswordHash) {
 		newHash := HashPasswordArgon2id(password)
-		if err := s.repo.UpgradePasswordHash(user.ID, newHash); err != nil {
+		oldHash := user.PasswordHash
+		if err := s.repo.UpgradePasswordHash(user.ID, oldHash, newHash); err != nil {
+			// CAS failure means the hash changed between our read and write
+			// (password reset, concurrent login, etc.). The login itself was
+			// valid but the migration atomicity contract requires all-or-nothing.
 			return nil, ErrInvalidCredentials
 		}
 		user.PasswordHash = newHash
