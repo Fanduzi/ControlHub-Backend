@@ -8,8 +8,11 @@ package api
 import (
 	"context"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
+
+	"github.com/go-chi/chi/v5"
 
 	"github.com/fan/controlhub/internal/service"
 )
@@ -73,7 +76,8 @@ func requireAuthenticatedActor(authService *service.AuthService, cfg QueryExecut
 // requireAdminActor is the chi middleware factory for admin-only routes.
 // It emits auth.authorization denied with the verified actor and, when the
 // route contains a parseable positive /{id} path parameter, the target
-// resource id.
+// resource id. Only /resources/{id} routes contribute a target; all other
+// routes pass nil to avoid invented attribution.
 func requireAdminActor(emitter service.AuthAuditEmitter) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -83,7 +87,13 @@ func requireAdminActor(emitter service.AuthAuditEmitter) func(http.Handler) http
 				if id, ok := actorUserIDFromContext(r.Context()); ok {
 					actorID = &id
 				}
-				emitter.EmitAuthAudit("auth.authorization", "denied", actorID, nil)
+				var targetID *uint64
+				if raw := chi.URLParam(r, "id"); raw != "" {
+					if parsed, err := strconv.ParseUint(raw, 10, 64); err == nil && parsed > 0 {
+						targetID = &parsed
+					}
+				}
+				emitter.EmitAuthAudit("auth.authorization", "denied", actorID, targetID)
 				writeJSONError(w, http.StatusForbidden, "forbidden", "admin role is required")
 				return
 			}

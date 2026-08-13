@@ -39,7 +39,6 @@ func TestAuthAudit_LoginSucceeded(t *testing.T) {
 		AuthService:      authSvc,
 		AuthAuditEmitter: emitter,
 		QueryExecutionAuth: api.QueryExecutionAuthConfig{
-			TokenMaxAge: 8 * 1e9,
 			Clock:       time.Now,
 		},
 		QueryCredentialService: &authzCredStub{},
@@ -85,7 +84,6 @@ func TestAuthAudit_LoginRejected(t *testing.T) {
 		AuthService:      authSvc,
 		AuthAuditEmitter: emitter,
 		QueryExecutionAuth: api.QueryExecutionAuthConfig{
-			TokenMaxAge: 8 * 1e9,
 			Clock:       time.Now,
 		},
 		QueryCredentialService: &authzCredStub{},
@@ -136,7 +134,6 @@ func TestAuthAudit_BearerRejected(t *testing.T) {
 		AuthService:      authSvc,
 		AuthAuditEmitter: emitter,
 		QueryExecutionAuth: api.QueryExecutionAuthConfig{
-			TokenMaxAge: 8 * 1e9,
 			Clock:       time.Now,
 		},
 		QueryCredentialService: &authzCredStub{},
@@ -183,7 +180,6 @@ func TestAuthAudit_AuthorizationDenied(t *testing.T) {
 		AuthService:      authSvc,
 		AuthAuditEmitter: emitter,
 		QueryExecutionAuth: api.QueryExecutionAuthConfig{
-			TokenMaxAge: 8 * 1e9,
 			Clock:       time.Now,
 		},
 		QueryCredentialService: &authzCredStub{},
@@ -241,7 +237,6 @@ func TestAuthAudit_FailOpenOnDBError(t *testing.T) {
 		AuthService:      authSvc,
 		AuthAuditEmitter: emitter,
 		QueryExecutionAuth: api.QueryExecutionAuthConfig{
-			TokenMaxAge: 8 * 1e9,
 			Clock:       time.Now,
 		},
 		QueryCredentialService: &authzCredStub{},
@@ -283,7 +278,6 @@ func TestAuthAudit_FreshnessRejectionEmitsBearerRejected(t *testing.T) {
 		AuthService:      authSvc,
 		AuthAuditEmitter: emitter,
 		QueryExecutionAuth: api.QueryExecutionAuthConfig{
-			TokenMaxAge: 8 * time.Hour,
 			Clock:       func() time.Time { return now },
 		},
 		QueryCredentialService: &authzCredStub{},
@@ -337,7 +331,6 @@ func TestAuthAudit_NoProhibitedValues(t *testing.T) {
 		AuthService:      authSvc,
 		AuthAuditEmitter: emitter,
 		QueryExecutionAuth: api.QueryExecutionAuthConfig{
-			TokenMaxAge: 8 * 1e9,
 			Clock:       time.Now,
 		},
 		QueryCredentialService: &authzCredStub{},
