@@ -183,6 +183,122 @@ func TestDecodeArgon2id_RejectsMalformedFormat(t *testing.T) {
 	}
 }
 
+// --- Trailing-parameter and length regression tests (P1 security) ---
+
+// TestDecodeArgon2id_RejectsTrailingGarbageOnVersion proves that trailing
+// bytes after the version (e.g. "v=19X") are rejected by exact match.
+func TestDecodeArgon2id_RejectsTrailingGarbageOnVersion(t *testing.T) {
+	salt := make([]byte, argon2SaltLen)
+	key := make([]byte, argon2KeyLen)
+	fake := "$argon2id$v=19X$m=65536,t=3,p=1$" + encodeB64(salt) + "$" + encodeB64(key)
+	if VerifyPassword("pw", fake) {
+		t.Fatal("must reject v=19X (trailing garbage on version)")
+	}
+}
+
+// TestDecodeArgon2id_RejectsTrailingGarbageOnParams proves that trailing
+// bytes after parameters (e.g. "m=65536,t=3,p=1X") are rejected.
+func TestDecodeArgon2id_RejectsTrailingGarbageOnParams(t *testing.T) {
+	salt := make([]byte, argon2SaltLen)
+	key := make([]byte, argon2KeyLen)
+	fake := "$argon2id$v=19$m=65536,t=3,p=1X$" + encodeB64(salt) + "$" + encodeB64(key)
+	if VerifyPassword("pw", fake) {
+		t.Fatal("must reject m=65536,t=3,p=1X (trailing garbage on params)")
+	}
+}
+
+// TestDecodeArgon2id_RejectsOneByteSalt proves a salt shorter than 16 bytes
+// is rejected even if base64 decoding succeeds.
+func TestDecodeArgon2id_RejectsOneByteSalt(t *testing.T) {
+	shortSalt := encodeB64([]byte{0x42}) // 1 byte
+	key := make([]byte, argon2KeyLen)
+	fake := "$argon2id$v=19$m=65536,t=3,p=1$" + shortSalt + "$" + encodeB64(key)
+	if VerifyPassword("pw", fake) {
+		t.Fatal("must reject 1-byte salt")
+	}
+}
+
+// TestDecodeArgon2id_RejectsOneByteKey proves a key shorter than 32 bytes
+// is rejected even if base64 decoding succeeds.
+func TestDecodeArgon2id_RejectsOneByteKey(t *testing.T) {
+	salt := make([]byte, argon2SaltLen)
+	shortKey := encodeB64([]byte{0x42}) // 1 byte
+	fake := "$argon2id$v=19$m=65536,t=3,p=1$" + encodeB64(salt) + "$" + shortKey
+	if VerifyPassword("pw", fake) {
+		t.Fatal("must reject 1-byte key")
+	}
+}
+
+// TestDecodeArgon2id_RejectsOversizedSalt proves a salt longer than 16 bytes
+// is rejected.
+func TestDecodeArgon2id_RejectsOversizedSalt(t *testing.T) {
+	bigSalt := make([]byte, 32) // 32 bytes, want 16
+	key := make([]byte, argon2KeyLen)
+	fake := "$argon2id$v=19$m=65536,t=3,p=1$" + encodeB64(bigSalt) + "$" + encodeB64(key)
+	if VerifyPassword("pw", fake) {
+		t.Fatal("must reject 32-byte salt")
+	}
+}
+
+// TestDecodeArgon2id_RejectsOversizedKey proves a key longer than 32 bytes
+// is rejected.
+func TestDecodeArgon2id_RejectsOversizedKey(t *testing.T) {
+	salt := make([]byte, argon2SaltLen)
+	bigKey := make([]byte, 64) // 64 bytes, want 32
+	fake := "$argon2id$v=19$m=65536,t=3,p=1$" + encodeB64(salt) + "$" + encodeB64(bigKey)
+	if VerifyPassword("pw", fake) {
+		t.Fatal("must reject 64-byte key")
+	}
+}
+
+// TestDecodeArgon2id_NoPanicOnArbitraryInput proves the parser never panics
+// on any input, including empty strings, very long strings, and binary data.
+func TestDecodeArgon2id_NoPanicOnArbitraryInput(t *testing.T) {
+	cases := []string{
+		"",
+		"\x00",
+		strings.Repeat("a", 10000),
+		"$argon2id$v=19$m=65536,t=3,p=1$" + strings.Repeat("!", 100) + "$" + strings.Repeat("!", 100),
+		"$argon2id$v=19$m=65536,t=3,p=1$\xff\xff\xff$\xff\xff\xff",
+	}
+	for _, tc := range cases {
+		// Must not panic; return value doesn't matter.
+		VerifyPassword("pw", tc)
+	}
+}
+
+// --- Benchmark ---
+
+// BenchmarkArgon2id_Hash measures the wall-clock time of HashPasswordArgon2id.
+// The benchmark runs on the machine executing it; results are meaningful only
+// on hardware representative of the deployment target. There is no universal
+// CI timing threshold — the ~250 ms budget is a deployment specification, not
+// a test assertion. Run this benchmark on your target hardware and compare
+// against the budget.
+func BenchmarkArgon2id_Hash(b *testing.B) {
+	for b.Loop() {
+		HashPasswordArgon2id("benchmark-password")
+	}
+}
+
+// BenchmarkArgon2id_Verify measures the wall-clock time of VerifyPassword
+// against an Argon2id hash. Same provenance caveat as BenchmarkArgon2id_Hash.
+func BenchmarkArgon2id_Verify(b *testing.B) {
+	hash := HashPasswordArgon2id("benchmark-password")
+	for b.Loop() {
+		VerifyPassword("benchmark-password", hash)
+	}
+}
+
+// BenchmarkLegacySHA256_Verify measures the wall-clock time of VerifyPassword
+// against a legacy SHA-256 hash, for comparison with the Argon2id path.
+func BenchmarkLegacySHA256_Verify(b *testing.B) {
+	legacyHash := "fcf730b6d95236ecd3c9fc2d92d7b6b2bb061514961aec041d6c7a7192f592e4"
+	for b.Loop() {
+		VerifyPassword("secret123", legacyHash)
+	}
+}
+
 // encodeB64 is a test helper for base64.RawStdEncoding.
 func encodeB64(data []byte) string {
 	return base64.RawStdEncoding.EncodeToString(data)

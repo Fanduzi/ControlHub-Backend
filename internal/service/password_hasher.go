@@ -93,44 +93,48 @@ func verifyArgon2id(password, encodedHash string) bool {
 	return subtle.ConstantTimeCompare(key, otherKey) == 1
 }
 
+// canonicalVersion is the exact version string we accept ("v=19").
+const canonicalVersion = "v=19"
+
+// canonicalParams is the exact parameters string we accept
+// ("m=65536,t=3,p=1"). Exact string matching prevents fmt.Sscanf from
+// silently accepting trailing garbage (e.g. "m=65536,t=3,p=1X").
+const canonicalParams = "m=65536,t=3,p=1"
+
 // decodeArgon2id parses an Argon2id encoded hash and enforces that the
-// encoded parameters exactly match the supported configuration. Returns
-// salt and key on success; returns an error for any format, version, or
-// parameter mismatch.
+// encoded format is exactly canonical: version v=19, parameters m=65536,t=3,p=1,
+// salt length 16, key length 32. Any deviation — trailing bytes, wrong lengths,
+// non-canonical encoding — is rejected. Returns salt and key on success.
 func decodeArgon2id(encodedHash string) (salt, key []byte, err error) {
 	parts := strings.Split(encodedHash, "$")
 	if len(parts) != 6 {
 		return nil, nil, fmt.Errorf("argon2id: invalid encoded hash format")
 	}
 
-	var version int
-	if _, err := fmt.Sscanf(parts[2], "v=%d", &version); err != nil {
-		return nil, nil, fmt.Errorf("argon2id: invalid version: %w", err)
-	}
-	if version != argon2.Version {
-		return nil, nil, fmt.Errorf("argon2id: unsupported version %d", version)
+	// Exact string match for version — prevents "v=19garbage".
+	if parts[2] != canonicalVersion {
+		return nil, nil, fmt.Errorf("argon2id: unsupported version %q", parts[2])
 	}
 
-	var memory, timeCost uint32
-	var parallelism uint8
-	if _, err := fmt.Sscanf(parts[3], "m=%d,t=%d,p=%d", &memory, &timeCost, &parallelism); err != nil {
-		return nil, nil, fmt.Errorf("argon2id: invalid parameters: %w", err)
-	}
-	// Reject hashes with parameters that differ from the supported
-	// configuration. An attacker could store m=1,t=1,p=1 to make
-	// verification nearly free; rejecting non-matching parameters prevents this.
-	if memory != argon2Memory || timeCost != argon2Time || parallelism != argon2Threads {
-		return nil, nil, fmt.Errorf("argon2id: unsupported parameters m=%d,t=%d,p=%d", memory, timeCost, parallelism)
+	// Exact string match for parameters — prevents "m=65536,t=3,p=1X".
+	if parts[3] != canonicalParams {
+		return nil, nil, fmt.Errorf("argon2id: unsupported parameters %q", parts[3])
 	}
 
 	salt, err = base64.RawStdEncoding.DecodeString(parts[4])
 	if err != nil {
 		return nil, nil, fmt.Errorf("argon2id: invalid salt encoding: %w", err)
 	}
+	if len(salt) != argon2SaltLen {
+		return nil, nil, fmt.Errorf("argon2id: salt length %d, want %d", len(salt), argon2SaltLen)
+	}
 
 	key, err = base64.RawStdEncoding.DecodeString(parts[5])
 	if err != nil {
 		return nil, nil, fmt.Errorf("argon2id: invalid key encoding: %w", err)
+	}
+	if len(key) != argon2KeyLen {
+		return nil, nil, fmt.Errorf("argon2id: key length %d, want %d", len(key), argon2KeyLen)
 	}
 
 	return salt, key, nil
