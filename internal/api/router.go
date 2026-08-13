@@ -123,6 +123,7 @@ func NewRouter(deps Dependencies) *chi.Mux {
 			r.Delete("/resource-relations/{id}", handleDeleteResourceRelation(deps.RelationService))
 			r.Get("/resources/{id}/audit-events", handleListResourceAuditEvents(deps.AuditService))
 			r.Get("/audit-events", handleListAuditEvents(deps.AuditService))
+			r.Get("/ops/auth-audit-metrics", handleAuthAuditMetrics())
 		})
 	})
 

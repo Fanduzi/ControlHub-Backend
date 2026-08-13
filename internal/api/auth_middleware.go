@@ -12,8 +12,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/go-chi/chi/v5"
-
 	"github.com/fan/controlhub/internal/service"
 )
 
@@ -74,10 +72,11 @@ func requireAuthenticatedActor(authService *service.AuthService, cfg QueryExecut
 }
 
 // requireAdminActor is the chi middleware factory for admin-only routes.
-// It emits auth.authorization denied with the verified actor and, when the
-// route contains a parseable positive /{id} path parameter, the target
-// resource id. Only /resources/{id} routes contribute a target; all other
-// routes pass nil to avoid invented attribution.
+// It emits auth.authorization denied with the verified actor. The target
+// resource id is populated ONLY for routes matching /resources/{id} (and
+// sub-paths like /resources/{id}/profile). All other routes — including
+// /query-targets/{id} — pass nil to avoid storing non-resource IDs in the
+// audit_events.target_resource_id column.
 func requireAdminActor(emitter service.AuthAuditEmitter) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -88,10 +87,8 @@ func requireAdminActor(emitter service.AuthAuditEmitter) func(http.Handler) http
 					actorID = &id
 				}
 				var targetID *uint64
-				if raw := chi.URLParam(r, "id"); raw != "" {
-					if parsed, err := strconv.ParseUint(raw, 10, 64); err == nil && parsed > 0 {
-						targetID = &parsed
-					}
+				if id, ok := extractResourceIDFromPath(r.URL.Path); ok {
+					targetID = &id
 				}
 				emitter.EmitAuthAudit("auth.authorization", "denied", actorID, targetID)
 				writeJSONError(w, http.StatusForbidden, "forbidden", "admin role is required")
@@ -100,6 +97,30 @@ func requireAdminActor(emitter service.AuthAuditEmitter) func(http.Handler) http
 			next.ServeHTTP(w, r)
 		})
 	}
+}
+
+// extractResourceIDFromPath parses a positive integer after /resources/ in the
+// URL path. Returns (id, true) only for paths like /resources/{id} or
+// /resources/{id}/... . Returns (0, false) for all other paths including
+// /query-targets/{id}, /resource-relations/{id}, or malformed paths.
+func extractResourceIDFromPath(path string) (uint64, bool) {
+	const prefix = "/resources/"
+	if !strings.HasPrefix(path, prefix) {
+		return 0, false
+	}
+	rest := path[len(prefix):]
+	end := strings.Index(rest, "/")
+	if end < 0 {
+		end = len(rest)
+	}
+	if end == 0 {
+		return 0, false
+	}
+	parsed, err := strconv.ParseUint(rest[:end], 10, 64)
+	if err != nil || parsed == 0 {
+		return 0, false
+	}
+	return parsed, true
 }
 
 // requireFreshQueryActor is the chi middleware factory mounted on query

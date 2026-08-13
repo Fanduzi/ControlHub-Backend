@@ -18,6 +18,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/go-chi/chi/v5"
+
 	"github.com/fan/controlhub/internal/model"
 	"github.com/fan/controlhub/internal/service"
 )
@@ -530,6 +532,176 @@ func assertGeneric401Body(t *testing.T, rec *httptest.ResponseRecorder) {
 	for _, leak := range []string{"password", "authorization_version", "version mismatch", "disabled", "expired", "signature", "secret"} {
 		if strings.Contains(lower, leak) {
 			t.Fatalf("401 body leaks %q: %s", leak, body)
+		}
+	}
+}
+
+// TestRequireAdminActorEmitsTargetForResourceRoute proves that a non-admin
+// hitting /resources/{id}/profile emits auth.authorization denied WITH the
+// parsed resource ID as target_resource_id.
+func TestRequireAdminActorEmitsTargetForResourceRoute(t *testing.T) {
+	emitter := &spyEmitter{}
+	now := time.Date(2026, 8, 12, 12, 0, 0, 0, time.UTC)
+	cfg := QueryExecutionAuthConfig{Clock: fixedClock(now)}
+
+	router := chi.NewRouter()
+	router.Use(requireAuthenticatedActor(service.NewAuthService(testAuthUsers, "admin-emit-secret"), cfg, emitter))
+	router.Use(requireAdminActor(emitter))
+	router.Get("/resources/{id}/profile", func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
+
+	// Viewer token (ID 43 is seeded as viewer in testAuthUsers).
+	token := mintToken(t, "admin-emit-secret", 43, "viewer", now)
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/resources/99/profile", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	 router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, want 403", rec.Code)
+	}
+	var deniedEvent *spyEvent
+	for i := range emitter.events {
+		if emitter.events[i].eventType == "auth.authorization" {
+			deniedEvent = &emitter.events[i]
+			break
+		}
+	}
+	if deniedEvent == nil {
+		t.Fatal("no auth.authorization denied event emitted")
+	}
+	if deniedEvent.targetResID == nil {
+		t.Fatal("expected target_resource_id on /resources/{id} denial, got nil")
+	}
+	if *deniedEvent.targetResID != 99 {
+		t.Fatalf("target_resource_id = %d, want 99", *deniedEvent.targetResID)
+	}
+}
+
+// TestRequireAdminActorNilTargetForQueryTargetRoute proves that a non-admin
+// hitting /query-targets/{id}/credential emits auth.authorization denied with
+// nil target_resource_id (query-target IDs must not pollute audit_events).
+func TestRequireAdminActorNilTargetForQueryTargetRoute(t *testing.T) {
+	emitter := &spyEmitter{}
+	now := time.Date(2026, 8, 12, 12, 0, 0, 0, time.UTC)
+	cfg := QueryExecutionAuthConfig{Clock: fixedClock(now)}
+
+	router := chi.NewRouter()
+	router.Use(requireAuthenticatedActor(service.NewAuthService(testAuthUsers, "admin-emit-secret"), cfg, emitter))
+	router.Use(requireAdminActor(emitter))
+	router.Put("/query-targets/{id}/credential", func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
+
+	token := mintToken(t, "admin-emit-secret", 43, "viewer", now)
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPut, "/query-targets/22/credential", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	 router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, want 403", rec.Code)
+	}
+	var deniedEvent *spyEvent
+	for i := range emitter.events {
+		if emitter.events[i].eventType == "auth.authorization" {
+			deniedEvent = &emitter.events[i]
+			break
+		}
+	}
+	if deniedEvent == nil {
+		t.Fatal("no auth.authorization denied event emitted")
+	}
+	if deniedEvent.targetResID != nil {
+		t.Fatalf("expected nil target_resource_id on /query-targets denial, got %d", *deniedEvent.targetResID)
+	}
+}
+
+// testOpsRouter builds a minimal router with AuthAuditEmitter for ops endpoint tests.
+func testOpsRouter(t *testing.T) *chi.Mux {
+	t.Helper()
+	emitter := &spyEmitter{}
+	svc := service.NewAuthService(testAuthUsers, "ops-test-secret")
+	now := time.Date(2026, 8, 12, 12, 0, 0, 0, time.UTC)
+	cfg := QueryExecutionAuthConfig{Clock: fixedClock(now)}
+	deps := Dependencies{
+		AuthService:      svc,
+		AuthAuditEmitter: emitter,
+		QueryExecutionAuth: cfg,
+	}
+	return NewRouter(deps)
+}
+
+// TestAuthAuditMetricsEndpointAdminOnly proves the ops endpoint requires admin role.
+func TestAuthAuditMetricsEndpointAdminOnly(t *testing.T) {
+	router := testOpsRouter(t)
+	now := time.Date(2026, 8, 12, 12, 0, 0, 0, time.UTC)
+	token := mintToken(t, "ops-test-secret", 43, "viewer", now)
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/ops/auth-audit-metrics", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("viewer status = %d, want 403; body=%s", rec.Code, rec.Body.String())
+	}
+}
+
+// TestAuthAuditMetricsEndpointReturnsCounter proves the endpoint returns
+// a JSON object with only the authAuditPersistenceFailures number.
+func TestAuthAuditMetricsEndpointReturnsCounter(t *testing.T) {
+	router := testOpsRouter(t)
+	now := time.Date(2026, 8, 12, 12, 0, 0, 0, time.UTC)
+	token := mintToken(t, "ops-test-secret", 42, "admin", now)
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/ops/auth-audit-metrics", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", rec.Code, rec.Body.String())
+	}
+
+	var resp struct {
+		AuthAuditPersistenceFailures int64 `json:"authAuditPersistenceFailures"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode: %v; body=%s", err, rec.Body.String())
+	}
+	if resp.AuthAuditPersistenceFailures < 0 {
+		t.Fatalf("counter = %d, want >= 0", resp.AuthAuditPersistenceFailures)
+	}
+}
+
+// TestAuthAuditMetricsNoLeak proves the response contains ONLY the expected
+// field — no identity, no request values, no internal details.
+func TestAuthAuditMetricsNoLeak(t *testing.T) {
+	router := testOpsRouter(t)
+	now := time.Date(2026, 8, 12, 12, 0, 0, 0, time.UTC)
+	token := mintToken(t, "ops-test-secret", 42, "admin", now)
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/ops/auth-audit-metrics", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rec.Code)
+	}
+
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(rec.Body.Bytes(), &raw); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	expectedKeys := map[string]bool{"authAuditPersistenceFailures": true}
+	for key := range raw {
+		if !expectedKeys[key] {
+			t.Fatalf("unexpected key %q in response", key)
 		}
 	}
 }

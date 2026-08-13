@@ -3005,6 +3005,40 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/ErrorResponse"
+  /ops/auth-audit-metrics:
+    get:
+      summary: Auth audit operational metrics
+      description: >-
+        Admin-only endpoint returning auth audit persistence-failure counter.
+        Used for operational visibility; no identity or request data is exposed.
+      operationId: getAuthAuditMetrics
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Auth audit metrics
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [authAuditPersistenceFailures]
+                properties:
+                  authAuditPersistenceFailures:
+                    type: integer
+                    format: int64
+                    description: Total auth audit INSERT failures since server start
+        "401":
+          description: Missing or invalid Bearer token
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "403":
+          description: Authenticated actor is not an admin
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
   /environments:
     get:
       summary: List environments
