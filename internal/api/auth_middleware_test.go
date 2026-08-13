@@ -705,3 +705,38 @@ func TestAuthAuditMetricsNoLeak(t *testing.T) {
 		}
 	}
 }
+
+// TestOpsAuthAuditMetricsOperatorBoundary is a table-driven operator-boundary
+// matrix test for GET /ops/auth-audit-metrics: anonymous → 401, editor → 403,
+// admin → 200. Mirrors the operator_access_boundary_test.go pattern.
+func TestOpsAuthAuditMetricsOperatorBoundary(t *testing.T) {
+	router := testOpsRouter(t)
+	now := time.Date(2026, 8, 12, 12, 0, 0, 0, time.UTC)
+	adminTok := mintToken(t, "ops-test-secret", 42, "admin", now)
+	editorTok := mintToken(t, "ops-test-secret", 7, "editor", now)
+
+	tests := []struct {
+		name   string
+		token  string
+		want   int
+		reason string
+	}{
+		{"anonymous", "", http.StatusUnauthorized, "no token must be rejected"},
+		{"editor", editorTok, http.StatusForbidden, "non-admin must be forbidden"},
+		{"admin", adminTok, http.StatusOK, "admin must receive 200"},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			rec := httptest.NewRecorder()
+			req := httptest.NewRequest(http.MethodGet, "/ops/auth-audit-metrics", nil)
+			if tc.token != "" {
+				req.Header.Set("Authorization", "Bearer "+tc.token)
+			}
+			router.ServeHTTP(rec, req)
+			if rec.Code != tc.want {
+				t.Fatalf("status = %d, want %d; %s; body=%s", rec.Code, tc.want, tc.reason, rec.Body.String())
+			}
+		})
+	}
+}
