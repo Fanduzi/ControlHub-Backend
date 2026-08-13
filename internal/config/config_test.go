@@ -1,7 +1,7 @@
 // Package config tests validate configuration loading behavior.
-// input: internal/config (Config, Load, LoadDotEnv, ValidateJWTSecret)
+// input: internal/config (Config, Load, LoadDotEnv, ValidateJWTSecret, ErrQueryExecutionTokenMaxAgeRejected)
 // output: TestConfig* test functions
-// pos: Validates config loading and signing-secret validation behavior
+// pos: Validates config loading, signing-secret validation, and fixed-freshness enforcement
 // note: if config loading or validation changes, update this header
 package config
 
@@ -28,7 +28,10 @@ func TestLoadDotEnvLoadsMissingValuesWithoutOverridingExistingEnv(t *testing.T) 
 		t.Fatalf("load dot env: %v", err)
 	}
 
-	cfg := Load()
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load(): %v", err)
+	}
 
 	if cfg.DatabaseDSN != "env-dsn" {
 		t.Fatalf("expected DATABASE_DSN from exported env, got %q", cfg.DatabaseDSN)
@@ -88,6 +91,50 @@ func TestValidateJWTSecret_RejectsShortSecrets(t *testing.T) {
 		if err != ErrInvalidJWTSecret {
 			t.Errorf("ValidateJWTSecret(%q) = %v, want ErrInvalidJWTSecret", secret, err)
 		}
+	}
+}
+
+func TestLoadRejectsQueryExecutionTokenMaxAgeEnvVar(t *testing.T) {
+	// WHY: the eight-hour freshness bound is a fixed backend contract (Issue #21).
+	// Supplying QUERY_EXECUTION_TOKEN_MAX_AGE must fail startup with a controlled
+	// error so no deployment can silently extend the Operator Access Boundary.
+	t.Setenv("QUERY_EXECUTION_TOKEN_MAX_AGE", "12h")
+	unsetEnv(t, "APP_PORT")
+	unsetEnv(t, "DATABASE_DSN")
+	unsetEnv(t, "JWT_SECRET")
+
+	_, err := Load()
+	if err != ErrQueryExecutionTokenMaxAgeRejected {
+		t.Fatalf("Load() with QUERY_EXECUTION_TOKEN_MAX_AGE set: err = %v, want ErrQueryExecutionTokenMaxAgeRejected", err)
+	}
+}
+
+func TestLoadRejectsExplicitlyEmptyQueryExecutionTokenMaxAgeEnvVar(t *testing.T) {
+	// WHY: an explicitly empty QUERY_EXECUTION_TOKEN_MAX_AGE (="") must be
+	// rejected the same as a non-empty value. The variable is removed; its
+	// mere presence signals a stale deployment config.
+	t.Setenv("QUERY_EXECUTION_TOKEN_MAX_AGE", "")
+	unsetEnv(t, "APP_PORT")
+	unsetEnv(t, "DATABASE_DSN")
+	unsetEnv(t, "JWT_SECRET")
+
+	_, err := Load()
+	if err != ErrQueryExecutionTokenMaxAgeRejected {
+		t.Fatalf("Load() with QUERY_EXECUTION_TOKEN_MAX_AGE=\"\": err = %v, want ErrQueryExecutionTokenMaxAgeRejected", err)
+	}
+}
+
+func TestLoadAcceptsMissingQueryExecutionTokenMaxAgeEnvVar(t *testing.T) {
+	// WHY: the eight-hour constant is hardcoded in the middleware; Load() must
+	// succeed when the deprecated env var is absent.
+	unsetEnv(t, "QUERY_EXECUTION_TOKEN_MAX_AGE")
+	unsetEnv(t, "APP_PORT")
+	unsetEnv(t, "DATABASE_DSN")
+	unsetEnv(t, "JWT_SECRET")
+
+	_, err := Load()
+	if err != nil {
+		t.Fatalf("Load() without QUERY_EXECUTION_TOKEN_MAX_AGE: err = %v", err)
 	}
 }
 

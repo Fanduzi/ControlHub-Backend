@@ -146,8 +146,7 @@ func setupNavigateFixture(t *testing.T) (string, uint64, *sql.DB) {
 			wallClock{},
 		),
 		QueryExecutionAuth: api.QueryExecutionAuthConfig{
-			TokenMaxAge: 8 * time.Hour,
-			Clock:       time.Now,
+			Clock: time.Now,
 		},
 	}
 

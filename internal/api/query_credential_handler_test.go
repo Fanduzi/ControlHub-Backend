@@ -60,8 +60,7 @@ func newCredentialRouter(stub queryCredentialAPI) *chi.Mux {
 		AuthService:            service.NewAuthService(testAuthUsers, "qc-test-secret"),
 		QueryCredentialService: stub,
 		QueryExecutionAuth: QueryExecutionAuthConfig{
-			TokenMaxAge: 8 * 60 * 60 * 1e9, // 8h, explicit so the helper has no hidden time import
-			Clock:       fixedClock(qeTestNow),
+			Clock: fixedClock(qeTestNow),
 		},
 	}
 	return NewRouter(deps)

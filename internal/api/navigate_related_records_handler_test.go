@@ -25,8 +25,7 @@ func newNavRouter(stub queryExecutionAPI) *chi.Mux {
 		AuthService:           service.NewAuthService(testAuthUsers, "nav-test-secret"),
 		QueryExecutionService: stub,
 		QueryExecutionAuth: QueryExecutionAuthConfig{
-			TokenMaxAge: 8 * time.Hour,
-			Clock:       fixedClock(navTestNow),
+			Clock: fixedClock(navTestNow),
 		},
 	}
 	return NewRouter(deps)

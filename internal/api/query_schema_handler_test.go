@@ -115,8 +115,7 @@ func newSchemaRouter(stub querySchemaAPI) *chi.Mux {
 		AuthService:        service.NewAuthService(testAuthUsers, "qs-test-secret"),
 		QuerySchemaService: stub,
 		QueryExecutionAuth: QueryExecutionAuthConfig{
-			TokenMaxAge: 8 * time.Hour,
-			Clock:       fixedClock(schemaTestNow),
+			Clock: fixedClock(schemaTestNow),
 		},
 	}
 	return NewRouter(deps)

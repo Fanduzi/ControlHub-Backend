@@ -56,7 +56,8 @@ func newMiddlewareAuthService(secret string) *service.AuthService {
 
 func TestAuthenticatedActorRejectsMissingBearerToken(t *testing.T) {
 	svc := newMiddlewareAuthService("test-secret")
-	h := requireAuthenticatedActor(svc, service.NoopEmitter{})(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	cfg := QueryExecutionAuthConfig{Clock: fixedClock(time.Now())}
+	h := requireAuthenticatedActor(svc, cfg, service.NoopEmitter{})(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		t.Error("handler must not run without a bearer token")
 	}))
 
@@ -72,7 +73,8 @@ func TestAuthenticatedActorRejectsMissingBearerToken(t *testing.T) {
 
 func TestAuthenticatedActorRejectsInvalidBearerToken(t *testing.T) {
 	svc := newMiddlewareAuthService("test-secret")
-	h := requireAuthenticatedActor(svc, service.NoopEmitter{})(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	cfg := QueryExecutionAuthConfig{Clock: fixedClock(time.Now())}
+	h := requireAuthenticatedActor(svc, cfg, service.NoopEmitter{})(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		t.Error("handler must not run with an invalid token")
 	}))
 
@@ -90,11 +92,12 @@ func TestAuthenticatedActorRejectsInvalidBearerToken(t *testing.T) {
 func TestAuthenticatedActorStoresActorInContext(t *testing.T) {
 	svc := newMiddlewareAuthService("test-secret")
 	now := time.Date(2026, 6, 21, 8, 0, 0, 0, time.UTC)
+	cfg := QueryExecutionAuthConfig{Clock: fixedClock(now)}
 	token := mintToken(t, "test-secret", 42, "admin", now)
 
 	var capturedID uint64
 	var capturedOK bool
-	h := requireAuthenticatedActor(svc, service.NoopEmitter{})(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	h := requireAuthenticatedActor(svc, cfg, service.NoopEmitter{})(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		capturedID, capturedOK = actorUserIDFromContext(r.Context())
 		w.WriteHeader(http.StatusOK)
 	}))
@@ -115,10 +118,32 @@ func TestAuthenticatedActorStoresActorInContext(t *testing.T) {
 	}
 }
 
+// TestAuthenticatedActorRejectsTokenOlderThanEightHours proves the Operator
+// Access Boundary lifetime is enforced on ordinary protected reads (AC2).
+func TestAuthenticatedActorRejectsTokenOlderThanEightHours(t *testing.T) {
+	svc := newMiddlewareAuthService("test-secret")
+	now := time.Date(2026, 8, 12, 12, 0, 0, 0, time.UTC)
+	cfg := QueryExecutionAuthConfig{Clock: fixedClock(now)}
+
+	// Token at 8h01m — beyond the fixed 8h bound, must be rejected.
+	token := mintToken(t, "test-secret", 42, "admin", now.Add(-8*time.Hour-1*time.Minute))
+	h := requireAuthenticatedActor(svc, cfg, service.NoopEmitter{})(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		t.Error("handler must not run for a token beyond the fixed 8h bound")
+	}))
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/resources", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("status = %d, want 401", rec.Code)
+	}
+	assertGeneric401Body(t, rec)
+}
+
 func TestFreshQueryActorRejectsMissingBearer(t *testing.T) {
 	svc := newMiddlewareAuthService("test-secret")
 	now := time.Date(2026, 6, 21, 8, 0, 0, 0, time.UTC)
-	cfg := QueryExecutionAuthConfig{TokenMaxAge: 8 * time.Hour, Clock: fixedClock(now)}
+	cfg := QueryExecutionAuthConfig{Clock: fixedClock(now)}
 
 	h := requireFreshQueryActor(svc, cfg, service.NoopEmitter{})(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		t.Error("handler must not run without a bearer token")
@@ -137,7 +162,7 @@ func TestFreshQueryActorRejectsMissingBearer(t *testing.T) {
 func TestFreshQueryActorRejectsMalformedBearer(t *testing.T) {
 	svc := newMiddlewareAuthService("test-secret")
 	now := time.Date(2026, 6, 21, 8, 0, 0, 0, time.UTC)
-	cfg := QueryExecutionAuthConfig{TokenMaxAge: 8 * time.Hour, Clock: fixedClock(now)}
+	cfg := QueryExecutionAuthConfig{Clock: fixedClock(now)}
 
 	h := requireFreshQueryActor(svc, cfg, service.NoopEmitter{})(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		t.Error("handler must not run with a malformed token")
@@ -157,7 +182,7 @@ func TestFreshQueryActorRejectsMalformedBearer(t *testing.T) {
 func TestFreshQueryActorRejectsBadSignature(t *testing.T) {
 	svc := newMiddlewareAuthService("test-secret")
 	now := time.Date(2026, 6, 21, 8, 0, 0, 0, time.UTC)
-	cfg := QueryExecutionAuthConfig{TokenMaxAge: 8 * time.Hour, Clock: fixedClock(now)}
+	cfg := QueryExecutionAuthConfig{Clock: fixedClock(now)}
 
 	token := mintToken(t, "wrong-secret", 1, "admin", now)
 
@@ -179,7 +204,7 @@ func TestFreshQueryActorRejectsBadSignature(t *testing.T) {
 func TestFreshQueryActorAcceptsTokenWithinTTL(t *testing.T) {
 	svc := newMiddlewareAuthService("test-secret")
 	now := time.Date(2026, 6, 21, 8, 0, 0, 0, time.UTC)
-	cfg := QueryExecutionAuthConfig{TokenMaxAge: 8 * time.Hour, Clock: fixedClock(now)}
+	cfg := QueryExecutionAuthConfig{Clock: fixedClock(now)}
 
 	token := mintToken(t, "test-secret", 7, "editor", now.Add(-1*time.Hour))
 
@@ -209,7 +234,7 @@ func TestFreshQueryActorAcceptsTokenWithinTTL(t *testing.T) {
 func TestFreshQueryActorRejectsTokenOlderThanTTL(t *testing.T) {
 	svc := newMiddlewareAuthService("test-secret")
 	now := time.Date(2026, 6, 21, 8, 0, 0, 0, time.UTC)
-	cfg := QueryExecutionAuthConfig{TokenMaxAge: 8 * time.Hour, Clock: fixedClock(now)}
+	cfg := QueryExecutionAuthConfig{Clock: fixedClock(now)}
 
 	// WHY: governed-query freshness stays fixed at eight hours; an older
 	// credential is a generic 401, same as other auth failures.
@@ -235,7 +260,7 @@ func TestFreshQueryActorRejectsTokenOlderThanTTL(t *testing.T) {
 func TestFreshQueryActorStoresCurrentRole(t *testing.T) {
 	svc := newMiddlewareAuthService("test-secret")
 	now := time.Date(2026, 6, 21, 8, 0, 0, 0, time.UTC)
-	cfg := QueryExecutionAuthConfig{TokenMaxAge: 8 * time.Hour, Clock: fixedClock(now)}
+	cfg := QueryExecutionAuthConfig{Clock: fixedClock(now)}
 	token := mintToken(t, "test-secret", 42, "admin", now)
 
 	var capturedRole string
@@ -264,7 +289,7 @@ func TestFreshQueryActorRejectsStaleAuthorizationVersion(t *testing.T) {
 	})
 	svc := service.NewAuthService(store, "test-secret")
 	now := time.Date(2026, 8, 9, 10, 0, 0, 0, time.UTC)
-	cfg := QueryExecutionAuthConfig{TokenMaxAge: 8 * time.Hour, Clock: fixedClock(now)}
+	cfg := QueryExecutionAuthConfig{Clock: fixedClock(now)}
 
 	token := mintVersionedToken(t, "test-secret", 100, 1, now)
 	if err := svc.ChangeUserRole(100, "editor"); err != nil {
@@ -292,7 +317,7 @@ func TestFreshQueryActorRejectsDisabledUser(t *testing.T) {
 	})
 	svc := service.NewAuthService(store, "test-secret")
 	now := time.Date(2026, 8, 9, 10, 0, 0, 0, time.UTC)
-	cfg := QueryExecutionAuthConfig{TokenMaxAge: 8 * time.Hour, Clock: fixedClock(now)}
+	cfg := QueryExecutionAuthConfig{Clock: fixedClock(now)}
 
 	token := mintVersionedToken(t, "test-secret", 101, 1, now)
 	if err := svc.SetUserActive(101, false); err != nil {
@@ -321,7 +346,7 @@ func TestGeneric401EquivalenceAcrossAuthFailures(t *testing.T) {
 	})
 	svc := service.NewAuthService(store, "test-secret")
 	now := time.Date(2026, 8, 9, 10, 0, 0, 0, time.UTC)
-	cfg := QueryExecutionAuthConfig{TokenMaxAge: 8 * time.Hour, Clock: fixedClock(now)}
+	cfg := QueryExecutionAuthConfig{Clock: fixedClock(now)}
 	h := requireFreshQueryActor(svc, cfg, service.NoopEmitter{})(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
 		t.Error("handler must not run")
 	}))
@@ -358,6 +383,46 @@ func TestGeneric401EquivalenceAcrossAuthFailures(t *testing.T) {
 			t.Fatalf("401 bodies differ: %q vs %q", bodies[0], bodies[i])
 		}
 	}
+}
+
+// TestFreshQueryActorEnforcesFixedEightHourConstant proves the governed-query
+// freshness bound is a fixed eight-hour backend contract (Issue #21). A token
+// issued 7h59m ago is accepted; a token issued 8h01m ago is rejected — regardless
+// of any configuration value.
+func TestFreshQueryActorEnforcesFixedEightHourConstant(t *testing.T) {
+	svc := newMiddlewareAuthService("test-secret")
+	now := time.Date(2026, 8, 12, 12, 0, 0, 0, time.UTC)
+
+	// WHY: the middleware must use a hardcoded constant, not a configurable TTL.
+	// The Clock injection must not affect the fixed bound.
+	cfg := QueryExecutionAuthConfig{Clock: fixedClock(now)}
+
+	// Token at 7h59m — within the fixed 8h bound, must be accepted.
+	within := mintToken(t, "test-secret", 7, "editor", now.Add(-7*time.Hour-59*time.Minute))
+	h := requireFreshQueryActor(svc, cfg, service.NoopEmitter{})(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/query-targets/1/execute", nil)
+	req.Header.Set("Authorization", "Bearer "+within)
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("7h59m token: status = %d, want 200", rec.Code)
+	}
+
+	// Token at 8h01m — beyond the fixed 8h bound, must be rejected.
+	beyond := mintToken(t, "test-secret", 7, "editor", now.Add(-8*time.Hour-1*time.Minute))
+	h2 := requireFreshQueryActor(svc, cfg, service.NoopEmitter{})(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		t.Error("handler must not run for a token beyond the fixed 8h bound")
+	}))
+	rec2 := httptest.NewRecorder()
+	req2 := httptest.NewRequest(http.MethodPost, "/query-targets/1/execute", nil)
+	req2.Header.Set("Authorization", "Bearer "+beyond)
+	h2.ServeHTTP(rec2, req2)
+	if rec2.Code != http.StatusUnauthorized {
+		t.Fatalf("8h01m token: status = %d, want 401", rec2.Code)
+	}
+	assertGeneric401Body(t, rec2)
 }
 
 // TestValidIdentityWithoutRequiredRoleRemains403 uses a credential write path:

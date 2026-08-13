@@ -1,5 +1,5 @@
 // Package main provides the ControlHub application entry point.
-// input: config.LoadDotEnv/Load/ValidateJWTSecret, mysql repositories, api.NewRouter, service constructors
+// input: config.LoadDotEnv/Load/ValidateJWTSecret/ErrQueryExecutionTokenMaxAgeRejected, mysql repositories, api.NewRouter, service constructors
 // output: main() binary entry point
 // pos: Application bootstrap, manual DI container; validates the signing secret before opening the database, then wires saved-statement template execution into the governed execution service
 // note: if wiring or startup validation changes, update this header and cmd/server/README.md
@@ -24,7 +24,10 @@ func main() {
 		log.Fatalf("load .env: %v", err)
 	}
 
-	cfg := config.Load()
+	cfg, err := config.Load()
+	if err != nil {
+		log.Fatalf("config: %v", err)
+	}
 
 	if err := config.ValidateJWTSecret(cfg.JWTSecret); err != nil {
 		log.Fatalf("config: %v", err)
@@ -146,8 +149,7 @@ func buildDependencies(db *sql.DB, cfg config.Config) api.Dependencies {
 		QueryDisclosureService:     queryDisclosureSvc,
 		QuerySavedStatementService: querySavedStatementSvc,
 		QueryExecutionAuth: api.QueryExecutionAuthConfig{
-			TokenMaxAge: cfg.QueryExecutionTokenMaxAge,
-			Clock:       time.Now,
+			Clock: time.Now,
 		},
 	}
 }

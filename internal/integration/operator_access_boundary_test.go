@@ -68,8 +68,7 @@ func TestOperatorAccessBoundary(t *testing.T) {
 			service.NewQueryGuard(service.QueryGuardConfig{DefaultMaxRows: 100, HardMaxRows: 500}),
 		),
 		QueryExecutionAuth: api.QueryExecutionAuthConfig{
-			TokenMaxAge: 8 * time.Hour,
-			Clock:       time.Now,
+			Clock: time.Now,
 		},
 	})
 

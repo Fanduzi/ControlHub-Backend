@@ -1,3 +1,8 @@
+// Package main provides the local bigint cutover CLI entry point.
+// input: config.LoadDotEnv/Load/ErrQueryExecutionTokenMaxAgeRejected, cutover.RunLocalPreserveThenImport, flag
+// output: local preserve-then-import cutover binary
+// pos: Operator-invoked CLI that preserves legacy UUID tables and rebuilds with bigint schema
+// note: if cutover logic or config loading changes, update this header and cmd/cutover-local/README.md
 package main
 
 import (
@@ -14,7 +19,10 @@ func main() {
 		log.Fatalf("load .env: %v", err)
 	}
 
-	cfg := config.Load()
+	cfg, err := config.Load()
+	if err != nil {
+		log.Fatalf("config: %v", err)
+	}
 	preserveDB := flag.String("preserve-db", "", "database name used to preserve the legacy UUID-backed runtime tables (default: <target-db>_v1)")
 	targetDB := flag.String("target-db", "controlhub", "database name to rebuild with bigint schema")
 	resume := flag.Bool("resume", false, "continue a previously preserved local cutover using an existing non-empty preserve database")
