@@ -1,7 +1,7 @@
 // Package mysql provides MySQL-backed repository implementations.
 // input: database/sql, context, errors, internal/model
 // output: NewUserRepository, UserRepository struct
-// pos: MySQL data access for users table — credential lookup and Authorization Version mutators
+// pos: MySQL data access for users table — credential lookup, Authorization Version mutators, UpgradePasswordHash for legacy migration, CountLegacyHashUsers
 // note: if this file changes, update header and README.md
 package mysql
 
@@ -131,6 +131,7 @@ func (r *UserRepository) SetActive(userID uint64, active bool) error {
 }
 
 // UpdatePasswordHash replaces password_hash and bumps authorization_version.
+// Used for password resets where prior tokens must be invalidated.
 func (r *UserRepository) UpdatePasswordHash(userID uint64, passwordHash string) error {
 	res, err := r.db.ExecContext(context.Background(), `
 		update users
@@ -150,4 +151,45 @@ func (r *UserRepository) UpdatePasswordHash(userID uint64, passwordHash string) 
 		return fmt.Errorf("update password hash: user not found")
 	}
 	return nil
+}
+
+// UpgradePasswordHash atomically replaces password_hash without bumping
+// authorization_version, but only if the current hash matches
+// expectedOldHash (compare-and-swap). This prevents a stale login from
+// overwriting a password reset or concurrent change. Zero rows affected
+// returns an error; callers treat this as a failed upgrade.
+func (r *UserRepository) UpgradePasswordHash(userID uint64, expectedOldHash, newPasswordHash string) error {
+	res, err := r.db.ExecContext(context.Background(), `
+		update users
+		set password_hash = ?
+		where id = ?
+		  and password_hash = ?`,
+		newPasswordHash, userID, expectedOldHash,
+	)
+	if err != nil {
+		return fmt.Errorf("upgrade password hash: %w", err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if n == 0 {
+		return fmt.Errorf("upgrade password hash: CAS failed — hash changed since read")
+	}
+	return nil
+}
+
+// CountLegacyHashUsers returns the count of users whose password_hash is
+// exactly a 64-character lowercase hexadecimal string — the canonical
+// SHA-256 representation from the pre-Argon2id code path. Malformed,
+// unknown, or Argon2id hashes are excluded. The query carries no
+// identity-bearing information beyond the integer count.
+func (r *UserRepository) CountLegacyHashUsers() (int64, error) {
+	var count int64
+	err := r.db.QueryRowContext(context.Background(),
+		`SELECT COUNT(*) FROM users WHERE password_hash COLLATE utf8mb4_bin REGEXP '^[0-9a-f]{64}$'`).Scan(&count)
+	if err != nil {
+		return 0, fmt.Errorf("count legacy hash users: %w", err)
+	}
+	return count, nil
 }

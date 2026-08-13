@@ -50,7 +50,7 @@ behind.
 | File | Responsibility |
 |------|---------------|
 | main.go | Env+DSN CLI: requires the capability flag, the dedicated disposable DSN, and all four fixture credentials; verifies migration 00016 has an applied row + inactive retired seeds before upserting (reactivate + rotate authorization_version); refuses the 0002 seed identities and identical admin/editor emails; password-safe report |
-| main_test.go | Hash-compatibility (vs the published 0002 seed hash), mandatory capability/DSN/credentials, distinct printable-ASCII admin/editor emails, DSN isolation gate (loopback + `*_e2e` naming), migration-00016 applied-row verification, legacy-seed refusal, and no-password-leak unit tests |
+| main_test.go | Argon2id hash format verification, mandatory capability/DSN/credentials, distinct printable-ASCII admin/editor emails, DSN isolation gate (loopback + `*_e2e` naming), migration-00016 applied-row verification, legacy-seed refusal, and no-password-leak unit tests |
 
 ## Seams
 Package-internal functions exercised by the unit and integration tests (not
@@ -60,7 +60,7 @@ publicly exported symbols):
 - `parseDisposableDSN(dsn)` — the loopback/`*_e2e` DSN isolation gate
 - `verifyFixtureDatabase(ctx, db)` — migration-00016 applied-row + retired-seed verification
 - `runFixtureBootstrap(ctx, db, set)` — upsert seam returning per-identity outcomes
-- `hashPassword(password)` — auth-compatible SHA-256 hex (same scheme as `internal/service` Login)
+- `hashPassword(password)` — Argon2id via `internal/service.HashPasswordArgon2id` (fixture credentials use Argon2id; legacy SHA-256 login still works for transparent migration)
 - `printReport(w, set, outcomes)` — CLI seam (identities/roles/outcomes only)
 
 ## Usage

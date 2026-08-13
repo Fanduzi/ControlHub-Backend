@@ -8,9 +8,7 @@ package main
 
 import (
 	"context"
-	"crypto/sha256"
 	"database/sql"
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -21,6 +19,7 @@ import (
 	_ "github.com/go-sql-driver/mysql"
 
 	"github.com/fan/controlhub/internal/config"
+	"github.com/fan/controlhub/internal/service"
 )
 
 // bootstrapConfig carries the two operator-supplied credentials. The password
@@ -83,12 +82,9 @@ func resolveBootstrapConfig() (bootstrapConfig, error) {
 	return bootstrapConfig{email: strings.ToLower(email), password: password}, nil
 }
 
-// hashPassword hashes with the exact SHA-256 hex scheme internal/service uses
-// for password authentication, so a bootstrap-created credential signs in
-// without any change to existing hashes.
+// hashPassword uses Argon2id via internal/service for new bootstrap credentials.
 func hashPassword(password string) string {
-	sum := sha256.Sum256([]byte(password))
-	return hex.EncodeToString(sum[:])
+	return service.HashPasswordArgon2id(password)
 }
 
 // runBootstrap creates the administrator, or reactivates an existing account
@@ -116,7 +112,7 @@ func runBootstrap(ctx context.Context, db *sql.DB, cfg bootstrapConfig) (bootstr
 			role_id = values(role_id),
 			is_active = 1,
 			authorization_version = authorization_version + 1`,
-		cfg.email, hashPassword(cfg.password), adminRoleID,
+		cfg.email, service.HashPasswordArgon2id(cfg.password), adminRoleID,
 	)
 	if err != nil {
 		return "", fmt.Errorf("upsert admin: %w", err)

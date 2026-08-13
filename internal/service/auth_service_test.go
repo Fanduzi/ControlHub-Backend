@@ -333,3 +333,206 @@ func TestInvalidTokenErrorsAreGeneric(t *testing.T) {
 		}
 	}
 }
+
+// --- Argon2id migration tests ---
+
+// TestLoginLegacySHA256UpgradesToArgon2id proves a successful login with a
+// legacy SHA-256 hash atomically upgrades the stored representation to
+// Argon2id. WHY: transparent migration without user disruption.
+func TestLoginLegacySHA256UpgradesToArgon2id(t *testing.T) {
+	store := NewMemoryUserStore(activeAdmin(20))
+	svc := NewAuthService(store, "test-secret")
+
+	// Precondition: stored hash is legacy SHA-256.
+	u, _ := store.FindByID(20)
+	if !IsLegacyHash(u.PasswordHash) {
+		t.Fatal("precondition: stored hash should be legacy SHA-256")
+	}
+
+	resp, err := svc.Login("admin@example.com", "secret123")
+	if err != nil {
+		t.Fatalf("login error: %v", err)
+	}
+	if resp.Token == "" {
+		t.Fatal("expected token")
+	}
+
+	// Postcondition: stored hash is now Argon2id.
+	u2, _ := store.FindByID(20)
+	if IsLegacyHash(u2.PasswordHash) {
+		t.Fatal("after login: hash should be upgraded to Argon2id")
+	}
+	if !IsArgon2idHash(u2.PasswordHash) {
+		t.Fatal("after login: hash should start with $argon2id$")
+	}
+}
+
+// TestLoginFailedDoesNotUpgradeHash proves a failed login never touches the
+// stored hash. WHY: the hash must remain stable on failure.
+func TestLoginFailedDoesNotUpgradeHash(t *testing.T) {
+	store := NewMemoryUserStore(activeAdmin(21))
+	svc := NewAuthService(store, "test-secret")
+
+	originalHash := testPasswordHash
+
+	_, err := svc.Login("admin@example.com", "wrong-password")
+	if !errors.Is(err, ErrInvalidCredentials) {
+		t.Fatalf("expected ErrInvalidCredentials, got %v", err)
+	}
+
+	// Hash must be unchanged.
+	u, _ := store.FindByID(21)
+	if u.PasswordHash != originalHash {
+		t.Fatalf("hash changed after failed login: got %s, want %s", u.PasswordHash, originalHash)
+	}
+}
+
+// TestResetUserPasswordWritesArgon2id proves password reset always writes
+// Argon2id, even when the original hash was legacy SHA-256.
+func TestResetUserPasswordWritesArgon2id(t *testing.T) {
+	store := NewMemoryUserStore(activeAdmin(22))
+	svc := NewAuthService(store, "test-secret")
+
+	if err := svc.ResetUserPassword(22, "new-password-reset"); err != nil {
+		t.Fatalf("ResetUserPassword: %v", err)
+	}
+
+	u, _ := store.FindByID(22)
+	if !IsArgon2idHash(u.PasswordHash) {
+		t.Fatal("ResetUserPassword should write Argon2id")
+	}
+
+	// The new password should work for login.
+	resp, err := svc.Login("admin@example.com", "new-password-reset")
+	if err != nil {
+		t.Fatalf("login with reset password: %v", err)
+	}
+	if resp.Token == "" {
+		t.Fatal("expected token after reset login")
+	}
+}
+
+// TestLoginArgon2idPasswordWorks proves Argon2id hashes verify correctly
+// through the normal login path.
+func TestLoginArgon2idPasswordWorks(t *testing.T) {
+	// Seed a user with an Argon2id hash.
+	argonHash := HashPasswordArgon2id("argon-password")
+	u := activeAdmin(23)
+	u.PasswordHash = argonHash
+	store := NewMemoryUserStore(u)
+	svc := NewAuthService(store, "test-secret")
+
+	resp, err := svc.Login("admin@example.com", "argon-password")
+	if err != nil {
+		t.Fatalf("login with Argon2id: %v", err)
+	}
+	if resp.Token == "" {
+		t.Fatal("expected token")
+	}
+
+	// Second login should NOT upgrade (already Argon2id).
+	u2, _ := store.FindByID(23)
+	if u2.PasswordHash != argonHash {
+		t.Fatal("Argon2id hash should not be re-hashed on login")
+	}
+}
+
+// TestLegacyHashCountReturnsNonIdentityCount proves the count is exposed
+// without identity-bearing information.
+func TestLegacyHashCountReturnsNonIdentityCount(t *testing.T) {
+	// User 30: legacy SHA-256, User 31: Argon2id.
+	u30 := activeAdmin(30) // legacy SHA-256 (testPasswordHash)
+	u31 := activeAdmin(31)
+	u31.PasswordHash = HashPasswordArgon2id("pw")
+	store := NewMemoryUserStore(u30, u31)
+	svc := NewAuthService(store, "test-secret")
+
+	count, err := svc.LegacyHashCount()
+	if err != nil {
+		t.Fatalf("LegacyHashCount: %v", err)
+	}
+	if count != 1 {
+		t.Fatalf("expected 1 legacy hash user, got %d", count)
+	}
+}
+
+// TestLoginUpgradeFailureRejectsLogin proves that when the upgrade write
+// fails, no token is issued and the existing hash is never replaced.
+// WHY: the migration contract is all-or-nothing — a successful login with
+// a legacy hash must atomically upgrade; if the write fails, the login
+// must fail too.
+func TestLoginUpgradeFailureRejectsLogin(t *testing.T) {
+	// Use a failing repo that returns an error on UpgradePasswordHash.
+	base := NewMemoryUserStore(activeAdmin(32))
+	failRepo := &failingUpgradeRepo{UserCredentialRepository: base}
+	svc := NewAuthService(failRepo, "test-secret")
+
+	// Precondition: hash is legacy.
+	u, _ := base.FindByID(32)
+	if !IsLegacyHash(u.PasswordHash) {
+		t.Fatal("precondition: stored hash should be legacy")
+	}
+
+	_, err := svc.Login("admin@example.com", "secret123")
+	if !errors.Is(err, ErrInvalidCredentials) {
+		t.Fatalf("expected ErrInvalidCredentials on upgrade failure, got %v", err)
+	}
+
+	// Postcondition: hash must be unchanged.
+	u2, _ := base.FindByID(32)
+	if u2.PasswordHash != testPasswordHash {
+		t.Fatalf("hash changed after failed upgrade: got %s, want %s", u2.PasswordHash, testPasswordHash)
+	}
+}
+
+// failingUpgradeRepo wraps a real repo but returns an error from
+// UpgradePasswordHash to simulate a write failure.
+type failingUpgradeRepo struct {
+	UserCredentialRepository
+}
+
+func (r *failingUpgradeRepo) UpgradePasswordHash(uint64, string, string) error {
+	return fmt.Errorf("simulated write failure")
+}
+
+// TestLoginCASRejectsStaleUpgrade proves that if the stored hash changes
+// between the password verification read and the CAS upgrade write, the
+// upgrade is rejected and no token is issued. This simulates the race:
+// 1. User A reads legacy hash
+// 2. Admin resets User A's password (hash changes to Argon2id)
+// 3. User A's stale CAS upgrade fails (old hash no longer matches)
+func TestLoginCASRejectsStaleUpgrade(t *testing.T) {
+	store := NewMemoryUserStore(activeAdmin(40))
+	svc := NewAuthService(store, "test-secret")
+
+	// Precondition: legacy hash.
+	u, _ := store.FindByID(40)
+	if !IsLegacyHash(u.PasswordHash) {
+		t.Fatal("precondition: stored hash should be legacy")
+	}
+
+	// Simulate external change: admin resets the password between our
+	// read and our CAS write. The hash is now Argon2id.
+	store.Put(model.UserCredential{
+		ID:                   40,
+		Email:                "admin@example.com",
+		RoleName:             "admin",
+		PasswordHash:         HashPasswordArgon2id("admin-reset-pw"),
+		IsActive:             true,
+		AuthorizationVersion: 2,
+	})
+
+	// Login with the old password should verify (legacy hash was correct)
+	// but the CAS upgrade must fail because the hash no longer matches.
+	_, err := svc.Login("admin@example.com", "secret123")
+	if !errors.Is(err, ErrInvalidCredentials) {
+		t.Fatalf("expected ErrInvalidCredentials on CAS failure, got %v", err)
+	}
+
+	// Postcondition: hash must be the Argon2id from the reset, not a
+	// stale overwrite.
+	u2, _ := store.FindByID(40)
+	if !IsArgon2idHash(u2.PasswordHash) {
+		t.Fatal("hash should remain Argon2id from reset, not overwritten by stale CAS")
+	}
+}

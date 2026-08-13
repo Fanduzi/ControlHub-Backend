@@ -143,6 +143,37 @@ func (s *MemoryUserStore) UpdatePasswordHash(userID uint64, passwordHash string)
 	return nil
 }
 
+// UpgradePasswordHash atomically replaces the password hash without bumping
+// authorization_version, but only if the current hash matches
+// expectedOldHash (compare-and-swap).
+func (s *MemoryUserStore) UpgradePasswordHash(userID uint64, expectedOldHash, newPasswordHash string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	u, ok := s.byID[userID]
+	if !ok {
+		return fmt.Errorf("user not found")
+	}
+	if u.PasswordHash != expectedOldHash {
+		return fmt.Errorf("upgrade password hash: CAS failed — hash changed since read")
+	}
+	u.PasswordHash = newPasswordHash
+	return nil
+}
+
+// CountLegacyHashUsers returns the number of users whose password hash is
+// not Argon2id (i.e. legacy SHA-256).
+func (s *MemoryUserStore) CountLegacyHashUsers() (int64, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var count int64
+	for _, u := range s.byID {
+		if IsLegacyHash(u.PasswordHash) {
+			count++
+		}
+	}
+	return count, nil
+}
+
 func cloneUser(u model.UserCredential) *model.UserCredential {
 	cp := u
 	return &cp

@@ -6,13 +6,13 @@ administrator. Never runs at server startup and never logs passwords.
 ## Files
 | File | Responsibility |
 |------|---------------|
-| main.go | Env+DSN CLI: requires BOOTSTRAP_ADMIN_EMAIL + BOOTSTRAP_ADMIN_PASSWORD, hashes with the auth-compatible SHA-256 scheme, idempotent upsert on the unique users.email (reactivate + rotate authorization_version), password-safe report |
-| main_test.go | Hash-compatibility (vs the published 0002 seed hash), required-credentials, and no-password-leak unit tests |
+| main.go | Env+DSN CLI: requires BOOTSTRAP_ADMIN_EMAIL + BOOTSTRAP_ADMIN_PASSWORD, hashes with Argon2id via internal/service, idempotent upsert on the unique users.email (reactivate + rotate authorization_version), password-safe report |
+| main_test.go | Argon2id hash format verification, required-credentials, and no-password-leak unit tests |
 
 ## Exports
 - `main()` — binary entry point (`go run ./cmd/bootstrap-admin`)
 - `runBootstrap(ctx, db, cfg)` — upsert seam returning `outcomeCreated` / `outcomeReactivated`
-- `hashPassword(password)` — auth-compatible SHA-256 hex (same scheme as `internal/service` Login)
+- `hashPassword(password)` — Argon2id via `internal/service.HashPasswordArgon2id` (new bootstrap credentials use Argon2id; legacy SHA-256 login still works for transparent migration)
 - `resolveBootstrapConfig()`, `printReport(w, email, outcome)` — CLI seams
 
 ## Usage

@@ -1,7 +1,7 @@
 // Package service provides authentication business logic — credential validation and token generation.
 // input: internal/model (UserCredential, LoginRequest, LoginResponse), crypto/hmac, crypto/sha256, encoding/hex, encoding/base64, strconv
-// output: NewAuthService, AuthService.Login, AuthService.VerifyToken, AuthService.ChangeUserRole, AuthService.SetUserActive, AuthService.ResetUserPassword, AuthenticatedUser, ErrInvalidCredentials, ErrInvalidToken, UserCredentialRepository
-// pos: Authentication business logic — credential validation, versioned token generation, and current-state token verification (Authorization Version)
+// output: NewAuthService, AuthService.Login, AuthService.VerifyToken, AuthService.ChangeUserRole, AuthService.SetUserActive, AuthService.ResetUserPassword, AuthService.LegacyHashCount, AuthenticatedUser, ErrInvalidCredentials, ErrInvalidToken, ErrInvalidAuthorizationMutation, UserCredentialRepository
+// pos: Authentication business logic — credential validation, versioned token generation, current-state token verification (Authorization Version), and transparent legacy-to-Argon2id password migration
 // note: if this file changes, update header and README.md
 package service
 
@@ -39,7 +39,17 @@ type UserCredentialRepository interface {
 	// SetActive sets whether the user may authenticate and bumps Authorization Version.
 	SetActive(userID uint64, active bool) error
 	// UpdatePasswordHash replaces the password hash and bumps Authorization Version.
+	// Use for password resets where prior tokens must be invalidated.
 	UpdatePasswordHash(userID uint64, passwordHash string) error
+	// UpgradePasswordHash atomically replaces the password hash without
+	// bumping Authorization Version, but only if the current hash matches
+	// expectedOldHash (compare-and-swap). This prevents a stale login from
+	// overwriting a password reset or concurrent change. Returns nil on
+	// success; returns an error (including when zero rows match) on failure.
+	UpgradePasswordHash(userID uint64, expectedOldHash, newPasswordHash string) error
+	// CountLegacyHashUsers returns the number of users whose stored password
+	// hash is not Argon2id. The count carries no identity-bearing information.
+	CountLegacyHashUsers() (int64, error)
 }
 
 type AuthService struct {
@@ -72,8 +82,31 @@ func (s *AuthService) Login(email string, password string) (*model.LoginResponse
 	}
 	// Disabled and missing users share the same generic failure as a bad password
 	// so login never discloses account state.
-	if user == nil || !user.IsActive || hashPassword(password) != user.PasswordHash {
+	if user == nil || !user.IsActive {
 		return nil, ErrInvalidCredentials
+	}
+
+	if !VerifyPassword(password, user.PasswordHash) {
+		return nil, ErrInvalidCredentials
+	}
+
+	// Transparent legacy migration: successful login with a legacy SHA-256 hash
+	// atomically upgrades the stored representation to Argon2id. The upgrade
+	// uses UpgradePasswordHash which does not bump Authorization Version —
+	// the user just authenticated and no prior tokens need invalidation.
+	// If the upgrade write fails, login fails atomically: no token is issued and
+	// the existing hash is never replaced. This ensures the migration contract
+	// is all-or-nothing.
+	if IsLegacyHash(user.PasswordHash) {
+		newHash := HashPasswordArgon2id(password)
+		oldHash := user.PasswordHash
+		if err := s.repo.UpgradePasswordHash(user.ID, oldHash, newHash); err != nil {
+			// CAS failure means the hash changed between our read and write
+			// (password reset, concurrent login, etc.). The login itself was
+			// valid but the migration atomicity contract requires all-or-nothing.
+			return nil, ErrInvalidCredentials
+		}
+		user.PasswordHash = newHash
 	}
 
 	return &model.LoginResponse{
@@ -92,11 +125,6 @@ func (s *AuthService) issueToken(user *model.UserCredential) string {
 	mac.Write([]byte(payload))
 	signature := hex.EncodeToString(mac.Sum(nil))
 	return base64.RawURLEncoding.EncodeToString([]byte(payload + ":" + signature))
-}
-
-func hashPassword(password string) string {
-	sum := sha256.Sum256([]byte(password))
-	return hex.EncodeToString(sum[:])
 }
 
 // AuthenticatedUser is the verified identity for a protected request.
@@ -201,11 +229,18 @@ func (s *AuthService) SetUserActive(userID uint64, active bool) error {
 	return s.repo.SetActive(userID, active)
 }
 
-// ResetUserPassword replaces the password hash and invalidates prior credentials
-// so a reset cannot leave outstanding Backend Bearer Credentials usable.
+// ResetUserPassword replaces the password hash with Argon2id and invalidates
+// prior credentials so a reset cannot leave outstanding Backend Bearer
+// Credentials usable.
 func (s *AuthService) ResetUserPassword(userID uint64, newPassword string) error {
 	if userID == 0 || newPassword == "" {
 		return ErrInvalidAuthorizationMutation
 	}
-	return s.repo.UpdatePasswordHash(userID, hashPassword(newPassword))
+	return s.repo.UpdatePasswordHash(userID, HashPasswordArgon2id(newPassword))
+}
+
+// LegacyHashCount returns the number of users whose stored password hash is
+// not yet Argon2id. The count carries no identity-bearing information.
+func (s *AuthService) LegacyHashCount() (int64, error) {
+	return s.repo.CountLegacyHashUsers()
 }

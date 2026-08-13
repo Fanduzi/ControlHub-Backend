@@ -15,15 +15,19 @@ import (
 )
 
 // seedAdminPasswordHash is the SHA-256 hex of "secret123" published by
-// migrations/0002_seed_reference_data.sql for the seeded admin. If bootstrap
-// hashing ever diverges from the login algorithm, this test fails — a
-// bootstrap-created credential must authenticate against AuthService.Login.
+// migrations/0002_seed_reference_data.sql for the seeded admin. It remains
+// here for reference but is no longer produced by hashPassword (now Argon2id).
 const seedAdminPasswordHash = "fcf730b6d95236ecd3c9fc2d92d7b6b2bb061514961aec041d6c7a7192f592e4"
 
-func TestHashPassword_MatchesAuthCompatibleSHA256(t *testing.T) {
+func TestHashPassword_ProducesArgon2id(t *testing.T) {
 	got := hashPassword("secret123")
-	if got != seedAdminPasswordHash {
-		t.Fatalf("hashPassword(secret123) = %s, want %s (published 0002 seed hash)", got, seedAdminPasswordHash)
+	if !strings.HasPrefix(got, "$argon2id$") {
+		t.Fatalf("hashPassword(secret123) = %s, want Argon2id prefix", got)
+	}
+	// Random salt means two calls produce different outputs.
+	got2 := hashPassword("secret123")
+	if got == got2 {
+		t.Fatal("two hashPassword calls must produce different salts")
 	}
 }
 
