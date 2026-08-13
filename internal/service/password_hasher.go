@@ -55,18 +55,40 @@ func HashPasswordArgon2id(password string) string {
 
 // VerifyPassword checks a plaintext password against a stored hash. It
 // detects Argon2id vs legacy SHA-256 format and verifies accordingly.
-// Returns true only if the password matches.
+// Returns true only if the stored hash is a recognized format AND the
+// password matches. Returns false for unknown/malformed formats.
 func VerifyPassword(password, storedHash string) bool {
 	if IsArgon2idHash(storedHash) {
 		return verifyArgon2id(password, storedHash)
 	}
-	return verifyLegacySHA256(password, storedHash)
+	if IsLegacyHash(storedHash) {
+		return verifyLegacySHA256(password, storedHash)
+	}
+	return false
 }
 
-// IsLegacyHash reports whether the stored hash is a legacy SHA-256
-// representation that should be upgraded on next successful login.
+// legacySHA256HexLen is the exact length of a SHA-256 hex-encoded hash.
+const legacySHA256HexLen = 64
+
+// hexDigits is the set of valid hexadecimal characters for legacy hash
+// detection. Using a lookup table avoids importing encoding/hex just for
+// the length check.
+const hexDigits = "0123456789abcdef"
+
+// IsLegacyHash reports whether the stored hash is exactly a 64-character
+// lowercase hexadecimal string — the canonical representation produced by
+// the pre-Argon2id SHA-256 code path. Anything else (Argon2id, malformed,
+// unknown) returns false.
 func IsLegacyHash(storedHash string) bool {
-	return !IsArgon2idHash(storedHash)
+	if len(storedHash) != legacySHA256HexLen {
+		return false
+	}
+	for i := 0; i < legacySHA256HexLen; i++ {
+		if !strings.ContainsRune(hexDigits, rune(storedHash[i])) {
+			return false
+		}
+	}
+	return true
 }
 
 // IsArgon2idHash reports whether the stored hash is an Argon2id

@@ -179,13 +179,15 @@ func (r *UserRepository) UpgradePasswordHash(userID uint64, expectedOldHash, new
 	return nil
 }
 
-// CountLegacyHashUsers returns the count of users whose password_hash does
-// not start with the Argon2id encoded prefix. The query carries no
+// CountLegacyHashUsers returns the count of users whose password_hash is
+// exactly a 64-character lowercase hexadecimal string — the canonical
+// SHA-256 representation from the pre-Argon2id code path. Malformed,
+// unknown, or Argon2id hashes are excluded. The query carries no
 // identity-bearing information beyond the integer count.
 func (r *UserRepository) CountLegacyHashUsers() (int64, error) {
 	var count int64
 	err := r.db.QueryRowContext(context.Background(),
-		`SELECT COUNT(*) FROM users WHERE password_hash NOT LIKE '$argon2id$%'`).Scan(&count)
+		`SELECT COUNT(*) FROM users WHERE password_hash COLLATE utf8mb4_bin REGEXP '^[0-9a-f]{64}$'`).Scan(&count)
 	if err != nil {
 		return 0, fmt.Errorf("count legacy hash users: %w", err)
 	}

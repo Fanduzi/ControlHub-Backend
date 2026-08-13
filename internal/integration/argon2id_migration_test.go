@@ -318,6 +318,59 @@ func (r *casInterceptRepo) UpgradePasswordHash(userID uint64, expectedOldHash, n
 	return r.UserCredentialRepository.UpgradePasswordHash(userID, expectedOldHash, newPasswordHash)
 }
 
+// TestArgon2idMigration_MalformedHashesNotCountedAsLegacy proves that
+// users with malformed, unknown, or non-hex hashes are NOT counted by
+// CountLegacyHashUsers — only exact 64-char lowercase hex strings are.
+func TestArgon2idMigration_MalformedHashesNotCountedAsLegacy(t *testing.T) {
+	db := setupTestDB(t)
+
+	// Record baseline count before inserting any test users.
+	var baseline int64
+	if err := db.QueryRow(`SELECT COUNT(*) FROM users WHERE password_hash COLLATE utf8mb4_bin REGEXP '^[0-9a-f]{64}$'`).Scan(&baseline); err != nil {
+		t.Fatalf("baseline count: %v", err)
+	}
+
+	// Insert users with malformed/unknown hashes that must NOT be counted.
+	malformedCases := []struct {
+		desc  string
+		hash  string
+		email string
+	}{
+		{"empty", "", "argon-cm-empty@example.com"},
+		{"garbage", "not-a-valid-hash", "argon-cm-garbage@example.com"},
+		{"uppercase hex", "FCF730B6D95236ECD3C9FC2D92D7B6B2BB061514961AEC041D6C7A7192F592E4", "argon-cm-upper@example.com"},
+		{"short hex", "abc123", "argon-cm-short@example.com"},
+		{"non-hex chars", strings.Repeat("z", 64), "argon-cm-nonhex@example.com"},
+	}
+	for _, tc := range malformedCases {
+		res, err := db.Exec(`
+			insert into users (email, password_hash, display_name, role_id, is_active, authorization_version)
+			select ?, ?, 'Malformed Count Test', roles.id, 1, 1
+			from roles where roles.name = 'admin'`,
+			tc.email, tc.hash,
+		)
+		if err != nil {
+			t.Fatalf("insert %s: %v", tc.desc, err)
+		}
+		id, _ := res.LastInsertId()
+		t.Cleanup(func() { db.Exec(`delete from users where id = ?`, id) })
+	}
+
+	userRepo := mysql.NewUserRepository(db)
+	authSvc := service.NewAuthService(userRepo, "argon-test-secret")
+
+	count, err := authSvc.LegacyHashCount()
+	if err != nil {
+		t.Fatalf("LegacyHashCount: %v", err)
+	}
+
+	// The count must equal the baseline — none of the malformed hashes
+	// should be counted as legacy.
+	if count != baseline {
+		t.Fatalf("LegacyHashCount = %d, want %d (baseline); malformed hashes must not be counted", count, baseline)
+	}
+}
+
 // --- test helpers ---
 
 // assertPasswordHashPrefix checks that the user's password_hash starts with

@@ -73,7 +73,7 @@ func TestVerifyPassword_LegacySHA256(t *testing.T) {
 	}
 }
 
-// TestIsLegacyHash_DetectsFormat verifies format detection for both hash types.
+// TestIsLegacyHash_DetectsFormat verifies strict format detection.
 func TestIsLegacyHash_DetectsFormat(t *testing.T) {
 	argonHash := HashPasswordArgon2id("test")
 	legacyHash := "fcf730b6d95236ecd3c9fc2d92d7b6b2bb061514961aec041d6c7a7192f592e4"
@@ -82,10 +82,52 @@ func TestIsLegacyHash_DetectsFormat(t *testing.T) {
 		t.Fatal("Argon2id hash should not be detected as legacy")
 	}
 	if !IsLegacyHash(legacyHash) {
-		t.Fatal("SHA-256 hash should be detected as legacy")
+		t.Fatal("64-char hex should be detected as legacy")
 	}
-	if !IsLegacyHash("") {
-		t.Fatal("empty string should be detected as legacy")
+}
+
+// TestIsLegacyHash_StrictRejection proves that only exact 64-char lowercase
+// hex strings are classified as legacy. Everything else — empty, short,
+// long, uppercase, non-hex — is not.
+func TestIsLegacyHash_StrictRejection(t *testing.T) {
+	cases := []struct {
+		desc string
+		hash string
+		want bool
+	}{
+		{"empty", "", false},
+		{"63 chars", strings.Repeat("a", 63), false},
+		{"65 chars", strings.Repeat("a", 65), false},
+		{"uppercase hex", "FCF730B6D95236ECD3C9FC2D92D7B6B2BB061514961AEC041D6C7A7192F592E4", false},
+		{"non-hex chars", "zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz", false},
+		{"mixed case", "FcF730b6d95236ecd3c9fc2d92d7b6b2bb061514961aec041d6c7a7192f592e4", false},
+		{"with prefix", "sha256:fcf730b6d95236ecd3c9fc2d92d7b6b2bb061514961aec041d6c7a7192f592e4", false},
+		{"with suffix", "fcf730b6d95236ecd3c9fc2d92d7b6b2bb061514961aec041d6c7a7192f592e4extra", false},
+		{"garbage", "not-a-hash", false},
+		{"valid lowercase 64", "fcf730b6d95236ecd3c9fc2d92d7b6b2bb061514961aec041d6c7a7192f592e4", true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.desc, func(t *testing.T) {
+			if got := IsLegacyHash(tc.hash); got != tc.want {
+				t.Fatalf("IsLegacyHash(%q) = %v, want %v", tc.hash, got, tc.want)
+			}
+		})
+	}
+}
+
+// TestVerifyPassword_RejectsUnknownFormat proves VerifyPassword returns false
+// for hashes that are neither Argon2id nor valid SHA-256 hex.
+func TestVerifyPassword_RejectsUnknownFormat(t *testing.T) {
+	cases := []string{
+		"",
+		"not-a-hash",
+		"FCF730B6D95236ECD3C9FC2D92D7B6B2BB061514961AEC041D6C7A7192F592E4", // uppercase
+		"zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz",   // non-hex
+	}
+	for _, tc := range cases {
+		if VerifyPassword("secret123", tc) {
+			t.Fatalf("VerifyPassword must reject unknown format: %q", tc)
+		}
 	}
 }
 
