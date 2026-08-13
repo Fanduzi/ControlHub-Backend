@@ -4198,12 +4198,15 @@ components:
           minLength: 1
     LoginResponse:
       type: object
-      required: [token, role]
+      required: [token, role, userId]
       properties:
         token:
           type: string
         role:
           type: string
+        userId:
+          type: integer
+          format: int64
     ResourceType:
       type: string
       enum:
@@ -4511,7 +4514,7 @@ components:
           description: Health status of the worst-status member
     AuditEvent:
       type: object
-      required: [id, actorUserId, eventType, result, createdAt]
+      required: [id, eventType, result, createdAt]
       properties:
         id:
           type: integer
@@ -4519,9 +4522,11 @@ components:
         actorUserId:
           type: integer
           format: int64
+          nullable: true
         targetResourceId:
           type: integer
           format: int64
+          nullable: true
         eventType:
           type: string
         result:
