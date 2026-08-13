@@ -140,6 +140,43 @@ func TestAuthenticatedActorRejectsTokenOlderThanEightHours(t *testing.T) {
 	assertGeneric401Body(t, rec)
 }
 
+// TestAuthenticatedActorStaleRejectionEmitsAuthBearerRejected proves that a
+// valid but stale bearer token (exceeding the fixed 8h freshness gate) on an
+// ordinary protected read emits auth.bearer rejected with the verified actor id.
+func TestAuthenticatedActorStaleRejectionEmitsAuthBearerRejected(t *testing.T) {
+	svc := newMiddlewareAuthService("test-secret")
+	now := time.Date(2026, 8, 12, 12, 0, 0, 0, time.UTC)
+	cfg := QueryExecutionAuthConfig{Clock: fixedClock(now)}
+	spy := &spyEmitter{}
+
+	// Token at 8h01m — beyond the fixed 8h bound.
+	token := mintToken(t, "test-secret", 42, "admin", now.Add(-8*time.Hour-1*time.Minute))
+	h := requireAuthenticatedActor(svc, cfg, spy)(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		t.Error("handler must not run for a stale token")
+	}))
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/resources", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("status = %d, want 401", rec.Code)
+	}
+	if len(spy.events) != 1 {
+		nEvents := len(spy.events)
+		t.Fatalf("emitter called %d times, want 1", nEvents)
+	}
+	e := spy.events[0]
+	if e.eventType != "auth.bearer" || e.result != "rejected" {
+		t.Fatalf("event = %s/%s, want auth.bearer/rejected", e.eventType, e.result)
+	}
+	if e.actorUserID == nil {
+		t.Fatal("expected verified actor on stale rejection, got nil")
+	}
+	if *e.actorUserID != 42 {
+		t.Fatalf("actor = %d, want 42", *e.actorUserID)
+	}
+}
+
 func TestFreshQueryActorRejectsMissingBearer(t *testing.T) {
 	svc := newMiddlewareAuthService("test-secret")
 	now := time.Date(2026, 6, 21, 8, 0, 0, 0, time.UTC)
@@ -453,6 +490,23 @@ func TestValidIdentityWithoutRequiredRoleRemains403(t *testing.T) {
 
 func fixedClock(now time.Time) func() time.Time {
 	return func() time.Time { return now }
+}
+
+// spyEmitter captures EmitAuthAudit calls for test assertions.
+type spyEmitter struct {
+	events []spyEvent
+}
+
+type spyEvent struct {
+	eventType    string
+	result       string
+	actorUserID  *uint64
+	targetResID  *uint64
+}
+
+func (s *spyEmitter) EmitAuthAudit(eventType, result string, actorUserID *uint64, targetResourceID *uint64) error {
+	s.events = append(s.events, spyEvent{eventType: eventType, result: result, actorUserID: actorUserID, targetResID: targetResourceID})
+	return nil
 }
 
 func assertGeneric401Body(t *testing.T, rec *httptest.ResponseRecorder) {
