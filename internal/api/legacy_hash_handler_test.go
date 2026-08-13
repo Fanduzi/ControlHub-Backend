@@ -110,6 +110,60 @@ func TestGetLegacyHashCount_ResponseNeverLeaksHashes(t *testing.T) {
 	}
 }
 
+// TestGetLegacyHashCount_AuthMatrix proves the full chi middleware chain
+// through the router: anonymous → 401, valid editor → 403, admin → 200.
+// This is a single table-driven router-level test that exercises
+// requireAuthenticatedActor → requireAdminActor → handler.
+func TestGetLegacyHashCount_AuthMatrix(t *testing.T) {
+	server := NewTestServer()
+
+	cases := []struct {
+		desc       string
+		token      string // empty = no Authorization header
+		wantStatus int
+	}{
+		{"anonymous", "", http.StatusUnauthorized},
+		{"editor", mintLegacyHashTestToken(t, 7, "editor", 1), http.StatusForbidden},
+		{"admin", mintLegacyHashTestToken(t, 1, "admin", 1), http.StatusOK},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.desc, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodGet, "/admin/legacy-hash-count", nil)
+			if tc.token != "" {
+				req.Header.Set("Authorization", "Bearer "+tc.token)
+			}
+			rec := httptest.NewRecorder()
+			server.Router.ServeHTTP(rec, req)
+
+			if rec.Code != tc.wantStatus {
+				t.Fatalf("%s: status = %d, want %d; body=%s", tc.desc, rec.Code, tc.wantStatus, rec.Body.String())
+			}
+
+			// Admin path must return a valid count JSON.
+			if tc.wantStatus == http.StatusOK {
+				var resp struct{ Count int64 `json:"count"` }
+				if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+					t.Fatalf("decode: %v", err)
+				}
+				if resp.Count < 0 {
+					t.Fatalf("count must be non-negative, got %d", resp.Count)
+				}
+			}
+
+			// Error paths must not leak identity.
+			if tc.wantStatus != http.StatusOK {
+				body := rec.Body.String()
+				for _, leak := range []string{"password_hash", "hash", "email", "admin@example"} {
+					if contains(body, leak) {
+						t.Fatalf("%s: body leaks %q: %s", tc.desc, leak, body)
+					}
+				}
+			}
+		})
+	}
+}
+
 // mintLegacyHashTestToken creates a valid bearer token for tests.
 func mintLegacyHashTestToken(t *testing.T, userID uint64, role string, version uint64) string {
 	t.Helper()
