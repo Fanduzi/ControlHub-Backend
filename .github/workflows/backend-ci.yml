@@ -40,6 +40,7 @@ jobs:
           name: argon2id-budget-evidence
           path: .argon2id-budget/
           retention-days: 7
+          include-hidden-files: true
 
   release-docker-gates:
     name: release-docker-gates

@@ -19,6 +19,7 @@ or the legacy successful-login migration path.
 | Task branch | `issue-27-argon2id-budget-20260814-214034` |
 | Task worktree | `/Users/fan/GolangProjects/ControlHub-wt-issue-27-argon2id-budget-20260814-214034` |
 | Budget-gate commit | `7282ba0` (`test(auth): prove Argon2id verification budget at the password-verification seam`) |
+| CI portability fix commit | `e325c7f` (`fix(make): make argon2id-budget POSIX-sh safe for CI`) |
 | Evidence commit | this commit (docs) |
 
 Changed files (budget-gate commit):
@@ -118,12 +119,52 @@ argon2id-budget: result=PASS samples=20 median=99.427771ms p95=101.527167ms min=
 argon2id-budget: environment goos=darwin goarch=arm64 ncpu=12 image_os=
 ```
 
-**Acceptance measurement (documented target — GitHub Actions `ubuntu-latest`
-runner):** pending. The acceptance numbers for the documented target
-environment must come from the CI gate, which requires pushing the task
-branch; push is not authorized at the time of writing. The CI run link, exact
-runner image (from the "Set up job" log), and resulting median/p95 will be
-recorded here once the branch is pushed and the workflow runs.
+**Acceptance measurement (documented target — GitHub Actions `ubuntu-latest` runner):**
+
+CI run
+[31810761582](https://github.com/Fanduzi/ControlHub-Backend/actions/runs/31810761582)
+(`release-local-gates` job
+[94800549370](https://github.com/Fanduzi/ControlHub-Backend/actions/runs/31810761582/job/94800549370))
+ran at task-branch head `e325c7f` and the dedicated budget gate passed:
+
+```
+argon2id-budget: result=PASS samples=20 median=122.417513ms p95=123.509627ms min=122.103113ms max=123.626724ms budget_median<=250ms budget_p95<=300ms
+argon2id-budget: environment goos=linux goarch=amd64 ncpu=2 image_os=ubuntu24
+```
+
+- Target environment confirmed from the runner's "Set up job" log: `Image:
+  ubuntu-24.04`, image release `ubuntu24/20260810.271` (fresh VM), `linux`/
+  `amd64`, `ncpu=2` — matching the documented target (2 vCPU x86_64, Ubuntu
+  24.04, 8 GB RAM, 14 GB SSD).
+- **Outcome: PASS.** median `122.4 ms` ≤ 250 ms and p95 `123.5 ms` ≤ 300 ms
+  on the documented target environment. Sample count 20, thresholds written
+  in the test and this evidence.
+- The budget gate also ran inside `make release-local-gates` (`go test
+  -count=1 ./...`) in the same job and passed; both jobs
+  (`release-local-gates`, `release-docker-gates`) concluded `success`.
+
+## CI-Caught Fixes
+
+Two defects were caught only by running on the documented target, exactly the
+failure mode Issue #27 exists to surface:
+
+1. **POSIX-sh portability (`e325c7f`).** The first CI attempt
+   ([31810444657](https://github.com/Fanduzi/ControlHub-Backend/actions/runs/31810444657))
+   failed with `/bin/sh: 1: set: Illegal option -o pipefail` — GitHub Actions
+   runs make recipes under dash, while macOS `/bin/sh` is bash and masked the
+   bug locally. The recipe now redirects `go test` output to the artifact
+   file and `cat`s it back, preserving the non-zero exit code without
+   shell-specific features. Verified locally: pass exits 0, budget breach
+   exits 2.
+2. **Hidden-directory artifact (`include-hidden-files: true`).** The default
+   uploader excludes dot-directories, so the first successful run uploaded no
+   artifact (`##[warning]No files were found with the provided path:
+   .argon2id-budget/`). The upload step now sets `include-hidden-files: true`
+   so the raw output is actually retained; the pre-existing
+   `.schemathesis-reports/` upload has the same latent gap and is untouched
+   here.
+
+Neither fix touches the Argon2id parameters or the migration path.
 
 ## Candidate Gates (task worktree, base `2e864b08`)
 
@@ -135,6 +176,7 @@ recorded here once the branch is pushed and the workflow runs.
 | `go build ./...` | PASS, exit 0 |
 | `make openapi-validate` | PASS; `TestOpenAPIYAMLIsValid` |
 | `make argon2id-budget` | PASS (sanity reference above); exit 0; artifact written |
+| CI run `31810761582` on task branch | PASS; `release-local-gates` and `release-docker-gates` both `success`; acceptance measurement above |
 | `/Users/fan/.codex/skills/check-three-level-doc/scripts/check_three_level_doc.sh` | `[three-level-doc] OK` |
 
 The three-level-doc L1 reminder was reviewed: module `internal/service`
