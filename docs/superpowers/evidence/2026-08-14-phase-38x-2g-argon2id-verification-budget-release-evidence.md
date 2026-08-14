@@ -42,26 +42,30 @@ diff lines against base — confirmed by the independent review.
 
 ## Documented Target Environment
 
-The repository documents no deployment specification (exhaustive search of
-`README.md`, `Makefile`, `.env.example`, `.github/`, `docs/`, `cmd/`; no
-Dockerfile, compose, Kubernetes, or deployment manifest; sibling frontend
-checkout has none either). Per Issue #27's acceptance criteria, the
-documented CI environment therefore serves as the budget target:
+The repository documented no deployment specification before this release
+(exhaustive search of `README.md`, `Makefile`, `.env.example`, `.github/`,
+`docs/`, `cmd/`, and repo history; no Dockerfile, compose, Kubernetes, or
+deployment manifest; sibling frontend checkout has none either). The
+repository owner therefore established the baseline on 2026-08-14
+(`docs/decisions/2026-08-14-phase-38x-2g-argon2id-verification-budget.md`):
 
 | Property | Value |
 | --- | --- |
-| Environment | GitHub Actions standard `ubuntu-latest` runner (this is a private repository) |
+| Lowest supported deployment baseline | Hardware at least as capable as the GitHub Actions standard Linux runner |
 | CPU | 2 vCPU, x86_64 |
 | Memory | 8 GB RAM |
 | Disk | 14 GB SSD |
-| OS | Ubuntu 24.04 LTS image (fresh VM per job) |
+| OS | Ubuntu 24.04 LTS |
+| Equivalence | By construction: the CI release gates run on exactly this hardware class; runner facts are GitHub-published; exact image recorded per run in the "Set up job" log |
 
-Hardware per GitHub's published hosted-runners reference
-(docs.github.com/en/actions/reference/runners/github-hosted-runners);
-rationale and limitations recorded in
-`docs/decisions/2026-08-14-phase-38x-2g-argon2id-verification-budget.md`.
-`ubuntu-latest` is an alias that may migrate; the exact image of the CI run is
-recorded in that run's "Set up job" log and is captured as evidence below.
+An independent review of the first draft flagged (P1) that selecting the
+runner as a mere reference environment without claiming equivalence fails
+Issue #27's "lowest supported deployment, or a CI environment verified
+equivalent to it" requirement. The owner resolved it by accepting the 2-vCPU
+runner class as the lowest supported deployment baseline, so the budget is
+measured directly on the lowest supported deployment itself. A deployment
+weaker than this baseline is outside the supported-deployment contract and is
+escalated per the handling path.
 
 ## Acceptance Budget
 
@@ -203,6 +207,16 @@ changes against base `2e864b08cbb33df33b12f8f70bc71dd3929e067b`:
   this evidence document, resolved by this commit. The P3 notes that
   `ubuntu-latest` is unpinned; the decision doc records the exact image per
   run instead, which the issue's CI reference (`backend-ci.yml`) permits.
+
+A subsequent independent read-only review of the pushed branch found **one
+P1**: the first ADR draft selected the runner as a reference environment
+without claiming equivalence, which fails Issue #27's lowest-supported-
+deployment requirement. The repository owner resolved the product decision
+on 2026-08-14 by accepting the 2-vCPU runner class as the lowest supported
+deployment baseline; the ADR and this evidence were amended accordingly. No
+other P1/P2 findings were reported. The gate itself (real `VerifyPassword`
+seam, production parameters, median/p95 computation, fail-loud breach
+behavior, CI/artifact evidence matching branch SHAs) was confirmed correct.
 
 ## Root WIP Preservation
 

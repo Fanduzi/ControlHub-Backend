@@ -13,23 +13,31 @@ available were local developer machines (an Apple M4 Pro at about 103 ms),
 which prove nothing about a lowest supported deployment. Issue #27 requires
 the budget proof to be established on a documented target environment.
 
-This decision records the evidence base, the documented target environment,
-the acceptance budget, and the fail-loud handling path. It does not change
-the production Argon2id parameters and does not alter the legacy
+This decision records the evidence base, the lowest supported deployment
+baseline, the acceptance budget, and the fail-loud handling path. It does
+not change the production Argon2id parameters and does not alter the legacy
 successful-login migration path.
+
+The baseline was established by the repository owner on 2026-08-14 after an
+independent review (P1 finding on the first draft): the draft selected the
+GitHub Actions runner only as a reference environment and explicitly
+renounced equivalence to any deployment, which Issue #27 does not permit.
+The owner therefore accepted the 2-vCPU runner class as ControlHub's
+lowest supported deployment baseline (section 1 below), making the CI
+environment verifiably equivalent to it by construction.
 
 ## Evidence Base
 
-### No deployment specification exists
+### No deployment specification existed before this decision
 
 An exhaustive search of the tracked repository found no documented deployment
 specification: `README.md`, `Makefile`, `.env.example`, `.github/`, `docs/`
 (decisions, releases, evidence, quality baseline, hardening checklist), and
 `cmd/` contain no CPU, vCPU, RAM, memory, OS, or instance-tier requirement.
 No Dockerfile, docker-compose, Kubernetes, or deployment manifest exists in
-the repository. A sibling `ControlHub-Frontend` checkout contains no backend
-deployment specification either. There is therefore no assumed specification
-that could be used, and none is invented here.
+the repository or its history. A sibling `ControlHub-Frontend` checkout
+contains no backend deployment specification either. Because no assumed
+specification could be used, the owner established the baseline below.
 
 ### The documented execution environment is CI
 
@@ -46,16 +54,17 @@ run is recorded in that run's "Set up job" log and is captured as CI evidence.
 
 ## Decision
 
-1. **Target environment for the budget proof:** the GitHub Actions standard
-   `ubuntu-latest` runner for this private repository — 2 vCPU (x86_64), 8 GB
-   RAM, 14 GB SSD, Ubuntu 24.04 LTS. Rationale: the repository documents no
-   deployment specification (evidence above), and this CI environment is the
-   only documented execution environment for the backend release gates. It is
-   a modest two-vCPU baseline and is verifiable: its hardware is
-   GitHub-published and the exact image is recorded per run. This does not
-   claim the CI runner equals any production deployment; a deployment weaker
-   than this environment must document its own specification, and a budget
-   breach on any environment is handled per the handling path below.
+1. **Lowest supported deployment baseline (owner-accepted 2026-08-14):**
+   ControlHub's lowest supported deployment specification is hardware at
+   least as capable as the GitHub Actions standard Linux runner used by
+   backend CI — 2 vCPU (x86_64), 8 GB RAM, 14 GB SSD, Ubuntu 24.04 LTS. The
+   CI environment is verifiably equivalent to this baseline by construction:
+   `.github/workflows/backend-ci.yml` runs the release gates on exactly this
+   hardware class, GitHub publishes the runner facts, and the exact image of
+   every run is recorded in that run's "Set up job" log. The acceptance
+   budget is therefore measured directly on the lowest supported deployment
+   itself. A deployment weaker than this baseline is outside the supported
+   deployment contract and must be escalated per the handling path below.
 2. **Acceptance budget:** median verification time ≤ 250 ms and p95 ≤ 300 ms
    (250 ms + 20% tolerance), measured at the real password-verification seam
    (`VerifyPassword` in `internal/service/password_hasher.go`, the seam used
@@ -86,13 +95,19 @@ run is recorded in that run's "Set up job" log and is captured as CI evidence.
    either the environment is not the documented target, or the documented
    target cannot meet the accepted budget and the budget/deployment contract
    must be renegotiated with the issue owner before any parameter change.
+   In particular, a deployment on hardware weaker than the 2-vCPU baseline is
+   not a supported deployment and does not by itself trigger a parameter
+   change.
 6. **Local measurements** (e.g. an Apple M4 Pro) are at most upper-bound
    sanity references and are never acceptance evidence for the budget.
 
 ## Consequences
 
-- Every backend release re-proves the budget on the documented CI target via
-  the dedicated gate, producing a reproducible raw artifact.
+- The lowest supported deployment baseline (2 vCPU x86_64, 8 GB RAM, 14 GB
+  SSD, Ubuntu 24.04) is now part of the supported-deployment contract: any
+  release must pass the budget gate on that baseline, and every backend
+  release re-proves it via the dedicated CI gate with a reproducible raw
+  artifact.
 - A future PR that slows verification (e.g. changes parameters or adds work
   to the seam) fails CI with a non-zero exit instead of silently drifting
   past the budget.
