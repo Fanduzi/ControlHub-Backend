@@ -149,6 +149,10 @@ argon2id-budget: environment goos=linux goarch=amd64 ncpu=2 image_os=ubuntu24
   passed again (median `82.5 ms`, p95 `85.8 ms`) and uploaded the raw
   artifact `argon2id-budget-evidence` (422 bytes, `raw-output.txt`, contents
   verified by download).
+- Final run at head `7dede08` (after the owner-accepted baseline decision)
+  ([31813482070](https://github.com/Fanduzi/ControlHub-Backend/actions/runs/31813482070))
+  passed again on `Image: ubuntu-24.04` (median `97.5 ms`, p95 `104.2 ms`)
+  and uploaded `argon2id-budget-evidence` (421 bytes).
 - The budget gate also ran inside `make release-local-gates` (`go test
   -count=1 ./...`) in the same job and passed; both jobs
   (`release-local-gates`, `release-docker-gates`) concluded `success`.
