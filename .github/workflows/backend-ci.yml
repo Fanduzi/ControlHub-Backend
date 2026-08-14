@@ -31,6 +31,15 @@ jobs:
           cache: true
       - name: Run backend local release gates
         run: make release-local-gates
+      - name: Run Argon2id verification-budget gate
+        run: make argon2id-budget
+      - name: Upload Argon2id budget evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: argon2id-budget-evidence
+          path: .argon2id-budget/
+          retention-days: 7
 
   release-docker-gates:
     name: release-docker-gates

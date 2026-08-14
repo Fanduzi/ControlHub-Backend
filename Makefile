@@ -1,4 +1,4 @@
-.PHONY: test test-integration test-openapi-fuzz run openapi-validate migrate-up migrate-status migrate-down-one migrate-reset-dev cutover-local seed-query-dev-credential seed-query-dev-target query-e2e-mysql-up query-e2e-mysql-down query-e2e-mysql-status release-local-gates release-docker-gates release-readiness-gates
+.PHONY: test test-integration test-openapi-fuzz run openapi-validate migrate-up migrate-status migrate-down-one migrate-reset-dev cutover-local seed-query-dev-credential seed-query-dev-target query-e2e-mysql-up query-e2e-mysql-down query-e2e-mysql-status argon2id-budget release-local-gates release-docker-gates release-readiness-gates
 
 GOOSE := $(shell go env GOPATH)/bin/goose
 GOOSE_DRIVER := mysql
@@ -58,6 +58,9 @@ migrate-status: ## Show migration status
 migrate-down-one: ## Roll back one migration
 	@if [ -z "$(GOOSE_DBSTRING)" ]; then echo "Error: DATABASE_DSN not set. Export it or add to .env"; exit 1; fi
 	GOOSE_DRIVER=$(GOOSE_DRIVER) GOOSE_DBSTRING="$(GOOSE_DBSTRING)" GOOSE_MIGRATION_DIR=$(GOOSE_MIGRATION_DIR) $(GOOSE) down
+
+argon2id-budget: ## Run the Argon2id verification-budget gate at the password-verification seam; writes raw output to .argon2id-budget/ (no Docker)
+	@set -o pipefail; mkdir -p .argon2id-budget; go test ./internal/service -run '^TestArgon2idVerificationBudget$$' -count=1 -v 2>&1 | tee .argon2id-budget/raw-output.txt
 
 release-local-gates: ## Run local backend release-readiness gates (no Docker)
 	go test -count=1 ./...

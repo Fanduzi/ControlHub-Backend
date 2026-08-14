@@ -14,5 +14,6 @@
 /skills-lock.json
 /.idea/
 /.schemathesis-reports/
+/.argon2id-budget/
 /.review-screenshots/
 /advisor-plans/
