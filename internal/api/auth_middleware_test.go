@@ -1,6 +1,6 @@
 // Package api provides tests for query route auth middleware.
 // input: crypto/hmac, crypto/sha256, encoding/base64, encoding/hex, net/http, net/http/httptest, time, internal/service, internal/model
-// output: TestAuthenticatedActor*, TestFreshQueryActor*, TestAuthzVersion*, TestGeneric401*
+// output: TestAuthenticatedActor*, TestEightHourOldBearerIsExpired, TestFreshQueryActor*, TestAuthzVersion*, TestGeneric401*
 // pos: Tests bearer extraction, current Authorization Version verification, actor context, query TTL, generic 401 equivalence
 // note: if this file changes, update header and README.md
 package api
@@ -140,6 +140,37 @@ func TestAuthenticatedActorRejectsTokenOlderThanEightHours(t *testing.T) {
 		t.Fatalf("status = %d, want 401", rec.Code)
 	}
 	assertGeneric401Body(t, rec)
+}
+
+// TestEightHourOldBearerIsExpired proves the fixed eight-hour credential
+// lifetime is exclusive: a credential is no longer valid at exactly eight
+// hours, on both ordinary protected routes and governed-query routes.
+func TestEightHourOldBearerIsExpired(t *testing.T) {
+	svc := newMiddlewareAuthService("test-secret")
+	now := time.Date(2026, 8, 12, 12, 0, 0, 0, time.UTC)
+	cfg := QueryExecutionAuthConfig{Clock: fixedClock(now)}
+	token := mintToken(t, "test-secret", 42, "admin", now.Add(-MaxQueryTokenAge))
+
+	for name, wrap := range map[string]func(http.Handler) http.Handler{
+		"ordinary protected route": requireAuthenticatedActor(svc, cfg, service.NoopEmitter{}),
+		"governed query route":     requireFreshQueryActor(svc, cfg, service.NoopEmitter{}),
+	} {
+		t.Run(name, func(t *testing.T) {
+			h := wrap(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+				t.Error("handler must not run for an eight-hour-old bearer credential")
+			}))
+			rec := httptest.NewRecorder()
+			req := httptest.NewRequest(http.MethodGet, "/resources", nil)
+			req.Header.Set("Authorization", "Bearer "+token)
+
+			h.ServeHTTP(rec, req)
+
+			if rec.Code != http.StatusUnauthorized {
+				t.Fatalf("status = %d, want 401 at the fixed eight-hour boundary", rec.Code)
+			}
+			assertGeneric401Body(t, rec)
+		})
+	}
 }
 
 // TestAuthenticatedActorStaleRejectionEmitsAuthBearerRejected proves that a

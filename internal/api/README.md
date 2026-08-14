@@ -77,5 +77,11 @@ responses.
 - Upstream: `internal/service` (all services), `github.com/go-chi/chi/v5`
 - Downstream: none (HTTP layer is the top)
 
+## Credential Freshness
+
+All protected routes and governed-query routes reject a bearer credential at
+an age of eight hours or greater. The bound is fixed and cannot be extended by
+deployment configuration.
+
 ## Update Rule
 If routes, handlers, or Dependencies struct change, update this file and root README.md.

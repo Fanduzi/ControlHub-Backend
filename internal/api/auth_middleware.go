@@ -59,7 +59,7 @@ func requireAuthenticatedActor(authService *service.AuthService, cfg QueryExecut
 			}
 			// Fixed eight-hour freshness bound (Issue #21). Applies to all
 			// protected routes, including ordinary reads.
-			if clock().Sub(user.IssuedAt) > MaxQueryTokenAge {
+			if clock().Sub(user.IssuedAt) >= MaxQueryTokenAge {
 				emitter.EmitAuthAudit("auth.bearer", "rejected", &user.ID, nil)
 				writeJSONError(w, http.StatusUnauthorized, "unauthorized", controlledUnauthorizedMessage)
 				return
@@ -125,9 +125,9 @@ func extractResourceIDFromPath(path string) (uint64, bool) {
 
 // requireFreshQueryActor is the chi middleware factory mounted on query
 // execute/history routes. It performs the base current-state check and
-// additionally rejects credentials whose embedded issuedAt is older than
-// MaxQueryTokenAge (fixed eight-hour freshness for governed query). Expiry
-// uses the same generic 401 as other auth failures.
+// additionally rejects credentials whose embedded issuedAt is at least
+// MaxQueryTokenAge old (fixed eight-hour freshness for governed query).
+// Expiry uses the same generic 401 as other auth failures.
 func requireFreshQueryActor(authService *service.AuthService, cfg QueryExecutionAuthConfig, emitter service.AuthAuditEmitter) func(http.Handler) http.Handler {
 	clock := cfg.Clock
 	if clock == nil {
@@ -141,7 +141,7 @@ func requireFreshQueryActor(authService *service.AuthService, cfg QueryExecution
 			}
 			// Query execution is a higher-risk surface than read/list routes,
 			// so token freshness is bounded here by a fixed eight-hour constant.
-			if clock().Sub(user.IssuedAt) > MaxQueryTokenAge {
+			if clock().Sub(user.IssuedAt) >= MaxQueryTokenAge {
 				emitter.EmitAuthAudit("auth.bearer", "rejected", &user.ID, nil)
 				writeJSONError(w, http.StatusUnauthorized, "unauthorized", controlledUnauthorizedMessage)
 				return
