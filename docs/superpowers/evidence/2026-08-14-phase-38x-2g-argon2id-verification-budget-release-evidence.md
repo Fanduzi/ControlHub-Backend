@@ -20,6 +20,7 @@ or the legacy successful-login migration path.
 | Task worktree | `/Users/fan/GolangProjects/ControlHub-wt-issue-27-argon2id-budget-20260814-214034` |
 | Budget-gate commit | `7282ba0` (`test(auth): prove Argon2id verification budget at the password-verification seam`) |
 | CI portability fix commit | `e325c7f` (`fix(make): make argon2id-budget POSIX-sh safe for CI`) |
+| CI artifact fix commit | `fd455c4` (`fix(ci): upload hidden argon2id-budget artifact; record acceptance evidence`) |
 | Evidence commit | this commit (docs) |
 
 Changed files (budget-gate commit):
@@ -139,6 +140,11 @@ argon2id-budget: environment goos=linux goarch=amd64 ncpu=2 image_os=ubuntu24
 - **Outcome: PASS.** median `122.4 ms` ≤ 250 ms and p95 `123.5 ms` ≤ 300 ms
   on the documented target environment. Sample count 20, thresholds written
   in the test and this evidence.
+- A second run at head `fd455c4`
+  ([31811134897](https://github.com/Fanduzi/ControlHub-Backend/actions/runs/31811134897))
+  passed again (median `82.5 ms`, p95 `85.8 ms`) and uploaded the raw
+  artifact `argon2id-budget-evidence` (422 bytes, `raw-output.txt`, contents
+  verified by download).
 - The budget gate also ran inside `make release-local-gates` (`go test
   -count=1 ./...`) in the same job and passed; both jobs
   (`release-local-gates`, `release-docker-gates`) concluded `success`.
