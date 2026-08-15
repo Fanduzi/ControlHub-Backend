@@ -77,15 +77,23 @@ run is recorded in that run's "Set up job" log and is captured as CI evidence.
    sequential in-process samples (no `t.Parallel`). Median is the mean of the
    two middle sorted samples; p95 uses the nearest-rank method (sample 19 of
    20 sorted). The sample input is a fixed non-secret string; neither the
-   input nor the hash is ever logged. The dedicated single-package run
-   (`make argon2id-budget`) is the authoritative measurement; a run inside
-   `go test ./...` may share CPU with sibling packages and is still a valid
-   fail-loud check.
+   input nor the hash is ever logged. The gate is build-tagged
+   (`//go:build budget`) and runs only as the dedicated single-package
+   measurement (`make argon2id-budget`, equivalently `go test -tags=budget
+   ./internal/service -run '^TestArgon2idVerificationBudget$' -count=1 -v`).
+   It is deliberately excluded from `go test ./...`: that command runs
+   packages in parallel (`-p` = number of CPUs), and Argon2id wall time under
+   package co-tenancy is inflated roughly twofold, producing flaky breaches
+   that are not budget failures. Evidence: push CI run 31818969782 measured
+   median 186.8 ms / p95 366.9 ms (min 183.6 ms) inside `go test ./...` on
+   the 2-vCPU runner, while the same head's dedicated measurement passed 4 of
+   4 runs at median 82.5-122.4 ms / p95 85.8-123.5 ms.
 4. **Fail loud:** the gate is a Go test that fails (non-zero exit) when the
-   median or p95 threshold is exceeded. It runs in the default test suite
-   (`go test ./...`), in the local `make argon2id-budget` target, and as a
-   dedicated CI step that uploads the raw output as a CI artifact
-   (`.argon2id-budget/raw-output.txt`).
+   median or p95 threshold is exceeded. It runs in the local
+   `make argon2id-budget` target and as a dedicated CI step that uploads the
+   raw output as a CI artifact (`.argon2id-budget/raw-output.txt`); it is
+   intentionally not part of the default `go test ./...` suite (see
+   collection method above).
 5. **Handling path on breach (never lower the security parameters):**
    Argon2id `m=65536,t=3,p=1` is fixed by Issue #20 and this decision; a
    breach is never fixed by reducing cost. Instead: (a) re-measure with

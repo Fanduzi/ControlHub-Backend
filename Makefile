@@ -61,7 +61,7 @@ migrate-down-one: ## Roll back one migration
 
 argon2id-budget: ## Run the Argon2id verification-budget gate at the password-verification seam; writes raw output to .argon2id-budget/ (no Docker)
 	@mkdir -p .argon2id-budget
-	@go test ./internal/service -run '^TestArgon2idVerificationBudget$$' -count=1 -v > .argon2id-budget/raw-output.txt 2>&1
+	@go test -tags=budget ./internal/service -run '^TestArgon2idVerificationBudget$$' -count=1 -v > .argon2id-budget/raw-output.txt 2>&1
 	@cat .argon2id-budget/raw-output.txt
 
 release-local-gates: ## Run local backend release-readiness gates (no Docker)
