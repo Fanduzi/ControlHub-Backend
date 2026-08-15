@@ -91,7 +91,7 @@ head SHA `2308da5da491e22f5a233eb34e94ae5dd0b94913`):
   - dedicated Argon2id verification-budget gate PASS
     (`TestArgon2idVerificationBudget`), budget evidence uploaded.
 - `release-docker-gates` job
-  [94975460707](https://github.com/Fanduzi/ControlHub-Backend/actions/runs/31869357881/job/94975460707)
+  [94975460709](https://github.com/Fanduzi/ControlHub-Backend/actions/runs/31869357881/job/94975460709)
   — `success`:
   - `make test-integration` against disposable Testcontainers MySQL —
     232 integration tests PASS, 0 FAIL — including
@@ -152,3 +152,19 @@ worktrees, and branches were not started, stopped, or modified.
 - Issue #28 is open at evidence time and blocks #25. After this release
   passes independent verification, #28 closes with a factual comment
   (final SHA, evidence path, CI URL); #25, #20, and #7 must remain open.
+
+## Final Delivery Record
+
+- Evidence head `6d80db136296cc4f7d5d2e48aa1346bfc40a885d` was validated by
+  CI run
+  [31869721138](https://github.com/Fanduzi/ControlHub-Backend/actions/runs/31869721138):
+  `release-local-gates`
+  ([94976363062](https://github.com/Fanduzi/ControlHub-Backend/actions/runs/31869721138/job/94976363062))
+  and `release-docker-gates`
+  ([94976363082](https://github.com/Fanduzi/ControlHub-Backend/actions/runs/31869721138/job/94976363082))
+  both `success`; docker-gates log: 232 integration tests PASS, 0 FAIL,
+  including `TestAuthAudit_FailOpenPreservesRoleDenied403` PASS (0.16s);
+  local-gates: 13 packages `ok`, 0 failures.
+- This file was then amended (docs-only, no code change) to correct the
+  product-run docker-gates job link above. The amended head is validated by
+  the fresh-context independent final verification of this closure.
