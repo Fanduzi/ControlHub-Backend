@@ -256,3 +256,44 @@ No issue was commented on, closed, or relabeled. #25, #20, and #7 remain
 open. The task worktrees and branches are retained; removal requires
 separate authorization. Nothing was merged, pushed, rebased, amended,
 tagged, or deployed.
+
+## Final Delivery Record (appended after merge/push)
+
+Post-merge facts, appended only after they occurred:
+
+- **Product SHA**: `326fcfd25867aa94a72df79842fd04b327099da2` (the
+  corrected-evidence commit `326fcfd`), merged onto backend `main` by
+  `git merge --ff-only issue-25-math-20260815-164155` and pushed as the
+  non-force range `f276be8a1561e96a0d14441748f3017d79747060..326fcfd25867aa94a72df79842fd04b327099da2`
+  (`main -> main`). No rebase, amend, force-push, tag, or deploy occurred;
+  no frontend branch was merged or pushed.
+- **Backend CI** (push run for `326fcfd…`): run
+  [31876781134](https://github.com/Fanduzi/ControlHub-Backend/actions/runs/31876781134),
+  `headSha` `326fcfd25867aa94a72df79842fd04b327099da2`, conclusion
+  `success`. Jobs: `release-local-gates`
+  [94993592728](https://github.com/Fanduzi/ControlHub-Backend/actions/runs/31876781134/job/94993592728)
+  and `release-docker-gates`
+  [94993592773](https://github.com/Fanduzi/ControlHub-Backend/actions/runs/31876781134/job/94993592773)
+  both `success`.
+- **Published refs at delivery time**: backend `origin/main` =
+  `326fcfd25867aa94a72df79842fd04b327099da2`; frontend `origin/main` =
+  `d6bc7520000a14841bb4d2cd117c4f0bacc8fbf3` (unchanged).
+- **Review verdicts**: the three fresh-context read-only reviews recorded
+  above stand at P1=0, P2=0; the Security P2 is adjudicated a false
+  positive (complete-block repetition periods over the fixed 32-byte key
+  are exactly `{1,2,4,8,16}` = the checked set). No production or test
+  code was changed by this delivery; the diff is this evidence file only.
+- **#25 closure condition**: #25 closes only after (a) the final
+  evidence-head CI run reports both `release-local-gates` and
+  `release-docker-gates` success at the exact evidence `headSha`, and
+  (b) a fresh-context, read-only independent final verification passes
+  every release checkbox with no P1/P2. #20 and #7 must remain open;
+  this issue closes with a factual comment carrying the final backend
+  SHA, frontend ref, evidence path, and CI URL.
+- **Root WIP preservation**: the backend root WIP manifest captured before
+  merge (tracked patch, staged patch, NUL-safe status, untracked paths:
+  `CLAUDE.md`, `advisor-plans/README.md` modified; nine untracked paths
+  under `AGENTS.md.bak-*`, `CLAUDE.md.bak-*`, `CONTEXT.md`,
+  `docs/agents/`, `docs/decisions/`, `docs/superpowers/`) is unchanged
+  after merge and push; the frontend root remains clean at `d6bc752…`.
+  No stash, restore, reset, clean, relocate, or overwrite occurred.
