@@ -108,8 +108,12 @@ Exact command (local and CI):
 ```bash
 make argon2id-budget
 # equivalently:
-go test ./internal/service -run '^TestArgon2idVerificationBudget$' -count=1 -v
+go test -tags=budget ./internal/service -run '^TestArgon2idVerificationBudget$' -count=1 -v
 ```
+
+The gate is build-tagged (`//go:build budget`) and runs only as this
+dedicated single-package measurement; it is excluded from `go test ./...`
+(see the post-merge delivery record below).
 
 Raw artifact: `.argon2id-budget/raw-output.txt` (gitignored), uploaded in CI
 as the `argon2id-budget-evidence` artifact (7-day retention, matching the
@@ -221,6 +225,63 @@ deployment baseline; the ADR and this evidence were amended accordingly. No
 other P1/P2 findings were reported. The gate itself (real `VerifyPassword`
 seam, production parameters, median/p95 computation, fail-loud breach
 behavior, CI/artifact evidence matching branch SHAs) was confirmed correct.
+
+## Post-Merge Delivery Record
+
+Authorized closure of Issue #27 on 2026-08-15. The candidate branch
+`issue-27-argon2id-budget-20260814-214034` at
+`bb440652b137f13569eb1067d814ed7e58b62a1c` was fast-forward merged into
+`main` and normally pushed (`2e864b0..bb44065`; no rebase, amend,
+force-push, or tag). HEAD equaled `origin/main` immediately after push.
+
+### Push CI exposed a measurement defect (run 31818969782)
+
+The first push-triggered CI run
+[31818969782](https://github.com/Fanduzi/ControlHub-Backend/actions/runs/31818969782)
+(head `bb440652...`) failed on `release-local-gates`: inside
+`go test -count=1 ./...`, the budget gate ran under package-parallel CPU
+co-tenancy on the 2-vCPU runner and measured
+`result=FAIL samples=20 median=186.787653ms p95=366.908587ms
+min=183.567908ms max=374.548482ms`. Its minimum exceeded the clean
+dedicated-measurement maximum (124.5 ms), proving sustained ~50% CPU
+contention rather than a budget breach: the same head's dedicated
+single-package measurement passed 4 of 4 runs at median 82.5-122.4 ms and
+p95 85.8-123.5 ms. `release-docker-gates` succeeded. The ADR's original
+collection-method note ("a run inside `go test ./...` ... is still a valid
+fail-loud check") was wrong and was corrected with owner authorization.
+
+### Fix: build-tagged isolation (commit `f232151`)
+
+`internal/service/password_hasher_budget_test.go` is now build-tagged
+(`//go:build budget`) and `make argon2id-budget` runs
+`go test -tags=budget ./internal/service -run '^TestArgon2idVerificationBudget$'
+-count=1 -v`. The gate runs only as the dedicated single-package
+measurement and is excluded from `go test ./...`, making
+`release-local-gates` deterministic. Production Argon2id parameters and the
+legacy successful-login migration path are unchanged. Fix pushed as
+`bb44065..f232151` (normal push).
+
+### Fix CI (run 31852479841)
+
+[31852479841](https://github.com/Fanduzi/ControlHub-Backend/actions/runs/31852479841)
+at head `f232151c7a2bd222daa19fa93da609f95f32d9c3` concluded `success`:
+`release-local-gates` and `release-docker-gates` both passed. The dedicated
+budget gate passed on the documented target: `result=PASS samples=20
+median=110.84302ms p95=123.03068ms min=109.150842ms max=126.29716ms
+budget_median<=250ms budget_p95<=300ms` (environment `goos=linux
+goarch=amd64 ncpu=2 image_os=ubuntu24`, runner `Image: ubuntu-24.04`).
+Artifact `argon2id-budget-evidence` (423 bytes) was uploaded, downloaded,
+and verified to contain the identical `raw-output.txt`.
+
+### Final product state
+
+Final product SHA `f232151c7a2bd222daa19fa93da609f95f32d9c3` ==
+`origin/main`. Review conclusions for the merged candidate range
+(`2e864b08..bb44065`) stand as recorded above: Standards PASS (P1 0, P2 0),
+Spec PASS (P1 0, P2 0), Security PASS (P1 0, P2 0), with the baseline-
+equivalence P1 resolved by the owner-accepted lowest-supported-deployment
+baseline. The post-merge isolation fix is verified by the green fix CI and
+the independent final verification of this closure.
 
 ## Root WIP Preservation
 
