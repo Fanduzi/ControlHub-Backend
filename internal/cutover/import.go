@@ -1,3 +1,8 @@
+// Package cutover preserves legacy data into the bigint runtime schema.
+// input: context, database/sql, errors, fmt, go-sql-driver/mysql
+// output: ImportLegacyData, ImportConfig
+// pos: One-shot migration boundary translating legacy UUID identities into current bigint rows inside a single target transaction
+// note: if this file changes, update this header and README.md
 package cutover
 
 import (
@@ -6,8 +11,8 @@ import (
 	"errors"
 	"fmt"
 
-	gosqlmysql "github.com/go-sql-driver/mysql"
 	_ "github.com/go-sql-driver/mysql"
+	gosqlmysql "github.com/go-sql-driver/mysql"
 )
 
 type ImportConfig struct {
@@ -123,7 +128,7 @@ type relationRow struct {
 }
 
 type auditRow struct {
-	ActorUserID      string
+	ActorUserID      sql.NullString
 	TargetResourceID sql.NullString
 	EventType        string
 	Result           string
@@ -592,9 +597,16 @@ func (imp importer) importAuditEvents(ctx context.Context, tx *sql.Tx, userMap, 
 		if err := rows.Scan(&row.ActorUserID, &row.TargetResourceID, &row.EventType, &row.Result, &row.CreatedAt); err != nil {
 			return fmt.Errorf("scan source audit event: %w", err)
 		}
-		actorUserID, ok := userMap[row.ActorUserID]
-		if !ok {
-			return fmt.Errorf("missing actor user mapping for audit event %s", row.EventType)
+		// A NULL source actor (migration 00017: anonymous authentication outcomes
+		// have no verified actor) must import as NULL without fabricated
+		// attribution; a non-NULL source actor must map or the import fails loud.
+		var actorUserID any
+		if row.ActorUserID.Valid {
+			mappedActorID, ok := userMap[row.ActorUserID.String]
+			if !ok {
+				return fmt.Errorf("missing actor user mapping for audit event %s", row.EventType)
+			}
+			actorUserID = mappedActorID
 		}
 		var targetResourceID any
 		if row.TargetResourceID.Valid {

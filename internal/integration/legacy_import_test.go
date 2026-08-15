@@ -1,5 +1,10 @@
 //go:build integration
 
+// Package integration provides real-MySQL coverage for legacy cutover import.
+// input: context, database/sql, fmt, strings, testing, time, go-sql-driver/mysql, pressly/goose, internal/cutover
+// output: TestImportLegacyData_* integration cases
+// pos: Proves UUID-to-bigint cutover import against real MySQL: NULL audit actor preservation and fail-loud unknown actor mapping with no partial import
+// note: if this file changes, update this header and README.md
 package integration
 
 import (
@@ -96,6 +101,126 @@ func TestImportLegacyData_RejectsNonEmptyTargetDatabase(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "target table roles must be empty") {
 		t.Fatalf("unexpected non-empty target error: %v", err)
+	}
+}
+
+func TestImportLegacyData_PreservesNullAuditActor(t *testing.T) {
+	// Anonymous authentication audit events (migration 00017 makes the target
+	// actor_user_id nullable) must import with a NULL actor while preserving
+	// the fixed event/result/target/created-at metadata. A source row with no
+	// actor is valid security history; it must never be fabricated attribution
+	// nor fail the import.
+	ctx := context.Background()
+	sourceDBName := uniqueImportDBName("legacy_src")
+	targetDBName := uniqueImportDBName("legacy_dst")
+
+	adminDB := setupTestDB(t)
+	createDatabase(t, adminDB, sourceDBName)
+	createDatabase(t, adminDB, targetDBName)
+	t.Cleanup(func() {
+		dropDatabase(t, adminDB, sourceDBName)
+		dropDatabase(t, adminDB, targetDBName)
+	})
+
+	sourceDB := openNamedTestDB(t, sourceDBName)
+	targetDB := openNamedTestDB(t, targetDBName)
+	seedLegacySourceData(t, sourceDB)
+	// The legacy source permits anonymous auth outcomes: nullable actor column
+	// plus an auth.bearer/rejected event with no verified actor and no target.
+	execSQL(t, sourceDB, `alter table audit_events modify actor_user_id char(36) default null`)
+	execSQL(t, sourceDB, `insert into audit_events (id, actor_user_id, target_resource_id, event_type, result, created_at) values
+		('audit-anon-0000000000000000000000001', null, null, 'auth.bearer', 'rejected', '2026-01-05 00:00:00.000000')`)
+	applyMigrations(t, targetDB)
+	truncateBusinessTables(t, targetDB)
+
+	err := cutover.ImportLegacyData(ctx, cutover.ImportConfig{
+		SourceDSN: dsnForDatabase(sourceDBName),
+		TargetDSN: dsnForDatabase(targetDBName),
+	})
+	if err != nil {
+		t.Fatalf("import legacy data with anonymous audit event: %v", err)
+	}
+
+	var actorID sql.NullInt64
+	var targetID sql.NullInt64
+	var eventType, result string
+	var createdAt time.Time
+	if err := targetDB.QueryRow(`select actor_user_id, target_resource_id, event_type, result, created_at from audit_events where event_type = ?`, "auth.bearer").Scan(&actorID, &targetID, &eventType, &result, &createdAt); err != nil {
+		t.Fatalf("query imported anonymous audit event: %v", err)
+	}
+	if actorID.Valid {
+		t.Fatalf("anonymous audit actor = %v, want NULL", actorID.Int64)
+	}
+	if targetID.Valid {
+		t.Fatalf("anonymous audit target = %v, want NULL", targetID.Int64)
+	}
+	if eventType != "auth.bearer" || result != "rejected" {
+		t.Fatalf("anonymous audit event = %s/%s, want auth.bearer/rejected", eventType, result)
+	}
+	wantCreatedAt := time.Date(2026, 1, 5, 0, 0, 0, 0, time.UTC)
+	if !createdAt.Equal(wantCreatedAt) {
+		t.Fatalf("anonymous audit created_at = %v, want %v", createdAt, wantCreatedAt)
+	}
+	// The mapped non-NULL audit event must still import alongside it.
+	assertCount(t, targetDB, "audit_events", 2)
+}
+
+func TestImportLegacyData_UnknownAuditActorFailsLoudWithoutPartialImport(t *testing.T) {
+	// A non-NULL source actor that cannot be mapped to a target user must stop
+	// the import loudly: mapped identity history is never silently corrupted.
+	// The whole import runs in one target transaction, so a loud failure must
+	// leave no partial rows in any business table.
+	ctx := context.Background()
+	sourceDBName := uniqueImportDBName("legacy_src")
+	targetDBName := uniqueImportDBName("legacy_dst")
+
+	adminDB := setupTestDB(t)
+	createDatabase(t, adminDB, sourceDBName)
+	createDatabase(t, adminDB, targetDBName)
+	t.Cleanup(func() {
+		dropDatabase(t, adminDB, sourceDBName)
+		dropDatabase(t, adminDB, targetDBName)
+	})
+
+	sourceDB := openNamedTestDB(t, sourceDBName)
+	targetDB := openNamedTestDB(t, targetDBName)
+	seedLegacySourceData(t, sourceDB)
+	execSQL(t, sourceDB, `insert into audit_events (id, actor_user_id, target_resource_id, event_type, result, created_at) values
+		('audit-unknown-0000000000000000000001', 'user-ghost-0000000000000000000000001', null, 'auth.login', 'succeeded', '2026-01-05 00:00:00.000000')`)
+	applyMigrations(t, targetDB)
+	truncateBusinessTables(t, targetDB)
+
+	err := cutover.ImportLegacyData(ctx, cutover.ImportConfig{
+		SourceDSN: dsnForDatabase(sourceDBName),
+		TargetDSN: dsnForDatabase(targetDBName),
+	})
+	if err == nil {
+		t.Fatal("expected unknown audit actor to fail import loudly")
+	}
+	if !strings.Contains(err.Error(), "missing actor user mapping for audit event auth.login") {
+		t.Fatalf("unexpected unknown audit actor error: %v", err)
+	}
+	for _, tableName := range []string{
+		"audit_events",
+		"resource_relations",
+		"resource_profiles_service",
+		"resource_profiles_database_cluster",
+		"resource_profiles_database_instance",
+		"resource_profiles_host",
+		"resources",
+		"users",
+		"owners",
+		"environments",
+		"roles",
+	} {
+		assertCount(t, targetDB, tableName, 0)
+	}
+}
+
+func execSQL(t *testing.T, db *sql.DB, statement string) {
+	t.Helper()
+	if _, err := db.Exec(statement); err != nil {
+		t.Fatalf("exec %q: %v", shortSQL(statement), err)
 	}
 }
 

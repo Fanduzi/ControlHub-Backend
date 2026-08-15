@@ -15,6 +15,7 @@ MySQL-backed integration tests run against disposable Testcontainers databases.
 | bootstrap_admin_command_test.go | Runs the operator bootstrap-admin CLI against MySQL and verifies authentication-compatible creation, reactivation, version rotation, and cleanup |
 | e2e_fixture_bootstrap_command_test.go | Runs the test/CI-only e2e-fixture-bootstrap CLI against a disposable `controlhub_*_e2e` database: dual-role (admin+editor) creation, retired-seed inactivity, idempotent reactivation with `authorization_version` rotation, secret-free output, and whole-transaction rollback |
 | openapi_fuzz_contract_test.go | Enforces the OpenAPI Fuzz Exclusion Contract (no build tag): Schemathesis exclusions must be narrow single-operation `--exclude-operation-id` flags in openapi-fuzz.sh, within the canonical documented set, with no broad path/method/tag exclusions, no exclusion directives in schemathesis.toml, and a matching contract section in scripts/README.md |
+| legacy_import_test.go | Proves UUID-to-bigint cutover import against MySQL: full migration, non-empty target rejection, parseTime validation, NULL audit actor preserved as NULL with fixed event/result/target/created-at metadata, and unknown non-NULL audit actor failing loud with no partial import |
 | *_test.go | Exercises repository, API, and migration behavior against MySQL |
 
 ## Operator access coverage

@@ -238,6 +238,7 @@ ControlHub is a read-heavy resource management backend exposing dictionary-drive
 | internal/openapi | Embedded OpenAPI contract and validation | [README](internal/openapi/README.md) |
 | internal/integration | MySQL-backed Testcontainers coverage | [README](internal/integration/README.md) |
 | internal/testsupport | Test-only shared authorization metadata and fixtures | [README](internal/testsupport/README.md) |
+| internal/cutover | One-shot legacy UUID→bigint data preservation and import | [README](internal/cutover/README.md) |
 
 Dependency flow (strict, one-directional): `cmd/server` → `api` → `service` → `repository/mysql` → `model`. The `model` package has no upstream dependencies.
 
