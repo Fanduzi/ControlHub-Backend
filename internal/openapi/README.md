@@ -5,7 +5,7 @@ Embeds and validates the OpenAPI contract served by the API documentation route.
 ## Files
 | File | Responsibility |
 |------|---------------|
-| openapi.yaml | Source OpenAPI contract, including Operator Access Boundary security and schema-policy responses |
+| openapi.yaml | Source OpenAPI contract, including Operator Access Boundary security, schema-policy, and admin-only auth-audit metrics responses |
 | embed.go | Embeds the YAML for serving and tests |
 | openapi_test.go | Validates schema, topology, pagination, and executions contract tests |
 | operator_access_boundary_test.go | Proves every protected operation documents the status codes its operatoraccess class requires |
@@ -13,6 +13,9 @@ Embeds and validates the OpenAPI contract served by the API documentation route.
 
 ## Exports
 - `YAML` - embedded OpenAPI specification bytes
+
+## Contracts
+- `GET /ops/auth-audit-metrics` response schema: fixed admin-only shape with exactly `authAuditPersistenceFailures` and `authAuditSuppressedRejections` counters; carries no identity, request, or credential material
 
 ## Dependencies
 - Upstream: `github.com/getkin/kin-openapi` for validation tests
