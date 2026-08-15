@@ -1,12 +1,13 @@
 // Package api provides HTTP handlers and routing for the ControlHub REST API.
-// input: chi/v5, internal/service (all services)
+// input: chi/v5, time, internal/service (all services)
 // output: Dependencies struct, NewRouter, corsLocalDev
-// pos: HTTP routing entry point, wires service dependencies to handlers
+// pos: HTTP routing entry point, wires service dependencies to handlers; wraps the AuthAuditEmitter in the fixed 60/min per-process untrusted-Bearer budget
 // note: if this file changes, update header and README.md
 package api
 
 import (
 	"net/http"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 
@@ -85,6 +86,12 @@ func NewRouter(deps Dependencies) *chi.Mux {
 	if emitter == nil {
 		emitter = service.NoopEmitter{}
 	}
+	// Bound untrusted Bearer rejection persistence at 60/min per process
+	// (ADR 2026-08-15): the decorator caps only auth.bearer/rejected events
+	// with no verified actor; logins, verified-actor rejections, and role
+	// denials pass through unbounded. Missing Authorization emits no event at
+	// all (handled in verifyBearer).
+	emitter = service.NewBoundedAuthAuditEmitter(emitter, service.BoundedBearerRejectedLimit, time.Minute, nil)
 
 	router := chi.NewRouter()
 	router.Use(corsLocalDev)

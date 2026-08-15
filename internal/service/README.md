@@ -9,7 +9,7 @@ Business logic layer with interface-based repository dependencies. Each service 
 | relation_service.go | Relation listing by resource |
 | audit_service.go | Audit event listing (global and per-resource) |
 | auth_service.go | Login, versioned Backend Bearer issuance, current-state VerifyToken (Authorization Version), role/disable/password invalidation, legacy-to-Argon2id transparent migration |
-| auth_audit_emitter.go | AuthAuditEmitter interface and NoopEmitter for fail-open auth/authz audit event emission |
+| auth_audit_emitter.go | AuthAuditEmitter interface, NoopEmitter, and BoundedAuthAuditEmitter decorator capping untrusted Bearer rejection persistence at 60/min per process (fail-open) |
 | password_hasher.go | Argon2id password hashing, legacy SHA-256 verification, hash format detection, resource budget enforcement |
 | password_hasher_budget_test.go | Argon2id verification-budget gate (build-tagged, runs via `make argon2id-budget`): multi-sample VerifyPassword timing at the production seam, median/p95 statistics, fail-loud budget assertion |
 | environment_service.go | Environment listing |
@@ -46,6 +46,7 @@ Business logic layer with interface-based repository dependencies. Each service 
 - `NewXxxService(repo) *XxxService` constructors for all services
 - `NewMemoryUserStore`, `AuthService.WithClock`, `AuthService.ChangeUserRole`/`SetUserActive`/`ResetUserPassword` — Authorization Version seams
 - `AuthAuditEmitter`, `NoopEmitter` — fail-open authentication/authorization audit emission interface and discard implementation
+- `BoundedAuthAuditEmitter`, `NewBoundedAuthAuditEmitter`, `BoundedBearerRejectedLimit`, `AuthAuditSuppressedRejections` — process-local budget capping untrusted Bearer rejection persistence at 60 events/min; suppression counter exposed only via the admin auth-audit metrics surface
 - `HashPasswordArgon2id`, `VerifyPassword`, `IsLegacyHash`, `IsArgon2idHash` — password hashing and format detection
 - `AuthService.LegacyHashCount` — non-identity-bearing count of remaining legacy-hash accounts
 - `ErrResourceNotFound`, `ErrInvalidCredentials`, `ErrInvalidToken`, `ErrQueryDisclosureBlocked` sentinel errors

@@ -5,13 +5,13 @@ HTTP handlers, chi routing, CORS middleware, and fake-repo test infrastructure.
 ## Files
 | File | Responsibility |
 |------|---------------|
-| router.go | Route registration, Operator Access Boundary middleware (authenticated Inventory/dictionary reads; fresh-token query surfaces), Dependencies struct, CORS middleware |
+| router.go | Route registration, Operator Access Boundary middleware (authenticated Inventory/dictionary reads; fresh-token query surfaces), Dependencies struct, CORS middleware, bounded untrusted-Bearer audit persistence wiring |
 | health_handler.go | GET /health endpoint |
 | resource_handler.go | Resource list, detail, and profile handlers |
 | relation_handler.go | Resource relation list handler |
 | audit_handler.go | Audit event list handlers (global and per-resource) |
 | auth_handler.go | POST /auth/login handler |
-| auth_middleware.go | Bearer, role, Authorization Version, and query-freshness middleware |
+| auth_middleware.go | Bearer, role, Authorization Version, and query-freshness middleware; missing Authorization emits no audit event; supplied untrusted Bearer rejection emits the fixed event within the 60/min per-process budget |
 | dictionary_handler.go | Dictionary list handlers (environments, owners, roles, resource-types, relation-types, lifecycle-statuses, health-statuses) |
 | query_schema_handler.go | handleGetTableDefinition for MySQL table-definition requests |
 | query_execution_handler.go | POST execute, POST saved-statement template execute, and GET execution-history handlers, including optional governed result paging |

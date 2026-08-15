@@ -3045,7 +3045,8 @@ paths:
     get:
       summary: Auth audit operational metrics
       description: >-
-        Admin-only endpoint returning auth audit persistence-failure counter.
+        Admin-only endpoint returning auth audit persistence-failure and
+        untrusted-Bearer suppression counters.
         Used for operational visibility; no identity or request data is exposed.
       operationId: getAuthAuditMetrics
       security:
@@ -3057,12 +3058,16 @@ paths:
             application/json:
               schema:
                 type: object
-                required: [authAuditPersistenceFailures]
+                required: [authAuditPersistenceFailures, authAuditSuppressedRejections]
                 properties:
                   authAuditPersistenceFailures:
                     type: integer
                     format: int64
                     description: Total auth audit INSERT failures since server start
+                  authAuditSuppressedRejections:
+                    type: integer
+                    format: int64
+                    description: Untrusted Bearer rejection events skipped by the fixed 60/min process-local persistence budget since server start
         "401":
           description: Missing or invalid Bearer token
           content:

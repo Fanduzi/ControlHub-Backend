@@ -1,3 +1,8 @@
+// Package mysql provides tests for the auth audit emitter fail-open counter.
+// input: database/sql, testing
+// output: TestAuthAuditPersistenceFailuresCounterIncrements
+// pos: Proves the fixed-category persistence-failure counter increments on INSERT failure without changing the security decision
+// note: if this file changes, update header and README.md
 package mysql
 
 import (

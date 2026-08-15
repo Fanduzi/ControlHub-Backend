@@ -56,6 +56,44 @@ func newMiddlewareAuthService(secret string) *service.AuthService {
 	return service.NewAuthService(testAuthUsers, secret)
 }
 
+// TestMissingAuthorizationEmitsNoAuditEvent proves a request with no
+// Authorization header is absence of a credential, not a rejected supplied
+// credential: it returns the generic 401 without emitting any auth.bearer
+// rejected event (bounded-audit ADR 2026-08-15).
+func TestMissingAuthorizationEmitsNoAuditEvent(t *testing.T) {
+	svc := newMiddlewareAuthService("test-secret")
+	now := time.Date(2026, 8, 15, 12, 0, 0, 0, time.UTC)
+	cfg := QueryExecutionAuthConfig{Clock: fixedClock(now)}
+
+	for name, factory := range map[string]func(service.AuthAuditEmitter) func(http.Handler) http.Handler{
+		"ordinary protected route": func(e service.AuthAuditEmitter) func(http.Handler) http.Handler {
+			return requireAuthenticatedActor(svc, cfg, e)
+		},
+		"governed query route": func(e service.AuthAuditEmitter) func(http.Handler) http.Handler {
+			return requireFreshQueryActor(svc, cfg, e)
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			spy := &spyEmitter{}
+			h := factory(spy)(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+				t.Error("handler must not run without an Authorization header")
+			}))
+
+			rec := httptest.NewRecorder()
+			req := httptest.NewRequest(http.MethodGet, "/resources", nil)
+			h.ServeHTTP(rec, req)
+
+			if rec.Code != http.StatusUnauthorized {
+				t.Fatalf("status = %d, want 401", rec.Code)
+			}
+			assertGeneric401Body(t, rec)
+			if len(spy.events) != 0 {
+				t.Fatalf("emitted events = %d, want 0 for missing Authorization", len(spy.events))
+			}
+		})
+	}
+}
+
 func TestAuthenticatedActorRejectsMissingBearerToken(t *testing.T) {
 	svc := newMiddlewareAuthService("test-secret")
 	cfg := QueryExecutionAuthConfig{Clock: fixedClock(time.Now())}
@@ -531,10 +569,10 @@ type spyEmitter struct {
 }
 
 type spyEvent struct {
-	eventType    string
-	result       string
-	actorUserID  *uint64
-	targetResID  *uint64
+	eventType   string
+	result      string
+	actorUserID *uint64
+	targetResID *uint64
 }
 
 func (s *spyEmitter) EmitAuthAudit(eventType, result string, actorUserID *uint64, targetResourceID *uint64) error {
@@ -588,7 +626,7 @@ func TestRequireAdminActorEmitsTargetForResourceRoute(t *testing.T) {
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/resources/99/profile", nil)
 	req.Header.Set("Authorization", "Bearer "+token)
-	 router.ServeHTTP(rec, req)
+	router.ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusForbidden {
 		t.Fatalf("status = %d, want 403", rec.Code)
@@ -631,7 +669,7 @@ func TestRequireAdminActorNilTargetForQueryTargetRoute(t *testing.T) {
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPut, "/query-targets/22/credential", nil)
 	req.Header.Set("Authorization", "Bearer "+token)
-	 router.ServeHTTP(rec, req)
+	router.ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusForbidden {
 		t.Fatalf("status = %d, want 403", rec.Code)
@@ -659,8 +697,8 @@ func testOpsRouter(t *testing.T) *chi.Mux {
 	now := time.Date(2026, 8, 12, 12, 0, 0, 0, time.UTC)
 	cfg := QueryExecutionAuthConfig{Clock: fixedClock(now)}
 	deps := Dependencies{
-		AuthService:      svc,
-		AuthAuditEmitter: emitter,
+		AuthService:        svc,
+		AuthAuditEmitter:   emitter,
 		QueryExecutionAuth: cfg,
 	}
 	return NewRouter(deps)
@@ -683,7 +721,8 @@ func TestAuthAuditMetricsEndpointAdminOnly(t *testing.T) {
 }
 
 // TestAuthAuditMetricsEndpointReturnsCounter proves the endpoint returns
-// a JSON object with only the authAuditPersistenceFailures number.
+// a JSON object with the authAuditPersistenceFailures and
+// authAuditSuppressedRejections counters.
 func TestAuthAuditMetricsEndpointReturnsCounter(t *testing.T) {
 	router := testOpsRouter(t)
 	now := time.Date(2026, 8, 12, 12, 0, 0, 0, time.UTC)
@@ -699,18 +738,22 @@ func TestAuthAuditMetricsEndpointReturnsCounter(t *testing.T) {
 	}
 
 	var resp struct {
-		AuthAuditPersistenceFailures int64 `json:"authAuditPersistenceFailures"`
+		AuthAuditPersistenceFailures  int64 `json:"authAuditPersistenceFailures"`
+		AuthAuditSuppressedRejections int64 `json:"authAuditSuppressedRejections"`
 	}
 	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
 		t.Fatalf("decode: %v; body=%s", err, rec.Body.String())
 	}
 	if resp.AuthAuditPersistenceFailures < 0 {
-		t.Fatalf("counter = %d, want >= 0", resp.AuthAuditPersistenceFailures)
+		t.Fatalf("persistence counter = %d, want >= 0", resp.AuthAuditPersistenceFailures)
+	}
+	if resp.AuthAuditSuppressedRejections < 0 {
+		t.Fatalf("suppression counter = %d, want >= 0", resp.AuthAuditSuppressedRejections)
 	}
 }
 
 // TestAuthAuditMetricsNoLeak proves the response contains ONLY the expected
-// field — no identity, no request values, no internal details.
+// fields — no identity, no request values, no internal details.
 func TestAuthAuditMetricsNoLeak(t *testing.T) {
 	router := testOpsRouter(t)
 	now := time.Date(2026, 8, 12, 12, 0, 0, 0, time.UTC)
@@ -729,10 +772,18 @@ func TestAuthAuditMetricsNoLeak(t *testing.T) {
 	if err := json.Unmarshal(rec.Body.Bytes(), &raw); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
-	expectedKeys := map[string]bool{"authAuditPersistenceFailures": true}
+	expectedKeys := map[string]bool{
+		"authAuditPersistenceFailures":  true,
+		"authAuditSuppressedRejections": true,
+	}
 	for key := range raw {
 		if !expectedKeys[key] {
 			t.Fatalf("unexpected key %q in response", key)
+		}
+	}
+	for key := range expectedKeys {
+		if _, ok := raw[key]; !ok {
+			t.Fatalf("expected key %q missing from response", key)
 		}
 	}
 }

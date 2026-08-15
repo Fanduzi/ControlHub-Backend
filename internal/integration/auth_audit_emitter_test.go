@@ -42,7 +42,7 @@ func TestAuthAudit_LoginSucceeded(t *testing.T) {
 		AuthService:      authSvc,
 		AuthAuditEmitter: emitter,
 		QueryExecutionAuth: api.QueryExecutionAuthConfig{
-			Clock:       time.Now,
+			Clock: time.Now,
 		},
 		QueryCredentialService: &authzCredStub{},
 	})
@@ -87,7 +87,7 @@ func TestAuthAudit_LoginRejected(t *testing.T) {
 		AuthService:      authSvc,
 		AuthAuditEmitter: emitter,
 		QueryExecutionAuth: api.QueryExecutionAuthConfig{
-			Clock:       time.Now,
+			Clock: time.Now,
 		},
 		QueryCredentialService: &authzCredStub{},
 	})
@@ -121,13 +121,15 @@ func TestAuthAudit_LoginRejected(t *testing.T) {
 	}
 }
 
-// TestAuthAudit_BearerRejected proves a request with no/malformed Bearer token
-// emits auth.bearer rejected with no actor.
-func TestAuthAudit_BearerRejected(t *testing.T) {
+// TestAuthAudit_MissingHeaderEmitsNoRow proves a request with no
+// Authorization header is absence of a credential, not a rejected supplied
+// credential: the generic 401 is returned and no auth.bearer rejected row is
+// persisted (bounded-audit ADR 2026-08-15).
+func TestAuthAudit_MissingHeaderEmitsNoRow(t *testing.T) {
 	db := setupTestDB(t)
 	assertSchemaChainBaseline(t, db)
 
-	userID := insertAuthzTestUser(t, db, "audit-bearer@example.com", "admin")
+	userID := insertAuthzTestUser(t, db, "audit-missing-header@example.com", "admin")
 	t.Cleanup(func() { deleteAuthzTestUser(t, db, userID) })
 
 	userRepo := mysql.NewUserRepository(db)
@@ -137,33 +139,172 @@ func TestAuthAudit_BearerRejected(t *testing.T) {
 		AuthService:      authSvc,
 		AuthAuditEmitter: emitter,
 		QueryExecutionAuth: api.QueryExecutionAuthConfig{
-			Clock:       time.Now,
+			Clock: time.Now,
 		},
 		QueryCredentialService: &authzCredStub{},
 	})
 
-	// No Authorization header
-	rec := doBearer(t, router, http.MethodGet, "/query-targets/1/credential", "")
+	before := countUntrustedBearerRejections(t, db)
+
+	// No Authorization header at all.
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/query-targets/1/credential", nil)
+	router.ServeHTTP(rec, req)
 	if rec.Code != http.StatusUnauthorized {
 		t.Fatalf("no-header status = %d, want 401", rec.Code)
 	}
 
-	var eventType, result string
-	var actorUserID sql.NullInt64
-	err := db.QueryRow(
-		`select event_type, result, actor_user_id from audit_events
-		 where event_type = 'auth.bearer' and result = 'rejected'
-		 order by created_at desc limit 1`,
-	).Scan(&eventType, &result, &actorUserID)
-	if err != nil {
-		t.Fatalf("query auth.bearer rejected: %v", err)
+	after := countUntrustedBearerRejections(t, db)
+	if after-before != 0 {
+		t.Fatalf("untrusted rejection rows delta = %d, want 0 for missing Authorization", after-before)
 	}
-	if eventType != "auth.bearer" || result != "rejected" {
-		t.Fatalf("unexpected event: type=%s result=%s", eventType, result)
+}
+
+// TestAuthAudit_SuppliedInvalidBearerEmitsRejectedRow proves a supplied but
+// untrusted Bearer (invalid token) persists the fixed auth.bearer rejected
+// event with no actor while the process budget has capacity.
+func TestAuthAudit_SuppliedInvalidBearerEmitsRejectedRow(t *testing.T) {
+	db := setupTestDB(t)
+	assertSchemaChainBaseline(t, db)
+
+	userID := insertAuthzTestUser(t, db, "audit-invalid-bearer@example.com", "admin")
+	t.Cleanup(func() { deleteAuthzTestUser(t, db, userID) })
+
+	userRepo := mysql.NewUserRepository(db)
+	authSvc := service.NewAuthService(userRepo, authzIntegrationSecret)
+	emitter := mysql.NewAuthAuditEmitter(db)
+	router := api.NewRouter(api.Dependencies{
+		AuthService:      authSvc,
+		AuthAuditEmitter: emitter,
+		QueryExecutionAuth: api.QueryExecutionAuthConfig{
+			Clock: time.Now,
+		},
+		QueryCredentialService: &authzCredStub{},
+	})
+
+	before := countUntrustedBearerRejections(t, db)
+
+	rec := doBearer(t, router, http.MethodGet, "/query-targets/1/credential", "forged-token")
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("invalid-token status = %d, want 401", rec.Code)
 	}
-	if actorUserID.Valid {
-		t.Fatalf("expected no actor on bearer rejected, got %d", actorUserID.Int64)
+
+	after := countUntrustedBearerRejections(t, db)
+	if after-before != 1 {
+		t.Fatalf("untrusted rejection rows delta = %d, want 1", after-before)
 	}
+}
+
+// TestAuthAudit_BoundedUntrustedBearerPersistence proves the fixed 60/min
+// per-process persistence budget against real MySQL: the 61st untrusted
+// rejection keeps the generic 401 but persists no row, the safe suppression
+// counter is visible on the administrator-only metrics surface, and a
+// verified actor's role denial still persists after budget exhaustion.
+func TestAuthAudit_BoundedUntrustedBearerPersistence(t *testing.T) {
+	db := setupTestDB(t)
+	assertSchemaChainBaseline(t, db)
+
+	adminID := insertAuthzTestUser(t, db, "audit-budget-admin@example.com", "admin")
+	t.Cleanup(func() { deleteAuthzTestUser(t, db, adminID) })
+	editorID := insertAuthzTestUser(t, db, "audit-budget-editor@example.com", "editor")
+	t.Cleanup(func() { deleteAuthzTestUser(t, db, editorID) })
+
+	userRepo := mysql.NewUserRepository(db)
+	authSvc := service.NewAuthService(userRepo, authzIntegrationSecret)
+	emitter := mysql.NewAuthAuditEmitter(db)
+	router := api.NewRouter(api.Dependencies{
+		AuthService:      authSvc,
+		AuthAuditEmitter: emitter,
+		QueryExecutionAuth: api.QueryExecutionAuthConfig{
+			Clock: time.Now,
+		},
+		QueryCredentialService: &authzCredStub{},
+	})
+
+	adminToken := mustLogin(t, router, "audit-budget-admin@example.com", "secret123")
+	editorToken := mustLogin(t, router, "audit-budget-editor@example.com", "secret123")
+
+	beforeRows := countUntrustedBearerRejections(t, db)
+	beforeSuppressed, _ := readAuthAuditMetrics(t, router, adminToken)
+	beforeDenied := countRoleDenials(t, db, editorID)
+
+	for i := 0; i < 61; i++ {
+		rec := doBearer(t, router, http.MethodGet, "/query-targets/1/credential", "forged-token")
+		if rec.Code != http.StatusUnauthorized {
+			t.Fatalf("attempt %d: status = %d, want 401", i+1, rec.Code)
+		}
+	}
+
+	afterRows := countUntrustedBearerRejections(t, db)
+	if afterRows-beforeRows != 60 {
+		t.Fatalf("untrusted rejection rows delta = %d, want exactly 60 of 61", afterRows-beforeRows)
+	}
+
+	afterSuppressed, ok := readAuthAuditMetrics(t, router, adminToken)
+	if !ok {
+		t.Fatal("authAuditSuppressedRejections missing from admin metrics surface")
+	}
+	if afterSuppressed-beforeSuppressed != 1 {
+		t.Fatalf("suppression counter delta = %d, want 1", afterSuppressed-beforeSuppressed)
+	}
+
+	// Verified editor denied by role AFTER budget exhaustion still persists.
+	rec := doBearer(t, router, http.MethodPut, "/query-targets/1/credential", editorToken)
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("editor PUT status = %d, want 403", rec.Code)
+	}
+	afterDenied := countRoleDenials(t, db, editorID)
+	if afterDenied-beforeDenied != 1 {
+		t.Fatalf("role denial rows delta = %d, want 1 despite exhausted budget", afterDenied-beforeDenied)
+	}
+}
+
+func countUntrustedBearerRejections(t *testing.T, db *sql.DB) int {
+	t.Helper()
+	var n int
+	if err := db.QueryRow(
+		`select count(*) from audit_events
+		 where event_type = 'auth.bearer' and result = 'rejected' and actor_user_id is null`,
+	).Scan(&n); err != nil {
+		t.Fatalf("count untrusted rejections: %v", err)
+	}
+	return n
+}
+
+func countRoleDenials(t *testing.T, db *sql.DB, actorID uint64) int {
+	t.Helper()
+	var n int
+	if err := db.QueryRow(
+		`select count(*) from audit_events
+		 where event_type = 'auth.authorization' and result = 'denied' and actor_user_id = ?`,
+		actorID,
+	).Scan(&n); err != nil {
+		t.Fatalf("count role denials: %v", err)
+	}
+	return n
+}
+
+// readAuthAuditMetrics calls the administrator-only auth-audit metrics
+// endpoint with a valid admin token and returns the safe suppression counter
+// and whether it is present at all.
+func readAuthAuditMetrics(t *testing.T, h http.Handler, adminToken string) (suppressed int64, ok bool) {
+	t.Helper()
+	rec := doBearer(t, h, http.MethodGet, "/ops/auth-audit-metrics", adminToken)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("metrics status = %d, want 200", rec.Code)
+	}
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(rec.Body.Bytes(), &raw); err != nil {
+		t.Fatalf("decode metrics: %v", err)
+	}
+	val, ok := raw["authAuditSuppressedRejections"]
+	if !ok {
+		return 0, false
+	}
+	if err := json.Unmarshal(val, &suppressed); err != nil {
+		t.Fatalf("decode suppression counter: %v", err)
+	}
+	return suppressed, true
 }
 
 // TestAuthAudit_AuthorizationDenied proves a valid authenticated user with
@@ -183,7 +324,7 @@ func TestAuthAudit_AuthorizationDenied(t *testing.T) {
 		AuthService:      authSvc,
 		AuthAuditEmitter: emitter,
 		QueryExecutionAuth: api.QueryExecutionAuthConfig{
-			Clock:       time.Now,
+			Clock: time.Now,
 		},
 		QueryCredentialService: &authzCredStub{},
 	})
@@ -202,7 +343,9 @@ func TestAuthAudit_AuthorizationDenied(t *testing.T) {
 	err := db.QueryRow(
 		`select event_type, result, actor_user_id from audit_events
 		 where event_type = 'auth.authorization' and result = 'denied'
+		   and actor_user_id = ?
 		 order by created_at desc limit 1`,
+		userID,
 	).Scan(&eventType, &result, &actorUserID)
 	if err != nil {
 		t.Fatalf("query auth.authorization denied: %v", err)
@@ -292,7 +435,7 @@ func TestAuthAudit_FailOpenOnDBError(t *testing.T) {
 		AuthService:      authSvc,
 		AuthAuditEmitter: emitter,
 		QueryExecutionAuth: api.QueryExecutionAuthConfig{
-			Clock:       time.Now,
+			Clock: time.Now,
 		},
 		QueryCredentialService: &authzCredStub{},
 	})
@@ -484,7 +627,7 @@ func TestAuthAudit_FreshnessRejectionEmitsBearerRejected(t *testing.T) {
 		AuthService:      authSvc,
 		AuthAuditEmitter: emitter,
 		QueryExecutionAuth: api.QueryExecutionAuthConfig{
-			Clock:       func() time.Time { return now },
+			Clock: func() time.Time { return now },
 		},
 		QueryCredentialService: &authzCredStub{},
 	})
@@ -537,14 +680,14 @@ func TestAuthAudit_NoProhibitedValues(t *testing.T) {
 		AuthService:      authSvc,
 		AuthAuditEmitter: emitter,
 		QueryExecutionAuth: api.QueryExecutionAuthConfig{
-			Clock:       time.Now,
+			Clock: time.Now,
 		},
 		QueryCredentialService: &authzCredStub{},
 	})
 
 	// Generate auth audit events: login, bearer rejection, role denial
 	_ = mustLogin(t, router, "audit-prohibited@example.com", "secret123")
-	_ = doBearer(t, router, http.MethodGet, "/query-targets/1/credential", "")
+	_ = doBearer(t, router, http.MethodGet, "/query-targets/1/credential", "forged-token")
 	edToken := mustLogin(t, router, "audit-prohibited@example.com", "secret123")
 	_ = doBearerWithBody(t, router, http.MethodPut, "/query-targets/1/credential", edToken, `{}`)
 
