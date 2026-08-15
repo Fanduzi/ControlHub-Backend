@@ -55,9 +55,10 @@ persistence-failure counter.
 
 ## Deliberate limits of this first implementation
 
-- The budget is process-local and per-router-instance; the deployed server runs
-  one router per process, which is the stated boundary. There is no distributed
-  or database-backed limiter, no Redis, and no cross-process coordination.
+- The budget is process-local and shared by every router instance in the
+  process: all routers draw from one budget, so the bound holds per server
+  process regardless of router count. There is no distributed or
+  database-backed limiter, no Redis, and no cross-process coordination.
 - The budget is a fixed-window bound anchored at the first event of each
   minute, not a sliding window. Under sustained attack traffic it deliberately
   favors bounded storage and availability over complete unauthenticated-attempt

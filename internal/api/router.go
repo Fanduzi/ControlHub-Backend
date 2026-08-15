@@ -7,7 +7,6 @@ package api
 
 import (
 	"net/http"
-	"time"
 
 	"github.com/go-chi/chi/v5"
 
@@ -90,8 +89,9 @@ func NewRouter(deps Dependencies) *chi.Mux {
 	// (ADR 2026-08-15): the decorator caps only auth.bearer/rejected events
 	// with no verified actor; logins, verified-actor rejections, and role
 	// denials pass through unbounded. Missing Authorization emits no event at
-	// all (handled in verifyBearer).
-	emitter = service.NewBoundedAuthAuditEmitter(emitter, service.BoundedBearerRejectedLimit, time.Minute, nil)
+	// all (handled in verifyBearer). All routers in the process share one
+	// budget, so the bound holds per server process.
+	emitter = service.NewBoundedAuthAuditEmitter(emitter, service.ProcessBearerRejectBudget)
 
 	router := chi.NewRouter()
 	router.Use(corsLocalDev)

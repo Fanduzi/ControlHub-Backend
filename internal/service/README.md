@@ -46,7 +46,7 @@ Business logic layer with interface-based repository dependencies. Each service 
 - `NewXxxService(repo) *XxxService` constructors for all services
 - `NewMemoryUserStore`, `AuthService.WithClock`, `AuthService.ChangeUserRole`/`SetUserActive`/`ResetUserPassword` — Authorization Version seams
 - `AuthAuditEmitter`, `NoopEmitter` — fail-open authentication/authorization audit emission interface and discard implementation
-- `BoundedAuthAuditEmitter`, `NewBoundedAuthAuditEmitter`, `BoundedBearerRejectedLimit`, `AuthAuditSuppressedRejections` — process-local budget capping untrusted Bearer rejection persistence at 60 events/min; suppression counter exposed only via the admin auth-audit metrics surface
+- `BoundedAuthAuditEmitter`, `NewBoundedAuthAuditEmitter`, `BearerRejectBudget`, `NewBearerRejectBudget`, `ProcessBearerRejectBudget`, `BoundedBearerRejectedLimit`, `AuthAuditSuppressedRejections` — process-shared budget capping untrusted Bearer rejection persistence at 60 events/min per server process (all routers draw from one budget); suppression counter exposed only via the admin auth-audit metrics surface
 - `HashPasswordArgon2id`, `VerifyPassword`, `IsLegacyHash`, `IsArgon2idHash` — password hashing and format detection
 - `AuthService.LegacyHashCount` — non-identity-bearing count of remaining legacy-hash accounts
 - `ErrResourceNotFound`, `ErrInvalidCredentials`, `ErrInvalidToken`, `ErrQueryDisclosureBlocked` sentinel errors

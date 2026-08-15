@@ -40,7 +40,7 @@ func (r *recordingEmitter) len() int {
 func TestBoundedAuthAuditEmitter_CapsUntrustedRejectionsPerWindow(t *testing.T) {
 	inner := &recordingEmitter{}
 	now := time.Date(2026, 8, 15, 12, 0, 0, 0, time.UTC)
-	b := NewBoundedAuthAuditEmitter(inner, BoundedBearerRejectedLimit, time.Minute, func() time.Time { return now })
+	b := NewBoundedAuthAuditEmitter(inner, NewBearerRejectBudget(BoundedBearerRejectedLimit, time.Minute, func() time.Time { return now }))
 
 	before := AuthAuditSuppressedRejections.Value()
 	for i := 0; i < 61; i++ {
@@ -63,7 +63,7 @@ func TestBoundedAuthAuditEmitter_WindowResetProvesTheNextMinuteAllowsEventsAgain
 	inner := &recordingEmitter{}
 	now := time.Date(2026, 8, 15, 12, 0, 0, 0, time.UTC)
 	current := now
-	b := NewBoundedAuthAuditEmitter(inner, BoundedBearerRejectedLimit, time.Minute, func() time.Time { return current })
+	b := NewBoundedAuthAuditEmitter(inner, NewBearerRejectBudget(BoundedBearerRejectedLimit, time.Minute, func() time.Time { return current }))
 
 	for i := 0; i < 60; i++ {
 		_ = b.EmitAuthAudit("auth.bearer", "rejected", nil, nil)
@@ -88,7 +88,7 @@ func TestBoundedAuthAuditEmitter_WindowResetProvesTheNextMinuteAllowsEventsAgain
 func TestBoundedAuthAuditEmitter_ConcurrentConsumptionNeverExceedsLimit(t *testing.T) {
 	inner := &recordingEmitter{}
 	now := time.Date(2026, 8, 15, 12, 0, 0, 0, time.UTC)
-	b := NewBoundedAuthAuditEmitter(inner, BoundedBearerRejectedLimit, time.Minute, func() time.Time { return now })
+	b := NewBoundedAuthAuditEmitter(inner, NewBearerRejectBudget(BoundedBearerRejectedLimit, time.Minute, func() time.Time { return now }))
 
 	const goroutines = 8
 	const perGoroutine = 20 // 160 attempts total, only 60 may pass
@@ -109,12 +109,35 @@ func TestBoundedAuthAuditEmitter_ConcurrentConsumptionNeverExceedsLimit(t *testi
 	}
 }
 
+// TestBoundedAuthAuditEmitter_TwoInstancesShareOneBudget proves the budget is
+// shared state, not per-emitter state: two decorators over one budget together
+// admit at most the limit per window.
+func TestBoundedAuthAuditEmitter_TwoInstancesShareOneBudget(t *testing.T) {
+	innerA := &recordingEmitter{}
+	innerB := &recordingEmitter{}
+	now := time.Date(2026, 8, 15, 12, 0, 0, 0, time.UTC)
+	shared := NewBearerRejectBudget(BoundedBearerRejectedLimit, time.Minute, func() time.Time { return now })
+	a := NewBoundedAuthAuditEmitter(innerA, shared)
+	b := NewBoundedAuthAuditEmitter(innerB, shared)
+
+	for i := 0; i < 40; i++ {
+		_ = a.EmitAuthAudit("auth.bearer", "rejected", nil, nil)
+	}
+	for i := 0; i < 40; i++ {
+		_ = b.EmitAuthAudit("auth.bearer", "rejected", nil, nil)
+	}
+
+	if got := innerA.len() + innerB.len(); got != 60 {
+		t.Fatalf("events across two instances = %d, want exactly 60 (shared budget)", got)
+	}
+}
+
 // TestBoundedAuthAuditEmitter_PassesNonUntrustedEvents proves logins,
 // verified-actor bearer rejections, and role denials are never budgeted.
 func TestBoundedAuthAuditEmitter_PassesNonUntrustedEvents(t *testing.T) {
 	inner := &recordingEmitter{}
 	now := time.Date(2026, 8, 15, 12, 0, 0, 0, time.UTC)
-	b := NewBoundedAuthAuditEmitter(inner, BoundedBearerRejectedLimit, time.Minute, func() time.Time { return now })
+	b := NewBoundedAuthAuditEmitter(inner, NewBearerRejectBudget(BoundedBearerRejectedLimit, time.Minute, func() time.Time { return now }))
 
 	actor := uint64(42)
 	target := uint64(7)

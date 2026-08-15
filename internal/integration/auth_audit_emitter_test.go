@@ -181,6 +181,7 @@ func TestAuthAudit_SuppliedInvalidBearerEmitsRejectedRow(t *testing.T) {
 		},
 		QueryCredentialService: &authzCredStub{},
 	})
+	t.Cleanup(service.ProcessBearerRejectBudget.Reset)
 
 	before := countUntrustedBearerRejections(t, db)
 
@@ -223,6 +224,7 @@ func TestAuthAudit_BoundedUntrustedBearerPersistence(t *testing.T) {
 
 	adminToken := mustLogin(t, router, "audit-budget-admin@example.com", "secret123")
 	editorToken := mustLogin(t, router, "audit-budget-editor@example.com", "secret123")
+	t.Cleanup(service.ProcessBearerRejectBudget.Reset)
 
 	beforeRows := countUntrustedBearerRejections(t, db)
 	beforeSuppressed, _ := readAuthAuditMetrics(t, router, adminToken)

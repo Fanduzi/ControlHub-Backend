@@ -1,7 +1,7 @@
 // Package service provides business logic for authentication audit event emission.
 // input: expvar, sync, time
-// output: AuthAuditEmitter, NoopEmitter, BoundedAuthAuditEmitter, NewBoundedAuthAuditEmitter, BoundedBearerRejectedLimit, AuthAuditSuppressedRejections
-// pos: Interface for emitting auth/authz audit events; fail-open: callers never block on failure; bounded decorator caps untrusted Bearer rejection persistence per process
+// output: AuthAuditEmitter, NoopEmitter, BoundedAuthAuditEmitter, NewBoundedAuthAuditEmitter, BearerRejectBudget, NewBearerRejectBudget, ProcessBearerRejectBudget, BoundedBearerRejectedLimit, AuthAuditSuppressedRejections
+// pos: Interface for emitting auth/authz audit events; fail-open: callers never block on failure; bounded decorator caps untrusted Bearer rejection persistence via one process-shared budget
 // note: if this file changes, update header and README.md
 package service
 
@@ -40,54 +40,48 @@ const BoundedBearerRejectedLimit = 60
 // auth-audit metrics surface. It carries no identity or request dimensions.
 var AuthAuditSuppressedRejections = expvar.NewInt("auth_audit_suppressed_rejections")
 
-// BoundedAuthAuditEmitter is a process-local decorator over AuthAuditEmitter
-// that caps persistence of untrusted Bearer rejection events (event type
-// auth.bearer, result rejected, no verified actor) at BoundedBearerRejectedLimit
-// per fixed window. All other events — logins, verified-actor rejections, and
-// role denials — pass through unchanged and are never budgeted. The budget is
-// race-safe and anchored to the first event of each window.
-type BoundedAuthAuditEmitter struct {
-	inner       AuthAuditEmitter
+// BearerRejectBudget is the fixed process-local persistence budget for
+// untrusted Backend Bearer rejection events: at most limit events per fixed
+// window across EVERY emitter wired to it, making the bound per server
+// process rather than per emitter instance (Issue #31). It is race-safe and
+// anchored to the first event of each window. It has no configuration, IP,
+// token, identity, or request-value dimension.
+type BearerRejectBudget struct {
+	mu          sync.Mutex
 	limit       int
 	window      time.Duration
 	clock       func() time.Time
-	mu          sync.Mutex
 	windowStart time.Time
 	count       int
 }
 
-// NewBoundedAuthAuditEmitter returns a bounded decorator. clock is injected for
-// tests and defaults to time.Now when nil; it is a test seam, not a
-// configuration knob.
-func NewBoundedAuthAuditEmitter(inner AuthAuditEmitter, limit int, window time.Duration, clock func() time.Time) *BoundedAuthAuditEmitter {
+// NewBearerRejectBudget returns a budget. clock is injected for tests and
+// defaults to time.Now when nil; it is a test seam, not a configuration knob.
+func NewBearerRejectBudget(limit int, window time.Duration, clock func() time.Time) *BearerRejectBudget {
 	if clock == nil {
 		clock = time.Now
 	}
-	return &BoundedAuthAuditEmitter{
-		inner:  inner,
-		limit:  limit,
-		window: window,
-		clock:  clock,
-	}
+	return &BearerRejectBudget{limit: limit, window: window, clock: clock}
 }
 
-// EmitAuthAudit applies the untrusted-Bearer budget and passes every other
-// event straight through. Budget exhaustion keeps the caller's security
-// decision unchanged, writes no per-attempt row or log, and increments only
-// the safe suppression counter.
-func (b *BoundedAuthAuditEmitter) EmitAuthAudit(eventType, result string, actorUserID *uint64, targetResourceID *uint64) error {
-	if eventType == "auth.bearer" && result == "rejected" && actorUserID == nil {
-		if !b.allow() {
-			AuthAuditSuppressedRejections.Add(1)
-			return nil
-		}
-	}
-	return b.inner.EmitAuthAudit(eventType, result, actorUserID, targetResourceID)
+// ProcessBearerRejectBudget is the single per-process budget for untrusted
+// Bearer rejection persistence. Every router in the process shares it, so the
+// 60/min contract holds per server process regardless of router count.
+var ProcessBearerRejectBudget = NewBearerRejectBudget(BoundedBearerRejectedLimit, time.Minute, nil)
+
+// Reset clears the current window and count. It is a test seam (and the
+// rollover exercised by window-reset tests); production relies on the fixed
+// one-minute window and process restart.
+func (b *BearerRejectBudget) Reset() {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.windowStart = time.Time{}
+	b.count = 0
 }
 
 // allow reports whether one more untrusted rejection fits in the current
 // window, rolling the window forward when it has elapsed.
-func (b *BoundedAuthAuditEmitter) allow() bool {
+func (b *BearerRejectBudget) allow() bool {
 	now := b.clock()
 	b.mu.Lock()
 	defer b.mu.Unlock()
@@ -100,4 +94,35 @@ func (b *BoundedAuthAuditEmitter) allow() bool {
 	}
 	b.count++
 	return true
+}
+
+// BoundedAuthAuditEmitter is a decorator over AuthAuditEmitter that caps
+// persistence of untrusted Bearer rejection events (event type auth.bearer,
+// result rejected, no verified actor) at the shared budget's fixed limit per
+// window. All other events — logins, verified-actor rejections, and role
+// denials — pass through unchanged and are never budgeted.
+type BoundedAuthAuditEmitter struct {
+	inner  AuthAuditEmitter
+	budget *BearerRejectBudget
+}
+
+// NewBoundedAuthAuditEmitter returns a bounded decorator sharing budget.
+// Production wires ProcessBearerRejectBudget so every router in the process
+// draws from one budget; tests may pass an isolated budget.
+func NewBoundedAuthAuditEmitter(inner AuthAuditEmitter, budget *BearerRejectBudget) *BoundedAuthAuditEmitter {
+	return &BoundedAuthAuditEmitter{inner: inner, budget: budget}
+}
+
+// EmitAuthAudit applies the untrusted-Bearer budget and passes every other
+// event straight through. Budget exhaustion keeps the caller's security
+// decision unchanged, writes no per-attempt row or log, and increments only
+// the safe suppression counter.
+func (b *BoundedAuthAuditEmitter) EmitAuthAudit(eventType, result string, actorUserID *uint64, targetResourceID *uint64) error {
+	if eventType == "auth.bearer" && result == "rejected" && actorUserID == nil {
+		if !b.budget.allow() {
+			AuthAuditSuppressedRejections.Add(1)
+			return nil
+		}
+	}
+	return b.inner.EmitAuthAudit(eventType, result, actorUserID, targetResourceID)
 }

@@ -18,7 +18,8 @@ import (
 
 // boundedCredentialRouter builds a real NewRouter with an injectable emitter
 // and a recording credential stub so tests can prove budget semantics and
-// handler non-execution at the router seam.
+// handler non-execution at the router seam. Routers draw from the shared
+// process budget, so each test resets it afterwards to stay order-independent.
 func boundedCredentialRouter(t *testing.T, emitter service.AuthAuditEmitter) (*chi.Mux, *stubQueryCredential) {
 	t.Helper()
 	stub := &stubQueryCredential{}
@@ -28,6 +29,7 @@ func boundedCredentialRouter(t *testing.T, emitter service.AuthAuditEmitter) (*c
 		QueryCredentialService: stub,
 		QueryExecutionAuth:     QueryExecutionAuthConfig{Clock: fixedClock(qeTestNow)},
 	}
+	t.Cleanup(service.ProcessBearerRejectBudget.Reset)
 	return NewRouter(deps), stub
 }
 
@@ -144,6 +146,42 @@ func TestBoundedBearerAudit_RoleDenialUnaffectedByBudget(t *testing.T) {
 	}
 	if last.actorUserID == nil || *last.actorUserID != 43 {
 		t.Fatalf("denial actor = %v, want 43", last.actorUserID)
+	}
+}
+
+// TestBoundedBearerAudit_TwoRoutersShareOneProcessBudget proves the budget is
+// per server process, not per router instance: two routers in one process
+// together can persist at most 60 untrusted rejections per minute (Issue #31
+// regression: each router previously carried its own budget).
+func TestBoundedBearerAudit_TwoRoutersShareOneProcessBudget(t *testing.T) {
+	spyA := &spyEmitter{}
+	routerA, _ := boundedCredentialRouter(t, spyA)
+	spyB := &spyEmitter{}
+	routerB, _ := boundedCredentialRouter(t, spyB)
+
+	for i := 0; i < 40; i++ {
+		rec := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodPut, "/query-targets/22/credential", nil)
+		req.Header.Set("Authorization", "Bearer forged-token")
+		routerA.ServeHTTP(rec, req)
+		if rec.Code != http.StatusUnauthorized {
+			t.Fatalf("router A attempt %d: status = %d, want 401", i+1, rec.Code)
+		}
+	}
+	for i := 0; i < 40; i++ {
+		rec := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodPut, "/query-targets/22/credential", nil)
+		req.Header.Set("Authorization", "Bearer forged-token")
+		routerB.ServeHTTP(rec, req)
+		if rec.Code != http.StatusUnauthorized {
+			t.Fatalf("router B attempt %d: status = %d, want 401", i+1, rec.Code)
+		}
+	}
+
+	// 40+40 attempts across two routers: the shared budget admits exactly 60
+	// and suppresses 20, no matter which router received them.
+	if got := len(spyA.events) + len(spyB.events); got != 60 {
+		t.Fatalf("events across two routers = %d, want exactly 60 (shared process budget)", got)
 	}
 }
 

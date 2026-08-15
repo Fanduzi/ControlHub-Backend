@@ -5,7 +5,7 @@ HTTP handlers, chi routing, CORS middleware, and fake-repo test infrastructure.
 ## Files
 | File | Responsibility |
 |------|---------------|
-| router.go | Route registration, Operator Access Boundary middleware (authenticated Inventory/dictionary reads; fresh-token query surfaces), Dependencies struct, CORS middleware, bounded untrusted-Bearer audit persistence wiring |
+| router.go | Route registration, Operator Access Boundary middleware (authenticated Inventory/dictionary reads; fresh-token query surfaces), Dependencies struct, CORS middleware, process-shared bounded untrusted-Bearer audit persistence wiring |
 | health_handler.go | GET /health endpoint |
 | resource_handler.go | Resource list, detail, and profile handlers |
 | relation_handler.go | Resource relation list handler |
