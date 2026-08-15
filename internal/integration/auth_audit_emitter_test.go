@@ -2,9 +2,9 @@
 
 // Package integration provides real-MySQL coverage for authentication and
 // authorization audit event emission.
-// input: context, database/sql, encoding/json, net/http, testing, internal/api, internal/repository/mysql, internal/service
+// input: context, database/sql, encoding/json, fmt, log, net/http, testing, internal/api, internal/repository/mysql, internal/service
 // output: TestAuthAudit_* integration cases
-// pos: Proves auth audit events are persisted correctly against real MySQL, fail-open on inject errors, and never contain prohibited values
+// pos: Proves auth audit events are persisted correctly against real MySQL, fail-open on inject errors (login, bearer, and role-denied 403 outcomes), and never contain prohibited values
 // note: if this file changes, update header and README.md
 package integration
 
@@ -12,8 +12,11 @@ import (
 	"bytes"
 	"database/sql"
 	"encoding/json"
+	"fmt"
+	"log"
 	"net/http"
 	"net/http/httptest"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -304,6 +307,157 @@ func TestAuthAudit_FailOpenOnDBError(t *testing.T) {
 	rec := doBearer(t, router, http.MethodGet, "/query-targets/1/credential", "garbage-token")
 	if rec.Code != http.StatusUnauthorized {
 		t.Fatalf("expected 401 despite audit failure, got %d", rec.Code)
+	}
+}
+
+// TestAuthAudit_FailOpenPreservesRoleDenied403 proves the role-denied half of
+// the fail-open contract (Issue #28): when auth-audit persistence fails, a
+// valid editor requesting an admin-only protected operation with a known
+// target resource still receives the controlled 403 and the protected handler
+// does not execute. TestAuthAudit_FailOpenOnDBError already proves login
+// success and Bearer rejection are unchanged; this test closes the remaining
+// gap that the fail-open contract covers authorization outcomes too.
+func TestAuthAudit_FailOpenPreservesRoleDenied403(t *testing.T) {
+	db := setupTestDB(t)
+	assertSchemaChainBaseline(t, db)
+
+	userID := insertAuthzTestUser(t, db, "audit-failopen-403@example.com", "editor")
+	t.Cleanup(func() { deleteAuthzTestUser(t, db, userID) })
+
+	userRepo := mysql.NewUserRepository(db)
+	authSvc := service.NewAuthService(userRepo, authzIntegrationSecret)
+
+	// Repository's existing failure-injection seam (identical to
+	// TestAuthAudit_FailOpenOnDBError): an emitter backed by a closed DB so
+	// every audit INSERT fails. No second audit abstraction is introduced.
+	brokenDB, _ := sql.Open("mysql", "invalid:dsn@tcp(127.0.0.1:1)/noexist?timeout=1ms")
+	brokenDB.Close()
+	emitter := mysql.NewAuthAuditEmitter(brokenDB)
+
+	// Capture the fail-open diagnostics so the test can prove they stay
+	// privacy-safe: fixed taxonomy label + fixed error class only, never an
+	// identity, credential, session, DSN, request value, or failure detail.
+	logBuf := &bytes.Buffer{}
+	origLogOut := log.Writer()
+	log.SetOutput(logBuf)
+	t.Cleanup(func() { log.SetOutput(origLogOut) })
+
+	router := api.NewRouter(api.Dependencies{
+		AuthService:      authSvc,
+		AuthAuditEmitter: emitter,
+		QueryExecutionAuth: api.QueryExecutionAuthConfig{
+			Clock: time.Now,
+		},
+		// Real MySQL-backed resource service: if the role gate ever let the
+		// handler through, the PATCH would genuinely mutate the row, so the
+		// no-execution probe below is a clean proof rather than a nil-service
+		// panic that would mask the bug.
+		ResourceService: service.NewResourceService(mysql.NewResourceRepository(db)),
+	})
+
+	// Known target resource where the admin-only route has one: the seeded
+	// payment-mysql-replica-01-prod resource (same fixture as
+	// TestGooseCleanMigration) with a known display_name probe.
+	var resourceID uint64
+	var originalDisplayName string
+	err := db.QueryRow(
+		`select id, display_name from resources where name = 'payment-mysql-replica-01-prod'`,
+	).Scan(&resourceID, &originalDisplayName)
+	if err != nil {
+		t.Fatalf("lookup seeded resource: %v", err)
+	}
+	if originalDisplayName == "" {
+		t.Fatal("seeded resource has empty display_name; handler-execution probe would be vacuous")
+	}
+
+	token := mustLogin(t, router, "audit-failopen-403@example.com", "secret123")
+
+	// Snapshot the operational metric AFTER login: login itself also fails its
+	// own emit against the broken emitter, so the delta below isolates exactly
+	// the denied authorization emit.
+	beforeFailures := mysql.AuthAuditPersistenceFailures.Value()
+
+	// Editor PATCH on the admin-only resource route while audit persistence
+	// fails. The request body carries a distinct marker display name that only
+	// the protected handler could apply.
+	mutatedName := originalDisplayName + "-mutated-by-failopen-test"
+	body := fmt.Sprintf(`{"displayName":%q}`, mutatedName)
+	rec := doBearerWithBody(t, router, http.MethodPatch, fmt.Sprintf("/resources/%d", resourceID), token, body)
+
+	// Externally visible outcome stays the controlled 403 — not 401, 2xx, or
+	// 5xx. Diagnostics never echo the body: a leaking response must not become
+	// test output (criterion: no prohibited value in responses or test output).
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("editor PATCH status = %d, want controlled 403", rec.Code)
+	}
+	// The response is exactly the fixed controlled payload — no audit or
+	// persistence internals appended.
+	wantBody := `{"error":"forbidden","message":"admin role is required"}` + "\n"
+	if rec.Body.String() != wantBody {
+		t.Fatalf("403 body length = %d, want the controlled %d-byte payload", rec.Body.Len(), len(wantBody))
+	}
+
+	// The protected handler did not execute: the real-MySQL resource row is
+	// unchanged. With the real ResourceService wired above, an executed handler
+	// would have updated display_name to the marker value.
+	var displayNameAfter string
+	err = db.QueryRow(`select display_name from resources where id = ?`, resourceID).Scan(&displayNameAfter)
+	if err != nil {
+		t.Fatalf("query resource after denied PATCH: %v", err)
+	}
+	if displayNameAfter != originalDisplayName {
+		// Do not echo the mutated value: it is the request-derived marker, which
+		// must never appear in test output (criterion: no request value in
+		// responses, logs, diagnostics, or test output).
+		t.Fatal("protected handler executed despite 403: display_name was mutated")
+	}
+
+	// Safe fail-open operational observability still occurs: exactly the one
+	// denied authorization emit incremented the fixed-category metric, while
+	// the authorization decision stayed unchanged.
+	afterFailures := mysql.AuthAuditPersistenceFailures.Value()
+	if afterFailures-beforeFailures != 1 {
+		t.Fatalf("auth audit persistence failures delta = %d, want 1 (only the denied emit)", afterFailures-beforeFailures)
+	}
+
+	// The captured fail-open diagnostics carry exactly the fixed taxonomy label
+	// and the fixed error class — no email, password, Bearer credential,
+	// session material, DSN, request value, or detailed failure reason. The
+	// shape regexp admits only the ADR's fixed event/result taxonomy and the
+	// fixed error class; anything else is a deviation. Diagnostics below never
+	// echo a line or a value, so a leaking diagnostic cannot leak again into
+	// test output.
+	safeShape := regexp.MustCompile(
+		`^\d{4}/\d{2}/\d{2} \d{2}:\d{2}:\d{2} auth_audit_emit_fail ` +
+			`event=(auth\.login|auth\.bearer|auth\.authorization) ` +
+			`result=(succeeded|rejected|denied) error_class=audit_persistence_failure$`)
+	prohibited := []string{
+		"audit-failopen-403@example.com", // email
+		"secret123",                      // password value
+		token,                            // bearer credential
+		"noexist", "invalid:dsn",         // DSN internals
+		mutatedName, // request value
+	}
+	logLines := strings.Split(logBuf.String(), "\n")
+	capturedCount := 0
+	for i, line := range logLines {
+		if strings.TrimSpace(line) == "" {
+			continue
+		}
+		capturedCount++
+		if !safeShape.MatchString(line) {
+			t.Errorf("captured diagnostic line %d (len=%d) deviates from the fixed safe shape", i+1, len(line))
+			continue
+		}
+		lower := strings.ToLower(line)
+		for _, p := range prohibited {
+			if p != "" && strings.Contains(lower, strings.ToLower(p)) {
+				t.Errorf("captured diagnostic line %d contains a prohibited value", i+1)
+			}
+		}
+	}
+	if capturedCount == 0 {
+		t.Error("expected fail-open diagnostic lines, captured none")
 	}
 }
 
