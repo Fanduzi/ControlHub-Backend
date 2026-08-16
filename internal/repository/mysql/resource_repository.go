@@ -402,6 +402,25 @@ const (
 	upsertServiceProfileSQL = `INSERT INTO resource_profiles_service (resource_id, system_name, repository_url, runtime_env, spec)
 		 VALUES (?, ?, ?, ?, '{}')
 		 ON DUPLICATE KEY UPDATE system_name = VALUES(system_name), repository_url = VALUES(repository_url), runtime_env = VALUES(runtime_env)`
+
+	// patch statements merge submitted fields (COALESCE) and create the row
+	// when absent; omitted fields keep their current values. Each pointer
+	// argument appears twice: once for the INSERT branch, once for UPDATE.
+	patchHostProfileSQL = `INSERT INTO resource_profiles_host (resource_id, hostname, ip_address, os_name, spec)
+		 VALUES (?, COALESCE(?, ''), COALESCE(?, ''), COALESCE(?, ''), '{}')
+		 ON DUPLICATE KEY UPDATE hostname = COALESCE(?, hostname), ip_address = COALESCE(?, ip_address), os_name = COALESCE(?, os_name)`
+
+	patchDatabaseInstanceProfileSQL = `INSERT INTO resource_profiles_database_instance (resource_id, engine, version, host, port, role, spec)
+		 VALUES (?, COALESCE(?, ''), COALESCE(?, ''), COALESCE(?, ''), COALESCE(?, 0), COALESCE(?, ''), '{}')
+		 ON DUPLICATE KEY UPDATE engine = COALESCE(?, engine), version = COALESCE(?, version), host = COALESCE(?, host), port = COALESCE(?, port), role = COALESCE(?, role)`
+
+	patchDatabaseClusterProfileSQL = `INSERT INTO resource_profiles_database_cluster (resource_id, engine, topology_mode, primary_endpoint, spec)
+		 VALUES (?, COALESCE(?, ''), COALESCE(?, ''), COALESCE(?, ''), '{}')
+		 ON DUPLICATE KEY UPDATE engine = COALESCE(?, engine), topology_mode = COALESCE(?, topology_mode), primary_endpoint = COALESCE(?, primary_endpoint)`
+
+	patchServiceProfileSQL = `INSERT INTO resource_profiles_service (resource_id, system_name, repository_url, runtime_env, spec)
+		 VALUES (?, COALESCE(?, ''), COALESCE(?, ''), COALESCE(?, ''), '{}')
+		 ON DUPLICATE KEY UPDATE system_name = COALESCE(?, system_name), repository_url = COALESCE(?, repository_url), runtime_env = COALESCE(?, runtime_env)`
 )
 
 // upsertProfileTx writes the typed profile row inside the create-with-profile
@@ -453,8 +472,68 @@ func profileFieldInt(fields map[string]any, key string) int {
 		return int(n)
 	case int:
 		return n
+	case int64:
+		return int(n)
 	default:
 		return 0
+	}
+}
+
+// profileFieldStringPtr returns nil when the key is absent (field omitted)
+// and a pointer to the value otherwise, so a single COALESCE statement can
+// distinguish "omit" from "set to empty".
+func profileFieldStringPtr(fields map[string]any, key string) *string {
+	if _, ok := fields[key]; !ok {
+		return nil
+	}
+	s := profileFieldString(fields, key)
+	return &s
+}
+
+// profileFieldIntPtr is the integer counterpart of profileFieldStringPtr.
+func profileFieldIntPtr(fields map[string]any, key string) *int {
+	if _, ok := fields[key]; !ok {
+		return nil
+	}
+	n := profileFieldInt(fields, key)
+	return &n
+}
+
+// PatchProfile merges the submitted profile fields in a single atomic
+// statement: nil pointers leave the stored value unchanged, non-nil values
+// are written (explicit empty/zero values honored), and the row is created
+// when absent. The per-type field dispatch mirrors ProfileService.writeProfile
+// in internal/service/profile_service.go; keep the two mappings in sync.
+func (r *ResourceRepository) PatchProfile(ctx context.Context, resourceID uint64, resourceType model.ResourceType, fields map[string]any) error {
+	switch resourceType {
+	case model.ResourceTypeHost:
+		hostname := profileFieldStringPtr(fields, "hostname")
+		ipAddress := profileFieldStringPtr(fields, "ipAddress")
+		osName := profileFieldStringPtr(fields, "osName")
+		_, err := r.db.ExecContext(ctx, patchHostProfileSQL, resourceID, hostname, ipAddress, osName, hostname, ipAddress, osName)
+		return err
+	case model.ResourceTypeDatabaseInstance:
+		engine := profileFieldStringPtr(fields, "engine")
+		version := profileFieldStringPtr(fields, "version")
+		host := profileFieldStringPtr(fields, "host")
+		port := profileFieldIntPtr(fields, "port")
+		role := profileFieldStringPtr(fields, "role")
+		_, err := r.db.ExecContext(ctx, patchDatabaseInstanceProfileSQL, resourceID, engine, version, host, port, role, engine, version, host, port, role)
+		return err
+	case model.ResourceTypeDatabaseCluster:
+		engine := profileFieldStringPtr(fields, "engine")
+		topologyMode := profileFieldStringPtr(fields, "topologyMode")
+		primaryEndpoint := profileFieldStringPtr(fields, "primaryEndpoint")
+		_, err := r.db.ExecContext(ctx, patchDatabaseClusterProfileSQL, resourceID, engine, topologyMode, primaryEndpoint, engine, topologyMode, primaryEndpoint)
+		return err
+	case model.ResourceTypeService:
+		systemName := profileFieldStringPtr(fields, "systemName")
+		repositoryUrl := profileFieldStringPtr(fields, "repositoryUrl")
+		runtimeEnv := profileFieldStringPtr(fields, "runtimeEnv")
+		_, err := r.db.ExecContext(ctx, patchServiceProfileSQL, resourceID, systemName, repositoryUrl, runtimeEnv, systemName, repositoryUrl, runtimeEnv)
+		return err
+	default:
+		return service.ErrProfileNotSupported
 	}
 }
 

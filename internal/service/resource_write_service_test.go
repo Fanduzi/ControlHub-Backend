@@ -940,3 +940,35 @@ func TestResourceServiceCreate_EmptyProfileObjectGoesThroughAtomicPath(t *testin
 		t.Fatalf("expected exactly one resource, found %d", len(repo.resources))
 	}
 }
+
+func TestResourceServiceCreateRejectsInvalidProfileFields(t *testing.T) {
+	repo := &fakeResourceWriteRepo{resources: map[uint64]model.Resource{}}
+	svc := NewResourceService(repo)
+
+	_, err := svc.Create(context.Background(), model.ResourceCreateInput{
+		ResourceType:    model.ResourceTypeHost,
+		ResourceSubtype: "vm",
+		Name:            "atomicity-invalid-profile-01",
+		DisplayName:     "Atomicity Invalid Profile 01",
+		EnvironmentID:   testEnvID,
+		OwnerID:         testOwnerID,
+		LifecycleStatus: model.LifecycleStatusRunning,
+		HealthStatus:    model.HealthStatusHealthy,
+		Source:          "manual",
+		Profile: map[string]any{
+			"hostname":  strings.Repeat("h", 256),
+			"bogus":     "x",
+			"ipAddress": "10.0.0.1",
+		},
+	})
+	var ve *ValidationError
+	if !errors.As(err, &ve) {
+		t.Fatalf("expected ValidationError for invalid profile fields, got %v", err)
+	}
+	if ve.Fields["hostname"] == "" || ve.Fields["bogus"] == "" {
+		t.Fatalf("expected field-level details for hostname and bogus, got %#v", ve.Fields)
+	}
+	if len(repo.resources) != 0 {
+		t.Fatalf("expected no resource left behind after validation failure, found %d", len(repo.resources))
+	}
+}

@@ -1,12 +1,11 @@
 // Package api provides HTTP handlers for profile write endpoints.
-// input: internal/service (ProfileService), encoding/json, net/http
+// input: internal/service (ProfileService), internal/api (decodeJSONBody), encoding/json, net/http
 // output: handlePutResourceProfile, handlePatchResourceProfile, handleDeleteResourceProfile
-// pos: HTTP handlers for PUT/PATCH/DELETE /resources/{id}/profile
+// pos: HTTP handlers for PUT/PATCH/DELETE /resources/{id}/profile with strict single-JSON-object decoding
 // note: if this file changes, update header and README.md
 package api
 
 import (
-	"encoding/json"
 	"net/http"
 
 	"github.com/fan/controlhub/internal/service"
@@ -21,12 +20,13 @@ func handlePutResourceProfile(profileService *service.ProfileService) http.Handl
 		}
 
 		var fields map[string]interface{}
-		if err := json.NewDecoder(r.Body).Decode(&fields); err != nil {
+		if err := decodeJSONBody(r, &fields); err != nil {
 			writeJSONError(w, http.StatusBadRequest, "validation_failed", "invalid JSON")
 			return
 		}
 		if fields == nil {
-			fields = map[string]interface{}{}
+			writeJSONError(w, http.StatusBadRequest, "validation_failed", "profile must be a JSON object")
+			return
 		}
 
 		if err := profileService.PutProfile(r.Context(), id, fields); err != nil {
@@ -47,12 +47,13 @@ func handlePatchResourceProfile(profileService *service.ProfileService) http.Han
 		}
 
 		var fields map[string]interface{}
-		if err := json.NewDecoder(r.Body).Decode(&fields); err != nil {
+		if err := decodeJSONBody(r, &fields); err != nil {
 			writeJSONError(w, http.StatusBadRequest, "validation_failed", "invalid JSON")
 			return
 		}
 		if fields == nil {
-			fields = map[string]interface{}{}
+			writeJSONError(w, http.StatusBadRequest, "validation_failed", "profile must be a JSON object")
+			return
 		}
 
 		if err := profileService.PatchProfile(r.Context(), id, fields); err != nil {
@@ -60,6 +61,12 @@ func handlePatchResourceProfile(profileService *service.ProfileService) http.Han
 			return
 		}
 
+		// An empty PATCH body is a no-op and reports 200 per the approved
+		// design spec; a real partial update reports 204.
+		if len(fields) == 0 {
+			w.WriteHeader(http.StatusOK)
+			return
+		}
 		w.WriteHeader(http.StatusNoContent)
 	}
 }

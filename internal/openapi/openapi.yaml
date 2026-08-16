@@ -2581,7 +2581,14 @@ paths:
         "404":
           description: Resource not found
     put:
-      summary: Replace typed profile fields for a resource
+      summary: Replace typed profile fields for a resource (explicit full replacement)
+      description: >
+        PUT is an explicit full replacement: every submitted field is written
+        and omitted fields are cleared to empty values. An empty body clears
+        all profile fields for the resource. Fields are validated per
+        resourceType: unknown fields, non-string values for string fields,
+        non-integer or out-of-range values for port, and overlong values are
+        rejected with 400 validation_failed and field-level details.
       operationId: putResourceProfile
       parameters:
         - in: path
@@ -2621,7 +2628,15 @@ paths:
         "401": {description: Missing or invalid Bearer token, content: {application/json: {schema: {$ref: "#/components/schemas/ErrorResponse"}}}}
         "403": {description: Authenticated actor is not an admin, content: {application/json: {schema: {$ref: "#/components/schemas/ErrorResponse"}}}}
     patch:
-      summary: Partially update typed profile fields for a resource
+      summary: Partially update typed profile fields for a resource (partial merge)
+      description: >
+        PATCH is a partial merge: only submitted fields are changed and
+        omitted fields are preserved, so a partial update never clears a field
+        it does not mention. Explicit empty strings and valid zero values are
+        honored. An empty body is a no-op. Submitted fields are validated per
+        resourceType (unknown, malformed, fractional, out-of-range, or overlong
+        values are rejected with 400 validation_failed and field-level
+        details).
       operationId: patchResourceProfile
       parameters:
         - in: path
@@ -2638,8 +2653,10 @@ paths:
               type: object
               additionalProperties: true
       responses:
+        "200":
+          description: Empty-body no-op (no fields changed)
         "204":
-          description: Profile updated
+          description: Profile partially updated
         "400":
           description: Validation failed or malformed JSON
           content:

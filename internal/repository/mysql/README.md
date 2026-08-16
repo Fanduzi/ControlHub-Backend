@@ -5,7 +5,7 @@ Data access layer implementing service-layer repository interfaces with raw SQL 
 ## Files
 | File | Responsibility |
 |------|---------------|
-| resource_repository.go | Resource CRUD, profile queries, type-specific profile scanning, transactional create-with-profile (resource + initial profile roll back together) |
+| resource_repository.go | Resource CRUD, profile queries, type-specific profile scanning, transactional create-with-profile (resource + initial profile roll back together), atomic COALESCE partial profile merge (PatchProfile) |
 | relation_repository.go | Relation queries by resource ID |
 | audit_repository.go | Audit event queries (global and by resource) |
 | user_repository.go | User credential lookup by email/id; Authorization Version mutators (role/active/password); UpgradePasswordHash for legacy-to-Argon2id migration; CountLegacyHashUsers for operator visibility |

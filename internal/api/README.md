@@ -8,6 +8,7 @@ HTTP handlers, chi routing, CORS middleware, and fake-repo test infrastructure.
 | router.go | Route registration, Operator Access Boundary middleware (authenticated Inventory/dictionary reads; fresh-token query surfaces), Dependencies struct, CORS middleware, process-shared bounded untrusted-Bearer audit persistence wiring |
 | health_handler.go | GET /health endpoint |
 | resource_handler.go | Resource list, detail, and profile handlers |
+| profile_handler.go | PUT/PATCH/DELETE /resources/{id}/profile handlers with strict single-JSON-object decoding |
 | relation_handler.go | Resource relation list handler |
 | audit_handler.go | Audit event list handlers (global and per-resource) |
 | auth_handler.go | POST /auth/login handler |
@@ -23,6 +24,7 @@ HTTP handlers, chi routing, CORS middleware, and fake-repo test infrastructure.
 | test_server.go | Fake repositories and NewTestServer() with a default admin actor for handler tests |
 | health_handler_test.go | Health endpoint tests |
 | resource_handler_test.go | Resource and profile endpoint tests, including create-with-profile atomicity at the HTTP seam |
+| profile_handler_test.go | PUT full-replacement and PATCH partial-merge tests: strict JSON decoding, field validation, no-op empty PATCH |
 | relation_handler_test.go | Relation endpoint tests |
 | auth_handler_test.go | Auth endpoint tests |
 | dictionary_handler_test.go | Dictionary endpoint tests |

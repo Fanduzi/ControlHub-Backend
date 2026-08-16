@@ -113,6 +113,33 @@ func (f *fakeResourceRepo) DeleteProfile(_ context.Context, resourceID uint64, _
 	return nil
 }
 
+// PatchProfile mirrors the real repository's atomic partial merge: submitted
+// fields are applied on top of the current profile, omitted fields are kept,
+// and the row is created when absent.
+func (f *fakeResourceRepo) PatchProfile(ctx context.Context, resourceID uint64, resourceType model.ResourceType, fields map[string]any) error {
+	current, ok := f.profiles[resourceID]
+	if !ok {
+		current = &model.ResourceProfileResponse{ResourceID: resourceID, ResourceType: resourceType, Profile: map[string]any{}}
+	}
+	merged := cloneProfileResponse(current)
+	for key, value := range fields {
+		merged.Profile[key] = value
+	}
+
+	switch resourceType {
+	case model.ResourceTypeHost:
+		return f.UpsertHostProfile(ctx, resourceID, profileString(merged.Profile, "hostname"), profileString(merged.Profile, "ipAddress"), profileString(merged.Profile, "osName"))
+	case model.ResourceTypeDatabaseInstance:
+		return f.UpsertDatabaseInstanceProfile(ctx, resourceID, profileString(merged.Profile, "engine"), profileString(merged.Profile, "version"), profileString(merged.Profile, "host"), profileInt(merged.Profile, "port"), profileString(merged.Profile, "role"))
+	case model.ResourceTypeDatabaseCluster:
+		return f.UpsertDatabaseClusterProfile(ctx, resourceID, profileString(merged.Profile, "engine"), profileString(merged.Profile, "topologyMode"), profileString(merged.Profile, "primaryEndpoint"))
+	case model.ResourceTypeService:
+		return f.UpsertServiceProfile(ctx, resourceID, profileString(merged.Profile, "systemName"), profileString(merged.Profile, "repositoryUrl"), profileString(merged.Profile, "runtimeEnv"))
+	default:
+		return service.ErrProfileNotSupported
+	}
+}
+
 func (f *fakeResourceRepo) ListResources(_ context.Context, q model.ResourceListQuery) ([]model.Resource, int, error) {
 	filtered := make([]model.Resource, 0, len(f.listOrder))
 	for _, id := range f.listOrder {

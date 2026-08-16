@@ -1,12 +1,14 @@
 // Package service provides tests for profile write operations.
 // input: internal/service ProfileService, internal/model, testing
 // output: TestProfileService* functions
-// pos: Validates profile write business rules
+// pos: Validates profile write business rules: strict field validation, PUT full replacement, PATCH partial merge
+// note: if this file changes, update header and README.md
 package service
 
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -17,6 +19,7 @@ import (
 type fakeProfileRepo struct {
 	upsertedType   string
 	upsertedFields map[string]interface{}
+	patchedFields  map[string]interface{}
 	deletedType    string
 	deletedID      uint64
 	deleteErr      error
@@ -65,6 +68,11 @@ func (f *fakeProfileRepo) UpsertServiceProfile(_ context.Context, resourceID uin
 		"repositoryUrl": repositoryUrl,
 		"runtimeEnv":    runtimeEnv,
 	}
+	return nil
+}
+
+func (f *fakeProfileRepo) PatchProfile(_ context.Context, _ uint64, _ model.ResourceType, fields map[string]interface{}) error {
+	f.patchedFields = fields
 	return nil
 }
 
@@ -294,8 +302,8 @@ func TestProfileServicePatchProfileHost(t *testing.T) {
 	if err != nil {
 		t.Fatalf("expected no error, got %v", err)
 	}
-	if profileRepo.upsertedType != "host" {
-		t.Fatalf("expected upsertedType host, got %q", profileRepo.upsertedType)
+	if v, ok := profileRepo.patchedFields["hostname"]; !ok || v != "web-02" {
+		t.Fatalf("expected hostname web-02 delegated for patching, got %#v", profileRepo.patchedFields)
 	}
 }
 
@@ -421,5 +429,232 @@ func TestProfileServicePutProfileDefaultsMissingFields(t *testing.T) {
 	}
 	if profileRepo.upsertedFields["engine"] != "" {
 		t.Fatalf("expected default engine empty, got %q", profileRepo.upsertedFields["engine"])
+	}
+}
+
+// ---------- PATCH: partial semantics ----------
+
+func TestProfileServicePatchProfileDelegatesSubmittedFields(t *testing.T) {
+	profileRepo := &fakeProfileRepo{}
+	resourceRepo := &fakeResourceWriteRepo{
+		resources: map[uint64]model.Resource{
+			testResource1ID: makeActiveResource(model.ResourceTypeHost),
+		},
+	}
+	svc := NewProfileService(profileRepo, resourceRepo)
+
+	err := svc.PatchProfile(context.Background(), testResource1ID, map[string]interface{}{
+		"hostname": "web-02",
+	})
+	if err != nil {
+		t.Fatalf("expected no error, got %v", err)
+	}
+	if len(profileRepo.patchedFields) != 1 || profileRepo.patchedFields["hostname"] != "web-02" {
+		t.Fatalf("expected only submitted fields delegated to the repository, got %#v", profileRepo.patchedFields)
+	}
+}
+
+func TestProfileServicePatchProfileEmptyBodyIsNoOp(t *testing.T) {
+	profileRepo := &fakeProfileRepo{}
+	resourceRepo := &fakeResourceWriteRepo{
+		resources: map[uint64]model.Resource{
+			testResource1ID: makeActiveResource(model.ResourceTypeHost),
+		},
+	}
+	svc := NewProfileService(profileRepo, resourceRepo)
+
+	err := svc.PatchProfile(context.Background(), testResource1ID, map[string]interface{}{})
+	if err != nil {
+		t.Fatalf("expected no error, got %v", err)
+	}
+	if profileRepo.upsertedType != "" || profileRepo.patchedFields != nil {
+		t.Fatalf("expected empty PATCH to be a no-op with no profile write, got upsertedType %q patchedFields %#v", profileRepo.upsertedType, profileRepo.patchedFields)
+	}
+}
+
+func TestProfileServicePatchProfileAllowsExplicitEmptyValue(t *testing.T) {
+	profileRepo := &fakeProfileRepo{}
+	resourceRepo := &fakeResourceWriteRepo{
+		resources: map[uint64]model.Resource{
+			testResource1ID: makeActiveResource(model.ResourceTypeHost),
+		},
+	}
+	svc := NewProfileService(profileRepo, resourceRepo)
+
+	err := svc.PatchProfile(context.Background(), testResource1ID, map[string]interface{}{
+		"hostname": "",
+	})
+	if err != nil {
+		t.Fatalf("expected explicit empty string to be allowed, got %v", err)
+	}
+	if v, ok := profileRepo.patchedFields["hostname"]; !ok || v != "" {
+		t.Fatalf("expected explicit empty hostname delegated, got %#v", profileRepo.patchedFields)
+	}
+}
+
+func TestProfileServicePatchProfileRejectsInvalidFieldBeforeWrite(t *testing.T) {
+	profileRepo := &fakeProfileRepo{}
+	resourceRepo := &fakeResourceWriteRepo{
+		resources: map[uint64]model.Resource{
+			testResource1ID: makeActiveResource(model.ResourceTypeHost),
+		},
+	}
+	svc := NewProfileService(profileRepo, resourceRepo)
+
+	err := svc.PatchProfile(context.Background(), testResource1ID, map[string]interface{}{
+		"hostname": "x",
+		"bogus":    "y",
+	})
+	var ve *ValidationError
+	if !errors.As(err, &ve) {
+		t.Fatalf("expected ValidationError for unknown field, got %v", err)
+	}
+	if profileRepo.patchedFields != nil {
+		t.Fatalf("expected no repository write after validation failure, got %#v", profileRepo.patchedFields)
+	}
+}
+
+// ---------- Profile field validation (PUT and PATCH) ----------
+
+func TestProfileServicePutProfileRejectsUnknownField(t *testing.T) {
+	profileRepo := &fakeProfileRepo{}
+	resourceRepo := &fakeResourceWriteRepo{
+		resources: map[uint64]model.Resource{
+			testResource1ID: makeActiveResource(model.ResourceTypeHost),
+		},
+	}
+	svc := NewProfileService(profileRepo, resourceRepo)
+
+	err := svc.PutProfile(context.Background(), testResource1ID, map[string]interface{}{
+		"hostname": "web-01",
+		"bogus":    "x",
+	})
+	var ve *ValidationError
+	if !errors.As(err, &ve) {
+		t.Fatalf("expected ValidationError for unknown field, got %v", err)
+	}
+	if ve.Fields["bogus"] == "" {
+		t.Fatalf("expected field-level detail for bogus, got %#v", ve.Fields)
+	}
+}
+
+func TestProfileServicePutProfileRejectsNonStringValue(t *testing.T) {
+	profileRepo := &fakeProfileRepo{}
+	resourceRepo := &fakeResourceWriteRepo{
+		resources: map[uint64]model.Resource{
+			testResource1ID: makeActiveResource(model.ResourceTypeHost),
+		},
+	}
+	svc := NewProfileService(profileRepo, resourceRepo)
+
+	err := svc.PutProfile(context.Background(), testResource1ID, map[string]interface{}{
+		"hostname": 42,
+	})
+	var ve *ValidationError
+	if !errors.As(err, &ve) {
+		t.Fatalf("expected ValidationError for non-string value, got %v", err)
+	}
+	if ve.Fields["hostname"] == "" {
+		t.Fatalf("expected field-level detail for hostname, got %#v", ve.Fields)
+	}
+}
+
+func TestProfileServicePutProfileRejectsFractionalPort(t *testing.T) {
+	profileRepo := &fakeProfileRepo{}
+	resourceRepo := &fakeResourceWriteRepo{
+		resources: map[uint64]model.Resource{
+			testResource1ID: makeActiveResource(model.ResourceTypeDatabaseInstance),
+		},
+	}
+	svc := NewProfileService(profileRepo, resourceRepo)
+
+	err := svc.PutProfile(context.Background(), testResource1ID, map[string]interface{}{
+		"port": 3306.5,
+	})
+	var ve *ValidationError
+	if !errors.As(err, &ve) {
+		t.Fatalf("expected ValidationError for fractional port, got %v", err)
+	}
+	if ve.Fields["port"] == "" {
+		t.Fatalf("expected field-level detail for port, got %#v", ve.Fields)
+	}
+}
+
+func TestProfileServicePutProfileRejectsPortOutOfRange(t *testing.T) {
+	for _, port := range []interface{}{0, 65536} {
+		profileRepo := &fakeProfileRepo{}
+		resourceRepo := &fakeResourceWriteRepo{
+			resources: map[uint64]model.Resource{
+				testResource1ID: makeActiveResource(model.ResourceTypeDatabaseInstance),
+			},
+		}
+		svc := NewProfileService(profileRepo, resourceRepo)
+
+		err := svc.PutProfile(context.Background(), testResource1ID, map[string]interface{}{"port": port})
+		var ve *ValidationError
+		if !errors.As(err, &ve) {
+			t.Fatalf("port %v: expected ValidationError, got %v", port, err)
+		}
+		if ve.Fields["port"] == "" {
+			t.Fatalf("port %v: expected field-level detail for port, got %#v", port, ve.Fields)
+		}
+	}
+}
+
+func TestProfileServicePutProfileRejectsOverlongString(t *testing.T) {
+	profileRepo := &fakeProfileRepo{}
+	resourceRepo := &fakeResourceWriteRepo{
+		resources: map[uint64]model.Resource{
+			testResource1ID: makeActiveResource(model.ResourceTypeHost),
+		},
+	}
+	svc := NewProfileService(profileRepo, resourceRepo)
+
+	err := svc.PutProfile(context.Background(), testResource1ID, map[string]interface{}{
+		"hostname": strings.Repeat("h", 256),
+	})
+	var ve *ValidationError
+	if !errors.As(err, &ve) {
+		t.Fatalf("expected ValidationError for overlong hostname, got %v", err)
+	}
+	if ve.Fields["hostname"] == "" {
+		t.Fatalf("expected field-level detail for hostname, got %#v", ve.Fields)
+	}
+}
+
+func TestProfileServicePutProfileAcceptsExplicitEmptyStrings(t *testing.T) {
+	profileRepo := &fakeProfileRepo{}
+	resourceRepo := &fakeResourceWriteRepo{
+		resources: map[uint64]model.Resource{
+			testResource1ID: makeActiveResource(model.ResourceTypeHost),
+		},
+	}
+	svc := NewProfileService(profileRepo, resourceRepo)
+
+	err := svc.PutProfile(context.Background(), testResource1ID, map[string]interface{}{
+		"hostname": "",
+	})
+	if err != nil {
+		t.Fatalf("expected explicit empty string to be allowed, got %v", err)
+	}
+}
+
+func TestProfileServicePutProfileInt64PortPersisted(t *testing.T) {
+	profileRepo := &fakeProfileRepo{}
+	resourceRepo := &fakeResourceWriteRepo{
+		resources: map[uint64]model.Resource{
+			testResource1ID: makeActiveResource(model.ResourceTypeDatabaseInstance),
+		},
+	}
+	svc := NewProfileService(profileRepo, resourceRepo)
+
+	err := svc.PutProfile(context.Background(), testResource1ID, map[string]interface{}{
+		"port": int64(3306),
+	})
+	if err != nil {
+		t.Fatalf("expected no error, got %v", err)
+	}
+	if profileRepo.upsertedFields["port"] != 3306 {
+		t.Fatalf("expected int64 port 3306 persisted as 3306, got %v", profileRepo.upsertedFields["port"])
 	}
 }

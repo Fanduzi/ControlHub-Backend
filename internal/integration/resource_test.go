@@ -440,8 +440,12 @@ func TestResourceServiceCreate_ProfileWriteFailureLeavesNoResource(t *testing.T)
 	}
 
 	created, err := svc.Create(ctx, input)
-	if err == nil {
-		t.Fatalf("expected error when the initial profile write fails; got success (created id=%v)", created.ID)
+	var ve *service.ValidationError
+	if !errors.As(err, &ve) {
+		t.Fatalf("expected validation error when the initial profile write fails; got %v (created id=%v)", err, created)
+	}
+	if ve.Fields["hostname"] == "" {
+		t.Fatalf("expected field-level detail for hostname, got %#v", ve.Fields)
 	}
 
 	var resourceRows int
@@ -611,8 +615,11 @@ func TestResourceAPI_CreateWithProfileFailureRollsBack(t *testing.T) {
 	}`, name, envProd, ownerDBA, strings.Repeat("h", 300))
 
 	rec := doBearerWithBody(t, router, http.MethodPost, "/resources", token, body)
-	if rec.Code >= 200 && rec.Code < 300 {
-		t.Fatalf("must not return success when the initial profile write fails; got %d body=%s", rec.Code, rec.Body.String())
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected controlled 400 validation error when the profile write fails, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "validation_failed") {
+		t.Fatalf("expected validation_failed error code, got body=%s", rec.Body.String())
 	}
 
 	var resourceRows int
@@ -694,5 +701,133 @@ func TestResourceRepositoryCreateWithProfile_EmptyProfileObjectWritesEmptyRow(t 
 	}
 	if hostname != "" {
 		t.Fatalf("expected empty hostname in profile row, got %q", hostname)
+	}
+}
+
+// TestProfileServicePatch_PreservesOmittedFieldsOnMySQL proves the PATCH
+// partial-merge contract against real MySQL: a partial update must not clear
+// fields that were not submitted.
+func TestProfileServicePatch_PreservesOmittedFieldsOnMySQL(t *testing.T) {
+	db := setupTestDB(t)
+	repo := mysql.NewResourceRepository(db)
+	profileSvc := service.NewProfileService(repo, repo)
+	ctx := context.Background()
+
+	name := fmt.Sprintf("patch-merge-%d", time.Now().UnixNano())
+	created, err := repo.CreateResource(ctx, model.ResourceCreateInput{
+		ResourceType:    model.ResourceTypeHost,
+		ResourceSubtype: "vm",
+		Name:            name,
+		DisplayName:     "Patch Merge Host",
+		EnvironmentID:   envProd,
+		OwnerID:         ownerDBA,
+		LifecycleStatus: model.LifecycleStatusProvisioning,
+		HealthStatus:    model.HealthStatusUnknown,
+		Source:          "manual",
+		Labels:          map[string]string{},
+	})
+	if err != nil {
+		t.Fatalf("create resource: %v", err)
+	}
+	if err := repo.UpsertHostProfile(ctx, created.ID, "original-host", "10.0.0.7", "Ubuntu 22.04"); err != nil {
+		t.Fatalf("seed host profile: %v", err)
+	}
+
+	if err := profileSvc.PatchProfile(ctx, created.ID, map[string]any{"hostname": "patched-host"}); err != nil {
+		t.Fatalf("patch profile: %v", err)
+	}
+
+	profile, err := repo.GetResourceProfile(created.ID)
+	if err != nil {
+		t.Fatalf("get profile: %v", err)
+	}
+	if profile.Profile["hostname"] != "patched-host" {
+		t.Fatalf("expected patched hostname, got %#v", profile.Profile)
+	}
+	if profile.Profile["ipAddress"] != "10.0.0.7" {
+		t.Fatalf("expected omitted ipAddress preserved as 10.0.0.7, got %#v", profile.Profile)
+	}
+	if profile.Profile["osName"] != "Ubuntu 22.04" {
+		t.Fatalf("expected omitted osName preserved as Ubuntu 22.04, got %#v", profile.Profile)
+	}
+}
+
+// TestProfileServicePutProfile_OverlongRejectedOnMySQL proves the length
+// validation contract against real MySQL: an overlong field is rejected with
+// a controlled validation error before any database write (never a 500).
+func TestProfileServicePutProfile_OverlongRejectedOnMySQL(t *testing.T) {
+	db := setupTestDB(t)
+	repo := mysql.NewResourceRepository(db)
+	profileSvc := service.NewProfileService(repo, repo)
+	ctx := context.Background()
+
+	name := fmt.Sprintf("overlong-%d", time.Now().UnixNano())
+	created, err := repo.CreateResource(ctx, model.ResourceCreateInput{
+		ResourceType:    model.ResourceTypeHost,
+		ResourceSubtype: "vm",
+		Name:            name,
+		DisplayName:     "Overlong Host",
+		EnvironmentID:   envProd,
+		OwnerID:         ownerDBA,
+		LifecycleStatus: model.LifecycleStatusProvisioning,
+		HealthStatus:    model.HealthStatusUnknown,
+		Source:          "manual",
+		Labels:          map[string]string{},
+	})
+	if err != nil {
+		t.Fatalf("create resource: %v", err)
+	}
+
+	err = profileSvc.PutProfile(ctx, created.ID, map[string]any{
+		"hostname": strings.Repeat("h", 256),
+	})
+	var ve *service.ValidationError
+	if !errors.As(err, &ve) {
+		t.Fatalf("expected ValidationError for overlong hostname, got %v", err)
+	}
+	if ve.Fields["hostname"] == "" {
+		t.Fatalf("expected field-level detail for hostname, got %#v", ve.Fields)
+	}
+}
+
+// TestResourceRepositoryPatchProfile_Int64PortPersisted pins the int64 port
+// conversion at the repository seam: a validated int64 port must be written
+// as its value, never coerced to zero.
+func TestResourceRepositoryPatchProfile_Int64PortPersisted(t *testing.T) {
+	db := setupTestDB(t)
+	repo := mysql.NewResourceRepository(db)
+	ctx := context.Background()
+
+	name := fmt.Sprintf("patch-int64-port-%d", time.Now().UnixNano())
+	created, err := repo.CreateResource(ctx, model.ResourceCreateInput{
+		ResourceType:    model.ResourceTypeDatabaseInstance,
+		ResourceSubtype: "mysql",
+		Name:            name,
+		DisplayName:     "Patch Int64 Port",
+		EnvironmentID:   envProd,
+		OwnerID:         ownerDBA,
+		LifecycleStatus: model.LifecycleStatusProvisioning,
+		HealthStatus:    model.HealthStatusUnknown,
+		Source:          "manual",
+		Labels:          map[string]string{},
+	})
+	if err != nil {
+		t.Fatalf("create resource: %v", err)
+	}
+
+	if err := repo.PatchProfile(ctx, created.ID, model.ResourceTypeDatabaseInstance, map[string]any{
+		"port": int64(3306),
+	}); err != nil {
+		t.Fatalf("patch profile: %v", err)
+	}
+
+	var port int
+	if err := db.QueryRowContext(ctx,
+		"select port from resource_profiles_database_instance where resource_id = ?", created.ID,
+	).Scan(&port); err != nil {
+		t.Fatalf("fetch port: %v", err)
+	}
+	if port != 3306 {
+		t.Fatalf("expected port 3306 persisted, got %d", port)
 	}
 }

@@ -1,7 +1,7 @@
-// Package service provides business logic for resource reads and typed profile assembly.
-// input: internal/model (Resource, ResourceProfileResponse, ResourceType, ResourceListQuery, PageInfo)
-// output: NewResourceService, ResourceService.List/Get/GetProfile, ErrResourceNotFound, ResourceRepository interface
-// pos: Business logic for resource reads with pagination support
+// Package service provides business logic for resource reads, writes, and typed profile assembly.
+// input: internal/model (Resource, ResourceProfileResponse, ResourceType, ResourceListQuery, PageInfo, ResourceCreateInput)
+// output: NewResourceService, ResourceService.List/Get/GetProfile/Create, ErrResourceNotFound, ResourceRepository interface
+// pos: Business logic for resource reads with pagination, create-with-profile atomicity, and strict profile field validation
 // note: if this file changes, update header and README.md
 package service
 
@@ -274,6 +274,20 @@ func validateResourceCreateInput(input model.ResourceCreateInput) error {
 	if err := validateResourceLabels(input.Labels); err != nil {
 		if ve == nil { ve = newValidationError("validation failed") }
 		ve.WithField("labels", err.Error())
+	}
+
+	if input.Profile != nil && input.ResourceType.Validate() == nil {
+		if err := validateProfileFields(input.ResourceType, input.Profile); err != nil {
+			var pe *ValidationError
+			if errors.As(err, &pe) {
+				if ve == nil { ve = newValidationError("validation failed") }
+				for field, message := range pe.Fields {
+					ve.WithField(field, message)
+				}
+			} else {
+				return err // ErrProfileNotSupported for types without a profile table
+			}
+		}
 	}
 
 	if ve != nil {
