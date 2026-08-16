@@ -5,7 +5,8 @@ Business logic layer with interface-based repository dependencies. Each service 
 ## Files
 | File | Responsibility |
 |------|---------------|
-| resource_service.go | Resource listing, detail, profile projection |
+| resource_service.go | Resource listing, detail, profile projection, create-with-profile atomicity (profile failure ⇒ create error, no partial resource) |
+| resource_write_service_test.go | Resource/relation write-flow tests, including create-with-profile atomicity at the service seam |
 | relation_service.go | Relation listing by resource |
 | audit_service.go | Audit event listing (global and per-resource) |
 | auth_service.go | Login, versioned Backend Bearer issuance, current-state VerifyToken (Authorization Version), role/disable/password invalidation, legacy-to-Argon2id transparent migration |

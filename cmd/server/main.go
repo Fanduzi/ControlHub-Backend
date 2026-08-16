@@ -126,7 +126,7 @@ func buildDependencies(db *sql.DB, cfg config.Config) api.Dependencies {
 	)
 
 	return api.Dependencies{
-		ResourceService:            service.NewResourceService(resourceRepo, profileSvc),
+		ResourceService:            service.NewResourceService(resourceRepo),
 		RelationService:            service.NewRelationService(relationRepo),
 		TopologyService:            service.NewTopologyService(relationRepo),
 		AuditService:               service.NewAuditService(mysql.NewAuditRepository(db)),

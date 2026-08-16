@@ -1,12 +1,23 @@
 //go:build integration
 
+// Package integration provides real-MySQL coverage for repository, API, and
+// migration behavior against disposable Testcontainers databases.
+// input: database/sql, testing, internal/model, internal/repository/mysql, internal/service
+// output: TestResource* and TestResourceService* integration cases
+// pos: Proves resource repository CRUD, filtering, and create-with-profile atomicity against real MySQL
+// note: if this file changes, update header and README.md
 package integration
 
 import (
 	"context"
 	"errors"
+	"fmt"
+	"net/http"
+	"strings"
 	"testing"
+	"time"
 
+	"github.com/fan/controlhub/internal/api"
 	"github.com/fan/controlhub/internal/model"
 	"github.com/fan/controlhub/internal/repository/mysql"
 	"github.com/fan/controlhub/internal/service"
@@ -397,4 +408,291 @@ func TestResourceRepository_DatabaseClusterOperationalSummary(t *testing.T) {
 			}
 		}
 	})
+}
+
+// TestResourceServiceCreate_ProfileWriteFailureLeavesNoResource pins the
+// create-with-profile atomicity contract against real MySQL: the resource row
+// is inserted, the profile write fails (hostname exceeds varchar(255)), and
+// the create must neither report success nor leave a resource with a lost
+// profile behind.
+func TestResourceServiceCreate_ProfileWriteFailureLeavesNoResource(t *testing.T) {
+	db := setupTestDB(t)
+	repo := mysql.NewResourceRepository(db)
+	svc := service.NewResourceService(repo)
+	ctx := context.Background()
+
+	name := fmt.Sprintf("atomicity-fail-%d", time.Now().UnixNano())
+	input := model.ResourceCreateInput{
+		ResourceType:    model.ResourceTypeHost,
+		ResourceSubtype: "vm",
+		Name:            name,
+		DisplayName:     "Atomicity Fail Host",
+		EnvironmentID:   envProd,
+		OwnerID:         ownerDBA,
+		LifecycleStatus: model.LifecycleStatusProvisioning,
+		HealthStatus:    model.HealthStatusUnknown,
+		Source:          "manual",
+		Profile: map[string]any{
+			"hostname":  strings.Repeat("h", 300), // exceeds resource_profiles_host.hostname varchar(255)
+			"ipAddress": "10.0.0.1",
+			"osName":    "Ubuntu 22.04",
+		},
+	}
+
+	created, err := svc.Create(ctx, input)
+	if err == nil {
+		t.Fatalf("expected error when the initial profile write fails; got success (created id=%v)", created.ID)
+	}
+
+	var resourceRows int
+	if err := db.QueryRowContext(ctx, "select count(*) from resources where name = ?", name).Scan(&resourceRows); err != nil {
+		t.Fatalf("count resources: %v", err)
+	}
+	if resourceRows != 0 {
+		t.Fatalf("profile write failure must not leave a resource row behind, found %d", resourceRows)
+	}
+
+	var profileRows int
+	if err := db.QueryRowContext(ctx,
+		"select count(*) from resource_profiles_host where resource_id in (select id from resources where name = ?)", name,
+	).Scan(&profileRows); err != nil {
+		t.Fatalf("count host profiles: %v", err)
+	}
+	if profileRows != 0 {
+		t.Fatalf("profile write failure must not leave a profile row behind, found %d", profileRows)
+	}
+}
+
+func TestResourceRepositoryCreateWithProfile_PersistsResourceAndProfile(t *testing.T) {
+	db := setupTestDB(t)
+	repo := mysql.NewResourceRepository(db)
+	ctx := context.Background()
+
+	name := fmt.Sprintf("atomicity-ok-%d", time.Now().UnixNano())
+	created, err := repo.CreateResourceWithProfile(ctx, model.ResourceCreateInput{
+		ResourceType:    model.ResourceTypeHost,
+		ResourceSubtype: "vm",
+		Name:            name,
+		DisplayName:     "Atomicity Ok Host",
+		EnvironmentID:   envProd,
+		OwnerID:         ownerDBA,
+		LifecycleStatus: model.LifecycleStatusProvisioning,
+		HealthStatus:    model.HealthStatusUnknown,
+		Source:          "manual",
+		Labels:          map[string]string{},
+	}, map[string]any{
+		"hostname":  name,
+		"ipAddress": "10.0.0.9",
+		"osName":    "Ubuntu 22.04",
+	})
+	if err != nil {
+		t.Fatalf("create resource with profile: %v", err)
+	}
+
+	var profileHostname string
+	if err := db.QueryRowContext(ctx,
+		"select hostname from resource_profiles_host where resource_id = ?", created.ID,
+	).Scan(&profileHostname); err != nil {
+		t.Fatalf("fetch host profile: %v", err)
+	}
+	if profileHostname != name {
+		t.Fatalf("hostname = %q, want %q", profileHostname, name)
+	}
+}
+
+// TestResourceRepositoryCreateWithProfile_FailureRollsBack proves at the
+// storage layer that a failed initial-profile write rolls the resource insert
+// back: no resource row and no profile row may survive.
+func TestResourceRepositoryCreateWithProfile_FailureRollsBack(t *testing.T) {
+	db := setupTestDB(t)
+	repo := mysql.NewResourceRepository(db)
+	ctx := context.Background()
+
+	name := fmt.Sprintf("atomicity-repo-fail-%d", time.Now().UnixNano())
+	_, err := repo.CreateResourceWithProfile(ctx, model.ResourceCreateInput{
+		ResourceType:    model.ResourceTypeHost,
+		ResourceSubtype: "vm",
+		Name:            name,
+		DisplayName:     "Atomicity Repo Fail",
+		EnvironmentID:   envProd,
+		OwnerID:         ownerDBA,
+		LifecycleStatus: model.LifecycleStatusProvisioning,
+		HealthStatus:    model.HealthStatusUnknown,
+		Source:          "manual",
+		Labels:          map[string]string{},
+	}, map[string]any{
+		"hostname":  strings.Repeat("h", 300), // exceeds varchar(255) → MySQL 1406
+		"ipAddress": "10.0.0.1",
+		"osName":    "Ubuntu 22.04",
+	})
+	if err == nil {
+		t.Fatal("expected error when the profile write fails")
+	}
+
+	var resourceRows int
+	if err := db.QueryRowContext(ctx, "select count(*) from resources where name = ?", name).Scan(&resourceRows); err != nil {
+		t.Fatalf("count resources: %v", err)
+	}
+	if resourceRows != 0 {
+		t.Fatalf("profile write failure must not leave a resource row behind, found %d", resourceRows)
+	}
+
+	var profileRows int
+	if err := db.QueryRowContext(ctx,
+		"select count(*) from resource_profiles_host where resource_id in (select id from resources where name = ?)", name,
+	).Scan(&profileRows); err != nil {
+		t.Fatalf("count host profiles: %v", err)
+	}
+	if profileRows != 0 {
+		t.Fatalf("profile write failure must not leave a profile row behind, found %d", profileRows)
+	}
+}
+
+// TestResourceAPI_CreateWithProfileFailureRollsBack drives the real HTTP
+// handler against real MySQL: when the initial profile write fails at the
+// storage layer, the API must not report success and no resource row may be
+// left behind.
+func TestResourceAPI_CreateWithProfileFailureRollsBack(t *testing.T) {
+	db := setupTestDB(t)
+	resourceRepo := mysql.NewResourceRepository(db)
+	profileService := service.NewProfileService(resourceRepo, resourceRepo)
+	relationRepo := mysql.NewRelationRepository(db)
+	dictRepo := mysql.NewDictionaryRepository(db)
+	qtRepo := mysql.NewQueryTargetRepository(db)
+	router := api.NewRouter(api.Dependencies{
+		ResourceService:        service.NewResourceService(resourceRepo),
+		ProfileService:         profileService,
+		RelationService:        service.NewRelationService(relationRepo),
+		TopologyService:        service.NewTopologyService(relationRepo),
+		AuditService:           service.NewAuditService(mysql.NewAuditRepository(db)),
+		AuthService:            service.NewAuthService(mysql.NewUserRepository(db), authzIntegrationSecret),
+		EnvironmentService:     service.NewEnvironmentService(dictRepo),
+		OwnerService:           service.NewOwnerService(dictRepo),
+		RoleService:            service.NewRoleService(dictRepo),
+		ResourceTypeService:    service.NewResourceTypeService(dictRepo),
+		RelationTypeService:    service.NewRelationTypeService(dictRepo),
+		LifecycleStatusService: service.NewLifecycleStatusService(dictRepo),
+		HealthStatusService:    service.NewHealthStatusService(dictRepo),
+		ResourceSubtypeService: service.NewResourceSubtypeService(),
+		QueryTargetService:     service.NewQueryTargetService(qtRepo),
+		QueryExecutionService:  &boundaryExecStub{},
+		QueryExplainService:    &boundaryExplainStub{},
+		QuerySchemaService:     &boundarySchemaStub{},
+		QueryCredentialService: &authzCredStub{},
+		QueryDisclosureService: &boundaryDisclosureStub{},
+		QuerySavedStatementService: service.NewQuerySavedStatementService(
+			mysql.NewQuerySavedStatementRepository(db),
+			mysql.NewQuerySavedStatementRepository(db),
+			qtRepo,
+			service.NewQueryGuard(service.QueryGuardConfig{DefaultMaxRows: 100, HardMaxRows: 500}),
+		),
+		QueryExecutionAuth: api.QueryExecutionAuthConfig{
+			Clock: time.Now,
+		},
+	})
+
+	email := fmt.Sprintf("atomicity-api-%d@example.com", time.Now().UnixNano())
+	userID := insertAuthzTestUser(t, db, email, "admin")
+	t.Cleanup(func() { deleteAuthzTestUser(t, db, userID) })
+	token := mustLogin(t, router, email, "secret123")
+
+	name := fmt.Sprintf("atomicity-api-fail-%d", time.Now().UnixNano())
+	body := fmt.Sprintf(`{
+		"resourceType":"host",
+		"resourceSubtype":"vm",
+		"name":%q,
+		"displayName":"Atomicity API Fail",
+		"environmentId":%d,
+		"ownerId":%d,
+		"lifecycleStatus":"provisioning",
+		"healthStatus":"unknown",
+		"source":"manual",
+		"profile":{"hostname":%q,"ipAddress":"10.0.0.1","osName":"Ubuntu 22.04"}
+	}`, name, envProd, ownerDBA, strings.Repeat("h", 300))
+
+	rec := doBearerWithBody(t, router, http.MethodPost, "/resources", token, body)
+	if rec.Code >= 200 && rec.Code < 300 {
+		t.Fatalf("must not return success when the initial profile write fails; got %d body=%s", rec.Code, rec.Body.String())
+	}
+
+	var resourceRows int
+	if err := db.QueryRowContext(context.Background(),
+		"select count(*) from resources where name = ?", name,
+	).Scan(&resourceRows); err != nil {
+		t.Fatalf("count resources: %v", err)
+	}
+	if resourceRows != 0 {
+		t.Fatalf("profile write failure must not leave a resource row behind, found %d", resourceRows)
+	}
+}
+
+// TestResourceRepositoryCreateWithProfile_EmptyProfileObjectOnUnsupportedType
+// pins the spec rule "其他 4 种 | 无 profile 表，不接受 profile 字段": a
+// submitted profile object — even an empty one — on a type without a profile
+// table is rejected and rolls the resource insert back.
+func TestResourceRepositoryCreateWithProfile_EmptyProfileObjectOnUnsupportedType(t *testing.T) {
+	db := setupTestDB(t)
+	repo := mysql.NewResourceRepository(db)
+	ctx := context.Background()
+
+	name := fmt.Sprintf("atomicity-empty-vip-%d", time.Now().UnixNano())
+	_, err := repo.CreateResourceWithProfile(ctx, model.ResourceCreateInput{
+		ResourceType:    model.ResourceTypeVirtualIP,
+		Name:            name,
+		DisplayName:     "Atomicity Empty VIP",
+		EnvironmentID:   envProd,
+		OwnerID:         ownerDBA,
+		LifecycleStatus: model.LifecycleStatusProvisioning,
+		HealthStatus:    model.HealthStatusUnknown,
+		Source:          "manual",
+		Labels:          map[string]string{},
+	}, map[string]any{})
+	if err == nil {
+		t.Fatal("expected error for a profile object on a type without a profile table")
+	}
+
+	var resourceRows int
+	if err := db.QueryRowContext(ctx, "select count(*) from resources where name = ?", name).Scan(&resourceRows); err != nil {
+		t.Fatalf("count resources: %v", err)
+	}
+	if resourceRows != 0 {
+		t.Fatalf("rejected profile write must not leave a resource row behind, found %d", resourceRows)
+	}
+}
+
+// TestResourceRepositoryCreateWithProfile_EmptyProfileObjectWritesEmptyRow
+// pins the submitted-empty semantics on a supported type: an explicit empty
+// profile object persists an empty typed profile row, matching the PUT
+// /resources/{id}/profile empty-body upsert behavior.
+func TestResourceRepositoryCreateWithProfile_EmptyProfileObjectWritesEmptyRow(t *testing.T) {
+	db := setupTestDB(t)
+	repo := mysql.NewResourceRepository(db)
+	ctx := context.Background()
+
+	name := fmt.Sprintf("atomicity-empty-host-%d", time.Now().UnixNano())
+	created, err := repo.CreateResourceWithProfile(ctx, model.ResourceCreateInput{
+		ResourceType:    model.ResourceTypeHost,
+		ResourceSubtype: "vm",
+		Name:            name,
+		DisplayName:     "Atomicity Empty Host",
+		EnvironmentID:   envProd,
+		OwnerID:         ownerDBA,
+		LifecycleStatus: model.LifecycleStatusProvisioning,
+		HealthStatus:    model.HealthStatusUnknown,
+		Source:          "manual",
+		Labels:          map[string]string{},
+	}, map[string]any{})
+	if err != nil {
+		t.Fatalf("create host with empty profile object: %v", err)
+	}
+
+	var hostname string
+	if err := db.QueryRowContext(ctx,
+		"select hostname from resource_profiles_host where resource_id = ?", created.ID,
+	).Scan(&hostname); err != nil {
+		t.Fatalf("fetch host profile: %v", err)
+	}
+	if hostname != "" {
+		t.Fatalf("expected empty hostname in profile row, got %q", hostname)
+	}
 }

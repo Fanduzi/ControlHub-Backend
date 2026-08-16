@@ -41,7 +41,7 @@ func TestOperatorAccessBoundary(t *testing.T) {
 	authService := service.NewAuthService(mysql.NewUserRepository(db), authzIntegrationSecret)
 	qtRepo := mysql.NewQueryTargetRepository(db)
 	router := api.NewRouter(api.Dependencies{
-		ResourceService:        service.NewResourceService(resourceRepo, profileService),
+		ResourceService:        service.NewResourceService(resourceRepo),
 		ProfileService:         profileService,
 		RelationService:        service.NewRelationService(relationRepo),
 		TopologyService:        service.NewTopologyService(relationRepo),

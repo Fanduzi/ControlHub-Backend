@@ -94,7 +94,7 @@ func TestOpenAPIFuzz(t *testing.T) {
 
 	authService := service.NewAuthService(mysql.NewUserRepository(db), "fuzz-test-jwt-secret")
 	deps := api.Dependencies{
-		ResourceService:        service.NewResourceService(resourceRepo, profileSvc),
+		ResourceService:        service.NewResourceService(resourceRepo),
 		RelationService:        service.NewRelationService(relationRepo),
 		TopologyService:        service.NewTopologyService(relationRepo),
 		AuditService:           service.NewAuditService(mysql.NewAuditRepository(db)),

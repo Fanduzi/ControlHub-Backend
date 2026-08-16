@@ -386,43 +386,95 @@ func (r *ResourceRepository) fetchHostProfile(ctx context.Context, id uint64) (m
 	}, nil
 }
 
-func (r *ResourceRepository) UpsertHostProfile(ctx context.Context, resourceID uint64, hostname, ipAddress, osName string) error {
-	_, err := r.db.ExecContext(ctx,
-		`INSERT INTO resource_profiles_host (resource_id, hostname, ip_address, os_name, spec)
+const (
+	upsertHostProfileSQL = `INSERT INTO resource_profiles_host (resource_id, hostname, ip_address, os_name, spec)
 		 VALUES (?, ?, ?, ?, '{}')
-		 ON DUPLICATE KEY UPDATE hostname = VALUES(hostname), ip_address = VALUES(ip_address), os_name = VALUES(os_name)`,
-		resourceID, hostname, ipAddress, osName,
-	)
+		 ON DUPLICATE KEY UPDATE hostname = VALUES(hostname), ip_address = VALUES(ip_address), os_name = VALUES(os_name)`
+
+	upsertDatabaseInstanceProfileSQL = `INSERT INTO resource_profiles_database_instance (resource_id, engine, version, host, port, role, spec)
+		 VALUES (?, ?, ?, ?, ?, ?, '{}')
+		 ON DUPLICATE KEY UPDATE engine = VALUES(engine), version = VALUES(version), host = VALUES(host), port = VALUES(port), role = VALUES(role)`
+
+	upsertDatabaseClusterProfileSQL = `INSERT INTO resource_profiles_database_cluster (resource_id, engine, topology_mode, primary_endpoint, spec)
+		 VALUES (?, ?, ?, ?, '{}')
+		 ON DUPLICATE KEY UPDATE engine = VALUES(engine), topology_mode = VALUES(topology_mode), primary_endpoint = VALUES(primary_endpoint)`
+
+	upsertServiceProfileSQL = `INSERT INTO resource_profiles_service (resource_id, system_name, repository_url, runtime_env, spec)
+		 VALUES (?, ?, ?, ?, '{}')
+		 ON DUPLICATE KEY UPDATE system_name = VALUES(system_name), repository_url = VALUES(repository_url), runtime_env = VALUES(runtime_env)`
+)
+
+// upsertProfileTx writes the typed profile row inside the create-with-profile
+// transaction. The per-type field dispatch mirrors ProfileService.writeProfile
+// in internal/service/profile_service.go; keep the two mappings in sync.
+func upsertProfileTx(ctx context.Context, tx *sql.Tx, resourceID uint64, resourceType model.ResourceType, fields map[string]any) error {
+	switch resourceType {
+	case model.ResourceTypeHost:
+		_, err := tx.ExecContext(ctx, upsertHostProfileSQL, resourceID,
+			profileFieldString(fields, "hostname"), profileFieldString(fields, "ipAddress"), profileFieldString(fields, "osName"))
+		return err
+	case model.ResourceTypeDatabaseInstance:
+		_, err := tx.ExecContext(ctx, upsertDatabaseInstanceProfileSQL, resourceID,
+			profileFieldString(fields, "engine"), profileFieldString(fields, "version"),
+			profileFieldString(fields, "host"), profileFieldInt(fields, "port"), profileFieldString(fields, "role"))
+		return err
+	case model.ResourceTypeDatabaseCluster:
+		_, err := tx.ExecContext(ctx, upsertDatabaseClusterProfileSQL, resourceID,
+			profileFieldString(fields, "engine"), profileFieldString(fields, "topologyMode"), profileFieldString(fields, "primaryEndpoint"))
+		return err
+	case model.ResourceTypeService:
+		_, err := tx.ExecContext(ctx, upsertServiceProfileSQL, resourceID,
+			profileFieldString(fields, "systemName"), profileFieldString(fields, "repositoryUrl"), profileFieldString(fields, "runtimeEnv"))
+		return err
+	default:
+		return service.ErrProfileNotSupported
+	}
+}
+
+func profileFieldString(fields map[string]any, key string) string {
+	v, ok := fields[key]
+	if !ok {
+		return ""
+	}
+	s, ok := v.(string)
+	if !ok {
+		return fmt.Sprintf("%v", v)
+	}
+	return s
+}
+
+func profileFieldInt(fields map[string]any, key string) int {
+	v, ok := fields[key]
+	if !ok {
+		return 0
+	}
+	switch n := v.(type) {
+	case float64:
+		return int(n)
+	case int:
+		return n
+	default:
+		return 0
+	}
+}
+
+func (r *ResourceRepository) UpsertHostProfile(ctx context.Context, resourceID uint64, hostname, ipAddress, osName string) error {
+	_, err := r.db.ExecContext(ctx, upsertHostProfileSQL, resourceID, hostname, ipAddress, osName)
 	return err
 }
 
 func (r *ResourceRepository) UpsertDatabaseInstanceProfile(ctx context.Context, resourceID uint64, engine, version, host string, port int, role string) error {
-	_, err := r.db.ExecContext(ctx,
-		`INSERT INTO resource_profiles_database_instance (resource_id, engine, version, host, port, role, spec)
-		 VALUES (?, ?, ?, ?, ?, ?, '{}')
-		 ON DUPLICATE KEY UPDATE engine = VALUES(engine), version = VALUES(version), host = VALUES(host), port = VALUES(port), role = VALUES(role)`,
-		resourceID, engine, version, host, port, role,
-	)
+	_, err := r.db.ExecContext(ctx, upsertDatabaseInstanceProfileSQL, resourceID, engine, version, host, port, role)
 	return err
 }
 
 func (r *ResourceRepository) UpsertDatabaseClusterProfile(ctx context.Context, resourceID uint64, engine, topologyMode, primaryEndpoint string) error {
-	_, err := r.db.ExecContext(ctx,
-		`INSERT INTO resource_profiles_database_cluster (resource_id, engine, topology_mode, primary_endpoint, spec)
-		 VALUES (?, ?, ?, ?, '{}')
-		 ON DUPLICATE KEY UPDATE engine = VALUES(engine), topology_mode = VALUES(topology_mode), primary_endpoint = VALUES(primary_endpoint)`,
-		resourceID, engine, topologyMode, primaryEndpoint,
-	)
+	_, err := r.db.ExecContext(ctx, upsertDatabaseClusterProfileSQL, resourceID, engine, topologyMode, primaryEndpoint)
 	return err
 }
 
 func (r *ResourceRepository) UpsertServiceProfile(ctx context.Context, resourceID uint64, systemName, repositoryUrl, runtimeEnv string) error {
-	_, err := r.db.ExecContext(ctx,
-		`INSERT INTO resource_profiles_service (resource_id, system_name, repository_url, runtime_env, spec)
-		 VALUES (?, ?, ?, ?, '{}')
-		 ON DUPLICATE KEY UPDATE system_name = VALUES(system_name), repository_url = VALUES(repository_url), runtime_env = VALUES(runtime_env)`,
-		resourceID, systemName, repositoryUrl, runtimeEnv,
-	)
+	_, err := r.db.ExecContext(ctx, upsertServiceProfileSQL, resourceID, systemName, repositoryUrl, runtimeEnv)
 	return err
 }
 
@@ -441,19 +493,21 @@ func (r *ResourceRepository) DeleteProfile(ctx context.Context, resourceID uint6
 	return err
 }
 
+// insertResourceSQL is shared by CreateResource and CreateResourceWithProfile
+// so the single-transaction path and the standalone path write the same row.
+const insertResourceSQL = `insert into resources
+	(resource_type, resource_subtype, name, display_name,
+	 environment_id, owner_id, lifecycle_status, health_status,
+	 source, external_id, labels, created_at, updated_at)
+	values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), NOW())`
+
 func (r *ResourceRepository) CreateResource(ctx context.Context, input model.ResourceCreateInput) (*model.Resource, error) {
 	labelsJSON, err := json.Marshal(input.Labels)
 	if err != nil {
 		return nil, fmt.Errorf("marshal labels: %w", err)
 	}
 
-	query := `insert into resources
-		(resource_type, resource_subtype, name, display_name,
-		 environment_id, owner_id, lifecycle_status, health_status,
-		 source, external_id, labels, created_at, updated_at)
-		values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), NOW())`
-
-	result, err := r.db.ExecContext(ctx, query,
+	result, err := r.db.ExecContext(ctx, insertResourceSQL,
 		input.ResourceType, input.ResourceSubtype,
 		input.Name, input.DisplayName,
 		input.EnvironmentID, input.OwnerID,
@@ -472,6 +526,56 @@ func (r *ResourceRepository) CreateResource(ctx context.Context, input model.Res
 	insertID, err := result.LastInsertId()
 	if err != nil {
 		return nil, fmt.Errorf("resource last insert id: %w", err)
+	}
+
+	return r.GetResource(uint64(insertID))
+}
+
+// CreateResourceWithProfile inserts the resource and its initial typed profile
+// in a single transaction: if the profile write fails, the resource insert is
+// rolled back, so a client can never receive success for a resource whose
+// submitted profile was not persisted. The field dispatch mirrors
+// ProfileService.writeProfile in internal/service/profile_service.go; keep the
+// two mappings in sync when profile fields change.
+func (r *ResourceRepository) CreateResourceWithProfile(ctx context.Context, input model.ResourceCreateInput, profile map[string]any) (*model.Resource, error) {
+	labelsJSON, err := json.Marshal(input.Labels)
+	if err != nil {
+		return nil, fmt.Errorf("marshal labels: %w", err)
+	}
+
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, fmt.Errorf("begin create resource transaction: %w", err)
+	}
+	defer tx.Rollback() // safe no-op after commit
+
+	result, err := tx.ExecContext(ctx, insertResourceSQL,
+		input.ResourceType, input.ResourceSubtype,
+		input.Name, input.DisplayName,
+		input.EnvironmentID, input.OwnerID,
+		string(input.LifecycleStatus), string(input.HealthStatus),
+		input.Source, input.ExternalID,
+		string(labelsJSON),
+	)
+	if err != nil {
+		var mysqlErr *mysql.MySQLError
+		if errors.As(err, &mysqlErr) && mysqlErr.Number == 1062 {
+			return nil, service.ErrResourceConflict
+		}
+		return nil, fmt.Errorf("insert resource: %w", err)
+	}
+
+	insertID, err := result.LastInsertId()
+	if err != nil {
+		return nil, fmt.Errorf("resource last insert id: %w", err)
+	}
+
+	if err := upsertProfileTx(ctx, tx, uint64(insertID), input.ResourceType, profile); err != nil {
+		return nil, fmt.Errorf("upsert profile for resource %d: %w", insertID, err)
+	}
+
+	if err := tx.Commit(); err != nil {
+		return nil, fmt.Errorf("commit create resource transaction: %w", err)
 	}
 
 	return r.GetResource(uint64(insertID))

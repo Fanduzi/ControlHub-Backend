@@ -26,9 +26,11 @@ const (
 )
 
 type fakeResourceWriteRepo struct {
-	resources        map[uint64]model.Resource
-	createErr        error
-	updateErr        error
+	resources  map[uint64]model.Resource
+	createErr  error
+	updateErr  error
+	profileErr error          // injected failure for create-with-profile
+	profile    map[string]any // last profile written via CreateResourceWithProfile
 	getProfileResult *model.ResourceProfileResponse
 }
 
@@ -81,6 +83,20 @@ func (f *fakeResourceWriteRepo) CreateResource(_ context.Context, input model.Re
 	}
 	f.resources[created.ID] = created
 	return &created, nil
+}
+
+// CreateResourceWithProfile simulates the repository-level transaction: when
+// the profile write fails, neither the resource nor the profile is recorded.
+func (f *fakeResourceWriteRepo) CreateResourceWithProfile(_ context.Context, input model.ResourceCreateInput, profile map[string]any) (*model.Resource, error) {
+	if f.profileErr != nil {
+		return nil, f.profileErr
+	}
+	created, err := f.CreateResource(context.Background(), input)
+	if err != nil {
+		return nil, err
+	}
+	f.profile = profile
+	return created, nil
 }
 
 func (f *fakeResourceWriteRepo) UpdateResource(_ context.Context, id uint64, input model.ResourceUpdateInput) (*model.Resource, error) {
@@ -817,5 +833,110 @@ func TestRelationServiceCreateRejectsArchivedTarget(t *testing.T) {
 	})
 	if !errors.Is(err, ErrResourceArchived) {
 		t.Fatalf("expected ErrResourceArchived, got %v", err)
+	}
+}
+
+// TestResourceServiceCreate_ProfileWriteFailureReturnsErrorAndNoResource pins
+// the atomicity contract: when the initial profile write fails, Create must
+// return an error and must not leave a resource with a lost profile behind.
+func TestResourceServiceCreate_ProfileWriteFailureReturnsErrorAndNoResource(t *testing.T) {
+	repo := &fakeResourceWriteRepo{
+		resources:  map[uint64]model.Resource{},
+		profileErr: errors.New("profile write failed"),
+	}
+	svc := NewResourceService(repo)
+
+	_, err := svc.Create(context.Background(), model.ResourceCreateInput{
+		ResourceType:    model.ResourceTypeHost,
+		ResourceSubtype: "vm",
+		Name:            "atomicity-host-01",
+		DisplayName:     "Atomicity Host 01",
+		EnvironmentID:   testEnvID,
+		OwnerID:         testOwnerID,
+		LifecycleStatus: model.LifecycleStatusRunning,
+		HealthStatus:    model.HealthStatusHealthy,
+		Source:          "manual",
+		Profile: map[string]any{
+			"hostname":  "atomicity-host-01",
+			"ipAddress": "10.0.0.1",
+			"osName":    "Ubuntu 22.04",
+		},
+	})
+	if err == nil {
+		t.Fatal("expected error when the initial profile write fails; got success")
+	}
+	if len(repo.resources) != 0 {
+		t.Fatalf("expected no resource left behind after profile write failure, found %d", len(repo.resources))
+	}
+}
+
+// TestResourceServiceCreate_WithProfilePersistsProfile pins the success side
+// of the contract: a valid embedded profile is written together with the
+// resource through the transactional repository seam.
+func TestResourceServiceCreate_WithProfilePersistsProfile(t *testing.T) {
+	repo := &fakeResourceWriteRepo{resources: map[uint64]model.Resource{}}
+	svc := NewResourceService(repo)
+
+	created, err := svc.Create(context.Background(), model.ResourceCreateInput{
+		ResourceType:    model.ResourceTypeHost,
+		ResourceSubtype: "vm",
+		Name:            "atomicity-host-02",
+		DisplayName:     "Atomicity Host 02",
+		EnvironmentID:   testEnvID,
+		OwnerID:         testOwnerID,
+		LifecycleStatus: model.LifecycleStatusRunning,
+		HealthStatus:    model.HealthStatusHealthy,
+		Source:          "manual",
+		Profile: map[string]any{
+			"hostname":  "atomicity-host-02",
+			"ipAddress": "10.0.0.2",
+			"osName":    "Ubuntu 22.04",
+		},
+	})
+	if err != nil {
+		t.Fatalf("expected success, got %v", err)
+	}
+	if created == nil || created.ID == 0 {
+		t.Fatal("expected created resource")
+	}
+	if repo.profile == nil || repo.profile["hostname"] != "atomicity-host-02" {
+		t.Fatalf("expected embedded profile to be written through the repo, got %#v", repo.profile)
+	}
+	if len(repo.resources) != 1 {
+		t.Fatalf("expected exactly one resource, found %d", len(repo.resources))
+	}
+}
+
+// TestResourceServiceCreate_EmptyProfileObjectGoesThroughAtomicPath pins the
+// nil-versus-empty distinction: a submitted empty profile object is still a
+// profile write request and must reach the transactional repository seam
+// (where unsupported types are rejected) instead of being silently dropped.
+func TestResourceServiceCreate_EmptyProfileObjectGoesThroughAtomicPath(t *testing.T) {
+	repo := &fakeResourceWriteRepo{resources: map[uint64]model.Resource{}}
+	svc := NewResourceService(repo)
+
+	created, err := svc.Create(context.Background(), model.ResourceCreateInput{
+		ResourceType:    model.ResourceTypeHost,
+		ResourceSubtype: "vm",
+		Name:            "atomicity-empty-profile-01",
+		DisplayName:     "Atomicity Empty Profile 01",
+		EnvironmentID:   testEnvID,
+		OwnerID:         testOwnerID,
+		LifecycleStatus: model.LifecycleStatusRunning,
+		HealthStatus:    model.HealthStatusHealthy,
+		Source:          "manual",
+		Profile:         map[string]any{},
+	})
+	if err != nil {
+		t.Fatalf("expected success, got %v", err)
+	}
+	if created == nil || created.ID == 0 {
+		t.Fatal("expected created resource")
+	}
+	if repo.profile == nil {
+		t.Fatal("expected the empty profile object to reach the atomic repository seam, got nil")
+	}
+	if len(repo.resources) != 1 {
+		t.Fatalf("expected exactly one resource, found %d", len(repo.resources))
 	}
 }

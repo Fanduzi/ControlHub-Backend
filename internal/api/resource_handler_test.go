@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -2408,3 +2409,103 @@ func TestGetResource_NoProfileSummaryWithoutProfileData(t *testing.T) {
 			}
 		}
 	}
+
+func TestCreateResourceWithProfile_Success(t *testing.T) {
+	server := NewTestServer()
+	body := `{
+		"resourceType":"host",
+		"resourceSubtype":"vm",
+		"name":"new-host-with-profile-01",
+		"displayName":"New Host With Profile 01",
+		"environmentId":1,
+		"ownerId":2,
+		"lifecycleStatus":"provisioning",
+		"healthStatus":"unknown",
+		"source":"manual",
+		"profile":{"hostname":"new-host-with-profile-01","ipAddress":"10.0.1.9","osName":"Ubuntu 24.04"}
+	}`
+	req := httptest.NewRequest(http.MethodPost, "/resources", strings.NewReader(body))
+	rec := httptest.NewRecorder()
+	server.Router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("expected 201, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+
+	var resp model.Resource
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if resp.ID == 0 {
+		t.Fatal("expected generated resource id")
+	}
+
+	profileReq := httptest.NewRequest(http.MethodGet, "/resources/"+strconv.FormatUint(resp.ID, 10)+"/profile", nil)
+	profileRec := httptest.NewRecorder()
+	server.Router.ServeHTTP(profileRec, profileReq)
+
+	if profileRec.Code != http.StatusOK {
+		t.Fatalf("expected 200 for profile fetch, got %d; body: %s", profileRec.Code, profileRec.Body.String())
+	}
+	var profile model.ResourceProfileResponse
+	if err := json.NewDecoder(profileRec.Body).Decode(&profile); err != nil {
+		t.Fatalf("decode profile: %v", err)
+	}
+	if profile.Profile["hostname"] != "new-host-with-profile-01" {
+		t.Fatalf("expected embedded profile to be persisted, got %#v", profile.Profile)
+	}
+}
+
+// TestCreateResourceWithProfile_ProfileWriteFailureIsNotSuccess pins the
+// atomicity contract at the HTTP seam: when the initial profile write cannot
+// succeed, the create must not return any success status. Both a non-empty
+// profile on a type without a profile table and a submitted empty profile
+// object on such a type are profile write requests and must be rejected.
+func TestCreateResourceWithProfile_ProfileWriteFailureIsNotSuccess(t *testing.T) {
+	server := NewTestServer()
+	cases := []struct {
+		name string
+		body string
+	}{
+		{
+			name: "profile-for-unsupported-type",
+			body: `{
+				"resourceType":"virtual_ip",
+				"name":"vip-atomicity-01",
+				"displayName":"VIP Atomicity 01",
+				"environmentId":1,
+				"ownerId":2,
+				"lifecycleStatus":"provisioning",
+				"healthStatus":"unknown",
+				"source":"manual",
+				"profile":{"address":"10.0.0.10"}
+			}`,
+		},
+		{
+			name: "empty-profile-object-on-unsupported-type",
+			body: `{
+				"resourceType":"virtual_ip",
+				"name":"vip-atomicity-02",
+				"displayName":"VIP Atomicity 02",
+				"environmentId":1,
+				"ownerId":2,
+				"lifecycleStatus":"provisioning",
+				"healthStatus":"unknown",
+				"source":"manual",
+				"profile":{}
+			}`,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodPost, "/resources", strings.NewReader(tc.body))
+			rec := httptest.NewRecorder()
+			server.Router.ServeHTTP(rec, req)
+
+			if rec.Code >= 200 && rec.Code < 300 {
+				t.Fatalf("must not return success when the initial profile write fails; got %d body=%s", rec.Code, rec.Body.String())
+			}
+		})
+	}
+}

@@ -1,5 +1,11 @@
 //go:build integration
 
+// Package integration provides real-MySQL coverage for related-record
+// navigation across resource types.
+// input: database/sql, testing, internal/model, internal/repository/mysql, internal/service
+// output: TestNavigateRelatedRecords_Integration_* cases
+// pos: Proves relation-driven navigation over real MySQL state
+// note: if this file changes, update header and README.md
 package integration
 
 import (
@@ -121,7 +127,7 @@ func setupNavigateFixture(t *testing.T) (string, uint64, *sql.DB) {
 	profileSvc := service.NewProfileService(resRepo, resRepo)
 
 	deps := api.Dependencies{
-		ResourceService:        service.NewResourceService(resRepo, profileSvc),
+		ResourceService:        service.NewResourceService(resRepo),
 		RelationService:        service.NewRelationService(mysql.NewRelationRepository(db)),
 		TopologyService:        service.NewTopologyService(mysql.NewRelationRepository(db)),
 		AuditService:           service.NewAuditService(mysql.NewAuditRepository(db)),

@@ -216,6 +216,72 @@ func (f *fakeResourceRepo) CreateResource(_ context.Context, input model.Resourc
 	return &cloned, nil
 }
 
+// CreateResourceWithProfile mirrors the real repository's create-with-profile
+// seam: the resource is created first and the typed profile is written on top;
+// resource types without a profile table are rejected, matching
+// service.ErrProfileNotSupported semantics for the create path.
+func (f *fakeResourceRepo) CreateResourceWithProfile(ctx context.Context, input model.ResourceCreateInput, profile map[string]any) (*model.Resource, error) {
+	var (
+		created *model.Resource
+		err     error
+	)
+	switch input.ResourceType {
+	case model.ResourceTypeHost:
+		created, err = f.CreateResource(ctx, input)
+		if err == nil {
+			err = f.UpsertHostProfile(ctx, created.ID, profileString(profile, "hostname"), profileString(profile, "ipAddress"), profileString(profile, "osName"))
+		}
+	case model.ResourceTypeDatabaseInstance:
+		created, err = f.CreateResource(ctx, input)
+		if err == nil {
+			err = f.UpsertDatabaseInstanceProfile(ctx, created.ID, profileString(profile, "engine"), profileString(profile, "version"), profileString(profile, "host"), profileInt(profile, "port"), profileString(profile, "role"))
+		}
+	case model.ResourceTypeDatabaseCluster:
+		created, err = f.CreateResource(ctx, input)
+		if err == nil {
+			err = f.UpsertDatabaseClusterProfile(ctx, created.ID, profileString(profile, "engine"), profileString(profile, "topologyMode"), profileString(profile, "primaryEndpoint"))
+		}
+	case model.ResourceTypeService:
+		created, err = f.CreateResource(ctx, input)
+		if err == nil {
+			err = f.UpsertServiceProfile(ctx, created.ID, profileString(profile, "systemName"), profileString(profile, "repositoryUrl"), profileString(profile, "runtimeEnv"))
+		}
+	default:
+		return nil, service.ErrProfileNotSupported
+	}
+	if err != nil {
+		return nil, err
+	}
+	return created, nil
+}
+
+func profileString(profile map[string]any, key string) string {
+	v, ok := profile[key]
+	if !ok {
+		return ""
+	}
+	s, ok := v.(string)
+	if !ok {
+		return fmt.Sprintf("%v", v)
+	}
+	return s
+}
+
+func profileInt(profile map[string]any, key string) int {
+	v, ok := profile[key]
+	if !ok {
+		return 0
+	}
+	switch n := v.(type) {
+	case float64:
+		return int(n)
+	case int:
+		return n
+	default:
+		return 0
+	}
+}
+
 func (f *fakeResourceRepo) UpdateResource(_ context.Context, id uint64, input model.ResourceUpdateInput) (*model.Resource, error) {
 	existing, ok := f.resources[id]
 	if !ok {
@@ -820,7 +886,7 @@ func NewTestServer() *TestServer {
 	credentialStore := &fakeCredentialMetadataStore{}
 
 	deps := Dependencies{
-		ResourceService: service.NewResourceService(resourceRepo, profileSvc),
+		ResourceService: service.NewResourceService(resourceRepo),
 		RelationService: service.NewRelationService(relationRepo),
 		TopologyService: service.NewTopologyService(topologyRepo),
 		AuditService:    service.NewAuditService(fakeAuditRepo{}),

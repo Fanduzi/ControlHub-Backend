@@ -11,6 +11,7 @@ Application bootstrap and manual dependency injection.
 | Module | Service | Repository | Phase |
 |--------|---------|------------|-------|
 | Resource | ResourceService | ResourceRepository | — |
+| Profile | ProfileService | ResourceRepository | — |
 | Relation | RelationService | RelationRepository | — |
 | Topology | TopologyService | RelationRepository | — |
 | Audit | AuditService | AuditRepository | — |
@@ -24,6 +25,8 @@ Application bootstrap and manual dependency injection.
 | Query Explain | QueryExplainService | (none — reuses access resolver + audit repo) | 38N |
 | Query Disclosure | QueryDisclosureService | QueryDisclosureRepository | 38Q |
 | Query Saved Statement | QuerySavedStatementService | QuerySavedStatementRepository | 38W (personal typed declarations) |
+
+Create-with-profile is atomic: `ResourceService.Create` routes embedded profiles through the repository's single transaction (`CreateResourceWithProfile`), so a failed initial profile write returns an error and leaves no resource row.
 
 ## Shared Guards
 - `QueryGuard` is constructed once and reused by execution, explain, and saved-statement services.

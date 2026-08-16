@@ -6,6 +6,7 @@ MySQL-backed integration tests run against disposable Testcontainers databases.
 | File | Responsibility |
 |------|---------------|
 | testenv_test.go | Starts MySQL, applies migrations, and provides database helpers |
+| resource_test.go | Resource repository CRUD/filtering and create-with-profile atomicity against real MySQL (profile write failure rolls back the resource row) |
 | auth_authorization_version_test.go | Verifies Authorization Version credential invalidation and governed-query freshness against current database state |
 | operator_access_boundary_test.go | Proves the complete Operator Access Boundary matrix against current database state using the shared operatoraccess policy |
 | auth_audit_emitter_test.go | Proves auth.login/auth.bearer/auth.authorization audit events persist against MySQL, stay fail-open on inject errors (login success, Bearer rejection, and role-denied 403 all unchanged), and never contain prohibited values; bounded untrusted-Bearer budget proved against real MySQL (missing header emits no row, 60 of 61 supplied rejections persist, suppression counter safe, role denial unbudgeted, process-shared across routers) |

@@ -34,22 +34,22 @@ type ResourceRepository interface {
 	GetResource(id uint64) (*model.Resource, error)
 	GetResourceProfile(id uint64) (*model.ResourceProfileResponse, error)
 	CreateResource(ctx context.Context, input model.ResourceCreateInput) (*model.Resource, error)
+	// CreateResourceWithProfile inserts the resource and its initial profile in
+	// one transaction (all-or-nothing); repositories that cannot run both writes
+	// in a single transaction must still fail the create when the profile write
+	// fails rather than silently dropping it.
+	CreateResourceWithProfile(ctx context.Context, input model.ResourceCreateInput, profile map[string]any) (*model.Resource, error)
 	UpdateResource(ctx context.Context, id uint64, input model.ResourceUpdateInput) (*model.Resource, error)
 	ArchiveResource(ctx context.Context, id uint64, reason string) (*model.Resource, error)
 	UnarchiveResource(ctx context.Context, id uint64) (*model.Resource, error)
 }
 
 type ResourceService struct {
-	repo       ResourceRepository
-	profileSvc *ProfileService
+	repo ResourceRepository
 }
 
-func NewResourceService(repo ResourceRepository, profileSvc ...*ProfileService) *ResourceService {
-	var ps *ProfileService
-	if len(profileSvc) > 0 {
-		ps = profileSvc[0]
-	}
-	return &ResourceService{repo: repo, profileSvc: ps}
+func NewResourceService(repo ResourceRepository) *ResourceService {
+	return &ResourceService{repo: repo}
 }
 
 func (s *ResourceService) List(ctx context.Context, q model.ResourceListQuery) ([]model.Resource, *model.PageInfo, error) {
@@ -87,12 +87,22 @@ func (s *ResourceService) Create(ctx context.Context, input model.ResourceCreate
 	if err := validateReferenceIDs(input.EnvironmentID, input.OwnerID); err != nil {
 		return nil, err
 	}
-	created, err := s.repo.CreateResource(ctx, normalizeResourceCreateInput(input))
+	input = normalizeResourceCreateInput(input)
+
+	var (
+		created *model.Resource
+		err     error
+	)
+	// A submitted profile object (even an empty one) is a profile write
+	// request: route it through the atomic path so unsupported resource types
+	// are rejected instead of silently dropping the profile.
+	if input.Profile != nil {
+		created, err = s.repo.CreateResourceWithProfile(ctx, input, input.Profile)
+	} else {
+		created, err = s.repo.CreateResource(ctx, input)
+	}
 	if err != nil {
 		return nil, err
-	}
-	if len(input.Profile) > 0 && s.profileSvc != nil {
-		_ = s.profileSvc.PutProfile(ctx, created.ID, input.Profile)
 	}
 	return created, nil
 }
