@@ -1,4 +1,4 @@
-.PHONY: test test-integration test-openapi-fuzz run openapi-validate migrate-up migrate-status migrate-down-one migrate-reset-dev cutover-local seed-query-dev-credential seed-query-dev-target query-e2e-mysql-up query-e2e-mysql-down query-e2e-mysql-status argon2id-budget release-local-gates release-docker-gates release-readiness-gates
+.PHONY: test test-integration test-openapi-fuzz run run-query-dev openapi-validate migrate-up migrate-status migrate-down-one migrate-reset-dev cutover-local seed-query-dev-credential seed-query-dev-target query-e2e-mysql-up query-e2e-mysql-down query-e2e-mysql-status argon2id-budget release-local-gates release-docker-gates release-readiness-gates
 
 GOOSE := $(shell go env GOPATH)/bin/goose
 GOOSE_DRIVER := mysql
@@ -27,6 +27,9 @@ openapi-validate: ## Validate internal/openapi/openapi.yaml
 
 run:
 	go run ./cmd/server
+
+run-query-dev: ## Start the backend for local Query Workbench acceptance: ensure the Query E2E fixture, seed the Local MySQL Query Dev target (idempotent), then run the server on APP_PORT with an ephemeral JWT_SECRET (no DSNs/secrets printed)
+	bash scripts/run-query-dev.sh
 
 cutover-local: ## Preserve current controlhub as controlhub_v1, rebuild bigint controlhub, then import legacy data (DESTRUCTIVE — requires CONFIRM=yes)
 	@if [ "$(CONFIRM)" != "yes" ]; then echo "Error: set CONFIRM=yes to run this target. This renames runtime tables, rebuilds the target database, and imports preserved data."; exit 1; fi

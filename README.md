@@ -103,6 +103,32 @@ JWT_SECRET="$(openssl rand -hex 32)" \
 make run
 ```
 
+### Local Query Workbench acceptance (cross-repo)
+
+Start the backend ready for local Query Workbench acceptance — Query E2E fixture
+ensured, Local MySQL Query Dev target metadata seeded (idempotent), server on
+`APP_PORT` (default 8080) with a fresh ephemeral `JWT_SECRET` (overrides any
+placeholder in `.env`):
+
+```bash
+make run-query-dev
+```
+
+No DSN, password, or token is printed; the quoted credential DSN from
+`.query-e2e-mysql.env` is sourced, never parsed. Requires Docker (fixture),
+`DATABASE_DSN` (from `.env` or the shell), and `openssl`.
+
+Manual acceptance sequence with the frontend (see the frontend README):
+
+1. Backend: `make run-query-dev`
+2. Frontend: `npm run dev:local` (Next on `http://localhost:3000`)
+3. Log in and run a governed query against the **Local MySQL Query Dev** target.
+
+Restarting either service invalidates the local session: the backend signs
+tokens with a fresh ephemeral `JWT_SECRET` each start, and the frontend seals
+sessions with a fresh ephemeral BFF key each start — log in again after any
+restart.
+
 To confirm the local toolchain before running, use `go version`.
 
 ## Local Verification
