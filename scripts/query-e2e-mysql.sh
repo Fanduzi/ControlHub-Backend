@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Phase 37H/38I dedicated Query E2E MySQL fixture (dev/test only).
 # input: docker, openssl, XDG_STATE_HOME (or HOME) and optional QUERY_E2E_MYSQL_* overrides
-# output: per-user mode-0600 fixture credential state; `env-file` prints its path only
+# output: per-user mode-0600 fixture credential state isolated per fixture identity (container/port/database/readonly user); `env-file` prints the current identity's path only
 # pos: owns the shared Query E2E fixture credential handoff used by run-query-dev.sh
 # note: update scripts/README.md and run-query-dev.sh when this handoff changes
 #
@@ -9,9 +9,11 @@
 # ready-target E2E. It creates a query_e2e schema (seed table, stable rows),
 # a query_e2e_aux schema (parent/child tables, view, composite index,
 # secondary index, foreign key), and a SELECT-only user with access to both
-# databases, then writes a per-user credential state file containing the
+# databases, then writes a per-user credential state file (isolated per
+# fixture identity: container, port, database, read-only user) containing the
 # read-only credential DSN. A legacy gitignored .query-e2e-mysql.env is
-# migrated once when present.
+# migrated once when present and matching the current identity's port and
+# database.
 #
 # Safety: this script NEVER prints the credential DSN or any password. It only
 # logs safe facts (container name, host, port, database name, readiness). The
@@ -34,7 +36,6 @@ HOST="127.0.0.1"
 LEGACY_ENV_FILE=".query-e2e-mysql.env"
 STATE_HOME="${XDG_STATE_HOME:-${HOME:?HOME is required when XDG_STATE_HOME is unset}/.local/state}"
 STATE_DIR="$STATE_HOME/controlhub"
-STATE_FILE="$STATE_DIR/query-e2e-mysql.env"
 REF="LOCAL_QUERY_RO"
 IMAGE="mysql:8.0"
 READY_TIMEOUT="${QUERY_E2E_MYSQL_READY_TIMEOUT:-90}"
@@ -64,10 +65,22 @@ stored_password() {
     | sed 's/^QUERY_E2E_MYSQL_READONLY_PASSWORD=//' | tr -d '\r\n'
 }
 
-# Move the old worktree-local handoff into state without ever displaying it.
+# Move the old worktree-local handoff into the CURRENT identity's state once,
+# without ever displaying it. The legacy file records no container or user, so
+# migration only proceeds when its DSN port and database match the current
+# identity; a mismatched legacy file is left untouched for the worktree that
+# owns it.
 migrate_legacy_state() {
   [ -f "$STATE_FILE" ] && return 0
   [ -f "$LEGACY_ENV_FILE" ] || return 0
+
+  # Compare only the port and database parsed from the DSN we previously
+  # wrote (validated shape; never displayed). No match => not this identity.
+  local legacy_port_db
+  legacy_port_db="$(sed -n 's#^CONTROLHUB_QUERY_CREDENTIAL_[A-Za-z0-9_]*="[^"]*@tcp([^:]*:\([0-9][0-9]*\))/\([^?]*\)?[^"]*"$#\1 \2#p' "$LEGACY_ENV_FILE" | head -1)"
+  if [ "$legacy_port_db" != "$PORT $DATABASE" ]; then
+    return 0
+  fi
 
   local tmp
   umask 077
@@ -551,8 +564,10 @@ cmd_down() {
   else
     log "$CONTAINER not present"
   fi
-  # Remove the shared state (regenerated on next up); ignore stale legacy state.
-  rm -f "$STATE_FILE" "$LEGACY_ENV_FILE"
+  # Remove only the CURRENT identity's state (regenerated on next up). Other
+  # fixture identities keep their own state; the legacy worktree env file is
+  # left for migration, never removed here.
+  rm -f "$STATE_FILE"
   log "done"
 }
 
@@ -584,6 +599,13 @@ usage() {
 # Fail closed on bad external input before any docker call, heredoc, or state
 # write (all subcommands validate).
 validate_inputs
+
+# Identity-scoped state path, derived only from the VALIDATED fixture identity
+# (container, port, database, read-only user) so worktrees using different
+# fixture identities never share — or clobber — each other's credential state.
+# The identity is joined with ':' because no component charset validated above
+# contains ':', making the join unambiguous and collision-free.
+STATE_FILE="$STATE_DIR/query-e2e-mysql--${CONTAINER}:${PORT}:${DATABASE}:${RO_USER}.env"
 
 case "${1:-}" in
   up) cmd_up ;;

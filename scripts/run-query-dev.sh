@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
 # Local Query Workbench dev launcher (dev-only, invoked via `make run-query-dev`).
-# input: scripts/query-e2e-mysql.sh shared state path, openssl, go, DATABASE_DSN
+# input: scripts/query-e2e-mysql.sh identity-scoped shared state path, openssl, go, DATABASE_DSN
 # output: run-query-dev — ControlHub backend on APP_PORT (default 8080) ready for local Query Workbench acceptance
 # pos: dev-only launcher; sources quoted shared fixture state (never parses), seeds Local MySQL Query Dev target metadata, overrides placeholder JWT_SECRET
 # note: if this script changes, update this header, the Makefile run-query-dev target, and scripts/README.md
 #
 # Ensures the dedicated Query E2E Docker MySQL fixture is up (idempotent),
-# SOURCES its per-user state file — the credential DSN in that file is
-# double-quoted and shell-sourceable by design, so it must be
+# SOURCES its per-identity per-user state file — the credential DSN in that
+# file is double-quoted and shell-sourceable by design, so it must be
 # sourced, never copied/parsed — idempotently ensures the Local MySQL Query Dev
 # target metadata, then starts the backend on APP_PORT (default 8080) with a
 # fresh ephemeral JWT_SECRET that overrides any placeholder exported from .env.
