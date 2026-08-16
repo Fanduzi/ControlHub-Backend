@@ -1,20 +1,25 @@
 #!/usr/bin/env bash
 # Phase 37H/38I dedicated Query E2E MySQL fixture (dev/test only).
+# input: docker, openssl, XDG_STATE_HOME (or HOME) and optional QUERY_E2E_MYSQL_* overrides
+# output: per-user mode-0600 fixture credential state; `env-file` prints its path only
+# pos: owns the shared Query E2E fixture credential handoff used by run-query-dev.sh
+# note: update scripts/README.md and run-query-dev.sh when this handoff changes
 #
 # up/down/status for a disposable Docker MySQL used by the Query Workbench
 # ready-target E2E. It creates a query_e2e schema (seed table, stable rows),
 # a query_e2e_aux schema (parent/child tables, view, composite index,
 # secondary index, foreign key), and a SELECT-only user with access to both
-# databases, then writes a gitignored .query-e2e-mysql.env containing the
-# read-only credential DSN.
+# databases, then writes a per-user credential state file containing the
+# read-only credential DSN. A legacy gitignored .query-e2e-mysql.env is
+# migrated once when present.
 #
 # Safety: this script NEVER prints the credential DSN or any password. It only
 # logs safe facts (container name, host, port, database name, readiness). The
-# password is generated as hex, reused across runs via the env file, passed to
-# mysql via MYSQL_PWD (never on the command line), and the env file is mode 0600.
+# password is generated as hex, reused across worktrees via the state file,
+# passed to mysql via MYSQL_PWD (never on the command line), and state is mode 0600.
 # Every external input (database/user/password/port/timeout/container) is
 # whitelisted against a safe charset before any docker call, SQL heredoc, or
-# env-file write, so a stray quote/space/shell-metachar can never reach those
+# state-file write, so a stray quote/space/shell-metachar can never reach those
 # contexts. Validation error strings name only the variable and the failing
 # category — they never echo the value, the password, or the DSN.
 #
@@ -26,7 +31,10 @@ PORT="${QUERY_E2E_MYSQL_PORT:-13306}"
 DATABASE="${QUERY_E2E_MYSQL_DATABASE:-query_e2e}"
 RO_USER="${QUERY_E2E_MYSQL_READONLY_USER:-query_e2e_ro}"
 HOST="127.0.0.1"
-ENV_FILE=".query-e2e-mysql.env"
+LEGACY_ENV_FILE=".query-e2e-mysql.env"
+STATE_HOME="${XDG_STATE_HOME:-${HOME:?HOME is required when XDG_STATE_HOME is unset}/.local/state}"
+STATE_DIR="$STATE_HOME/controlhub"
+STATE_FILE="$STATE_DIR/query-e2e-mysql.env"
 REF="LOCAL_QUERY_RO"
 IMAGE="mysql:8.0"
 READY_TIMEOUT="${QUERY_E2E_MYSQL_READY_TIMEOUT:-90}"
@@ -49,11 +57,45 @@ gen_password() {
   fi
 }
 
-# Read a stored password from the env file so re-runs reuse it (idempotent).
+# Read a stored password from the per-user state so worktrees reuse it.
 stored_password() {
-  [ -f "$ENV_FILE" ] || return 1
-  grep "^QUERY_E2E_MYSQL_READONLY_PASSWORD=" "$ENV_FILE" 2>/dev/null | head -1 \
+  [ -f "$STATE_FILE" ] || return 1
+  grep "^QUERY_E2E_MYSQL_READONLY_PASSWORD=" "$STATE_FILE" 2>/dev/null | head -1 \
     | sed 's/^QUERY_E2E_MYSQL_READONLY_PASSWORD=//' | tr -d '\r\n'
+}
+
+# Move the old worktree-local handoff into state without ever displaying it.
+migrate_legacy_state() {
+  [ -f "$STATE_FILE" ] && return 0
+  [ -f "$LEGACY_ENV_FILE" ] || return 0
+
+  local tmp
+  umask 077
+  mkdir -p "$STATE_DIR"
+  tmp="$(mktemp "$STATE_DIR/.query-e2e-mysql.env.XXXXXX")"
+  trap 'rm -f "$tmp"' RETURN
+  cat "$LEGACY_ENV_FILE" > "$tmp"
+  chmod 600 "$tmp"
+  mv "$tmp" "$STATE_FILE"
+  rm -f "$LEGACY_ENV_FILE"
+  trap - RETURN
+  log "migrated legacy fixture state to the per-user state directory (not printed)"
+}
+
+write_state() {
+  local password="$1" tmp
+  umask 077
+  mkdir -p "$STATE_DIR"
+  tmp="$(mktemp "$STATE_DIR/.query-e2e-mysql.env.XXXXXX")"
+  trap 'rm -f "$tmp"' RETURN
+  {
+    printf 'CONTROLHUB_QUERY_CREDENTIAL_%s="%s:%s@tcp(%s:%s)/%s?parseTime=true&charset=utf8mb4"\n' \
+      "$REF" "$RO_USER" "$password" "$HOST" "$PORT" "$DATABASE"
+    printf 'QUERY_E2E_MYSQL_READONLY_PASSWORD=%s\n' "$password"
+  } > "$tmp"
+  chmod 600 "$tmp"
+  mv "$tmp" "$STATE_FILE"
+  trap - RETURN
 }
 
 container_running() {
@@ -80,7 +122,7 @@ wait_ready() {
 
 # --- Input validation -------------------------------------------------------
 # Every externally-supplied value is whitelisted before any docker run/exec,
-# SQL heredoc interpolation, or env-file write. This is defense in depth: even
+# SQL heredoc interpolation, or state-file write. This is defense in depth: even
 # though these values flow into SQL, Docker args, and a shell-sourceable env
 # file, they are first restricted to a safe charset so a stray quote, space, or
 # shell/SQL metacharacter can never reach those contexts. Error messages are
@@ -145,18 +187,29 @@ validate_inputs() {
 cmd_up() {
   require_docker
 
+  # A legacy worktree handoff is upgraded before deciding whether a running
+  # fixture can be reused. The shared state is then the only credential source.
+  if [ ! -f "$STATE_FILE" ] && [ -f "$LEGACY_ENV_FILE" ]; then
+    migrate_legacy_state
+  fi
+
+  local running
+  running="$(container_running)"
+
   # Determine the fixture password: explicit env > stored (reuse) > generated.
   if [ -n "${QUERY_E2E_MYSQL_READONLY_PASSWORD:-}" ]; then
     PW="$QUERY_E2E_MYSQL_READONLY_PASSWORD"
   elif stored="$(stored_password)" && [ -n "$stored" ]; then
     PW="$stored"
   else
+    if [ -n "$running" ]; then
+      log "error: $CONTAINER exists but shared fixture state is missing; run query-e2e-mysql.sh once from the worktree that still has $LEGACY_ENV_FILE"
+      exit 1
+    fi
     PW="$(gen_password)"
     [ -n "$PW" ] || { log "error: could not generate a fixture password"; exit 1; }
   fi
 
-  local running
-  running="$(container_running)"
   if [ "$running" = "true" ]; then
     log "$CONTAINER already running (host=$HOST port=$PORT database=$DATABASE)"
   elif [ -n "$running" ]; then
@@ -483,22 +536,11 @@ grant select on \`$AUX_DATABASE\`.* to '$RO_USER'@'%';
 flush privileges;
 SQL
 
-  # Write the gitignored env file (credential DSN + reuse password). Mode 0600.
-  # The DSN value is double-quoted so the file is shell-sourceable (`set -a; . file`
-  # would otherwise break on the DSN's '&'); godotenv also strips the quotes.
-  # Never echoed to stdout/stderr.
-  (
-    umask 077
-    {
-      printf 'CONTROLHUB_QUERY_CREDENTIAL_%s="%s:%s@tcp(%s:%s)/%s?parseTime=true&charset=utf8mb4"\n' \
-        "$REF" "$RO_USER" "$PW" "$HOST" "$PORT" "$DATABASE"
-      printf 'QUERY_E2E_MYSQL_READONLY_PASSWORD=%s\n' "$PW"
-    } > "$ENV_FILE"
-  )
+  # Write shared state atomically. The double-quoted DSN remains shell-sourceable.
+  write_state "$PW"
 
   log "$CONTAINER ready (host=$HOST port=$PORT database=$DATABASE)"
-  log "credential DSN written to $ENV_FILE (gitignored; not printed)"
-  log "source it for the server and seed: set -a; . ./$ENV_FILE; set +a"
+  log "credential DSN written to per-user state (mode 0600; not printed)"
 }
 
 cmd_down() {
@@ -509,9 +551,13 @@ cmd_down() {
   else
     log "$CONTAINER not present"
   fi
-  # Remove the local env file (regenerated on next up); ignore if absent.
-  [ -f "$ENV_FILE" ] && rm -f "$ENV_FILE"
+  # Remove the shared state (regenerated on next up); ignore stale legacy state.
+  rm -f "$STATE_FILE" "$LEGACY_ENV_FILE"
   log "done"
+}
+
+cmd_env_file() {
+  printf '%s\n' "$STATE_FILE"
 }
 
 cmd_status() {
@@ -531,11 +577,11 @@ cmd_status() {
 }
 
 usage() {
-  log "usage: $0 {up|down|status}"
+  log "usage: $0 {up|down|status|env-file}"
   exit 2
 }
 
-# Fail closed on bad external input before any docker call, heredoc, or env-file
+# Fail closed on bad external input before any docker call, heredoc, or state
 # write (all subcommands validate).
 validate_inputs
 
@@ -543,5 +589,6 @@ case "${1:-}" in
   up) cmd_up ;;
   down) cmd_down ;;
   status) cmd_status ;;
+  env-file) cmd_env_file ;;
   *) usage ;;
 esac

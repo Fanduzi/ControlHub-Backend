@@ -41,10 +41,10 @@ seed-query-dev-credential: ## Seed local/dev query credential METADATA for one t
 seed-query-dev-target: ## Dev-only: ENSURE a local database_instance query target + profile (host/port from the credential DSN CONTROLHUB_QUERY_CREDENTIAL_<REF>), then seed its credential metadata in one idempotent pass. Requires DATABASE_DSN (metadata DB), QUERY_DEV_CREDENTIAL_REF, CONTROLHUB_QUERY_CREDENTIAL_<REF>. DSN is never stored/printed.
 	QUERY_DEV_ALLOW_TARGET_FIXTURE=true go run ./cmd/querydev
 
-query-e2e-mysql-up: ## Start the dedicated Query E2E Docker MySQL (dev/test). Writes gitignored .query-e2e-mysql.env with the read-only credential DSN (never printed). Does not touch the ControlHub metadata DB.
+query-e2e-mysql-up: ## Start the dedicated Query E2E Docker MySQL (dev/test). Writes per-user mode-0600 fixture state with the read-only credential DSN (never printed). Does not touch the ControlHub metadata DB.
 	bash scripts/query-e2e-mysql.sh up
 
-query-e2e-mysql-down: ## Stop and remove the dedicated Query E2E Docker MySQL, and remove .query-e2e-mysql.env.
+query-e2e-mysql-down: ## Stop and remove the dedicated Query E2E Docker MySQL and its per-user fixture state.
 	bash scripts/query-e2e-mysql.sh down
 
 query-e2e-mysql-status: ## Report whether the dedicated Query E2E Docker MySQL is running.

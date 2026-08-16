@@ -114,9 +114,11 @@ placeholder in `.env`):
 make run-query-dev
 ```
 
-No DSN, password, or token is printed; the quoted credential DSN from
-`.query-e2e-mysql.env` is sourced, never parsed. Requires Docker (fixture),
-`DATABASE_DSN` (from `.env` or the shell), and `openssl`.
+No DSN, password, or token is printed; the quoted credential DSN from the
+per-user state file at `${XDG_STATE_HOME:-$HOME/.local/state}/controlhub/`
+is sourced, never parsed. The first run migrates a legacy
+`.query-e2e-mysql.env` if present. Requires Docker (fixture), `DATABASE_DSN`
+(from `.env` or the shell), and `openssl`.
 
 Manual acceptance sequence with the frontend (see the frontend README):
 

@@ -6,7 +6,8 @@ Repository verification scripts.
 | File | Responsibility |
 |------|---------------|
 | openapi-fuzz.sh | Runs authenticated Schemathesis OpenAPI fuzzing; exits 2 when prerequisites (including Bearer token) are missing and excludes executeSavedStatement without a stable fixture |
-| run-query-dev.sh | Dev-only launcher for `make run-query-dev`: ensures the Query E2E fixture, sources the quoted credential DSN env (never parses), seeds the Local MySQL Query Dev target metadata, then runs the server on APP_PORT with an ephemeral JWT_SECRET |
+| query-e2e-mysql.sh | Owns the Query E2E MySQL lifecycle and per-user mode-0600 credential state; migrates a legacy worktree env file once and exposes its path without printing secrets |
+| run-query-dev.sh | Dev-only launcher for `make run-query-dev`: ensures the Query E2E fixture, sources its quoted shared credential state (never parses), seeds the Local MySQL Query Dev target metadata, then runs the server on APP_PORT with an ephemeral JWT_SECRET |
 
 ## OpenAPI Fuzz Exclusion Contract
 
