@@ -19,7 +19,7 @@ execution, and the obsolete standalone execution-history write seam
 | Base (`origin/main`, after #35 closure at `7327de3`) | `7327de395219b3af09d5fb2145e61af0d86fd406` |
 | Branch / worktree | `issue-36-related-nav-atomic-evidence-20260818` at `~/GolangProjects/ControlHub-wt-issue-36-20260818` |
 | Product SHA (all candidate gates run here) | `e3b77df50b7ab8e3fb3a46898db59de8472dfd05` |
-| Merged / pushed `origin/main` | `0508477c73425f697cc6c87b5695831e9b77afd8` (fast-forward push `7327de3..0508477`; product tree identical to `e3b77df` plus the evidence commits) |
+| Merged / pushed `origin/main` | `0c1116b99ff3b5cbfa3de0b49844f32bc4154a53` (fast-forward push `7327de3..0c1116b`; product tree identical to `e3b77df` plus the evidence commits) |
 | Delivery commits | `7354a37` `feat(evidence): migrate related-record navigation to the atomic Execution Evidence Pair (issue #36)`; `e3b77df` `fix(evidence): address code-review findings on Issue #36 range`; `3e04c28` `docs(evidence): record #36 related-record navigation atomic evidence release evidence`; `17192a4` `docs(evidence): finalize #36 evidence with merged-root re-run and CI result at shipped SHA`; `0508477` `docs(evidence): add final pushed-SHA CI run to #36 evidence` |
 
 Delivery range (`git diff --stat origin/main...HEAD`): 17 files, +540/-115 —
@@ -111,9 +111,10 @@ CI at the product-equivalent pushed root: <https://github.com/Fanduzi/ControlHub
 `release-docker-gates` success, conclusion `success`. Follow-up docs-only pushes
 ran green as well: `17192a4`
 (<https://github.com/Fanduzi/ControlHub-Backend/actions/runs/32081728126>)
-and the final head `0508477`
-(<https://github.com/Fanduzi/ControlHub-Backend/actions/runs/32081936804>), both
-jobs success in each.
+and the final heads: `0508477`
+(<https://github.com/Fanduzi/ControlHub-Backend/actions/runs/32081936804>) and
+`0c1116b` (<https://github.com/Fanduzi/ControlHub-Backend/actions/runs/32082156284>),
+both jobs success in each.
 
 Root worktree preservation: the ROOT worktree (`~/GolangProjects/ControlHub`,
 still at `3af5d29`) was not touched by this delivery; its pre-existing dirty
