@@ -4,7 +4,7 @@
 // boundary matrix.
 // input: context, encoding/json, fmt, net/http, net/http/httptest, strings, testing, time, internal/api, internal/model, internal/repository/mysql, internal/service, internal/testsupport/operatoraccess
 // output: TestOperatorAccessBoundary integration case
-// pos: Proves the operator access matrix (including 38R conditional saved statements) on real MySQL state
+// pos: Proves the operator access matrix (including 38R conditional saved statements) on real MySQL state with concrete resource/query-target paths bound to a self-contained database_instance fixture
 // note: if this file changes, update header and README.md
 package integration
 
