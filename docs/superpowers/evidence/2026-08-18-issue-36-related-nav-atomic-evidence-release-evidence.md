@@ -19,7 +19,8 @@ execution, and the obsolete standalone execution-history write seam
 | Base (`origin/main`, after #35 closure at `7327de3`) | `7327de395219b3af09d5fb2145e61af0d86fd406` |
 | Branch / worktree | `issue-36-related-nav-atomic-evidence-20260818` at `~/GolangProjects/ControlHub-wt-issue-36-20260818` |
 | Product SHA (all candidate gates run here) | `e3b77df50b7ab8e3fb3a46898db59de8472dfd05` |
-| Delivery commits | `7354a37` `feat(evidence): migrate related-record navigation to the atomic Execution Evidence Pair (issue #36)`; `e3b77df` `fix(evidence): address code-review findings on Issue #36 range` |
+| Merged / pushed `origin/main` | `3e04c283a319f2e7c8fdb24ba8fb570498457c87` (fast-forward push `7327de3..3e04c28`; product tree identical to `e3b77df` plus the evidence commit) |
+| Delivery commits | `7354a37` `feat(evidence): migrate related-record navigation to the atomic Execution Evidence Pair (issue #36)`; `e3b77df` `fix(evidence): address code-review findings on Issue #36 range`; `3e04c28` `docs(evidence): record #36 related-record navigation atomic evidence release evidence` |
 
 Delivery range (`git diff --stat origin/main...HEAD`): 17 files, +540/-115 —
 `internal/repository/mysql/query_execution_repository.go` (InsertExecutionWithAudit
@@ -89,6 +90,32 @@ All executed in the issue-36 worktree at `HEAD=e3b77df`.
 | `make test-openapi-fuzz` | PASS, exit 0, exactly 1 test (`TestOpenAPIFuzz`), Schemathesis checks clean |
 | `check_three_level_doc.sh` | PASS on the change set (L3 headers + four module READMEs synchronized; root README reviewed — no new module/contract row needed) |
 | `gofmt -l` (changed files) | Clean (pre-existing origin/main baseline files remain unformatted and were not touched) |
+
+## Merged-root Re-run (pushed SHA `3e04c28`) and CI
+
+All required gates were re-run at the pushed root `3e04c28` from the issue
+worktree (proven `HEAD == origin/main`).
+
+| Command | Result |
+| --- | --- |
+| `go test -count=1 ./...` | PASS, 1809 tests, 14 packages |
+| `go test -race -count=1 ./...` | PASS, 1809 tests, no data races |
+| `go vet ./...`, `go build ./...` | PASS, clean |
+| `go test ./internal/openapi` | PASS |
+| `go test -tags=integration -count=1 -run '^Test' -skip '^TestOpenAPIFuzz$' ./internal/integration` | PASS, 389 passed / 0 failed / 0 skipped |
+| `make test-openapi-fuzz` | PASS, exactly 1 test (`TestOpenAPIFuzz`), clean |
+| `check_three_level_doc.sh` | PASS on the merged root |
+
+CI: <https://github.com/Fanduzi/ControlHub-Backend/actions/runs/32081284820> —
+Backend CI at head `3e04c28`: `release-local-gates` success,
+`release-docker-gates` success, conclusion `success`.
+
+Root worktree preservation: the ROOT worktree (`~/GolangProjects/ControlHub`,
+still at `3af5d29`) was not touched by this delivery; its pre-existing dirty
+paths (modified `CLAUDE.md`, `advisor-plans/README.md`; untracked user WIP
+docs incl. a local `CONTEXT.md`, `AGENTS.md.bak*`, `CLAUDE.md.bak*`,
+`docs/agents/`, two decision records, two superpowers plans/specs) remain
+untouched in place.
 
 ## Acceptance Criteria Status
 
