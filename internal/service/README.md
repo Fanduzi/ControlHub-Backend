@@ -32,7 +32,7 @@ Business logic layer with interface-based repository dependencies. Each service 
 | query_executor_test.go | Executor scanning, result-cap, and compiler-owned template binding tests |
 | query_execution_service_test.go | Query execution service tests, including governed per-page access, disclosure, persistence guarantees, and cancellation-durable terminal evidence via the detached two-second Evidence Persistence Window (Issue #35) |
 | query_template_execution_service_test.go | Template-execution service tests (reread, authorization matrix, typed value field errors, per-page chain, no-value persistence, cancellation-durable evidence) |
-| query_disclosure_service.go | QueryDisclosureService — policy lookup, projection resolution, result transformation; preflight read errors %w-wrapped inside the blocked wrap so the execution service can distinguish cancellation from policy rejection (Issue #35) |
+| query_disclosure_service.go | QueryDisclosureService — policy lookup, projection resolution, result transformation; governance refusals stay blocked while disclosure machinery failures use a distinct backend sentinel so the execution service records them as terminal failed/timeout/canceled evidence, not policy rejections (Issue #35) |
 | query_disclosure_projection.go | Column provenance resolution from SQL AST and FK metadata |
 | query_disclosure_mask.go | applyDisclosureMask for server-side value redaction |
 | query_saved_statement_service.go | QuerySavedStatementService — authorized target-scoped saved statement CRUD with typed declaration validation and guard validation |

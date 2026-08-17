@@ -945,40 +945,49 @@ func TestExecute_PagedClientCanceledDuringExecution_RecordsFailedCanceled(t *tes
 // be recorded as failed/query_canceled — never as a policy rejection.
 func TestExecute_ClientCanceledDuringDisclosure_RecordsFailedCanceled(t *testing.T) {
 	t.Parallel()
-	repo := &fakeExecRepo{
-		credentials: map[uint64]model.QueryCredentialMetadata{
-			9001: enabledCred(model.QueryEnvPolicyNonProdOnly),
-		},
-	}
-	executor := &fakeExecutor{result: QueryDatabaseResult{RowCount: 1}}
-	// The real disclosure service wraps the inspector/read error inside an
-	// ErrQueryDisclosureBlocked wrap; a canceled read must still classify as
-	// failed/query_canceled rather than a policy rejection.
-	disclosure := &fakeDisclosureService{blockErr: fmt.Errorf("%w: %w", ErrQueryDisclosureBlocked, context.Canceled)}
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel()
-	svc := NewQueryExecutionService(
-		fakeTargetRepo{targets: []model.QueryTarget{mysqlTarget("Staging")}},
-		repo, &fakeResolver{dsn: testResolverDSN}, executor,
-		NewQueryGuard(QueryGuardConfig{DefaultMaxRows: 100, HardMaxRows: 500}),
-		&fakeClock{t: time.Now()},
-		nil, disclosure,
-	)
+	// Both wrap shapes a canceled disclosure read can arrive in must classify
+	// as failed/query_canceled, never as a policy rejection: the backend
+	// sentinel (the real disclosure service's wrap for inspector/read
+	// failures) and a defensive blocked-blend (any future regression that
+	// folds a cancelable cause back into the blocked wrap).
+	for name, wrapErr := range map[string]error{
+		"backend-sentinel-blend": fmt.Errorf("%w: %w", ErrQueryDisclosureBackendFailure, context.Canceled),
+		"blocked-blend":          fmt.Errorf("%w: %w", ErrQueryDisclosureBlocked, context.Canceled),
+	} {
+		t.Run(name, func(t *testing.T) {
+			repo := &fakeExecRepo{
+				credentials: map[uint64]model.QueryCredentialMetadata{
+					9001: enabledCred(model.QueryEnvPolicyNonProdOnly),
+				},
+			}
+			executor := &fakeExecutor{result: QueryDatabaseResult{RowCount: 1}}
+			disclosure := &fakeDisclosureService{preflightErr: wrapErr}
+			ctx, cancel := context.WithCancel(context.Background())
+			cancel()
+			svc := NewQueryExecutionService(
+				fakeTargetRepo{targets: []model.QueryTarget{mysqlTarget("Staging")}},
+				repo, &fakeResolver{dsn: testResolverDSN}, executor,
+				NewQueryGuard(QueryGuardConfig{DefaultMaxRows: 100, HardMaxRows: 500}),
+				&fakeClock{t: time.Now()},
+				nil, disclosure,
+			)
 
-	_, err := svc.Execute(ctx, 7, 9001, model.QueryExecuteRequest{Statement: "select 1", MaxRows: 10})
-	if !errors.Is(err, ErrQueryBackendFailure) {
-		t.Fatalf("error = %v, want ErrQueryBackendFailure for canceled disclosure work", err)
+			_, err := svc.Execute(ctx, 7, 9001, model.QueryExecuteRequest{Statement: "select 1", MaxRows: 10})
+			if !errors.Is(err, ErrQueryBackendFailure) {
+				t.Fatalf("error = %v, want ErrQueryBackendFailure for canceled disclosure work", err)
+			}
+			if executor.called {
+				t.Fatal("executor must not run when disclosure fails")
+			}
+			if len(repo.insertedAttempts) != 1 || repo.insertedAttempts[0].Status != model.QueryExecutionFailed {
+				t.Fatalf("canceled disclosure attempt must be recorded as failed: %+v", repo.insertedAttempts)
+			}
+			if repo.insertedAttempts[0].ErrorCode != "query_canceled" {
+				t.Fatalf("error code = %q, want query_canceled", repo.insertedAttempts[0].ErrorCode)
+			}
+			assertDetachedEvidenceWindow(t, repo)
+		})
 	}
-	if executor.called {
-		t.Fatal("executor must not run when disclosure fails")
-	}
-	if len(repo.insertedAttempts) != 1 || repo.insertedAttempts[0].Status != model.QueryExecutionFailed {
-		t.Fatalf("canceled disclosure attempt must be recorded as failed: %+v", repo.insertedAttempts)
-	}
-	if repo.insertedAttempts[0].ErrorCode != "query_canceled" {
-		t.Fatalf("error code = %q, want query_canceled", repo.insertedAttempts[0].ErrorCode)
-	}
-	assertDetachedEvidenceWindow(t, repo)
 }
 
 // TestExecute_DisclosurePreflightTimeout_RecordsTimeoutEvidence proves a
@@ -992,7 +1001,7 @@ func TestExecute_DisclosurePreflightTimeout_RecordsTimeoutEvidence(t *testing.T)
 		},
 	}
 	executor := &fakeExecutor{result: QueryDatabaseResult{RowCount: 1}}
-	disclosure := &fakeDisclosureService{blockErr: fmt.Errorf("%w: %w", ErrQueryDisclosureBlocked, context.DeadlineExceeded)}
+	disclosure := &fakeDisclosureService{preflightErr: fmt.Errorf("%w: %w", ErrQueryDisclosureBackendFailure, context.DeadlineExceeded)}
 	svc := NewQueryExecutionService(
 		fakeTargetRepo{targets: []model.QueryTarget{mysqlTarget("Staging")}},
 		repo, &fakeResolver{dsn: testResolverDSN}, executor,
@@ -1028,7 +1037,7 @@ func TestExecute_DisclosurePreflightTerminalFailure_RecordsFailedEvidence(t *tes
 		},
 	}
 	executor := &fakeExecutor{result: QueryDatabaseResult{RowCount: 1}}
-	disclosure := &fakeDisclosureService{preflightErr: errors.New("disclosure engine unreachable")}
+	disclosure := &fakeDisclosureService{preflightErr: fmt.Errorf("%w: %w", ErrQueryDisclosureBackendFailure, errors.New("disclosure engine unreachable"))}
 	svc := NewQueryExecutionService(
 		fakeTargetRepo{targets: []model.QueryTarget{mysqlTarget("Staging")}},
 		repo, &fakeResolver{dsn: testResolverDSN}, executor,
@@ -1047,11 +1056,11 @@ func TestExecute_DisclosurePreflightTerminalFailure_RecordsFailedEvidence(t *tes
 	if len(repo.insertedAttempts) != 1 || repo.insertedAttempts[0].Status != model.QueryExecutionFailed {
 		t.Fatalf("disclosure failure must be recorded as failed: %+v", repo.insertedAttempts)
 	}
-	if repo.insertedAttempts[0].ErrorCode != "query_backend_error" {
-		t.Fatalf("error code = %q, want query_backend_error", repo.insertedAttempts[0].ErrorCode)
+	if repo.insertedAttempts[0].ErrorCode != "query_disclosure_backend_error" {
+		t.Fatalf("error code = %q, want query_disclosure_backend_error", repo.insertedAttempts[0].ErrorCode)
 	}
-	if repo.insertedAttempts[0].ErrorMessage != "target database query failed" {
-		t.Fatalf("error message = %q, want fixed safe failed message", repo.insertedAttempts[0].ErrorMessage)
+	if repo.insertedAttempts[0].ErrorMessage != "query disclosure governance failed" {
+		t.Fatalf("error message = %q, want fixed safe disclosure-failure message", repo.insertedAttempts[0].ErrorMessage)
 	}
 }
 

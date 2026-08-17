@@ -775,6 +775,11 @@ func classifyExecutorError(err error) (model.QueryExecutionStatus, error, string
 		// attempt outcome, recorded as failed/query_canceled with a fixed safe
 		// message — the raw driver error is never persisted or returned.
 		return model.QueryExecutionFailed, ErrQueryBackendFailure, "query_canceled", "query canceled"
+	case errors.Is(err, ErrQueryDisclosureBackendFailure):
+		// Disclosure machinery failure (inspector/read/parse infrastructure),
+		// not a policy refusal: a terminal failed attempt with fixed safe
+		// evidence (Issue #35 AC 4).
+		return model.QueryExecutionFailed, ErrQueryBackendFailure, "query_disclosure_backend_error", "query disclosure governance failed"
 	case errors.Is(err, ErrQueryResultTooLarge):
 		return model.QueryExecutionRejected, ErrQueryValidationFailed, "validation_failed", "result set exceeds configured limits"
 	case errors.Is(err, ErrQueryDisclosureBlocked):

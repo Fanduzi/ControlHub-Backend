@@ -50,16 +50,20 @@ rejection.
    logged. `context.DeadlineExceeded` keeps its existing `timeout` outcome
    unchanged (408).
 
-3. **Disclosure terminal outcomes reach the shared atomic evidence path.** A
-   public disclosure-policy rejection (`ErrQueryDisclosureBlocked` without a
-   cancellation or deadline cause) stays a `rejected` attempt. All other
-   post-target disclosure terminal failures — including a canceled or
-   deadline-expired disclosure read blended into the blocked wrap — are
-   classified (failed/query_canceled or timeout) and recorded through the
-   same atomic pair path with a controlled sentinel response. To make the
-   blend detectable, the disclosure service `%w`-wraps the inner preflight
-   read error inside the blocked wrap (text-identical to the previous `%v`,
-   but `errors.Is` can now see the cancellation/deadline cause).
+3. **Disclosure terminal outcomes reach the shared atomic evidence path.**
+   The disclosure service now distinguishes governance refusals from
+   machinery failures. A genuine policy/governance refusal
+   (`ErrQueryDisclosureBlocked`: missing policy, unsupported/unresolvable
+   projection shape, invalid stored policy mode, no-governable columns, and
+   result-safety invariant failures in `Apply`) stays a `rejected` attempt.
+   All other post-target disclosure terminal failures — inspector/read/parse
+   infrastructure failures, including a canceled or deadline-expired
+   disclosure read — are wrapped in a new `ErrQueryDisclosureBackendFailure`
+   sentinel, classified as `failed` (code `query_disclosure_backend_error`
+   or `query_canceled`) or `timeout`, and recorded through the same atomic
+   pair path with a controlled sentinel response. The inner cause is
+   `%w`-wrapped so `errors.Is` can see cancellation/deadline through the
+   sentinel.
 
 4. **Success before cancellation stays success.** A query that completed
    successfully before the client cancellation arrived is recorded as
@@ -90,7 +94,8 @@ rejection.
   with a fixed safe message — Decisions 2–3.
 - Deadline expiry remains the existing timeout outcome — Decisions 2–3.
 - Disclosure policy rejection remains rejected; other post-target disclosure
-  terminal failures record fixed safe failed or timeout evidence — Decision 3.
+  terminal failures (machinery/infrastructure, incl. cancellation and
+  deadline) record fixed safe failed or timeout evidence — Decision 3.
 - Successful query before cancellation remains success — Decision 4.
 - Unknown targets and pre-resolution failures remain outside evidence —
   Decision 5.

@@ -72,12 +72,37 @@ func newTestDisclosureService(
 
 // --- tests ---
 
-// TestPreflight_CanceledInspectorRead_KeepsCancellationUnwrapable proves the
-// preflight read error stays %w-wrapped inside the blocked wrap (Issue #35), so
-// the execution service can classify a canceled disclosure read as
-// failed/query_canceled instead of a genuine policy rejection. This test fails
-// if the inner wrap degrades to %v, which is exactly the property the
-// execution service's canceled-outcome test depends on.
+// TestPreflight_InspectorReadFailure_ReturnsBackendSentinel proves disclosure
+// machinery failures (inspector/read infra) are NOT policy rejections: Preflight
+// returns the backend sentinel with the cause %w-wrapped (Issue #35 AC 4), so
+// the execution service records them as terminal failed/canceled/timeout
+// evidence instead of rejected. This test fails if the inspector error is
+// folded into the blocked wrap or the cause loses its %w.
+func TestPreflight_InspectorReadFailure_ReturnsBackendSentinel(t *testing.T) {
+	t.Parallel()
+
+	inspector := &fakeSchemaInspector{err: errors.New("inspector unreachable")}
+	targets := &fakeTargetRepo{targets: []model.QueryTarget{{ResourceID: 1}}}
+	svc := newTestDisclosureService(&fakeDisclosureReader{}, inspector, targets)
+
+	_, err := svc.Preflight(context.Background(), testDSN, 1, GuardedQuery{
+		OriginalStatement: "SELECT id FROM users",
+	})
+	if err == nil {
+		t.Fatal("Preflight() error = nil, want the backend-failure wrap around the inspector error")
+	}
+	if errors.Is(err, ErrQueryDisclosureBlocked) {
+		t.Fatalf("Preflight() inspector failure must not be a policy rejection: %v", err)
+	}
+	if !errors.Is(err, ErrQueryDisclosureBackendFailure) {
+		t.Fatalf("Preflight() error = %v, want ErrQueryDisclosureBackendFailure", err)
+	}
+}
+
+// TestPreflight_CanceledInspectorRead_KeepsCancellationUnwrapable proves a
+// canceled disclosure read stays errors.Is-unwrapable through the backend
+// sentinel wrap, so the execution service classifies it failed/query_canceled
+// instead of a policy rejection (Issue #35).
 func TestPreflight_CanceledInspectorRead_KeepsCancellationUnwrapable(t *testing.T) {
 	t.Parallel()
 
@@ -89,13 +114,13 @@ func TestPreflight_CanceledInspectorRead_KeepsCancellationUnwrapable(t *testing.
 		OriginalStatement: "SELECT id FROM users",
 	})
 	if err == nil {
-		t.Fatal("Preflight() error = nil, want the blocked wrap around the canceled read")
+		t.Fatal("Preflight() error = nil, want the backend-failure wrap around the canceled read")
 	}
-	if !errors.Is(err, ErrQueryDisclosureBlocked) {
-		t.Fatalf("Preflight() error = %v, want ErrQueryDisclosureBlocked wrap", err)
+	if !errors.Is(err, ErrQueryDisclosureBackendFailure) {
+		t.Fatalf("Preflight() error = %v, want ErrQueryDisclosureBackendFailure", err)
 	}
 	if !errors.Is(err, context.Canceled) {
-		t.Fatalf("canceled preflight read must stay unwrapable through the blocked wrap (Issue #35); errors.Is(context.Canceled) = false on %v", err)
+		t.Fatalf("canceled preflight read must stay unwrapable through the backend wrap (Issue #35); errors.Is(context.Canceled) = false on %v", err)
 	}
 }
 
