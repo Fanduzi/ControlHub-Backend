@@ -132,7 +132,7 @@ func NewRouter(deps Dependencies) *chi.Mux {
 			r.Get("/audit-events", handleListAuditEvents(deps.AuditService))
 			r.Get("/admin/legacy-hash-count", handleGetLegacyHashCount(deps.AuthService))
 			r.Get("/ops/auth-audit-metrics", handleAuthAuditMetrics())
-			r.Get("/ops/query-evidence-metrics", handleQueryEvidenceMetrics())
+			r.Get("/ops/query-evidence-metrics", handleQueryEvidenceMetrics(deps.QueryExecutionService))
 		})
 	})
 

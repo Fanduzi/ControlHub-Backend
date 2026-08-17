@@ -21,7 +21,7 @@ Data access layer implementing service-layer repository interfaces with raw SQL 
 - `NewQueryExecutionRepository(db)`, `NewQueryTargetRepository(db)`, `NewQueryDisclosureRepository(db)`, `NewQuerySavedStatementRepository(db)` — constructor functions
 - `QueryDisclosureReader`, `QueryDisclosureWriter` — narrow service-owned interfaces for disclosure policy access
 - `QuerySavedStatementReader`, `QuerySavedStatementWriter` — narrow service-owned interfaces for saved statement access, including atomic parameter-definition replacement
-- `QueryEvidencePersistenceFailures` — dimensionless expvar counter for atomic Execution Evidence Pair persistence failures (Issue #34)
+- `QueryEvidencePersistenceFailures` — dimensionless expvar counter for atomic Execution Evidence Pair persistence failures (Issue #34), readable through the repository's `QueryEvidencePersistenceFailures()` accessor for the service layer
 - `QueryExecutionRepository.InsertExecutionWithAudit` — repository-owned atomic Execution Evidence Pair: one transaction commits the history row and its fixed audit event; on any failure both roll back, the counter increments once, and one fixed safe log line is emitted
 - Repository structs satisfy service-layer interfaces
 

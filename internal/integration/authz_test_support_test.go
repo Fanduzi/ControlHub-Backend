@@ -148,6 +148,8 @@ func (boundaryExecStub) NavigateRelatedRecords(_ context.Context, _, _ uint64, _
 	return model.RelatedRecordNavigationResponse{}, nil
 }
 
+func (boundaryExecStub) QueryEvidencePersistenceFailures() int64 { return 0 }
+
 type boundaryExplainStub struct{}
 
 func (boundaryExplainStub) Explain(_ context.Context, _, _ uint64, _ model.ExplainRequest) (model.ExplainResponse, error) {

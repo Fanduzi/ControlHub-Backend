@@ -174,13 +174,13 @@ func (f *fakeExecRepo) InsertAuditEvent(_ context.Context, actor, target uint64,
 // primitive mirror. It records one atomic call; on injection failure nothing is
 // recorded (atomic rollback semantics), otherwise the history row and its
 // audit event are recorded together.
-func (f *fakeExecRepo) InsertExecutionWithAudit(_ context.Context, rec model.QueryExecutionRecord, event, result string) (uint64, error) {
+func (f *fakeExecRepo) InsertExecutionWithAudit(_ context.Context, rec model.QueryExecutionRecord, result string) (uint64, error) {
 	rec.ID = uint64(len(f.insertedAttempts)) + 1
 	f.pairCalls = append(f.pairCalls, struct {
 		rec    model.QueryExecutionRecord
 		event  string
 		result string
-	}{rec, event, result})
+	}{rec, "query.executed", result})
 	if f.pairErr != nil {
 		return 0, f.pairErr
 	}
@@ -190,9 +190,11 @@ func (f *fakeExecRepo) InsertExecutionWithAudit(_ context.Context, rec model.Que
 		target uint64
 		etype  string
 		result string
-	}{rec.ActorUserID, rec.TargetResourceID, event, result})
+	}{rec.ActorUserID, rec.TargetResourceID, "query.executed", result})
 	return rec.ID, nil
 }
+
+func (f *fakeExecRepo) QueryEvidencePersistenceFailures() int64 { return 0 }
 
 // fakeResolver mirrors the real resolver contract: validate the ref first (fail
 // closed), then return the configured DSN/error. It records whether it was

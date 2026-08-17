@@ -1,6 +1,6 @@
 // Package mysql provides MySQL-backed repository implementations.
 // input: database/sql, context, errors, expvar, fmt, log, strconv, internal/model
-// output: NewQueryExecutionRepository, QueryExecutionRepository (credential metadata incl. atomic UpsertCredentialMetadataWithAudit / DeleteCredentialMetadataWithAudit + inTx, atomic InsertExecutionWithAudit Execution Evidence Pair, execution history, audit events, QueryEvidencePersistenceFailures counter)
+// output: NewQueryExecutionRepository, QueryExecutionRepository (credential metadata incl. atomic UpsertCredentialMetadataWithAudit / DeleteCredentialMetadataWithAudit + inTx, atomic InsertExecutionWithAudit Execution Evidence Pair, execution history, audit events, QueryEvidencePersistenceFailures counter), QueryEvidencePersistenceFailures accessor
 // pos: MySQL data access for the Phase 37 read-only query sandbox (query_target_credentials, query_executions, audit_events) incl. the repository-owned atomic Execution Evidence Pair (Issue #34)
 // note: if this file changes, update header and README.md
 package mysql
@@ -236,14 +236,14 @@ func executionRecordArgs(rec model.QueryExecutionRecord) []any {
 
 // InsertExecutionWithAudit is the repository-owned atomic Execution Evidence
 // Pair primitive (Issue #34): it commits one query-execution history row and
-// its corresponding fixed audit event in ONE database transaction and returns
+// its fixed query.executed audit event in ONE database transaction and returns
 // the committed execution id on success. On any failure — including audit
 // insertion failure — the whole transaction rolls back so no partial evidence
 // can commit, the dimensionless QueryEvidencePersistenceFailures counter is
 // incremented exactly once, and one fixed safe log line is emitted. The
 // returned sentinel carries no driver/database/statement details; callers
 // surface it as the existing controlled backend error.
-func (r *QueryExecutionRepository) InsertExecutionWithAudit(ctx context.Context, rec model.QueryExecutionRecord, eventType, result string) (uint64, error) {
+func (r *QueryExecutionRepository) InsertExecutionWithAudit(ctx context.Context, rec model.QueryExecutionRecord, result string) (uint64, error) {
 	tx, err := r.db.BeginTx(ctx, nil)
 	if err != nil {
 		recordQueryEvidencePersistenceFailure()
@@ -261,7 +261,7 @@ func (r *QueryExecutionRepository) InsertExecutionWithAudit(ctx context.Context,
 		recordQueryEvidencePersistenceFailure()
 		return 0, errQueryEvidencePairFailed
 	}
-	if _, err := tx.ExecContext(ctx, insertAuditEventSQL, rec.ActorUserID, rec.TargetResourceID, eventType, result); err != nil {
+	if _, err := tx.ExecContext(ctx, insertAuditEventSQL, rec.ActorUserID, rec.TargetResourceID, "query.executed", result); err != nil {
 		recordQueryEvidencePersistenceFailure()
 		return 0, errQueryEvidencePairFailed
 	}
@@ -270,6 +270,10 @@ func (r *QueryExecutionRepository) InsertExecutionWithAudit(ctx context.Context,
 		return 0, errQueryEvidencePairFailed
 	}
 	return uint64(id), nil
+}
+
+func (r *QueryExecutionRepository) QueryEvidencePersistenceFailures() int64 {
+	return QueryEvidencePersistenceFailures.Value()
 }
 
 // ListExecutions returns execution history (newest first) for a target plus the

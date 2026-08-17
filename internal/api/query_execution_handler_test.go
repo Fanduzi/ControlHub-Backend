@@ -93,6 +93,10 @@ func (s *stubQueryExec) ListHistory(_ context.Context, actorUserID uint64, actor
 	return page, nil
 }
 
+// QueryEvidencePersistenceFailures returns the stub counter (0); the live
+// counter path is covered by repository/integration tests.
+func (s *stubQueryExec) QueryEvidencePersistenceFailures() int64 { return 0 }
+
 func (s *stubQueryExec) NavigateRelatedRecords(_ context.Context, actorUserID uint64, targetID uint64, req model.RelatedRecordNavigationRequest) (model.RelatedRecordNavigationResponse, error) {
 	s.navCalled = true
 	s.gotActor = actorUserID

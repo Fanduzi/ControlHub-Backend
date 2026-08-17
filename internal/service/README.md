@@ -27,7 +27,7 @@ Business logic layer with interface-based repository dependencies. Each service 
 | query_template_compiler.go | Server-owned AST placeholder compiler and guarded positional binding seam |
 | query_template_compiler_declaration.go | Declaration-only placeholder validation shared by saved-statement persistence and runtime compilation |
 | query_executor.go | Read-only MySQL/TiDB execution, compiler-owned template binding, and bounded result scanning |
-| query_execution_service.go | Governed query execution and Phase 38S result paging with per-page access, disclosure, and atomically paired history+audit (`InsertExecutionWithAudit`, Issue #34) |
+| query_execution_service.go | Governed query execution and Phase 38S result paging with per-page access, disclosure, and atomically paired history+audit (`InsertExecutionWithAudit`, Issue #34); exposes the `QueryEvidencePersistenceFailures` counter through the service layer |
 | query_template_execution_service.go | Fresh-query-actor saved-statement (template) execution — rereads the latest authorized statement, validates typed values, compiles server-side, then reuses the existing governed chain per page |
 | query_executor_test.go | Executor scanning, result-cap, and compiler-owned template binding tests |
 | query_execution_service_test.go | Query execution service tests, including governed per-page access, disclosure, and persistence guarantees |

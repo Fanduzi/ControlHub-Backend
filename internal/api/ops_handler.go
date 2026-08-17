@@ -1,6 +1,6 @@
 // Package api provides HTTP handlers and routing for the ControlHub REST API.
 // input: encoding/json, net/http, internal/repository/mysql, internal/service
-// output: handleAuthAuditMetrics, handleQueryEvidenceMetrics
+// output: handleAuthAuditMetrics, handleQueryEvidenceMetrics (query-evidence counter read through the service layer)
 // pos: Admin-only operational metrics endpoints for auth audit persistence failures, untrusted-Bearer suppression, and query-evidence persistence failures (Issue #34)
 // note: if this file changes, update header and README.md
 package api
@@ -32,14 +32,15 @@ func handleAuthAuditMetrics() http.HandlerFunc {
 // handleQueryEvidenceMetrics returns the query-evidence persistence-failure
 // counter (Issue #34). Admin-only; the response contains exactly the one fixed
 // field queryEvidencePersistenceFailures — no identity, target, statement,
-// value, credential, DSN, request, or raw error data.
-func handleQueryEvidenceMetrics() http.HandlerFunc {
+// value, credential, DSN, request, or raw error data. The counter is read
+// through the service layer; the api package never touches repository state.
+func handleQueryEvidenceMetrics(q queryExecutionAPI) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(struct {
 			QueryEvidencePersistenceFailures int64 `json:"queryEvidencePersistenceFailures"`
 		}{
-			QueryEvidencePersistenceFailures: mysql.QueryEvidencePersistenceFailures.Value(),
+			QueryEvidencePersistenceFailures: q.QueryEvidencePersistenceFailures(),
 		})
 	}
 }

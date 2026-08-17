@@ -61,15 +61,16 @@ const (
 //
 // InsertExecutionWithAudit is the repository-owned atomic Execution Evidence
 // Pair (Issue #34): one transaction commits the history row and its fixed
-// audit event together. Ordinary, paged, and template execution must route
-// through it; the standalone InsertExecution/InsertAuditEvent seam remains
-// only for #36 related-record navigation.
+// query.executed audit event together. Ordinary, paged, and template
+// execution must route through it; the standalone InsertExecution/
+// InsertAuditEvent seam remains only for #36 related-record navigation.
 type QueryExecutionRepository interface {
 	GetCredentialByResourceID(ctx context.Context, resourceID uint64) (model.QueryCredentialMetadata, error)
 	InsertExecution(ctx context.Context, rec model.QueryExecutionRecord) (uint64, error)
 	ListExecutions(ctx context.Context, q model.QueryExecutionListQuery) ([]model.QueryExecutionRecord, int, error)
 	InsertAuditEvent(ctx context.Context, actorUserID uint64, targetResourceID uint64, eventType string, result string) error
-	InsertExecutionWithAudit(ctx context.Context, rec model.QueryExecutionRecord, eventType, result string) (uint64, error)
+	InsertExecutionWithAudit(ctx context.Context, rec model.QueryExecutionRecord, result string) (uint64, error)
+	QueryEvidencePersistenceFailures() int64
 }
 
 // QueryCredentialResolver resolves a validated credential_ref to a DSN. It must
@@ -146,6 +147,13 @@ type QueryExecutionService struct {
 	// saved-statement (template) execution route; nil until then.
 	statements QuerySavedStatementReader
 	compiler   *TemplateStatementCompiler
+}
+
+// QueryEvidencePersistenceFailures exposes the dimensionless persistence-
+// failure counter through the service layer (Issue #34), keeping the api
+// layer free of repository imports.
+func (s *QueryExecutionService) QueryEvidencePersistenceFailures() int64 {
+	return s.executions.QueryEvidencePersistenceFailures()
 }
 
 // NewQueryExecutionService wires the service. targets is reused from the query
@@ -795,7 +803,7 @@ func (s *QueryExecutionService) buildRecord(target model.QueryTarget, actorUserI
 // transaction; the service never composes history and audit writes (Issue #34).
 func (s *QueryExecutionService) persistAttempt(ctx context.Context, target model.QueryTarget, actorUserID uint64, guarded *GuardedQuery, status model.QueryExecutionStatus, rowCount int, code, msg string, start time.Time) (uint64, error) {
 	rec := s.buildRecord(target, actorUserID, guarded, status, rowCount, code, msg, start)
-	id, err := s.executions.InsertExecutionWithAudit(ctx, rec, "query.executed", auditResultFor(status))
+	id, err := s.executions.InsertExecutionWithAudit(ctx, rec, auditResultFor(status))
 	if err != nil {
 		return 0, err
 	}

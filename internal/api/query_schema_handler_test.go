@@ -1084,10 +1084,12 @@ func (r auditFailingExecRepo) InsertAuditEvent(_ context.Context, _, _ uint64, _
 	return errors.New(r.marker)
 }
 
+func (auditFailingExecRepo) QueryEvidencePersistenceFailures() int64 { return 0 }
+
 // InsertExecutionWithAudit is never exercised by schema-only paths (Issue #34:
 // explain/schema remain audit-only); it exists only to satisfy the shared
 // QueryExecutionRepository interface.
-func (auditFailingExecRepo) InsertExecutionWithAudit(_ context.Context, _ model.QueryExecutionRecord, _, _ string) (uint64, error) {
+func (auditFailingExecRepo) InsertExecutionWithAudit(_ context.Context, _ model.QueryExecutionRecord, _ string) (uint64, error) {
 	return 0, errors.New("schema paths must not write execution pairs")
 }
 
