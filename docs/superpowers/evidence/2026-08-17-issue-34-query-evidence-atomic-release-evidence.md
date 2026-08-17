@@ -74,7 +74,7 @@ and, for the pre-fix product, in the issue-34 worktree at `HEAD=17701ce`.
 | `go vet -tags=integration ./internal/integration/` | PASS, clean |
 | `go build ./...` | PASS, clean |
 | `go test ./internal/openapi -run TestOpenAPIYAMLIsValid` | PASS |
-| `go test -tags=integration -count=1 ./internal/integration` | PASS, exit 0, 386 passed / 0 failed / 0 skipped (Testcontainers mysql:8.0) |
+| `go test -tags=integration -count=1 ./internal/integration` | PASS, exit 0, 389 passed / 0 failed / 0 skipped (Testcontainers mysql:8.0; 382 at the #39 baseline + 4 new `TestQueryEvidencePair*` tests + 3 new `/ops/query-evidence-metrics` boundary subtests) |
 | `make test-integration` | PASS, exit 0, 381 tests executed, 0 failed, 0 skipped; `TestOperatorAccessBoundary` executed (139 subtests incl. the 3 new `/ops/query-evidence-metrics` anonymous/editor/admin cases) and the 4 `TestQueryEvidencePair*` real-MySQL evidence tests passed |
 | `make test-openapi-fuzz` | PASS, exit 0, exactly 1 test executed (`TestOpenAPIFuzz`), Schemathesis checks clean |
 | `git diff --check origin/main...HEAD` | PASS, clean |
