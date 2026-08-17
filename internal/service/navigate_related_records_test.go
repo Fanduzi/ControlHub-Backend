@@ -549,9 +549,11 @@ func TestNavigateRelatedRecords_InspectorError(t *testing.T) {
 	}
 }
 
-// --- History persistence failure ---
+// --- Atomic pair persistence failure ---
 
-func TestNavigateRelatedRecords_HistoryPersistenceFailure(t *testing.T) {
+// TestNavigateRelatedRecords_PairPersistenceFailure proves a failed atomic
+// pair write surfaces the existing controlled backend failure (Issue #34/#36).
+func TestNavigateRelatedRecords_PairPersistenceFailure(t *testing.T) {
 	t.Parallel()
 	repo := &fakeExecRepo{
 		credentials: map[uint64]model.QueryCredentialMetadata{

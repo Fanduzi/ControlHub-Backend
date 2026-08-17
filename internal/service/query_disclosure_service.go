@@ -186,7 +186,11 @@ func (s *QueryDisclosureService) PreflightRelatedRecords(
 ) (DisclosurePlan, error) {
 	detail, err := s.inspector.GetObjectDetails(ctx, dsn, referencedDatabase, referencedTable, "table")
 	if err != nil {
-		return DisclosurePlan{}, fmt.Errorf("inspect related-record source for disclosure: %w", err)
+		// Inspector/read infrastructure failure is disclosure machinery
+		// failure, not a policy refusal: wrap it in the backend sentinel so the
+		// navigation service classifies it as fixed failed evidence exactly
+		// like core execution (Issue #35 AC 4 / Issue #36).
+		return DisclosurePlan{}, fmt.Errorf("%w: %w", ErrQueryDisclosureBackendFailure, err)
 	}
 	if detail == nil {
 		return DisclosurePlan{}, fmt.Errorf("%w: related-record metadata is missing", ErrQueryDisclosureBlocked)

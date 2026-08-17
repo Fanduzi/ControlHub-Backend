@@ -72,9 +72,10 @@ const evidencePersistenceWindow = 2 * time.Second
 // audit event together — query.executed for core execution (ordinary, paged,
 // template) and related_record_navigation for related-record navigation
 // (Issue #36). Every Evidence-Bearing Query Attempt must route through it; the
-// standalone split-write InsertExecution/InsertAuditEvent seam is removed
-// (Issue #36). Audit-only operations (explain, schema reads) keep their own
-// audit-only write through their own repository interfaces.
+// standalone InsertExecution single-write seam is removed (Issue #36).
+// InsertAuditEvent below is the audit-ONLY write for operations that
+// intentionally create no execution-history row (explain, schema reads);
+// governed execution and navigation never call it.
 type QueryExecutionRepository interface {
 	GetCredentialByResourceID(ctx context.Context, resourceID uint64) (model.QueryCredentialMetadata, error)
 	ListExecutions(ctx context.Context, q model.QueryExecutionListQuery) ([]model.QueryExecutionRecord, int, error)

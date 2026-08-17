@@ -385,6 +385,43 @@ func TestPreflightRelatedRecords_MissingPolicyBlocks(t *testing.T) {
 	}
 }
 
+// TestPreflightRelatedRecords_InspectorFailure_ReturnsBackendSentinel proves
+// related-record disclosure machinery failures (inspector read infrastructure)
+// are NOT policy rejections: PreflightRelatedRecords wraps them in
+// ErrQueryDisclosureBackendFailure with the cause %w-preserved (Issue #35 AC 4
+// / Issue #36), so the navigation service classifies them as fixed failed
+// disclosure evidence exactly like core execution — never as a rejection.
+func TestPreflightRelatedRecords_InspectorFailure_ReturnsBackendSentinel(t *testing.T) {
+	t.Parallel()
+
+	// Given: the schema inspector fails while reading the referenced table.
+	inspectorErr := errors.New("inspector connection refused")
+	inspector := &fakeSchemaInspector{
+		err: inspectorErr,
+	}
+	reader := &fakeDisclosureReader{policies: map[string]model.ResultDisclosurePolicy{}}
+	targets := &fakeTargetRepo{targets: []model.QueryTarget{{ResourceID: 1}}}
+	svc := newTestDisclosureService(reader, inspector, targets)
+
+	// When: PreflightRelatedRecords tries to resolve disclosure for the table.
+	_, err := svc.PreflightRelatedRecords(context.Background(), testDSN, 1, "testdb", "orders")
+
+	// Then: the backend sentinel is returned with the raw cause preserved for
+	// classification, and it is NOT a policy rejection.
+	if err == nil {
+		t.Fatal("PreflightRelatedRecords() error = nil, want ErrQueryDisclosureBackendFailure")
+	}
+	if !errors.Is(err, ErrQueryDisclosureBackendFailure) {
+		t.Errorf("PreflightRelatedRecords() error = %v, want wrapped ErrQueryDisclosureBackendFailure", err)
+	}
+	if !errors.Is(err, inspectorErr) {
+		t.Errorf("PreflightRelatedRecords() must wrap-preserve the inspector cause for classification: %v", err)
+	}
+	if isDisclosureBlocked(err) {
+		t.Errorf("PreflightRelatedRecords() error = %v, must not be a policy rejection", err)
+	}
+}
+
 func TestApply_TransformsRows(t *testing.T) {
 	t.Parallel()
 
