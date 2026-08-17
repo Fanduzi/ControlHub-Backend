@@ -202,8 +202,12 @@ persistence-failure counter.
 
 The repository-owned atomic persistence unit for an Evidence-Bearing Query
 Attempt: one query-execution history row and its corresponding fixed audit
-event, committed in a single database transaction. The repository owns the
-transaction, so services never compose separate history and audit writes. If
+event, committed in a single database transaction. The audit event type is a
+fixed per-path constant — `query.executed` for ordinary, paged, and template
+executions, `related_record_navigation` for related-record navigation — never
+request-controlled. The repository owns the transaction, so services never
+compose separate history and audit writes; the standalone execution-history
+write seam is removed. If
 either write fails — including audit insertion — the whole pair rolls back and
 no partial evidence commits. A failed pair surfaces the existing controlled
 backend failure, increments a dimensionless persistence-failure counter once,

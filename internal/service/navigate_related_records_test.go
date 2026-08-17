@@ -8,6 +8,7 @@ package service
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -556,7 +557,7 @@ func TestNavigateRelatedRecords_HistoryPersistenceFailure(t *testing.T) {
 		credentials: map[uint64]model.QueryCredentialMetadata{
 			9001: enabledCred(model.QueryEnvPolicyNonProdOnly),
 		},
-		insertExecErr: errors.New("db down"),
+		pairErr: errors.New("db down"),
 	}
 	inspector := &fakeNavSchemaInspector{
 		detail: &ObjectDetail{
@@ -973,5 +974,285 @@ func TestNavigateRelatedRecords_SuccessHistoryUsesCanonicalIdentity(t *testing.T
 	}
 	if strings.Contains(rec.StatementPreview, "orders_db") {
 		t.Fatalf("post-resolution preview must not contain request source database: %q", rec.StatementPreview)
+	}
+}
+
+// --- Issue #36: navigation joins the shared atomic Execution Evidence Pair ---
+
+// TestNavigateRelatedRecords_SuccessUsesSingleAtomicPairWrite proves the
+// navigation success path records history + its fixed related_record_navigation
+// audit event through ONE repository-owned atomic pair call — never the old
+// split InsertExecution+InsertAuditEvent sequence — and returns the committed
+// execution id. The pair write must run in the detached two-second Evidence
+// Persistence Window, not the request context (Issues #34/#35/#36).
+func TestNavigateRelatedRecords_SuccessUsesSingleAtomicPairWrite(t *testing.T) {
+	t.Parallel()
+	svc, repo, _, _ := navTestScaffold(t)
+
+	resp, err := svc.NavigateRelatedRecords(context.Background(), 1, 9001, validNavRequest())
+	if err != nil {
+		t.Fatalf("NavigateRelatedRecords: %v", err)
+	}
+	if len(repo.pairCalls) != 1 {
+		t.Fatalf("atomic pair calls = %d, want 1 (history+audit must share one transaction)", len(repo.pairCalls))
+	}
+	if repo.pairCalls[0].event != "related_record_navigation" || repo.pairCalls[0].result != "success" {
+		t.Fatalf("pair audit params = %q/%q, want related_record_navigation/success", repo.pairCalls[0].event, repo.pairCalls[0].result)
+	}
+	if resp.ExecutionID == 0 || repo.pairCalls[0].rec.ID != resp.ExecutionID {
+		t.Fatalf("committed execution id mismatch: resp=%d pair=%d", resp.ExecutionID, repo.pairCalls[0].rec.ID)
+	}
+	if len(repo.pairCalls[0].rec.StatementPreview) == 0 {
+		t.Fatal("navigation pair record must carry canonical relation identity metadata")
+	}
+	assertDetachedEvidenceWindow(t, repo)
+}
+
+// TestNavigateRelatedRecords_RejectedUsesSingleAtomicPairWrite proves the
+// rejected-navigation path (FK not found, pre-resolution) also routes through
+// the atomic pair with fixed related_record_navigation/validation_failed audit
+// evidence.
+func TestNavigateRelatedRecords_RejectedUsesSingleAtomicPairWrite(t *testing.T) {
+	t.Parallel()
+	svc, repo, _, _ := navTestScaffold(t)
+	req := validNavRequest()
+	req.Source.ForeignKey = "fk_nonexistent"
+
+	_, _ = svc.NavigateRelatedRecords(context.Background(), 1, 9001, req)
+
+	if len(repo.pairCalls) != 1 {
+		t.Fatalf("atomic pair calls = %d, want 1 for the rejected attempt", len(repo.pairCalls))
+	}
+	if repo.pairCalls[0].event != "related_record_navigation" || repo.pairCalls[0].result != "validation_failed" {
+		t.Fatalf("pair audit params = %q/%q, want related_record_navigation/validation_failed", repo.pairCalls[0].event, repo.pairCalls[0].result)
+	}
+	assertDetachedEvidenceWindow(t, repo)
+}
+
+// TestNavigateRelatedRecords_ClientCanceledDuringExecution_RecordsFailedCanceled
+// proves the navigation cancellation outcome (Issue #36 AC 3): when the
+// executor returns context.Canceled after a client disconnect, the attempt is
+// recorded as failed with the fixed query_canceled code and fixed safe message
+// — never a raw driver error — through the DETACHED two-second Evidence
+// Persistence Window, not the canceled request context.
+func TestNavigateRelatedRecords_ClientCanceledDuringExecution_RecordsFailedCanceled(t *testing.T) {
+	t.Parallel()
+	repo := &fakeExecRepo{
+		credentials: map[uint64]model.QueryCredentialMetadata{
+			9001: enabledCred(model.QueryEnvPolicyNonProdOnly),
+		},
+	}
+	executor := &fakeExecutor{err: context.Canceled}
+	inspector := &fakeNavSchemaInspector{
+		detail: &ObjectDetail{
+			Name: "order_items",
+			Kind: "table",
+			ForeignKeys: []FKSummary{
+				{
+					Name:    "fk_order_items_order",
+					Columns: []FKColumn{{Column: "order_id", ReferencedSchema: "orders", ReferencedTable: "orders", ReferencedColumn: "id"}},
+				},
+			},
+		},
+	}
+	svc := NewQueryExecutionService(
+		fakeTargetRepo{targets: []model.QueryTarget{mysqlTarget("Staging")}},
+		repo, &fakeResolver{dsn: testResolverDSN}, executor,
+		NewQueryGuard(QueryGuardConfig{DefaultMaxRows: 100, HardMaxRows: 500}),
+		&fakeClock{t: time.Now()},
+		inspector, &fakeDisclosureService{},
+	)
+	// Request context already canceled: the client disconnected mid-query.
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	_, err := svc.NavigateRelatedRecords(ctx, 1, 9001, validNavRequest())
+	if !errors.Is(err, ErrQueryBackendFailure) {
+		t.Fatalf("error = %v, want ErrQueryBackendFailure", err)
+	}
+	if !strings.Contains(err.Error(), "query canceled") {
+		t.Fatalf("error = %q, want fixed safe 'query canceled' message", err)
+	}
+	if len(repo.insertedAttempts) != 1 {
+		t.Fatalf("canceled navigation attempt must be recorded, got %d rows", len(repo.insertedAttempts))
+	}
+	rec := repo.insertedAttempts[0]
+	if rec.Status != model.QueryExecutionFailed {
+		t.Fatalf("status = %q, want failed", rec.Status)
+	}
+	if rec.ErrorCode != "query_canceled" {
+		t.Fatalf("error code = %q, want query_canceled", rec.ErrorCode)
+	}
+	if rec.ErrorMessage != "query canceled" {
+		t.Fatalf("error message = %q, want fixed 'query canceled'", rec.ErrorMessage)
+	}
+	if len(repo.pairCalls) != 1 || repo.pairCalls[0].result != "failed" {
+		t.Fatalf("pair audit = %+v, want one failed pair", repo.pairCalls)
+	}
+	if strings.Contains(asString(rec), testResolverDSN) {
+		t.Fatal("DSN leaked into navigation evidence")
+	}
+	assertDetachedEvidenceWindow(t, repo)
+}
+
+// TestNavigateRelatedRecords_DisclosurePreflightBackendFailure_RecordsFailed
+// proves a disclosure-policy machinery failure during navigation preflight is
+// NOT a policy rejection: it records fixed failed/disclosure_backend_error
+// evidence through the atomic pair and surfaces the controlled backend error,
+// mirroring core query execution (Issue #35 AC 4 / Issue #36).
+func TestNavigateRelatedRecords_DisclosurePreflightBackendFailure_RecordsFailed(t *testing.T) {
+	t.Parallel()
+	repo := &fakeExecRepo{
+		credentials: map[uint64]model.QueryCredentialMetadata{
+			9001: enabledCred(model.QueryEnvPolicyNonProdOnly),
+		},
+	}
+	inspector := &fakeNavSchemaInspector{
+		detail: &ObjectDetail{
+			Name: "order_items",
+			Kind: "table",
+			ForeignKeys: []FKSummary{
+				{
+					Name:    "fk_order_items_order",
+					Columns: []FKColumn{{Column: "order_id", ReferencedSchema: "orders", ReferencedTable: "orders", ReferencedColumn: "id"}},
+				},
+			},
+		},
+	}
+	svc := NewQueryExecutionService(
+		fakeTargetRepo{targets: []model.QueryTarget{mysqlTarget("Staging")}},
+		repo, &fakeResolver{dsn: testResolverDSN}, &fakeExecutor{},
+		NewQueryGuard(QueryGuardConfig{DefaultMaxRows: 100, HardMaxRows: 500}),
+		&fakeClock{t: time.Now()},
+		inspector, &fakeDisclosureService{preflightErr: ErrQueryDisclosureBackendFailure},
+	)
+
+	_, err := svc.NavigateRelatedRecords(context.Background(), 1, 9001, validNavRequest())
+	if !errors.Is(err, ErrQueryBackendFailure) {
+		t.Fatalf("error = %v, want ErrQueryBackendFailure", err)
+	}
+	if len(repo.insertedAttempts) != 1 {
+		t.Fatalf("disclosure machinery failure must be recorded, got %d rows", len(repo.insertedAttempts))
+	}
+	rec := repo.insertedAttempts[0]
+	if rec.Status != model.QueryExecutionFailed || rec.ErrorCode != "query_disclosure_backend_error" {
+		t.Fatalf("evidence = %q/%q, want failed/query_disclosure_backend_error", rec.Status, rec.ErrorCode)
+	}
+	if strings.Contains(rec.ErrorMessage, testResolverDSN) {
+		t.Fatal("DSN leaked into disclosure-failure evidence")
+	}
+	assertDetachedEvidenceWindow(t, repo)
+}
+
+// TestNavigateRelatedRecords_DisclosurePreflightCanceled_RecordsFailedCanceled
+// proves a canceled disclosure read during navigation preflight is recorded as
+// failed/query_canceled, never as a policy rejection (Issue #35/#36).
+func TestNavigateRelatedRecords_DisclosurePreflightCanceled_RecordsFailedCanceled(t *testing.T) {
+	t.Parallel()
+	repo := &fakeExecRepo{
+		credentials: map[uint64]model.QueryCredentialMetadata{
+			9001: enabledCred(model.QueryEnvPolicyNonProdOnly),
+		},
+	}
+	inspector := &fakeNavSchemaInspector{
+		detail: &ObjectDetail{
+			Name: "order_items",
+			Kind: "table",
+			ForeignKeys: []FKSummary{
+				{
+					Name:    "fk_order_items_order",
+					Columns: []FKColumn{{Column: "order_id", ReferencedSchema: "orders", ReferencedTable: "orders", ReferencedColumn: "id"}},
+				},
+			},
+		},
+	}
+	svc := NewQueryExecutionService(
+		fakeTargetRepo{targets: []model.QueryTarget{mysqlTarget("Staging")}},
+		repo, &fakeResolver{dsn: testResolverDSN}, &fakeExecutor{},
+		NewQueryGuard(QueryGuardConfig{DefaultMaxRows: 100, HardMaxRows: 500}),
+		&fakeClock{t: time.Now()},
+		inspector, &fakeDisclosureService{preflightErr: fmt.Errorf("%w: %w", ErrQueryDisclosureBlocked, context.Canceled)},
+	)
+
+	_, err := svc.NavigateRelatedRecords(context.Background(), 1, 9001, validNavRequest())
+	if !errors.Is(err, ErrQueryBackendFailure) {
+		t.Fatalf("error = %v, want ErrQueryBackendFailure, got a policy rejection instead", err)
+	}
+	rec := repo.insertedAttempts[0]
+	if rec.Status != model.QueryExecutionFailed || rec.ErrorCode != "query_canceled" {
+		t.Fatalf("evidence = %q/%q, want failed/query_canceled", rec.Status, rec.ErrorCode)
+	}
+}
+
+// TestNavigateRelatedRecords_SuccessAfterClientDisconnect_StaysSuccess proves
+// Issue #36 AC 4: when navigation backend work completed before the client
+// disconnect, the terminal evidence stays success — evidence describes backend
+// work, not response delivery — and the pair write still runs in the detached
+// window.
+func TestNavigateRelatedRecords_SuccessAfterClientDisconnect_StaysSuccess(t *testing.T) {
+	t.Parallel()
+	svc, repo, _, _ := navTestScaffold(t)
+	// Request context canceled after backend completion (response delivery is
+	// what gets dropped); the executor fake ignores the context so the query
+	// result is already produced.
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	resp, err := svc.NavigateRelatedRecords(ctx, 1, 9001, validNavRequest())
+	if err != nil {
+		t.Fatalf("NavigateRelatedRecords: %v", err)
+	}
+	if resp.Status != model.QueryExecutionSuccess {
+		t.Fatalf("status = %q, want success (evidence describes backend work)", resp.Status)
+	}
+	if len(repo.insertedAttempts) != 1 || repo.insertedAttempts[0].Status != model.QueryExecutionSuccess {
+		t.Fatalf("successful attempt must be recorded as success: %+v", repo.insertedAttempts)
+	}
+	if len(repo.pairCalls) != 1 || repo.pairCalls[0].result != "success" {
+		t.Fatalf("pair audit = %+v, want one success pair", repo.pairCalls)
+	}
+	assertDetachedEvidenceWindow(t, repo)
+}
+
+// TestNavigateRelatedRecords_PairWriteFailureOnCanceledRequest_StillReturnsBackendError
+// proves a genuine persistence failure is never silent on the navigation path:
+// even with the client gone, the pair rollback leaves nothing recorded and the
+// request surfaces the existing controlled backend-error response.
+func TestNavigateRelatedRecords_PairWriteFailureOnCanceledRequest_StillReturnsBackendError(t *testing.T) {
+	t.Parallel()
+	repo := &fakeExecRepo{
+		credentials: map[uint64]model.QueryCredentialMetadata{
+			9001: enabledCred(model.QueryEnvPolicyNonProdOnly),
+		},
+		pairErr: errors.New("evidence store down"),
+	}
+	inspector := &fakeNavSchemaInspector{
+		detail: &ObjectDetail{
+			Name: "order_items",
+			Kind: "table",
+			ForeignKeys: []FKSummary{
+				{
+					Name:    "fk_order_items_order",
+					Columns: []FKColumn{{Column: "order_id", ReferencedSchema: "orders", ReferencedTable: "orders", ReferencedColumn: "id"}},
+				},
+			},
+		},
+	}
+	svc := NewQueryExecutionService(
+		fakeTargetRepo{targets: []model.QueryTarget{mysqlTarget("Staging")}},
+		repo, &fakeResolver{dsn: testResolverDSN}, &fakeExecutor{result: QueryDatabaseResult{RowCount: 1}},
+		NewQueryGuard(QueryGuardConfig{DefaultMaxRows: 100, HardMaxRows: 500}),
+		&fakeClock{t: time.Now()},
+		inspector, &fakeDisclosureService{},
+	)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	_, err := svc.NavigateRelatedRecords(ctx, 1, 9001, validNavRequest())
+	if !errors.Is(err, errPersistAttempt) {
+		t.Fatalf("error = %v, want errPersistAttempt (controlled backend failure)", err)
+	}
+	if len(repo.insertedAttempts) != 0 {
+		t.Fatalf("failed pair must record nothing; got %d rows", len(repo.insertedAttempts))
 	}
 }

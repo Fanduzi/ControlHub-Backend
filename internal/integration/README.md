@@ -19,6 +19,7 @@ MySQL-backed integration tests run against disposable Testcontainers databases.
 | legacy_import_test.go | Proves UUID-to-bigint cutover import against MySQL: full migration, non-empty target rejection, parseTime validation, NULL audit actor preserved as NULL with fixed event/result/target/created-at metadata, and unknown non-NULL audit actor failing loud with no partial import |
 | *_test.go | Exercises repository, API, and migration behavior against MySQL |
 | query_evidence_pair_test.go | Proves the atomic Execution Evidence Pair (Issue #34) against real MySQL: history + audit commit together and both roll back on audit/history insert failure; persistence-failure counter increments exactly once per failed pair with a fixed safe log |
+| navigate_related_records_integration_test.go | Proves governed FK related-record navigation over real MySQL, including the Issue #36 atomic-pair rollback proof: a forced `related_record_navigation` audit insert failure rolls the navigation history row back with it (no partial evidence), the controlled backend-error envelope is preserved, and the failure counter increments exactly once |
 
 ## Operator access coverage
 

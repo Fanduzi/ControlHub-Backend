@@ -39,6 +39,35 @@ func seedCredentialRow(t *testing.T, db *sql.DB, resourceID uint64, engine, ref 
 	}
 }
 
+// seedExecutionHistoryRow inserts one execution-history row directly for
+// history-list test fixtures. It intentionally writes NO audit event: these
+// fixtures exercise execution-history listing only. Governed execution and
+// navigation never use this SQL seam — every Evidence-Bearing Query Attempt
+// writes through the repository-owned atomic pair (Issue #36 deleted the
+// standalone repository write).
+func seedExecutionHistoryRow(t *testing.T, db *sql.DB, rec model.QueryExecutionRecord) (uint64, error) {
+	t.Helper()
+	var createdAt any
+	if !rec.CreatedAt.IsZero() {
+		createdAt = rec.CreatedAt.UTC()
+	}
+	res, err := db.Exec(
+		`insert into query_executions
+		 (target_resource_id, actor_user_id, engine, statement_digest, statement_preview, status, row_count, duration_ms, error_code, error_message, created_at)
+		 values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, COALESCE(?, CURRENT_TIMESTAMP(6)))`,
+		rec.TargetResourceID, rec.ActorUserID, rec.Engine, rec.StatementDigest, rec.StatementPreview,
+		string(rec.Status), rec.RowCount, rec.DurationMs, rec.ErrorCode, rec.ErrorMessage, createdAt,
+	)
+	if err != nil {
+		return 0, err
+	}
+	id, err := res.LastInsertId()
+	if err != nil {
+		return 0, err
+	}
+	return uint64(id), nil
+}
+
 // createQueryTargetResource creates a database_instance resource and returns its
 // id so a credential row can be attached to it.
 func createQueryTargetResource(t *testing.T, db *sql.DB, namePrefix string) uint64 {
@@ -73,7 +102,7 @@ func TestQueryExecutionRepository_InsertAndListByTarget(t *testing.T) {
 		model.QueryExecutionSuccess,
 		model.QueryExecutionRejected,
 	} {
-		if _, err := repo.InsertExecution(ctx, model.QueryExecutionRecord{
+		if _, err := seedExecutionHistoryRow(t, db, model.QueryExecutionRecord{
 			TargetResourceID: targetID,
 			ActorUserID:      ownerDBA,
 			Engine:           "mysql",
@@ -807,14 +836,14 @@ func TestQueryExecutionRepository_ActorProjectionAndScope(t *testing.T) {
 	adminID := ownerDBA
 	orphanID := uint64(9_000_001)
 	repo := mysql.NewQueryExecutionRepository(db)
-	if _, err := repo.InsertExecution(ctx, model.QueryExecutionRecord{
+	if _, err := seedExecutionHistoryRow(t, db, model.QueryExecutionRecord{
 		TargetResourceID: targetID, ActorUserID: adminID, Engine: "mysql",
 		StatementDigest: "select 1", StatementPreview: "select 1",
 		Status: model.QueryExecutionSuccess, RowCount: 1,
 	}); err != nil {
 		t.Fatalf("insert admin: %v", err)
 	}
-	if _, err := repo.InsertExecution(ctx, model.QueryExecutionRecord{
+	if _, err := seedExecutionHistoryRow(t, db, model.QueryExecutionRecord{
 		TargetResourceID: targetID, ActorUserID: orphanID, Engine: "mysql",
 		StatementDigest: "select 2", StatementPreview: "select 2",
 		Status: model.QueryExecutionSuccess, RowCount: 1,
@@ -871,7 +900,7 @@ func TestQueryExecutionRepository_CursorPagination(t *testing.T) {
 
 	baseTime := time.Date(2026, 6, 22, 8, 0, 0, 0, time.UTC)
 	for i := 0; i < 5; i++ {
-		if _, err := repo.InsertExecution(ctx, model.QueryExecutionRecord{
+		if _, err := seedExecutionHistoryRow(t, db, model.QueryExecutionRecord{
 			TargetResourceID: targetID,
 			ActorUserID:      ownerDBA,
 			Engine:           "mysql",
@@ -948,7 +977,7 @@ func TestQueryExecutionRepository_CursorInitial_NoPageNoCursor(t *testing.T) {
 
 	baseTime := time.Date(2026, 6, 22, 8, 0, 0, 0, time.UTC)
 	for i := 0; i < 5; i++ {
-		if _, err := repo.InsertExecution(ctx, model.QueryExecutionRecord{
+		if _, err := seedExecutionHistoryRow(t, db, model.QueryExecutionRecord{
 			TargetResourceID: targetID,
 			ActorUserID:      ownerDBA,
 			Engine:           "mysql",
@@ -1015,7 +1044,7 @@ func TestQueryExecutionRepository_CursorContinuation(t *testing.T) {
 
 	baseTime := time.Date(2026, 6, 22, 8, 0, 0, 0, time.UTC)
 	for i := 0; i < 5; i++ {
-		if _, err := repo.InsertExecution(ctx, model.QueryExecutionRecord{
+		if _, err := seedExecutionHistoryRow(t, db, model.QueryExecutionRecord{
 			TargetResourceID: targetID,
 			ActorUserID:      ownerDBA,
 			Engine:           "mysql",
@@ -1097,7 +1126,7 @@ func TestQueryExecutionRepository_CursorNewerInsertBetweenPages(t *testing.T) {
 
 	baseTime := time.Date(2026, 6, 22, 8, 0, 0, 0, time.UTC)
 	for i := 0; i < 4; i++ {
-		if _, err := repo.InsertExecution(ctx, model.QueryExecutionRecord{
+		if _, err := seedExecutionHistoryRow(t, db, model.QueryExecutionRecord{
 			TargetResourceID: targetID,
 			ActorUserID:      ownerDBA,
 			Engine:           "mysql",
@@ -1124,7 +1153,7 @@ func TestQueryExecutionRepository_CursorNewerInsertBetweenPages(t *testing.T) {
 
 	// Insert a newer row AFTER page1 was fetched.
 	newerTime := baseTime.Add(10 * time.Second)
-	if _, err := repo.InsertExecution(ctx, model.QueryExecutionRecord{
+	if _, err := seedExecutionHistoryRow(t, db, model.QueryExecutionRecord{
 		TargetResourceID: targetID,
 		ActorUserID:      ownerDBA,
 		Engine:           "mysql",
@@ -1181,7 +1210,7 @@ func TestQueryExecutionRepository_CursorStatusFilter(t *testing.T) {
 		model.QueryExecutionRejected,
 		model.QueryExecutionSuccess,
 	} {
-		if _, err := repo.InsertExecution(ctx, model.QueryExecutionRecord{
+		if _, err := seedExecutionHistoryRow(t, db, model.QueryExecutionRecord{
 			TargetResourceID: targetID,
 			ActorUserID:      ownerDBA,
 			Engine:           "mysql",
@@ -1222,7 +1251,7 @@ func TestQueryExecutionRepository_CursorTimeFilter(t *testing.T) {
 	t2 := time.Date(2026, 6, 15, 0, 0, 0, 0, time.UTC)
 	t3 := time.Date(2026, 6, 22, 0, 0, 0, 0, time.UTC)
 	for i, ts := range []time.Time{t1, t2, t3} {
-		if _, err := repo.InsertExecution(ctx, model.QueryExecutionRecord{
+		if _, err := seedExecutionHistoryRow(t, db, model.QueryExecutionRecord{
 			TargetResourceID: targetID,
 			ActorUserID:      ownerDBA,
 			Engine:           "mysql",
@@ -1258,7 +1287,7 @@ func TestQueryExecutionRepository_IdenticalTimestampsOrderedByID(t *testing.T) {
 	sameTime := time.Date(2026, 6, 22, 8, 0, 0, 0, time.UTC)
 	ids := make([]uint64, 3)
 	for i := 0; i < 3; i++ {
-		id, err := repo.InsertExecution(ctx, model.QueryExecutionRecord{
+		id, err := seedExecutionHistoryRow(t, db, model.QueryExecutionRecord{
 			TargetResourceID: targetID,
 			ActorUserID:      ownerDBA,
 			Engine:           "mysql",

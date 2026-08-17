@@ -34,7 +34,7 @@ func TestQueryEvidencePersistenceFailuresCounterIncrementsOnce(t *testing.T) {
 		ActorUserID:      7,
 		Engine:           "mysql",
 		Status:           model.QueryExecutionSuccess,
-	}, "success")
+	}, "query.executed", "success")
 	if err == nil {
 		t.Fatal("expected the pair to fail against a broken DB")
 	}
@@ -67,7 +67,7 @@ func TestQueryEvidencePersistenceFailureLogIsFixedAndSafe(t *testing.T) {
 		StatementDigest:  "digest-leak-check",
 		StatementPreview: "preview-leak-check",
 		Status:           model.QueryExecutionSuccess,
-	}, "success")
+	}, "query.executed", "success")
 	if err == nil {
 		t.Fatal("expected the pair to fail")
 	}

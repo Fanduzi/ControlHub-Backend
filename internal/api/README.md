@@ -41,6 +41,7 @@ HTTP handlers, chi routing, CORS middleware, and fake-repo test infrastructure.
 |--------|------|-------------|
 | GET | /query-targets/{id}/schema/table-definition | Get MySQL table definition (base tables only) |
 | POST | /query-targets/{id}/execute | Execute a governed read-only statement, with optional page-number result paging for SELECT |
+| POST | /query-targets/{id}/related-records | Governed FK related-record navigation (Issue #36: records through the same atomic Execution Evidence Pair as execution) |
 | GET | /query-disclosure-policies | List disclosure policies (handler-admin) |
 | POST | /query-disclosure-policies | Create a disclosure policy (handler-admin) |
 | PUT | /query-disclosure-policies | Update a disclosure policy (handler-admin) |

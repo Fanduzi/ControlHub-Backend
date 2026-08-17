@@ -33,7 +33,7 @@ func queryEvidencePairInsert(t *testing.T, db *sql.DB, targetID, actorID uint64,
 		StatementPreview: "preview:" + string(status),
 		Status:           status,
 		RowCount:         7,
-	}, "success")
+	}, "query.executed", "success")
 	if err != nil {
 		t.Fatalf("insert execution with audit: %v", err)
 	}
@@ -93,7 +93,7 @@ func TestQueryEvidencePairAuditFailureRollsBackBothRows(t *testing.T) {
 		StatementPreview: "preview:rollback",
 		Status:           model.QueryExecutionSuccess,
 		RowCount:         1,
-	}, "success")
+	}, "query.executed", "success")
 	if err == nil {
 		t.Fatal("expected the pair to fail when the audit insert fails")
 	}
@@ -151,7 +151,7 @@ func TestQueryEvidencePairPersistenceFailureCounterIncrementsOncePerPair(t *test
 			StatementDigest:  "digest:counter",
 			StatementPreview: "preview:counter",
 			Status:           model.QueryExecutionSuccess,
-		}, "success"); err == nil {
+		}, "query.executed", "success"); err == nil {
 			t.Fatalf("pair %d: expected failure under forced audit trigger", i+1)
 		}
 	}
@@ -197,7 +197,7 @@ func TestQueryEvidencePairHistoryInsertFailure(t *testing.T) {
 		StatementDigest:  "digest:historyfail",
 		StatementPreview: "preview:historyfail",
 		Status:           model.QueryExecutionSuccess,
-	}, "success")
+	}, "query.executed", "success")
 	if err == nil {
 		t.Fatal("expected the pair to fail when the history insert fails")
 	}

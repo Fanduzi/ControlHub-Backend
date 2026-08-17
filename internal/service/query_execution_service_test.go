@@ -59,7 +59,6 @@ type fakeExecRepo struct {
 		result string
 	}
 	// Failure injection for the audit/history guarantee tests.
-	insertExecErr  error
 	insertAuditErr error
 	// Issue #34 (38X-3A): atomic Execution Evidence Pair observability. The
 	// pair path records the record + audit parameters in one call; the split
@@ -80,8 +79,6 @@ type fakeExecRepo struct {
 	pairCtxErr         error
 	pairCtxDeadline    time.Time
 	pairCtxHasDeadline bool
-	splitExecCalls     int
-	splitAuditCalls    int
 	// Captures the last ListExecutions query for mode-dispatch assertions.
 	lastQuery model.QueryExecutionListQuery
 }
@@ -95,16 +92,6 @@ func (f *fakeExecRepo) GetCredentialByResourceID(_ context.Context, resourceID u
 		return model.QueryCredentialMetadata{}, sql.ErrNoRows
 	}
 	return c, nil
-}
-
-func (f *fakeExecRepo) InsertExecution(_ context.Context, rec model.QueryExecutionRecord) (uint64, error) {
-	f.splitExecCalls++
-	if f.insertExecErr != nil {
-		return 0, f.insertExecErr
-	}
-	rec.ID = uint64(len(f.insertedAttempts)) + 1
-	f.insertedAttempts = append(f.insertedAttempts, rec)
-	return rec.ID, nil
 }
 
 func (f *fakeExecRepo) ListExecutions(_ context.Context, q model.QueryExecutionListQuery) ([]model.QueryExecutionRecord, int, error) {
@@ -166,8 +153,10 @@ func (f *fakeExecRepo) ListExecutions(_ context.Context, q model.QueryExecutionL
 	return items, len(items), nil
 }
 
+// InsertAuditEvent mirrors the audit-only seam still used by explain/schema
+// services; the governed query execution and navigation services never call it
+// — every Evidence-Bearing Query Attempt routes through InsertExecutionWithAudit.
 func (f *fakeExecRepo) InsertAuditEvent(_ context.Context, actor, target uint64, etype, result string) error {
-	f.splitAuditCalls++
 	if f.insertAuditErr != nil {
 		return f.insertAuditErr
 	}
@@ -187,7 +176,7 @@ func (f *fakeExecRepo) InsertAuditEvent(_ context.Context, actor, target uint64,
 // service hands the pair write so tests can assert it is the detached,
 // two-second Evidence Persistence Window, not the (possibly canceled) request
 // context.
-func (f *fakeExecRepo) InsertExecutionWithAudit(ctx context.Context, rec model.QueryExecutionRecord, result string) (uint64, error) {
+func (f *fakeExecRepo) InsertExecutionWithAudit(ctx context.Context, rec model.QueryExecutionRecord, eventType, result string) (uint64, error) {
 	f.lastPairCtx = ctx
 	f.pairCtxErr = ctx.Err()
 	f.pairCtxDeadline, f.pairCtxHasDeadline = ctx.Deadline()
@@ -196,7 +185,7 @@ func (f *fakeExecRepo) InsertExecutionWithAudit(ctx context.Context, rec model.Q
 		rec    model.QueryExecutionRecord
 		event  string
 		result string
-	}{rec, "query.executed", result})
+	}{rec, eventType, result})
 	if f.pairErr != nil {
 		return 0, f.pairErr
 	}
@@ -206,7 +195,7 @@ func (f *fakeExecRepo) InsertExecutionWithAudit(ctx context.Context, rec model.Q
 		target uint64
 		etype  string
 		result string
-	}{rec.ActorUserID, rec.TargetResourceID, "query.executed", result})
+	}{rec.ActorUserID, rec.TargetResourceID, eventType, result})
 	return rec.ID, nil
 }
 
@@ -334,6 +323,9 @@ func (f *fakeDisclosureService) Preflight(_ context.Context, _ string, _ uint64,
 }
 
 func (f *fakeDisclosureService) PreflightRelatedRecords(_ context.Context, _ string, _ uint64, _, _ string) (DisclosurePlan, error) {
+	if f.preflightErr != nil {
+		return DisclosurePlan{}, f.preflightErr
+	}
 	if f.blockErr != nil {
 		return DisclosurePlan{}, f.blockErr
 	}
@@ -680,9 +672,6 @@ func TestExecute_SuccessUsesSingleAtomicPairWrite(t *testing.T) {
 	if len(repo.pairCalls) != 1 {
 		t.Fatalf("atomic pair calls = %d, want 1 (history+audit must share one transaction)", len(repo.pairCalls))
 	}
-	if repo.splitExecCalls != 0 || repo.splitAuditCalls != 0 {
-		t.Fatalf("split writes leaked: InsertExecution=%d InsertAuditEvent=%d, want 0/0", repo.splitExecCalls, repo.splitAuditCalls)
-	}
 	if repo.pairCalls[0].event != "query.executed" || repo.pairCalls[0].result != "success" {
 		t.Fatalf("pair audit params = %q/%q, want query.executed/success", repo.pairCalls[0].event, repo.pairCalls[0].result)
 	}
@@ -710,9 +699,6 @@ func TestExecute_PagedSuccessUsesSingleAtomicPairWritePerPage(t *testing.T) {
 	}
 	if len(repo.pairCalls) != 1 {
 		t.Fatalf("atomic pair calls = %d, want 1 for one governed page execution", len(repo.pairCalls))
-	}
-	if repo.splitExecCalls != 0 || repo.splitAuditCalls != 0 {
-		t.Fatalf("split writes leaked on paged path: %d/%d, want 0/0", repo.splitExecCalls, repo.splitAuditCalls)
 	}
 	if resp.ExecutionID == 0 {
 		t.Fatal("paged execution returned no committed execution id")

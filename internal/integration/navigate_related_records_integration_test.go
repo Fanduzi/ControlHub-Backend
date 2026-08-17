@@ -416,3 +416,79 @@ func TestNavigateRelatedRecords_Integration_MissingBearer(t *testing.T) {
 		t.Fatalf("status = %d, want 401: %s", resp.StatusCode, string(respBody))
 	}
 }
+
+// TestNavigateRelatedRecords_Integration_AuditFailureRollsBackBothRows proves
+// Issue #36 AC 2 against real MySQL state THROUGH the navigation service path:
+// when the fixed related_record_navigation audit insert fails inside the
+// repository-owned pair transaction, the navigation history row is rolled back
+// too — neither row commits — the request surfaces the existing controlled
+// backend-error response, the persistence-failure counter increments exactly
+// once, and no raw driver text leaks to the client. The pre-atomic split-write
+// path left the history row orphaned in exactly this scenario.
+func TestNavigateRelatedRecords_Integration_AuditFailureRollsBackBothRows(t *testing.T) {
+	baseURL, targetID, db := setupNavigateFixture(t)
+	token := navLogin(t, baseURL)
+
+	// Force every audit_events INSERT to fail deterministically (same
+	// technique as the Issue #34 repository-level proof, applied to the
+	// navigation HTTP path).
+	mustExec(t, db, `create trigger ch36_force_audit_fail
+		before insert on audit_events for each row
+		signal sqlstate '45000' set message_text = 'forced audit failure'`)
+	t.Cleanup(func() { _, _ = db.Exec(`drop trigger if exists ch36_force_audit_fail`) })
+
+	body := `{
+		"source": {
+			"database": "query_e2e_aux",
+			"object": "schema_child",
+			"kind": "table",
+			"foreignKey": "fk_schema_child_parent"
+		},
+		"localValues": ["1"]
+	}`
+
+	req, err := http.NewRequest("POST", fmt.Sprintf("%s/query-targets/%d/related-records", baseURL, targetID), bytes.NewBufferString(body))
+	if err != nil {
+		t.Fatalf("build request: %v", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+token)
+
+	before := mysql.QueryEvidencePersistenceFailures.Value()
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("navigate request: %v", err)
+	}
+	defer resp.Body.Close()
+	respBody, _ := io.ReadAll(resp.Body)
+
+	// The existing controlled backend-error envelope: 502 query_backend_error.
+	if resp.StatusCode != http.StatusBadGateway {
+		t.Fatalf("status = %d, want 502: %s", resp.StatusCode, string(respBody))
+	}
+	if strings.Contains(string(respBody), "forced audit failure") {
+		t.Fatalf("raw database error leaked to the client: %s", respBody)
+	}
+
+	// Database-state proof: neither the execution-history row nor the audit
+	// row exists for the navigation attempt.
+	var execRows, auditRows int
+	if err := db.QueryRow(`select count(*) from query_executions where target_resource_id = ?`, targetID).Scan(&execRows); err != nil {
+		t.Fatalf("count executions: %v", err)
+	}
+	if err := db.QueryRow(`select count(*) from audit_events where target_resource_id = ?`, targetID).Scan(&auditRows); err != nil {
+		t.Fatalf("count audit events: %v", err)
+	}
+	if execRows != 0 {
+		t.Fatalf("execution rows = %d, want 0 (navigation history must be rolled back with the failed audit)", execRows)
+	}
+	if auditRows != 0 {
+		t.Fatalf("audit rows = %d, want 0", auditRows)
+	}
+
+	after := mysql.QueryEvidencePersistenceFailures.Value()
+	if after-before != 1 {
+		t.Fatalf("counter incremented by %d, want exactly 1 for one failed navigation pair", after-before)
+	}
+}

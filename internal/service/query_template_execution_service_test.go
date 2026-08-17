@@ -79,9 +79,6 @@ func TestExecuteSavedStatementUsesSingleAtomicPairWrite(t *testing.T) {
 	if repo.pairCalls[0].event != "query.executed" || repo.pairCalls[0].result != "success" {
 		t.Fatalf("pair audit params = %q/%q, want query.executed/success", repo.pairCalls[0].event, repo.pairCalls[0].result)
 	}
-	if repo.splitExecCalls != 0 || repo.splitAuditCalls != 0 {
-		t.Fatalf("split writes leaked on template path: %d/%d, want 0/0", repo.splitExecCalls, repo.splitAuditCalls)
-	}
 }
 
 // TestExecuteSavedStatementValidationRejectionUsesAtomicPairWrite proves the
@@ -104,9 +101,6 @@ func TestExecuteSavedStatementValidationRejectionUsesAtomicPairWrite(t *testing.
 	}
 	if repo.pairCalls[0].result != "validation_failed" {
 		t.Fatalf("pair audit result = %q, want validation_failed", repo.pairCalls[0].result)
-	}
-	if repo.splitExecCalls != 0 || repo.splitAuditCalls != 0 {
-		t.Fatalf("split writes leaked on template validation path: %d/%d, want 0/0", repo.splitExecCalls, repo.splitAuditCalls)
 	}
 }
 

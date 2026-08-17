@@ -1,7 +1,7 @@
 // Package service provides business logic for the Phase 37/38S read-only query sandbox.
 // input: context, errors, fmt, net, strconv, strings, time, go-sql-driver/mysql, internal/model
 // output: QueryExecutionService, query execution repository/resolver/executor/clock interfaces, sentinel errors, NewQueryExecutionService, Execute, ListHistory, validateDSNBinding
-// pos: Orchestrates governed MySQL/TiDB query execution and compiler-owned template execution — target/policy/guard/disclosure gating, paged result windows, timed execution, and guaranteed per-attempt atomic Execution Evidence Pair history + audit (Issue #34) persisted in a fixed two-second Evidence Persistence Window detached from request cancellation/deadline (Issue #35)
+// pos: Orchestrates governed MySQL/TiDB query execution, compiler-owned template execution, and FK related-record navigation — target/policy/guard/disclosure gating, paged result windows, timed execution, and guaranteed per-attempt atomic Execution Evidence Pair history + audit (Issue #34) persisted in a fixed two-second Evidence Persistence Window detached from request cancellation/deadline (Issue #35), including navigation (Issue #36)
 // note: if this file changes, update header and README.md
 package service
 
@@ -69,15 +69,22 @@ const evidencePersistenceWindow = 2 * time.Second
 //
 // InsertExecutionWithAudit is the repository-owned atomic Execution Evidence
 // Pair (Issue #34): one transaction commits the history row and its fixed
-// query.executed audit event together. Ordinary, paged, and template
-// execution must route through it; the standalone InsertExecution/
-// InsertAuditEvent seam remains only for #36 related-record navigation.
+// audit event together — query.executed for core execution (ordinary, paged,
+// template) and related_record_navigation for related-record navigation
+// (Issue #36). Every Evidence-Bearing Query Attempt must route through it; the
+// standalone split-write InsertExecution/InsertAuditEvent seam is removed
+// (Issue #36). Audit-only operations (explain, schema reads) keep their own
+// audit-only write through their own repository interfaces.
 type QueryExecutionRepository interface {
 	GetCredentialByResourceID(ctx context.Context, resourceID uint64) (model.QueryCredentialMetadata, error)
-	InsertExecution(ctx context.Context, rec model.QueryExecutionRecord) (uint64, error)
 	ListExecutions(ctx context.Context, q model.QueryExecutionListQuery) ([]model.QueryExecutionRecord, int, error)
+	// InsertAuditEvent is the audit-ONLY write for operations that intentionally
+	// create no execution-history row (explain, schema reads). Governed query
+	// execution and related-record navigation never call it — every
+	// Evidence-Bearing Query Attempt routes through InsertExecutionWithAudit
+	// (Issue #36).
 	InsertAuditEvent(ctx context.Context, actorUserID uint64, targetResourceID uint64, eventType string, result string) error
-	InsertExecutionWithAudit(ctx context.Context, rec model.QueryExecutionRecord, result string) (uint64, error)
+	InsertExecutionWithAudit(ctx context.Context, rec model.QueryExecutionRecord, eventType, result string) (uint64, error)
 	QueryEvidencePersistenceFailures() int64
 }
 
@@ -572,11 +579,19 @@ func (s *QueryExecutionService) NavigateRelatedRecords(ctx context.Context, acto
 
 	plan, err := s.disclosure.PreflightRelatedRecords(ctx, access.dsn, target.ResourceID, refSchema, refTable)
 	if err != nil {
-		if errors.Is(err, ErrQueryDisclosureBlocked) {
+		// A genuine public disclosure-policy rejection stays rejected. A
+		// canceled or deadline-expired disclosure read is NOT a policy
+		// rejection — it is a terminal failed/timeout client-cancellation or
+		// deadline outcome and must reach the shared atomic evidence path
+		// (Issue #35), exactly as core query execution does.
+		if errors.Is(err, ErrQueryDisclosureBlocked) && !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded) {
 			return s.rejectNavigation(ctx, target, actorUserID, matchedFK, "query_result_disclosure_blocked", "query blocked by result disclosure policy",
 				fmt.Errorf("%w: %v", ErrQueryNotAllowed, err), start)
 		}
-		return model.RelatedRecordNavigationResponse{}, err
+		// All other post-target disclosure terminal failures record fixed
+		// safe failed or timeout evidence and surface the existing controlled
+		// error (Issue #36).
+		return s.recordNavigationTerminalOutcome(ctx, target, actorUserID, matchedFK, err, start)
 	}
 
 	// 7. Build the parameterized SELECT from trusted FK metadata.
@@ -618,20 +633,12 @@ func (s *QueryExecutionService) NavigateRelatedRecords(ctx context.Context, acto
 		Limit:     limit,
 	})
 	if err != nil {
-		status, sentinel, code, safeMsg := classifyExecutorError(err)
-		if _, perr := s.persistNavigationAttempt(ctx, target, actorUserID, matchedFK, status, 0, code, safeMsg, start); perr != nil {
-			return model.RelatedRecordNavigationResponse{}, errPersistAttempt
-		}
-		return model.RelatedRecordNavigationResponse{}, fmt.Errorf("%w: %s", sentinel, safeMsg)
+		return s.recordNavigationTerminalOutcome(ctx, target, actorUserID, matchedFK, err, start)
 	}
 
 	columns, rows, applyErr := s.disclosure.Apply(plan, result.Columns, result.Rows)
 	if applyErr != nil {
-		status, sentinel, code, safeMsg := classifyExecutorError(applyErr)
-		if _, perr := s.persistNavigationAttempt(ctx, target, actorUserID, matchedFK, status, 0, code, safeMsg, start); perr != nil {
-			return model.RelatedRecordNavigationResponse{}, errPersistAttempt
-		}
-		return model.RelatedRecordNavigationResponse{}, fmt.Errorf("%w: %s", sentinel, safeMsg)
+		return s.recordNavigationTerminalOutcome(ctx, target, actorUserID, matchedFK, applyErr, start)
 	}
 	result.Columns = columns
 	result.Rows = rows
@@ -669,6 +676,21 @@ func (s *QueryExecutionService) NavigateRelatedRecords(ctx context.Context, acto
 	}, nil
 }
 
+// recordNavigationTerminalOutcome classifies one post-target navigation
+// terminal failure (disclosure preflight, executor, or disclosure apply) and
+// records its fixed-safe evidence through the shared atomic pair path,
+// returning the controlled response error. The raw error — which may echo DSN
+// fragments from the driver — is classified to a fixed status/code/message and
+// never returned or persisted; every Evidence-Bearing Query Attempt's terminal
+// outcome reaches the shared atomic evidence path (Issue #35 / #36).
+func (s *QueryExecutionService) recordNavigationTerminalOutcome(ctx context.Context, target model.QueryTarget, actorUserID uint64, fk *FKSummary, err error, start time.Time) (model.RelatedRecordNavigationResponse, error) {
+	status, sentinel, code, safeMsg := classifyExecutorError(err)
+	if _, perr := s.persistNavigationAttempt(ctx, target, actorUserID, fk, status, 0, code, safeMsg, start); perr != nil {
+		return model.RelatedRecordNavigationResponse{}, errPersistAttempt
+	}
+	return model.RelatedRecordNavigationResponse{}, fmt.Errorf("%w: %s", sentinel, safeMsg)
+}
+
 // rejectNavigation records a rejected navigation attempt and returns the error.
 func (s *QueryExecutionService) rejectNavigation(ctx context.Context, target model.QueryTarget, actorUserID uint64, fk *FKSummary, code, msg string, retErr error, start time.Time) (model.RelatedRecordNavigationResponse, error) {
 	if _, perr := s.persistNavigationAttempt(ctx, target, actorUserID, fk, model.QueryExecutionRejected, 0, code, msg, start); perr != nil {
@@ -677,12 +699,17 @@ func (s *QueryExecutionService) rejectNavigation(ctx context.Context, target mod
 	return model.RelatedRecordNavigationResponse{}, retErr
 }
 
-// persistNavigationAttempt records a navigation attempt. The recorded action is
-// fixed "related_record_navigation" with relation identity metadata only.
-// It never stores localValues, result rows, SQL, credentials, or raw errors.
-// When fk is nil (trusted resolution has not succeeded), only fixed generic
-// metadata is recorded. When fk is non-nil, canonical inspected relation
-// identity is used.
+// persistNavigationAttempt records a navigation attempt as one atomic
+// Execution Evidence Pair (history row + the fixed related_record_navigation
+// audit event) through the repository-owned primitive (Issue #36). It never
+// stores localValues, result rows, SQL, credentials, or raw errors. When fk is
+// nil (trusted resolution has not succeeded), only fixed generic metadata is
+// recorded. When fk is non-nil, canonical inspected relation identity is used.
+//
+// Issue #35: the pair write runs in the fixed two-second Evidence Persistence
+// Window detached from request cancellation/deadline, so a client disconnect
+// can never drop navigation evidence; the write is one synchronous bounded
+// attempt with no retry, queue, worker, or disk buffer.
 func (s *QueryExecutionService) persistNavigationAttempt(ctx context.Context, target model.QueryTarget, actorUserID uint64, fk *FKSummary, status model.QueryExecutionStatus, rowCount int, code, msg string, start time.Time) (uint64, error) {
 	var preview, digest string
 	if fk == nil {
@@ -711,14 +738,11 @@ func (s *QueryExecutionService) persistNavigationAttempt(ctx context.Context, ta
 		ErrorMessage:     truncateString(msg, 512),
 		CreatedAt:        s.clock.Now(),
 	}
-	id, err := s.executions.InsertExecution(ctx, rec)
+	windowCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), evidencePersistenceWindow)
+	defer cancel()
+	id, err := s.executions.InsertExecutionWithAudit(windowCtx, rec, "related_record_navigation", auditResultFor(status))
 	if err != nil {
 		return 0, err
-	}
-	// Audit event uses fixed action "related_record_navigation" with relation identity.
-	auditResult := auditResultFor(status)
-	if err := s.executions.InsertAuditEvent(ctx, actorUserID, target.ResourceID, "related_record_navigation", auditResult); err != nil {
-		return id, err
 	}
 	return id, nil
 }
@@ -844,7 +868,7 @@ func (s *QueryExecutionService) persistAttempt(ctx context.Context, target model
 	rec := s.buildRecord(target, actorUserID, guarded, status, rowCount, code, msg, start)
 	windowCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), evidencePersistenceWindow)
 	defer cancel()
-	id, err := s.executions.InsertExecutionWithAudit(windowCtx, rec, auditResultFor(status))
+	id, err := s.executions.InsertExecutionWithAudit(windowCtx, rec, "query.executed", auditResultFor(status))
 	if err != nil {
 		return 0, err
 	}
