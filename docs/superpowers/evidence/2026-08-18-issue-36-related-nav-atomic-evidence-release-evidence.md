@@ -106,9 +106,12 @@ worktree (proven `HEAD == origin/main`).
 | `make test-openapi-fuzz` | PASS, exactly 1 test (`TestOpenAPIFuzz`), clean |
 | `check_three_level_doc.sh` | PASS on the merged root |
 
-CI: <https://github.com/Fanduzi/ControlHub-Backend/actions/runs/32081284820> —
-Backend CI at head `3e04c28`: `release-local-gates` success,
-`release-docker-gates` success, conclusion `success`.
+CI at the product-equivalent pushed root: <https://github.com/Fanduzi/ControlHub-Backend/actions/runs/32081284820>
+— Backend CI at head `3e04c28`: `release-local-gates` success,
+`release-docker-gates` success, conclusion `success`. The final docs-only push
+(`3e04c28..17192a4`, evidence finalized with these facts) also ran green:
+<https://github.com/Fanduzi/ControlHub-Backend/actions/runs/32081728126> at
+head `17192a4`, both jobs success.
 
 Root worktree preservation: the ROOT worktree (`~/GolangProjects/ControlHub`,
 still at `3af5d29`) was not touched by this delivery; its pre-existing dirty
