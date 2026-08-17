@@ -1,5 +1,5 @@
 // Package service provides tests for the Phase 37/38S query execution service.
-// input: context, errors, strings, testing, time, internal/model
+// input: context, errors, fmt, strings, testing, time, internal/model
 // output: TestExecute_*, TestReadyDerivation_*, TestCredentialResolver_* (fakes for repos/resolver/executor/clock)
 // pos: Unit tests for execute gating, compiler-owned template executor dispatch, governed result pages, the environment-policy matrix, atomic Execution Evidence Pair history/audit recording (Issue #34), cancellation-durable terminal evidence via the detached two-second Evidence Persistence Window (Issue #35), and credential fail-closed behavior
 // note: if this file changes, update header and README.md
@@ -816,8 +816,10 @@ func assertDetachedEvidenceWindow(t *testing.T, f *fakeExecRepo) {
 
 // TestExecute_PairWriteFailureOnCanceledRequest_StillReturnsBackendError proves
 // AC 7 on the canceled path: even when the client is gone, a genuine
-// persistence failure is never silent — it still rolls back, increments the
-// telemetry, and surfaces the existing controlled backend-error response.
+// persistence failure is never silent — the pair rollback leaves nothing
+// recorded and the request surfaces the existing controlled backend-error
+// response instead (the exact-once telemetry increment is proven by the
+// repository and integration tests on the InsertExecutionWithAudit seam).
 func TestExecute_PairWriteFailureOnCanceledRequest_StillReturnsBackendError(t *testing.T) {
 	t.Parallel()
 	repo := &fakeExecRepo{

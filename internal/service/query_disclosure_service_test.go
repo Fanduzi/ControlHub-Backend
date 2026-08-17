@@ -72,6 +72,33 @@ func newTestDisclosureService(
 
 // --- tests ---
 
+// TestPreflight_CanceledInspectorRead_KeepsCancellationUnwrapable proves the
+// preflight read error stays %w-wrapped inside the blocked wrap (Issue #35), so
+// the execution service can classify a canceled disclosure read as
+// failed/query_canceled instead of a genuine policy rejection. This test fails
+// if the inner wrap degrades to %v, which is exactly the property the
+// execution service's canceled-outcome test depends on.
+func TestPreflight_CanceledInspectorRead_KeepsCancellationUnwrapable(t *testing.T) {
+	t.Parallel()
+
+	inspector := &fakeSchemaInspector{err: context.Canceled}
+	targets := &fakeTargetRepo{targets: []model.QueryTarget{{ResourceID: 1}}}
+	svc := newTestDisclosureService(&fakeDisclosureReader{}, inspector, targets)
+
+	_, err := svc.Preflight(context.Background(), testDSN, 1, GuardedQuery{
+		OriginalStatement: "SELECT id FROM users",
+	})
+	if err == nil {
+		t.Fatal("Preflight() error = nil, want the blocked wrap around the canceled read")
+	}
+	if !errors.Is(err, ErrQueryDisclosureBlocked) {
+		t.Fatalf("Preflight() error = %v, want ErrQueryDisclosureBlocked wrap", err)
+	}
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("canceled preflight read must stay unwrapable through the blocked wrap (Issue #35); errors.Is(context.Canceled) = false on %v", err)
+	}
+}
+
 func TestPreflight_AllRawCopyAllowed(t *testing.T) {
 	t.Parallel()
 

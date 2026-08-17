@@ -298,11 +298,7 @@ func (s *QueryExecutionService) executeGuardedChain(
 		}
 		// All other post-target disclosure terminal failures record fixed safe
 		// failed or timeout evidence and surface the existing controlled error.
-		status, sentinel, code, safeMsg := classifyExecutorError(err)
-		if _, perr := s.persistAttempt(ctx, target, actorUserID, guarded, status, 0, code, safeMsg, start); perr != nil {
-			return model.QueryExecuteResponse{}, errPersistAttempt
-		}
-		return model.QueryExecuteResponse{}, fmt.Errorf("%w: %s", sentinel, safeMsg)
+		return s.recordTerminalOutcome(ctx, target, actorUserID, guarded, err, start)
 	}
 
 	timeout := defaultQueryTimeout
@@ -314,22 +310,12 @@ func (s *QueryExecutionService) executeGuardedChain(
 
 	result, err := run(execCtx, dsn)
 	if err != nil {
-		status, sentinel, code, safeMsg := classifyExecutorError(err)
-		// safeMsg is a fixed string; the raw executor error (which may echo parts
-		// of the DSN from the driver) is recorded only internally, never returned.
-		if _, perr := s.persistAttempt(ctx, target, actorUserID, guarded, status, 0, code, safeMsg, start); perr != nil {
-			return model.QueryExecuteResponse{}, errPersistAttempt
-		}
-		return model.QueryExecuteResponse{}, fmt.Errorf("%w: %s", sentinel, safeMsg)
+		return s.recordTerminalOutcome(ctx, target, actorUserID, guarded, err, start)
 	}
 
 	columns, rows, applyErr := s.disclosure.Apply(plan, result.Columns, result.Rows)
 	if applyErr != nil {
-		status, sentinel, code, safeMsg := classifyExecutorError(applyErr)
-		if _, perr := s.persistAttempt(ctx, target, actorUserID, guarded, status, 0, code, safeMsg, start); perr != nil {
-			return model.QueryExecuteResponse{}, errPersistAttempt
-		}
-		return model.QueryExecuteResponse{}, fmt.Errorf("%w: %s", sentinel, safeMsg)
+		return s.recordTerminalOutcome(ctx, target, actorUserID, guarded, applyErr, start)
 	}
 	result.Columns = columns
 	result.Rows = rows
@@ -817,6 +803,21 @@ func (s *QueryExecutionService) buildRecord(target model.QueryTarget, actorUserI
 		rec.StatementPreview = guarded.StatementPreview
 	}
 	return rec
+}
+
+// recordTerminalOutcome classifies one post-target terminal failure (executor,
+// disclosure preflight, or disclosure apply) and records its fixed-safe
+// evidence through the shared atomic path, returning the controlled response
+// error. The raw error — which may echo DSN fragments from the driver — is
+// classified to a fixed status/code/message and never returned or persisted;
+// every Evidence-Bearing Query Attempt's terminal outcome reaches the shared
+// atomic evidence path (Issue #35).
+func (s *QueryExecutionService) recordTerminalOutcome(ctx context.Context, target model.QueryTarget, actorUserID uint64, guarded *GuardedQuery, err error, start time.Time) (model.QueryExecuteResponse, error) {
+	status, sentinel, code, safeMsg := classifyExecutorError(err)
+	if _, perr := s.persistAttempt(ctx, target, actorUserID, guarded, status, 0, code, safeMsg, start); perr != nil {
+		return model.QueryExecuteResponse{}, errPersistAttempt
+	}
+	return model.QueryExecuteResponse{}, fmt.Errorf("%w: %s", sentinel, safeMsg)
 }
 
 // persistAttempt records one attempt's Execution Evidence Pair (history row +
