@@ -1,7 +1,7 @@
 // Package service provides tests for the Phase 37/38S query execution service.
 // input: context, errors, strings, testing, time, internal/model
 // output: TestExecute_*, TestReadyDerivation_*, TestCredentialResolver_* (fakes for repos/resolver/executor/clock)
-// pos: Unit tests for execute gating, compiler-owned template executor dispatch, governed result pages, the environment-policy matrix, history/audit recording, and credential fail-closed behavior
+// pos: Unit tests for execute gating, compiler-owned template executor dispatch, governed result pages, the environment-policy matrix, atomic Execution Evidence Pair history/audit recording (Issue #34), and credential fail-closed behavior
 // note: if this file changes, update header and README.md
 package service
 
@@ -60,6 +60,18 @@ type fakeExecRepo struct {
 	// Failure injection for the audit/history guarantee tests.
 	insertExecErr  error
 	insertAuditErr error
+	// Issue #34 (38X-3A): atomic Execution Evidence Pair observability. The
+	// pair path records the record + audit parameters in one call; the split
+	// counters prove no standalone history/audit write happens on the
+	// ordinary/paged/template paths.
+	pairErr   error
+	pairCalls []struct {
+		rec    model.QueryExecutionRecord
+		event  string
+		result string
+	}
+	splitExecCalls  int
+	splitAuditCalls int
 	// Captures the last ListExecutions query for mode-dispatch assertions.
 	lastQuery model.QueryExecutionListQuery
 }
@@ -76,6 +88,7 @@ func (f *fakeExecRepo) GetCredentialByResourceID(_ context.Context, resourceID u
 }
 
 func (f *fakeExecRepo) InsertExecution(_ context.Context, rec model.QueryExecutionRecord) (uint64, error) {
+	f.splitExecCalls++
 	if f.insertExecErr != nil {
 		return 0, f.insertExecErr
 	}
@@ -144,6 +157,7 @@ func (f *fakeExecRepo) ListExecutions(_ context.Context, q model.QueryExecutionL
 }
 
 func (f *fakeExecRepo) InsertAuditEvent(_ context.Context, actor, target uint64, etype, result string) error {
+	f.splitAuditCalls++
 	if f.insertAuditErr != nil {
 		return f.insertAuditErr
 	}
@@ -154,6 +168,30 @@ func (f *fakeExecRepo) InsertAuditEvent(_ context.Context, actor, target uint64,
 		result string
 	}{actor, target, etype, result})
 	return nil
+}
+
+// InsertExecutionWithAudit is the Issue #34 atomic Execution Evidence Pair
+// primitive mirror. It records one atomic call; on injection failure nothing is
+// recorded (atomic rollback semantics), otherwise the history row and its
+// audit event are recorded together.
+func (f *fakeExecRepo) InsertExecutionWithAudit(_ context.Context, rec model.QueryExecutionRecord, event, result string) (uint64, error) {
+	rec.ID = uint64(len(f.insertedAttempts)) + 1
+	f.pairCalls = append(f.pairCalls, struct {
+		rec    model.QueryExecutionRecord
+		event  string
+		result string
+	}{rec, event, result})
+	if f.pairErr != nil {
+		return 0, f.pairErr
+	}
+	f.insertedAttempts = append(f.insertedAttempts, rec)
+	f.auditEvents = append(f.auditEvents, struct {
+		actor  uint64
+		target uint64
+		etype  string
+		result string
+	}{rec.ActorUserID, rec.TargetResourceID, event, result})
+	return rec.ID, nil
 }
 
 // fakeResolver mirrors the real resolver contract: validate the ref first (fail
@@ -558,11 +596,12 @@ func TestExecute_RecordsRejectedAttempt(t *testing.T) {
 func TestExecute_HistoryWriteFailureOnSuccess_ReturnsBackendError(t *testing.T) {
 	t.Parallel()
 	svc, repo, _, _ := executionTestScaffold(t)
-	repo.insertExecErr = errors.New("history db down")
+	repo.pairErr = errors.New("history db down")
 
-	// WHY: Phase 37 guarantees every attempt is recorded. If the history row
-	// cannot be written, the service must NOT pretend success (no executionId=0
-	// success response); it returns a controlled backend failure.
+	// WHY: Phase 37 guarantees every attempt is recorded. If the pair (history
+	// + audit) cannot be written, the service must NOT pretend success (no
+	// executionId=0 success response); it returns a controlled backend failure
+	// and no history row is committed.
 	resp, err := svc.Execute(context.Background(), 7, 9001, model.QueryExecuteRequest{Statement: "select 1", MaxRows: 10})
 	if !errors.Is(err, ErrQueryBackendFailure) {
 		t.Fatalf("error = %v, want ErrQueryBackendFailure", err)
@@ -573,25 +612,110 @@ func TestExecute_HistoryWriteFailureOnSuccess_ReturnsBackendError(t *testing.T) 
 	if resp.ExecutionID != 0 {
 		t.Fatalf("ExecutionID = %d, want 0 (no successful record)", resp.ExecutionID)
 	}
+	if len(repo.insertedAttempts) != 0 {
+		t.Fatalf("history rows = %d, want 0 (atomic pair rolled back)", len(repo.insertedAttempts))
+	}
 }
 
 func TestExecute_AuditWriteFailureOnSuccess_ReturnsBackendError(t *testing.T) {
 	t.Parallel()
 	svc, repo, _, _ := executionTestScaffold(t)
-	repo.insertAuditErr = errors.New("audit db down")
+	repo.pairErr = errors.New("audit db down")
 
-	// WHY: the audit event is part of the recording guarantee; if it cannot be
-	// written the request fails closed rather than reporting an unaudited run.
+	// WHY: the audit event is part of the recording guarantee; if the pair
+	// write fails the request fails closed rather than reporting an unaudited
+	// run, and the atomic rollback leaves no history row.
 	_, err := svc.Execute(context.Background(), 7, 9001, model.QueryExecuteRequest{Statement: "select 1", MaxRows: 10})
 	if !errors.Is(err, ErrQueryBackendFailure) {
 		t.Fatalf("error = %v, want ErrQueryBackendFailure", err)
+	}
+	if len(repo.insertedAttempts) != 0 {
+		t.Fatalf("history rows = %d, want 0 (failed pair must commit no history)", len(repo.insertedAttempts))
+	}
+}
+
+// TestExecute_SuccessUsesSingleAtomicPairWrite proves the ordinary execution
+// path records its history row and audit event through ONE repository-owned
+// atomic pair call — never two independent writes. This is the Issue #34
+// expand-step invariant.
+func TestExecute_SuccessUsesSingleAtomicPairWrite(t *testing.T) {
+	t.Parallel()
+	svc, repo, _, _ := executionTestScaffold(t)
+
+	resp, err := svc.Execute(context.Background(), 7, 9001, model.QueryExecuteRequest{Statement: "select 1", MaxRows: 10})
+	if err != nil {
+		t.Fatalf("execute: %v", err)
+	}
+	if len(repo.pairCalls) != 1 {
+		t.Fatalf("atomic pair calls = %d, want 1 (history+audit must share one transaction)", len(repo.pairCalls))
+	}
+	if repo.splitExecCalls != 0 || repo.splitAuditCalls != 0 {
+		t.Fatalf("split writes leaked: InsertExecution=%d InsertAuditEvent=%d, want 0/0", repo.splitExecCalls, repo.splitAuditCalls)
+	}
+	if repo.pairCalls[0].event != "query.executed" || repo.pairCalls[0].result != "success" {
+		t.Fatalf("pair audit params = %q/%q, want query.executed/success", repo.pairCalls[0].event, repo.pairCalls[0].result)
+	}
+	if resp.ExecutionID == 0 {
+		t.Fatal("ExecutionID = 0, want the committed execution id")
+	}
+	if repo.pairCalls[0].rec.ID != resp.ExecutionID {
+		t.Fatalf("committed id = %d, want %d", repo.pairCalls[0].rec.ID, resp.ExecutionID)
+	}
+}
+
+// TestExecute_PagedSuccessUsesSingleAtomicPairWritePerPage proves every fresh
+// paged execution records through the same one-call atomic pair.
+func TestExecute_PagedSuccessUsesSingleAtomicPairWritePerPage(t *testing.T) {
+	t.Parallel()
+	svc, repo, _, _ := executionTestScaffold(t)
+
+	resp, err := svc.Execute(context.Background(), 7, 9001, model.QueryExecuteRequest{
+		Statement:  "select value from metrics limit 100",
+		MaxRows:    100,
+		Pagination: &model.QueryExecutePaginationRequest{Page: 2, PageSize: 10},
+	})
+	if err != nil {
+		t.Fatalf("execute paged: %v", err)
+	}
+	if len(repo.pairCalls) != 1 {
+		t.Fatalf("atomic pair calls = %d, want 1 for one governed page execution", len(repo.pairCalls))
+	}
+	if repo.splitExecCalls != 0 || repo.splitAuditCalls != 0 {
+		t.Fatalf("split writes leaked on paged path: %d/%d, want 0/0", repo.splitExecCalls, repo.splitAuditCalls)
+	}
+	if resp.ExecutionID == 0 {
+		t.Fatal("paged execution returned no committed execution id")
+	}
+}
+
+// TestExecute_PairWriteFailureOnSuccess_ReturnsBackendError_NoHistory proves
+// the audit-failure path: the pair write fails, the request surfaces the
+// existing controlled backend failure, and NOTHING is committed to history —
+// the atomic rollback invariant at the service seam.
+func TestExecute_PairWriteFailureOnSuccess_ReturnsBackendError_NoHistory(t *testing.T) {
+	t.Parallel()
+	svc, repo, _, _ := executionTestScaffold(t)
+	repo.pairErr = errors.New("evidence store down")
+
+	_, err := svc.Execute(context.Background(), 7, 9001, model.QueryExecuteRequest{Statement: "select 1", MaxRows: 10})
+	if !errors.Is(err, ErrQueryBackendFailure) {
+		t.Fatalf("error = %v, want ErrQueryBackendFailure", err)
+	}
+	if len(repo.pairCalls) != 1 {
+		t.Fatalf("pair calls = %d, want 1", len(repo.pairCalls))
+	}
+	if len(repo.insertedAttempts) != 0 {
+		t.Fatalf("history rows = %d, want 0 (failed pair must commit no history)", len(repo.insertedAttempts))
+	}
+	if len(repo.auditEvents) != 0 {
+		t.Fatalf("audit events = %d, want 0 (failed pair must commit no audit)", len(repo.auditEvents))
 	}
 }
 
 func TestExecute_RejectedAttempt_PersistFailure_ReturnsBackendError(t *testing.T) {
 	t.Parallel()
 	svc, repo, _, executor := executionTestScaffold(t)
-	repo.insertExecErr = errors.New("history db down")
+	repo.pairErr = errors.New("history db down")
 
 	// WHY: even for a rejected attempt, a recording failure must surface as a
 	// controlled backend failure (never silently swallow + claim "recorded").
@@ -601,6 +725,9 @@ func TestExecute_RejectedAttempt_PersistFailure_ReturnsBackendError(t *testing.T
 	}
 	if executor.called {
 		t.Fatal("rejected attempt must not reach the executor")
+	}
+	if len(repo.insertedAttempts) != 0 {
+		t.Fatalf("history rows = %d, want 0 (failed pair must not commit a rejection row)", len(repo.insertedAttempts))
 	}
 }
 
@@ -1212,10 +1339,10 @@ func TestListHistory_Offset_SetsExplicitOffsetMode(t *testing.T) {
 func TestExecute_AuditHistoryFailureCannotProduceSuccess(t *testing.T) {
 	t.Parallel()
 	svc, repo, _, _ := executionTestScaffold(t)
-	// Phase 38S: if the audit/history write fails for any page, the overall
+	// Phase 38S: if the audit/history pair write fails for any page, the overall
 	// response must NOT be a success. This is the same guarantee as Phase 37
 	// but extended to per-page recording.
-	repo.insertExecErr = errors.New("history db down")
+	repo.pairErr = errors.New("history db down")
 	resp, err := svc.Execute(context.Background(), 7, 9001, model.QueryExecuteRequest{Statement: "select 1", MaxRows: 10})
 	if !errors.Is(err, ErrQueryBackendFailure) {
 		t.Fatalf("error = %v, want ErrQueryBackendFailure (audit/history failure must not produce success)", err)
@@ -1536,13 +1663,13 @@ func TestExecute_PagedSuccessRequiresHistoryAndAudit(t *testing.T) {
 		{
 			name: "history write fails",
 			configure: func(repo *fakeExecRepo) {
-				repo.insertExecErr = errors.New("history db down")
+				repo.pairErr = errors.New("history db down")
 			},
 		},
 		{
 			name: "audit write fails",
 			configure: func(repo *fakeExecRepo) {
-				repo.insertAuditErr = errors.New("audit db down")
+				repo.pairErr = errors.New("audit db down")
 			},
 		},
 	} {

@@ -1,7 +1,8 @@
 // Package service provides tests for governed saved-statement (template) execution.
 // input: context, database/sql, encoding/json, errors, strings, testing, time, internal/model
-// output: TestExecuteSavedStatement* (reread, authorization matrix, typed values, per-page chain, no-value persistence)
+// output: TestExecuteSavedStatement* (reread, authorization matrix, typed values, per-page chain, no-value persistence, atomic Execution Evidence Pair writes)
 // pos: Unit tests for the fresh-query-actor template-execution route through the existing governed chain
+// note: if this file changes, update header and README.md
 package service
 
 import (
@@ -58,6 +59,55 @@ func templateExecuteRequest(values map[string]string) model.QuerySavedStatementE
 		raw[name] = json.RawMessage(value)
 	}
 	return model.QuerySavedStatementExecuteRequest{Values: raw, MaxRows: 100}
+}
+
+// TestExecuteSavedStatementUsesSingleAtomicPairWrite proves the template
+// execution path records history + audit through one atomic pair write per
+// execution (Issue #34 expand step), never the split seams.
+func TestExecuteSavedStatementUsesSingleAtomicPairWrite(t *testing.T) {
+	svc, repo, _, _ := newTemplateExecutionTestService(
+		templateStatement(7, model.QuerySavedStatementPersonal, "select 1", nil), nil,
+	)
+
+	_, err := svc.ExecuteSavedStatement(context.Background(), 7, 9001, 7, templateExecuteRequest(nil))
+	if err != nil {
+		t.Fatalf("execute saved statement: %v", err)
+	}
+	if len(repo.pairCalls) != 1 {
+		t.Fatalf("atomic pair calls = %d, want 1 for template execution", len(repo.pairCalls))
+	}
+	if repo.pairCalls[0].event != "query.executed" || repo.pairCalls[0].result != "success" {
+		t.Fatalf("pair audit params = %q/%q, want query.executed/success", repo.pairCalls[0].event, repo.pairCalls[0].result)
+	}
+	if repo.splitExecCalls != 0 || repo.splitAuditCalls != 0 {
+		t.Fatalf("split writes leaked on template path: %d/%d, want 0/0", repo.splitExecCalls, repo.splitAuditCalls)
+	}
+}
+
+// TestExecuteSavedStatementValidationRejectionUsesAtomicPairWrite proves the
+// template validation-rejection path also records through the atomic pair.
+func TestExecuteSavedStatementValidationRejectionUsesAtomicPairWrite(t *testing.T) {
+	svc, repo, _, _ := newTemplateExecutionTestService(
+		templateStatement(7, model.QuerySavedStatementPersonal, "select 1", []model.QuerySavedStatementParameterDefinition{
+			{Name: "v", Type: model.QuerySavedStatementParameterInteger},
+		}), nil,
+	)
+
+	// A non-integer value for an integer parameter fails validation after the
+	// target has been resolved, so the rejected attempt must be pair-recorded.
+	_, err := svc.ExecuteSavedStatement(context.Background(), 7, 9001, 7, templateExecuteRequest(map[string]string{"v": "\"oops\""}))
+	if err == nil {
+		t.Fatal("expected validation failure")
+	}
+	if len(repo.pairCalls) != 1 {
+		t.Fatalf("atomic pair calls = %d, want 1 for rejected template validation", len(repo.pairCalls))
+	}
+	if repo.pairCalls[0].result != "validation_failed" {
+		t.Fatalf("pair audit result = %q, want validation_failed", repo.pairCalls[0].result)
+	}
+	if repo.splitExecCalls != 0 || repo.splitAuditCalls != 0 {
+		t.Fatalf("split writes leaked on template validation path: %d/%d, want 0/0", repo.splitExecCalls, repo.splitAuditCalls)
+	}
 }
 
 func TestExecuteSavedStatementRunsPersonalTemplateThroughGovernedChain(t *testing.T) {

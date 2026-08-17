@@ -293,6 +293,7 @@ Dependency flow (strict, one-directional): `cmd/server` → `api` → `service` 
 | GET | /query-targets/{id}/schema/table-definition | Get MySQL table definition (base tables only) |
 | POST | /query-targets/{id}/execute | Execute a governed read-only statement, with optional result paging for SELECT |
 | POST | /query-targets/{id}/saved-statements/{statementId}/execute | Execute a saved statement (governed template execution) through the existing governed chain |
+| GET | /ops/query-evidence-metrics | Admin-only query-evidence persistence-failure counter for atomic Execution Evidence Pair writes (Issue #34) |
 | GET | /openapi.yaml | Raw OpenAPI 3.1.0 spec |
 | GET | /docs | Scalar API Reference docs UI |
 
@@ -302,7 +303,8 @@ Dependency flow (strict, one-directional): `cmd/server` → `api` → `service` 
 operational APIs require a Backend Bearer Credential. Authenticated editors can
 read Inventory, dictionaries, query-target lists, saved-statement lists, and
 fresh governed query/schema surfaces. Router-admin operations cover Inventory
-mutations and audit reads; handler-admin operations cover credential writes and
+mutations, audit reads, and operational metrics reads (auth-audit and
+query-evidence metrics). Handler-admin operations cover credential writes and
 all disclosure-policy operations, including GET. Saved-statement mutations are
 not a router-wide admin gate: Phase 38R authorizes personal statements by owner
 and shared templates by admin role.

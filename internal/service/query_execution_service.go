@@ -1,7 +1,7 @@
 // Package service provides business logic for the Phase 37/38S read-only query sandbox.
 // input: context, errors, fmt, net, strconv, strings, time, go-sql-driver/mysql, internal/model
 // output: QueryExecutionService, query execution repository/resolver/executor/clock interfaces, sentinel errors, NewQueryExecutionService, Execute, ListHistory, validateDSNBinding
-// pos: Orchestrates governed MySQL/TiDB query execution and compiler-owned template execution — target/policy/guard/disclosure gating, paged result windows, timed execution, and guaranteed per-attempt history + audit
+// pos: Orchestrates governed MySQL/TiDB query execution and compiler-owned template execution — target/policy/guard/disclosure gating, paged result windows, timed execution, and guaranteed per-attempt atomic Execution Evidence Pair history + audit (Issue #34)
 // note: if this file changes, update header and README.md
 package service
 
@@ -58,11 +58,18 @@ const (
 // QueryExecutionRepository persists query execution history and audit events and
 // reads credential metadata. The concrete MySQL implementation lives in
 // internal/repository/mysql/query_execution_repository.go.
+//
+// InsertExecutionWithAudit is the repository-owned atomic Execution Evidence
+// Pair (Issue #34): one transaction commits the history row and its fixed
+// audit event together. Ordinary, paged, and template execution must route
+// through it; the standalone InsertExecution/InsertAuditEvent seam remains
+// only for #36 related-record navigation.
 type QueryExecutionRepository interface {
 	GetCredentialByResourceID(ctx context.Context, resourceID uint64) (model.QueryCredentialMetadata, error)
 	InsertExecution(ctx context.Context, rec model.QueryExecutionRecord) (uint64, error)
 	ListExecutions(ctx context.Context, q model.QueryExecutionListQuery) ([]model.QueryExecutionRecord, int, error)
 	InsertAuditEvent(ctx context.Context, actorUserID uint64, targetResourceID uint64, eventType string, result string) error
+	InsertExecutionWithAudit(ctx context.Context, rec model.QueryExecutionRecord, eventType, result string) (uint64, error)
 }
 
 // QueryCredentialResolver resolves a validated credential_ref to a DSN. It must
@@ -779,19 +786,18 @@ func (s *QueryExecutionService) buildRecord(target model.QueryTarget, actorUserI
 	return rec
 }
 
-// persistAttempt records one attempt's history row and audit event and returns
-// the new execution id, or an error if either write fails. Unlike best-effort
-// logging, callers treat a non-nil error as a controlled backend failure so the
-// "every attempt is recorded" guarantee holds. The recorded message never
-// contains the DSN.
+// persistAttempt records one attempt's Execution Evidence Pair (history row +
+// fixed query.executed audit event) through the repository-owned atomic
+// primitive and returns the committed execution id, or an error if the pair
+// write fails. Unlike best-effort logging, callers treat a non-nil error as a
+// controlled backend failure so the "every attempt is recorded" guarantee
+// holds. The recorded message never contains the DSN. The repository owns the
+// transaction; the service never composes history and audit writes (Issue #34).
 func (s *QueryExecutionService) persistAttempt(ctx context.Context, target model.QueryTarget, actorUserID uint64, guarded *GuardedQuery, status model.QueryExecutionStatus, rowCount int, code, msg string, start time.Time) (uint64, error) {
 	rec := s.buildRecord(target, actorUserID, guarded, status, rowCount, code, msg, start)
-	id, err := s.executions.InsertExecution(ctx, rec)
+	id, err := s.executions.InsertExecutionWithAudit(ctx, rec, "query.executed", auditResultFor(status))
 	if err != nil {
 		return 0, err
-	}
-	if err := s.executions.InsertAuditEvent(ctx, actorUserID, target.ResourceID, "query.executed", auditResultFor(status)); err != nil {
-		return id, err
 	}
 	return id, nil
 }

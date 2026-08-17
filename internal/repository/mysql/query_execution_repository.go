@@ -1,7 +1,7 @@
 // Package mysql provides MySQL-backed repository implementations.
-// input: database/sql, context, errors, fmt, internal/model
-// output: NewQueryExecutionRepository, QueryExecutionRepository (credential metadata incl. atomic UpsertCredentialMetadataWithAudit / DeleteCredentialMetadataWithAudit + inTx, execution history, audit events)
-// pos: MySQL data access for the Phase 37 read-only query sandbox (query_target_credentials, query_executions, audit_events)
+// input: database/sql, context, errors, expvar, fmt, log, strconv, internal/model
+// output: NewQueryExecutionRepository, QueryExecutionRepository (credential metadata incl. atomic UpsertCredentialMetadataWithAudit / DeleteCredentialMetadataWithAudit + inTx, atomic InsertExecutionWithAudit Execution Evidence Pair, execution history, audit events, QueryEvidencePersistenceFailures counter)
+// pos: MySQL data access for the Phase 37 read-only query sandbox (query_target_credentials, query_executions, audit_events) incl. the repository-owned atomic Execution Evidence Pair (Issue #34)
 // note: if this file changes, update header and README.md
 package mysql
 
@@ -9,7 +9,9 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"expvar"
 	"fmt"
+	"log"
 	"strconv"
 
 	"github.com/fan/controlhub/internal/model"
@@ -39,7 +41,29 @@ const (
 		             environment_policy = values(environment_policy)`
 	deleteCredentialMetadataSQL = `delete from query_target_credentials where resource_id = ?`
 	insertAuditEventSQL         = `insert into audit_events (actor_user_id, target_resource_id, event_type, result) values (?, ?, ?, ?)`
+	insertExecutionSQL          = `insert into query_executions
+	           (target_resource_id, actor_user_id, engine, statement_digest, statement_preview, status, row_count, duration_ms, error_code, error_message, created_at)
+	           values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, COALESCE(?, CURRENT_TIMESTAMP(6)))`
 )
+
+// QueryEvidencePersistenceFailures is the dimensionless operational counter for
+// atomic Execution Evidence Pair persistence failures (Issue #34). It carries
+// no dimensions and is published under a stable key so operational tooling can
+// scrape it without touching the admin-only metrics endpoint.
+var QueryEvidencePersistenceFailures = expvar.NewInt("query_evidence_persistence_failures")
+
+// recordQueryEvidencePersistenceFailure increments the dimensionless counter
+// exactly once and emits the ONE fixed safe log category. Neither surface may
+// contain actor, target, statement, template value, credential, DSN, request
+// data, or raw driver/database error details.
+func recordQueryEvidencePersistenceFailure() {
+	QueryEvidencePersistenceFailures.Add(1)
+	log.Printf("query_evidence_persistence_failed error_class=query_evidence_pair_persistence_failure")
+}
+
+// errQueryEvidencePairFailed is the internal pair-failure sentinel returned to
+// callers. It is a fixed string with no driver/database/statement details.
+var errQueryEvidencePairFailed = errors.New("query evidence pair persistence failed")
 
 // GetCredentialByResourceID returns the credential metadata for a query target.
 // It distinguishes three outcomes so callers never mask a failure as "no row":
@@ -181,25 +205,69 @@ func (r *QueryExecutionRepository) DeleteCredentialByResourceID(ctx context.Cont
 // InsertExecution persists one execution attempt's metadata and returns its id.
 // It stores a digest and short preview only — never full result rows.
 // When rec.CreatedAt is zero, the database default (CURRENT_TIMESTAMP) is used.
+// This standalone write remains ONLY for the #36 related-record navigation
+// caller; ordinary, paged, and template execution must use
+// InsertExecutionWithAudit.
 func (r *QueryExecutionRepository) InsertExecution(ctx context.Context, rec model.QueryExecutionRecord) (uint64, error) {
-	var createdAt any
-	if !rec.CreatedAt.IsZero() {
-		createdAt = rec.CreatedAt.UTC()
-	}
-	const q = `insert into query_executions
-	           (target_resource_id, actor_user_id, engine, statement_digest, statement_preview, status, row_count, duration_ms, error_code, error_message, created_at)
-	           values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, COALESCE(?, CURRENT_TIMESTAMP(6)))`
-	res, err := r.db.ExecContext(ctx, q,
-		rec.TargetResourceID, rec.ActorUserID, rec.Engine, rec.StatementDigest, rec.StatementPreview,
-		string(rec.Status), rec.RowCount, rec.DurationMs, rec.ErrorCode, rec.ErrorMessage,
-		createdAt,
-	)
+	res, err := r.db.ExecContext(ctx, insertExecutionSQL, executionRecordArgs(rec)...)
 	if err != nil {
 		return 0, fmt.Errorf("insert query execution: %w", err)
 	}
 	id, err := res.LastInsertId()
 	if err != nil {
 		return 0, fmt.Errorf("query execution last insert id: %w", err)
+	}
+	return uint64(id), nil
+}
+
+// executionRecordArgs converts a record into the insertExecutionSQL parameters.
+// When rec.CreatedAt is zero a nil placeholder lets the database default apply.
+func executionRecordArgs(rec model.QueryExecutionRecord) []any {
+	var createdAt any
+	if !rec.CreatedAt.IsZero() {
+		createdAt = rec.CreatedAt.UTC()
+	}
+	return []any{
+		rec.TargetResourceID, rec.ActorUserID, rec.Engine, rec.StatementDigest, rec.StatementPreview,
+		string(rec.Status), rec.RowCount, rec.DurationMs, rec.ErrorCode, rec.ErrorMessage,
+		createdAt,
+	}
+}
+
+// InsertExecutionWithAudit is the repository-owned atomic Execution Evidence
+// Pair primitive (Issue #34): it commits one query-execution history row and
+// its corresponding fixed audit event in ONE database transaction and returns
+// the committed execution id on success. On any failure — including audit
+// insertion failure — the whole transaction rolls back so no partial evidence
+// can commit, the dimensionless QueryEvidencePersistenceFailures counter is
+// incremented exactly once, and one fixed safe log line is emitted. The
+// returned sentinel carries no driver/database/statement details; callers
+// surface it as the existing controlled backend error.
+func (r *QueryExecutionRepository) InsertExecutionWithAudit(ctx context.Context, rec model.QueryExecutionRecord, eventType, result string) (uint64, error) {
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		recordQueryEvidencePersistenceFailure()
+		return 0, errQueryEvidencePairFailed
+	}
+	defer func() { _ = tx.Rollback() }() // no-op after Commit; safe on error
+
+	res, err := tx.ExecContext(ctx, insertExecutionSQL, executionRecordArgs(rec)...)
+	if err != nil {
+		recordQueryEvidencePersistenceFailure()
+		return 0, errQueryEvidencePairFailed
+	}
+	id, err := res.LastInsertId()
+	if err != nil {
+		recordQueryEvidencePersistenceFailure()
+		return 0, errQueryEvidencePairFailed
+	}
+	if _, err := tx.ExecContext(ctx, insertAuditEventSQL, rec.ActorUserID, rec.TargetResourceID, eventType, result); err != nil {
+		recordQueryEvidencePersistenceFailure()
+		return 0, errQueryEvidencePairFailed
+	}
+	if err := tx.Commit(); err != nil {
+		recordQueryEvidencePersistenceFailure()
+		return 0, errQueryEvidencePairFailed
 	}
 	return uint64(id), nil
 }

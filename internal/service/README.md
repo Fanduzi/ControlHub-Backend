@@ -27,7 +27,7 @@ Business logic layer with interface-based repository dependencies. Each service 
 | query_template_compiler.go | Server-owned AST placeholder compiler and guarded positional binding seam |
 | query_template_compiler_declaration.go | Declaration-only placeholder validation shared by saved-statement persistence and runtime compilation |
 | query_executor.go | Read-only MySQL/TiDB execution, compiler-owned template binding, and bounded result scanning |
-| query_execution_service.go | Governed query execution and Phase 38S result paging with per-page access, disclosure, history, and audit |
+| query_execution_service.go | Governed query execution and Phase 38S result paging with per-page access, disclosure, and atomically paired history+audit (`InsertExecutionWithAudit`, Issue #34) |
 | query_template_execution_service.go | Fresh-query-actor saved-statement (template) execution — rereads the latest authorized statement, validates typed values, compiles server-side, then reuses the existing governed chain per page |
 | query_executor_test.go | Executor scanning, result-cap, and compiler-owned template binding tests |
 | query_execution_service_test.go | Query execution service tests, including governed per-page access, disclosure, and persistence guarantees |
@@ -64,6 +64,7 @@ Business logic layer with interface-based repository dependencies. Each service 
 - `TemplateParameterDefinition`, `TemplateStatementInput`, `CompiledTemplateStatement`, `GuardedTemplateStatement` — compiler/guard seam values for governed execution
 - `QueryDatabaseExecutor.QueryTemplate` — executes only compiler-produced guarded SQL with positional values in a read-only transaction
 - `QueryExecutionService.ExecuteSavedStatement` — re-reads/authorizes the latest saved statement, validates typed values with controlled field errors, and runs the existing access/guard/disclosure/executor/history/audit chain per page
+- `QueryExecutionRepository.InsertExecutionWithAudit` — repository-owned atomic Execution Evidence Pair (Issue #34): ordinary, paged, and template execution record history + the fixed `query.executed` audit event in one transaction; the standalone `InsertExecution`/`InsertAuditEvent` seam remains only for #36 related-record navigation
 - `TemplateValueValidationError` — per-parameter field codes (missing/unknown/invalid/oversized); never carries supplied values
 - `QuerySavedStatementReader`, `QuerySavedStatementWriter`, `SavedStatementGuard` — saved statement data access interfaces
 - Personal parameterized saved statements validate declarations against server-owned compiler placeholders; no parameter values or execution requests enter this service.
@@ -80,9 +81,10 @@ falls back to the normal single-response path.
 
 Every paged `SELECT` is executed afresh. The service resolves target access,
 credential binding, statement governance, disclosure policy, timeout, and the
-effective row cap for every page, then records the execution attempt in history
-and audit. The service does not run a totals query, persist result rows, or
-create a snapshot between pages.
+effective row cap for every page, then records the execution attempt as one
+atomic Execution Evidence Pair (history row + fixed `query.executed` audit
+event in a single repository transaction). The service does not run a totals
+query, persist result rows, or create a snapshot between pages.
 
 ## Dependencies
 - Upstream: `internal/model` (domain types)

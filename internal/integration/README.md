@@ -18,6 +18,7 @@ MySQL-backed integration tests run against disposable Testcontainers databases.
 | openapi_fuzz_contract_test.go | Enforces the OpenAPI Fuzz Exclusion Contract (no build tag): Schemathesis exclusions must be narrow single-operation `--exclude-operation-id` flags in openapi-fuzz.sh, within the canonical documented set, with no broad path/method/tag exclusions, no exclusion directives in schemathesis.toml, and a matching contract section in scripts/README.md |
 | legacy_import_test.go | Proves UUID-to-bigint cutover import against MySQL: full migration, non-empty target rejection, parseTime validation, NULL audit actor preserved as NULL with fixed event/result/target/created-at metadata, and unknown non-NULL audit actor failing loud with no partial import |
 | *_test.go | Exercises repository, API, and migration behavior against MySQL |
+| query_evidence_pair_test.go | Proves the atomic Execution Evidence Pair (Issue #34) against real MySQL: history + audit commit together and both roll back on audit/history insert failure; persistence-failure counter increments exactly once per failed pair with a fixed safe log |
 
 ## Operator access coverage
 
