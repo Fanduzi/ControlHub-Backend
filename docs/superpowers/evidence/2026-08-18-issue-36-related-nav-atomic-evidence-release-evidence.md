@@ -19,8 +19,8 @@ execution, and the obsolete standalone execution-history write seam
 | Base (`origin/main`, after #35 closure at `7327de3`) | `7327de395219b3af09d5fb2145e61af0d86fd406` |
 | Branch / worktree | `issue-36-related-nav-atomic-evidence-20260818` at `~/GolangProjects/ControlHub-wt-issue-36-20260818` |
 | Product SHA (all candidate gates run here) | `e3b77df50b7ab8e3fb3a46898db59de8472dfd05` |
-| Merged / pushed `origin/main` | `3e04c283a319f2e7c8fdb24ba8fb570498457c87` (fast-forward push `7327de3..3e04c28`; product tree identical to `e3b77df` plus the evidence commit) |
-| Delivery commits | `7354a37` `feat(evidence): migrate related-record navigation to the atomic Execution Evidence Pair (issue #36)`; `e3b77df` `fix(evidence): address code-review findings on Issue #36 range`; `3e04c28` `docs(evidence): record #36 related-record navigation atomic evidence release evidence` |
+| Merged / pushed `origin/main` | `0508477c73425f697cc6c87b5695831e9b77afd8` (fast-forward push `7327de3..0508477`; product tree identical to `e3b77df` plus the evidence commits) |
+| Delivery commits | `7354a37` `feat(evidence): migrate related-record navigation to the atomic Execution Evidence Pair (issue #36)`; `e3b77df` `fix(evidence): address code-review findings on Issue #36 range`; `3e04c28` `docs(evidence): record #36 related-record navigation atomic evidence release evidence`; `17192a4` `docs(evidence): finalize #36 evidence with merged-root re-run and CI result at shipped SHA`; `0508477` `docs(evidence): add final pushed-SHA CI run to #36 evidence` |
 
 Delivery range (`git diff --stat origin/main...HEAD`): 17 files, +540/-115 —
 `internal/repository/mysql/query_execution_repository.go` (InsertExecutionWithAudit
@@ -108,10 +108,12 @@ worktree (proven `HEAD == origin/main`).
 
 CI at the product-equivalent pushed root: <https://github.com/Fanduzi/ControlHub-Backend/actions/runs/32081284820>
 — Backend CI at head `3e04c28`: `release-local-gates` success,
-`release-docker-gates` success, conclusion `success`. The final docs-only push
-(`3e04c28..17192a4`, evidence finalized with these facts) also ran green:
-<https://github.com/Fanduzi/ControlHub-Backend/actions/runs/32081728126> at
-head `17192a4`, both jobs success.
+`release-docker-gates` success, conclusion `success`. Follow-up docs-only pushes
+ran green as well: `17192a4`
+(<https://github.com/Fanduzi/ControlHub-Backend/actions/runs/32081728126>)
+and the final head `0508477`
+(<https://github.com/Fanduzi/ControlHub-Backend/actions/runs/32081936804>), both
+jobs success in each.
 
 Root worktree preservation: the ROOT worktree (`~/GolangProjects/ControlHub`,
 still at `3af5d29`) was not touched by this delivery; its pre-existing dirty
