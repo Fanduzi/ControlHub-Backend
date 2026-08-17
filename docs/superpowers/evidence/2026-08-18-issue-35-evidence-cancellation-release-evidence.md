@@ -18,6 +18,8 @@ outcomes all reach the shared atomic evidence path.
 | Repository | `Fanduzi/ControlHub-Backend` |
 | Base (`origin/main`, after #34 closure at `813d296`) | `813d296cc6e8c4a6ec2a2e2d59c0f1baf0f0cf1a` (see below) |
 | Branch / worktree | `issue-35-evidence-cancellation-20260818` at `~/GolangProjects/ControlHub-wt-issue-35-20260818` |
+| Product SHA (all candidate gates run here) | `02287de5154b760dc82e30bc99d115f77ed1b8ae` |
+| Candidate / merged / pushed `origin/main` | `905135e43c1575d46be73ef97b5591cf96cd29a3` (docs-only evidence commit; product tree identical to `02287de`) |
 | Delivery commits | `501a647` `feat(evidence): cancellation-durable terminal evidence via Evidence Persistence Window (issue #35)`; `c555ee4` `fix(evidence): address code-review findings on Issue #35 range`; `02287de` `fix(evidence): classify disclosure machinery failures as failed, not rejected (issue #35 AC 4)` |
 
 Delivery range (`git diff --stat origin/main...HEAD`): 8 files, +672/-37 —
@@ -58,7 +60,7 @@ files (+357/+48), `internal/service/query_disclosure_service.go`,
    evidence; #36 related-record navigation keeps its standalone
    history/audit seam untouched.
 
-## Candidate Gates (exact final SHA `02287de`)
+## Candidate Gates (exact product SHA `02287de`)
 
 All executed in the issue-35 worktree at `HEAD=02287de`.
 
@@ -114,6 +116,16 @@ cancellation test.
   refined) + decision doc.
 - AC10 (unit, race, real-MySQL integration, OpenAPI, fuzz, no-leak,
   documentation gates) — table above.
+
+## CI
+
+| Item | Value |
+| --- | --- |
+| Run | https://github.com/Fanduzi/ControlHub-Backend/actions/runs/32076941875 |
+| Head SHA | `905135e43c1575d46be73ef97b5591cf96cd29a3` |
+| Workflow | Backend CI (`.github/workflows/backend-ci.yml`) |
+| Required jobs | `release-local-gates` — conclusion `success`; `release-docker-gates` — conclusion `success` |
+| Conclusion | `success` |
 
 ## Review
 
