@@ -16,11 +16,11 @@ GOOSE_DBSTRING := $(shell echo "$(DATABASE_DSN)" | sed 's/?parseTime=true&charse
 test:
 	go test ./...
 
-test-integration: ## Run integration tests against disposable MySQL via Testcontainers (requires Docker)
-	go test -tags=integration -count=1 -v -run '^Test[^O]' ./internal/integration
+test-integration: ## Run all integration tests except the dedicated OpenAPI fuzz test against disposable MySQL via Testcontainers (requires Docker)
+	go test -tags=integration -count=1 -v -run '^Test' -skip '^TestOpenAPIFuzz$$' ./internal/integration
 
-test-openapi-fuzz: ## Run Schemathesis OpenAPI fuzzing against disposable MySQL server (requires Docker + schemathesis)
-	go test -tags=integration -count=1 -v -run TestOpenAPIFuzz ./internal/integration
+test-openapi-fuzz: ## Run only the OpenAPI fuzz test against disposable MySQL server (requires Docker + schemathesis)
+	go test -tags=integration -count=1 -v -run '^TestOpenAPIFuzz$$' ./internal/integration
 
 openapi-validate: ## Validate internal/openapi/openapi.yaml
 	go test ./internal/openapi -v -run TestOpenAPIYAMLIsValid

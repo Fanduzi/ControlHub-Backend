@@ -8,7 +8,7 @@ MySQL-backed integration tests run against disposable Testcontainers databases.
 | testenv_test.go | Starts MySQL, applies migrations, and provides database helpers |
 | resource_test.go | Resource repository CRUD/filtering, create-with-profile atomicity, profile validation, and PATCH partial-merge semantics against real MySQL |
 | auth_authorization_version_test.go | Verifies Authorization Version credential invalidation and governed-query freshness against current database state |
-| operator_access_boundary_test.go | Proves the complete Operator Access Boundary matrix against current database state using the shared operatoraccess policy |
+| operator_access_boundary_test.go | Proves the complete Operator Access Boundary matrix against current database state using the shared operatoraccess policy; concrete resource and query-target example paths bind to a self-contained database_instance fixture so the matrix never depends on mutable canonical seed IDs |
 | auth_audit_emitter_test.go | Proves auth.login/auth.bearer/auth.authorization audit events persist against MySQL, stay fail-open on inject errors (login success, Bearer rejection, and role-denied 403 all unchanged), and never contain prohibited values; bounded untrusted-Bearer budget proved against real MySQL (missing header emits no row, 60 of 61 supplied rejections persist, suppression counter safe, role denial unbudgeted, process-shared across routers) |
 | authz_test_support_test.go | Shared authorization constants, login/bearer/user helpers, and query handler stubs |
 | seed_credential_remediation_test.go | Regression guard for the forward-only seed-disable migration: proves the published seed users are inactive and their credentials rejected |

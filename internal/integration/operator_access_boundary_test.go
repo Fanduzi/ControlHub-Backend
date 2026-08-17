@@ -248,10 +248,14 @@ func boundaryCreateSavedStatement(t *testing.T, router http.Handler, path, body,
 	return created.ID
 }
 
-// boundaryRequestPath binds the policy's example concrete path to the fixture
-// target id; non-target paths are used verbatim.
+// boundaryRequestPath binds the policy's example concrete paths to the
+// self-contained fixture: query-target paths bind to the fixture target id,
+// and resource paths requiring a concrete resource bind to the fixture
+// resource id (a database_instance whose profile schema matches the boundary
+// bodies), so the matrix never depends on mutable canonical seed IDs.
 func boundaryRequestPath(op operatoraccess.Operation, targetID uint64) string {
-	return strings.Replace(op.RequestPath, "/query-targets/22", fmt.Sprintf("/query-targets/%d", targetID), 1)
+	path := strings.Replace(op.RequestPath, "/query-targets/22", fmt.Sprintf("/query-targets/%d", targetID), 1)
+	return strings.Replace(path, "/resources/1", fmt.Sprintf("/resources/%d", targetID), 1)
 }
 
 // boundaryBody returns a valid request body for operations that decode one.
