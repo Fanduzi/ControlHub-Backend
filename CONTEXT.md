@@ -182,9 +182,21 @@ boundaries, but is never exposed to console browser JavaScript.
 ### Evidence-Bearing Query Attempt
 
 A governed query attempt that has reached a terminal outcome after its query
-target has been resolved. Every such attempt must persist one complete evidence
-record; unknown targets are never evidence-bearing because there is no valid
-target to attribute.
+target has been resolved — whether success, rejection, timeout, failure, or
+client cancellation. Every such attempt must persist one complete evidence
+record, and the record write is cancellation-durable: it outlives the client
+disconnect that may have caused the attempt to end. Unknown targets are never
+evidence-bearing because there is no valid target to attribute.
+
+### Evidence Persistence Window
+
+The fixed two-second bounded context in which an Evidence-Bearing Query
+Attempt's Execution Evidence Pair write runs. It is detached from the request
+context — a client cancellation or deadline expiry can never drop the terminal
+evidence — and the write is a single synchronous bounded attempt with no
+retry, queue, worker, or disk buffer. A window expiry or persistence failure
+surfaces the existing controlled backend error and the existing
+persistence-failure counter.
 
 ### Execution Evidence Pair
 
@@ -205,3 +217,14 @@ dimensionless process counter (`queryEvidencePersistenceFailures`, admin-only
 metrics) and one fixed safe log category; it never carries identity, target,
 statement, value, credential, DSN, request, or raw driver/database details.
 There is no automatic retry, queue, worker, or disk buffer.
+
+### Client-Cancellation Evidence
+
+The terminal Evidence-Bearing Query Attempt outcome recorded when the client
+disconnects during query or disclosure work: status `failed` with the fixed
+`query_canceled` error code and the fixed safe message "query canceled". A
+query that completed successfully before the cancellation remains recorded as
+success; deadline expiry keeps its separate `timeout` outcome, and a genuine
+disclosure-policy rejection stays `rejected`. No statement values, template
+values, credentials, DSNs, or raw errors are ever stored with cancellation
+evidence.

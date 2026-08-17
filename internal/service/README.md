@@ -27,12 +27,12 @@ Business logic layer with interface-based repository dependencies. Each service 
 | query_template_compiler.go | Server-owned AST placeholder compiler and guarded positional binding seam |
 | query_template_compiler_declaration.go | Declaration-only placeholder validation shared by saved-statement persistence and runtime compilation |
 | query_executor.go | Read-only MySQL/TiDB execution, compiler-owned template binding, and bounded result scanning |
-| query_execution_service.go | Governed query execution and Phase 38S result paging with per-page access, disclosure, and atomically paired history+audit (`InsertExecutionWithAudit`, Issue #34); exposes the `QueryEvidencePersistenceFailures` counter through the service layer |
+| query_execution_service.go | Governed query execution and Phase 38S result paging with per-page access, disclosure, and atomically paired history+audit (`InsertExecutionWithAudit`, Issue #34) persisted in a fixed two-second Evidence Persistence Window detached from request cancellation/deadline, with client-cancellation evidence recorded as failed/query_canceled (Issue #35); exposes the `QueryEvidencePersistenceFailures` counter through the service layer |
 | query_template_execution_service.go | Fresh-query-actor saved-statement (template) execution — rereads the latest authorized statement, validates typed values, compiles server-side, then reuses the existing governed chain per page |
 | query_executor_test.go | Executor scanning, result-cap, and compiler-owned template binding tests |
-| query_execution_service_test.go | Query execution service tests, including governed per-page access, disclosure, and persistence guarantees |
-| query_template_execution_service_test.go | Template-execution service tests (reread, authorization matrix, typed value field errors, per-page chain, no-value persistence) |
-| query_disclosure_service.go | QueryDisclosureService — policy lookup, projection resolution, result transformation |
+| query_execution_service_test.go | Query execution service tests, including governed per-page access, disclosure, persistence guarantees, and cancellation-durable terminal evidence via the detached two-second Evidence Persistence Window (Issue #35) |
+| query_template_execution_service_test.go | Template-execution service tests (reread, authorization matrix, typed value field errors, per-page chain, no-value persistence, cancellation-durable evidence) |
+| query_disclosure_service.go | QueryDisclosureService — policy lookup, projection resolution, result transformation; preflight read errors %w-wrapped inside the blocked wrap so the execution service can distinguish cancellation from policy rejection (Issue #35) |
 | query_disclosure_projection.go | Column provenance resolution from SQL AST and FK metadata |
 | query_disclosure_mask.go | applyDisclosureMask for server-side value redaction |
 | query_saved_statement_service.go | QuerySavedStatementService — authorized target-scoped saved statement CRUD with typed declaration validation and guard validation |

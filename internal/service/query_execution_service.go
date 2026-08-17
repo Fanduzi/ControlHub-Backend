@@ -1,7 +1,7 @@
 // Package service provides business logic for the Phase 37/38S read-only query sandbox.
 // input: context, errors, fmt, net, strconv, strings, time, go-sql-driver/mysql, internal/model
 // output: QueryExecutionService, query execution repository/resolver/executor/clock interfaces, sentinel errors, NewQueryExecutionService, Execute, ListHistory, validateDSNBinding
-// pos: Orchestrates governed MySQL/TiDB query execution and compiler-owned template execution — target/policy/guard/disclosure gating, paged result windows, timed execution, and guaranteed per-attempt atomic Execution Evidence Pair history + audit (Issue #34)
+// pos: Orchestrates governed MySQL/TiDB query execution and compiler-owned template execution — target/policy/guard/disclosure gating, paged result windows, timed execution, and guaranteed per-attempt atomic Execution Evidence Pair history + audit (Issue #34) persisted in a fixed two-second Evidence Persistence Window detached from request cancellation/deadline (Issue #35)
 // note: if this file changes, update header and README.md
 package service
 
@@ -54,6 +54,14 @@ const (
 	productionQueryTimeout = 3 * time.Second
 	productionHardMaxRows  = 100
 )
+
+// evidencePersistenceWindow is the fixed two-second Evidence Persistence
+// Window (Issue #35): the maximum time an Evidence-Bearing Query Attempt's
+// Execution Evidence Pair write may take. The write runs in its own bounded
+// context detached from request cancellation and deadline — a client disconnect
+// can never drop terminal evidence — and is a single synchronous attempt with
+// no retry, queue, worker, or disk buffer.
+const evidencePersistenceWindow = 2 * time.Second
 
 // QueryExecutionRepository persists query execution history and audit events and
 // reads credential metadata. The concrete MySQL implementation lives in
@@ -279,11 +287,22 @@ func (s *QueryExecutionService) executeGuardedChain(
 	// Blocks if any projected column lacks an exact disclosure policy.
 	plan, err := s.disclosure.Preflight(ctx, dsn, target.ResourceID, *guarded)
 	if err != nil {
-		if errors.Is(err, ErrQueryDisclosureBlocked) {
+		// A genuine public disclosure-policy rejection stays rejected. A
+		// canceled or deadline-expired disclosure read (blended into the same
+		// blocked wrap by the disclosure service) is NOT a policy rejection —
+		// it is a terminal failed/timeout client-cancellation or deadline
+		// outcome and must reach the shared atomic evidence path (Issue #35).
+		if errors.Is(err, ErrQueryDisclosureBlocked) && !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded) {
 			return s.reject(ctx, target, actorUserID, guarded, "query_result_disclosure_blocked", "query blocked by result disclosure policy",
 				fmt.Errorf("%w: %v", ErrQueryNotAllowed, err), start)
 		}
-		return model.QueryExecuteResponse{}, err
+		// All other post-target disclosure terminal failures record fixed safe
+		// failed or timeout evidence and surface the existing controlled error.
+		status, sentinel, code, safeMsg := classifyExecutorError(err)
+		if _, perr := s.persistAttempt(ctx, target, actorUserID, guarded, status, 0, code, safeMsg, start); perr != nil {
+			return model.QueryExecuteResponse{}, errPersistAttempt
+		}
+		return model.QueryExecuteResponse{}, fmt.Errorf("%w: %s", sentinel, safeMsg)
 	}
 
 	timeout := defaultQueryTimeout
@@ -757,13 +776,19 @@ func validateRelatedRecordsFKMetadata(fk *FKSummary) error {
 // classifyExecutorError maps an executor error to a history status, a sentinel
 // for the handler, an audit/error code, and a client-safe message. A timeout is
 // 408; an oversized result is 400 (validation); a disclosure policy block is
-// 403; anything else from the target database is 502. The returned message is
-// fixed and never echoes the raw executor error, which may contain DSN fragments
-// from the driver.
+// 403; a client cancellation is recorded failed/query_canceled with a fixed
+// safe message (Issue #35); anything else from the target database is 502. The
+// returned message is fixed and never echoes the raw executor error, which may
+// contain DSN fragments from the driver.
 func classifyExecutorError(err error) (model.QueryExecutionStatus, error, string, string) {
 	switch {
 	case errors.Is(err, context.DeadlineExceeded):
 		return model.QueryExecutionTimeout, ErrQueryTimeout, "query_timeout", "query exceeded the time limit"
+	case errors.Is(err, context.Canceled):
+		// Client cancellation during query or disclosure work is a terminal
+		// attempt outcome, recorded as failed/query_canceled with a fixed safe
+		// message — the raw driver error is never persisted or returned.
+		return model.QueryExecutionFailed, ErrQueryBackendFailure, "query_canceled", "query canceled"
 	case errors.Is(err, ErrQueryResultTooLarge):
 		return model.QueryExecutionRejected, ErrQueryValidationFailed, "validation_failed", "result set exceeds configured limits"
 	case errors.Is(err, ErrQueryDisclosureBlocked):
@@ -801,9 +826,19 @@ func (s *QueryExecutionService) buildRecord(target model.QueryTarget, actorUserI
 // controlled backend failure so the "every attempt is recorded" guarantee
 // holds. The recorded message never contains the DSN. The repository owns the
 // transaction; the service never composes history and audit writes (Issue #34).
+//
+// Issue #35: the pair write runs in a context detached from request
+// cancellation/deadline and bounded to the fixed two-second Evidence
+// Persistence Window, so a client disconnect or deadline expiry can never drop
+// the terminal evidence. context.WithoutCancel preserves the request's trace
+// values while severing the Done channel; the write is one synchronous bounded
+// attempt — no retry, queue, worker, or disk buffer. A window expiry or DB
+// failure still surfaces the existing controlled backend failure.
 func (s *QueryExecutionService) persistAttempt(ctx context.Context, target model.QueryTarget, actorUserID uint64, guarded *GuardedQuery, status model.QueryExecutionStatus, rowCount int, code, msg string, start time.Time) (uint64, error) {
 	rec := s.buildRecord(target, actorUserID, guarded, status, rowCount, code, msg, start)
-	id, err := s.executions.InsertExecutionWithAudit(ctx, rec, auditResultFor(status))
+	windowCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), evidencePersistenceWindow)
+	defer cancel()
+	id, err := s.executions.InsertExecutionWithAudit(windowCtx, rec, auditResultFor(status))
 	if err != nil {
 		return 0, err
 	}

@@ -4,7 +4,7 @@
 // serialization. Absence of an exact matching policy is blocked (fail-closed).
 // input: context, database/sql, errors, fmt, mysql DSN, internal/model, QuerySchemaInspector, QueryTargetRepository
 // output: QueryDisclosureService, DisclosurePlan, ColumnDisclosure, QueryDisclosureReader/Writer, ErrQueryDisclosure* sentinels
-// pos: fail-closed disclosure governance for governed query results (Phase 38Q)
+// pos: fail-closed disclosure governance for governed query results (Phase 38Q); preflight read errors are %w-wrapped inside the blocked wrap so the execution service can distinguish canceled/deadline-expired disclosure work from genuine policy rejections (Issue #35)
 // note: if this file changes, update header and README.md
 package service
 
@@ -147,7 +147,10 @@ func (s *QueryDisclosureService) Preflight(
 		guarded:  guarded,
 	})
 	if err != nil {
-		return DisclosurePlan{}, fmt.Errorf("%w: %v", ErrQueryDisclosureBlocked, err)
+		// The inner read error is %w-wrapped (not just %v) so the execution
+		// service can distinguish a canceled/deadline-expired disclosure read
+		// from a genuine policy rejection via errors.Is (Issue #35).
+		return DisclosurePlan{}, fmt.Errorf("%w: %w", ErrQueryDisclosureBlocked, err)
 	}
 
 	if len(projection.Columns) == 0 {
