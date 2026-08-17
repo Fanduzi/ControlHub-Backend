@@ -72,10 +72,16 @@ All executed in the issue-35 worktree at `HEAD=02287de`.
 | `go vet -tags=integration ./internal/integration/` | PASS, clean |
 | `go build ./...` | PASS, clean |
 | `go test ./internal/openapi` | PASS, 12 tests (OpenAPI YAML validity; no OpenAPI change needed — no new endpoint/table/status enum, error codes are free strings) |
-| `make test-integration` | PASS, exit 0, real-MySQL Testcontainers suite (`TestQueryEvidencePair*` and operator-access boundary included) |
-| `make test-openapi-fuzz` | PASS, exit 0, `TestOpenAPIFuzz` Schemathesis checks clean |
+| `make test-integration` | PASS, exit 0, 389 passed / 0 failed / 0 skipped (Testcontainers mysql:8.0; `TestQueryEvidencePair*` and operator-access boundary included) |
+| `make test-openapi-fuzz` | PASS, exit 0, exactly 1 test (`TestOpenAPIFuzz`), Schemathesis checks clean |
 | `check_three_level_doc.sh` | PASS on the change set (L3 headers + internal/service README synchronized; root README reviewed — no new endpoint/contract row needed) |
 | `gofmt -l` (changed files) | Clean (10 pre-existing origin/main baseline files remain unformatted and were not touched) |
+
+The identical local + Docker gate set was re-run at the merged candidate
+HEAD `905135e43c1575d46be73ef97b5591cf96cd29a3` in the delivery worktree
+(`/tmp/wt35-merge`, branch `delivery-issue-35-merge`) before push: all PASS
+(unit 1801 / 14 packages, race 1801 no races, vet + build clean, openapi 12,
+integration 389 passed / 0 failed / 0 skipped, Schemathesis fuzz clean).
 
 Zero failures, zero skips. New tests: 7 execution-service tests (canceled
 executor, paged canceled, canceled-disclosure table-driven over backend- and
