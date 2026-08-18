@@ -165,8 +165,11 @@ Deliberate judgement calls recorded for traceability:
 
 ## CI
 
-CI URL, required job results, and the final pushed SHA are appended to this
-file in the follow-up evidence commit once the push and CI runs complete.
+| Run | Head | Result |
+| --- | --- | --- |
+| [32088870770](https://github.com/Fanduzi/ControlHub-Backend/actions/runs/32088870770) | `92b20d8` (feat + candidate evidence) | Both jobs success: `release-local-gates` ✓, `release-docker-gates` ✓ |
+
+The docs-only follow-up run for the final pushed head is appended below once it completes.
 
 ## Root Worktree Preservation
 
