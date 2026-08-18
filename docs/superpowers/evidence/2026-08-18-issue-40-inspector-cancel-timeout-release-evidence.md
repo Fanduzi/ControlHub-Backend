@@ -155,9 +155,16 @@ All four #40 ACs are met:
 
 ## CI
 
-Exact-head CI on the pushed `main` refs is recorded in the final evidence
-follow-up commit (same pattern as the #35/#37 evidence records); the final
-conclusion is also cited in the #40 ticket closing comment.
+Exact-head CI on the pushed `main` refs (workflow `backend-ci.yml`, jobs
+`release-local-gates` + `release-docker-gates`, both required):
+
+| Run | Head | Result |
+| --- | --- | --- |
+| [32105672610](https://github.com/Fanduzi/ControlHub-Backend/actions/runs/32105672610) | `2b79c20` (merged: fix + tests + this evidence) | Both jobs success |
+
+All required CI jobs are green at the exact merged head. The final pushed-head
+run after this follow-up commit is verified green and cited in the #40 ticket
+closing comment.
 
 ## Root Worktree Preservation
 
