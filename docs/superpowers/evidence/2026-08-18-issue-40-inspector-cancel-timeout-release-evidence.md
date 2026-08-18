@@ -160,11 +160,12 @@ Exact-head CI on the pushed `main` refs (workflow `backend-ci.yml`, jobs
 
 | Run | Head | Result |
 | --- | --- | --- |
-| [32105672610](https://github.com/Fanduzi/ControlHub-Backend/actions/runs/32105672610) | `2b79c20` (merged: fix + tests + this evidence) | Both jobs success |
+| [32105672610](https://github.com/Fanduzi/ControlHub-Backend/actions/runs/32105672610) | `2b79c20` (fix + tests + initial evidence) | Both jobs success |
+| [32105908430](https://github.com/Fanduzi/ControlHub-Backend/actions/runs/32105908430) | `a781da5` (merged product head) | Both jobs success |
 
-All required CI jobs are green at the exact merged head. The final pushed-head
-run after this follow-up commit is verified green and cited in the #40 ticket
-closing comment.
+All required CI jobs are green at the exact merged product head `a781da5`.
+The final evidence head carrying this file is verified green immediately
+before ticket closure; its run and URL are cited in the #40 closing comment.
 
 ## Root Worktree Preservation
 
