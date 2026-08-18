@@ -1,7 +1,7 @@
 // Package service provides business logic for the Phase 37/38S read-only query sandbox.
 // input: context, errors, fmt, net, strconv, strings, time, go-sql-driver/mysql, internal/model
 // output: QueryExecutionService, query execution repository/resolver/executor/clock interfaces, sentinel errors, NewQueryExecutionService, Execute, ListHistory, validateDSNBinding
-// pos: Orchestrates governed MySQL/TiDB query execution, compiler-owned template execution, and FK related-record navigation — target/policy/guard/disclosure gating, paged result windows, timed execution, and guaranteed per-attempt atomic Execution Evidence Pair history + audit (Issue #34) persisted in a fixed two-second Evidence Persistence Window detached from request cancellation/deadline (Issue #35), including navigation (Issue #36)
+// pos: Orchestrates governed MySQL/TiDB query execution, compiler-owned template execution, and FK related-record navigation — target/policy/guard/disclosure gating, paged result windows, timed execution, and guaranteed per-attempt atomic Execution Evidence Pair history + audit (Issue #34) persisted in a fixed two-second Evidence Persistence Window detached from request cancellation/deadline (Issue #35), including navigation (Issue #36) with inspector-phase cancellation/deadline classified as terminal failed/timeout evidence (Issue #40)
 // note: if this file changes, update header and README.md
 package service
 
@@ -541,6 +541,16 @@ func (s *QueryExecutionService) NavigateRelatedRecords(ctx context.Context, acto
 	// inspector error must never be exposed, persisted, or audited.
 	detail, err := s.inspector.GetObjectDetails(ctx, access.dsn, req.Source.Database, req.Source.Object, req.Source.Kind)
 	if err != nil {
+		// A canceled or deadline-expired inspector read is NOT a governance
+		// rejection — it is a terminal failed/timeout client-cancellation or
+		// deadline outcome and must reach the shared atomic evidence path
+		// (Issue #35 / #36), exactly as disclosure preflight and query
+		// execution do. Every other inspector failure stays a rejected
+		// navigation_source_error attempt with the public
+		// ErrNavigationSourceNotFound contract unchanged (Issue #40).
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			return s.recordNavigationTerminalOutcome(ctx, target, actorUserID, nil, err, start)
+		}
 		return s.rejectNavigation(ctx, target, actorUserID, nil,
 			"navigation_source_error", "could not retrieve source table metadata",
 			ErrNavigationSourceNotFound, start)
