@@ -6,6 +6,7 @@ Application bootstrap and manual dependency injection.
 | File | Responsibility |
 |------|---------------|
 | main.go | Load config (rejects removed QUERY_EXECUTION_TOKEN_MAX_AGE), validate JWT_SECRET before opening the DB, wire all services into api.Dependencies, start HTTP server |
+| shutdown.go | Graceful drain seam: serve until SIGTERM/SIGINT, stop new traffic and drain in-flight handlers for at most a fixed ten seconds (Issue #37) |
 
 ## Modules Wired
 | Module | Service | Repository | Phase |
@@ -27,6 +28,10 @@ Application bootstrap and manual dependency injection.
 | Query Saved Statement | QuerySavedStatementService | QuerySavedStatementRepository | 38W (personal typed declarations) |
 
 Create-with-profile is atomic: `ResourceService.Create` routes embedded profiles through the repository's single transaction (`CreateResourceWithProfile`), so a failed initial profile write returns an error and leaves no resource row.
+
+## Shutdown Contract (Issue #37)
+
+SIGTERM and SIGINT stop accepting new traffic and begin a bounded graceful drain so in-flight governed queries can finish their existing five-second query deadline and two-second Evidence Persistence Window. The drain bound is a fixed ten seconds (`shutdownDrainTimeout` in `shutdown.go`) — a product invariant, not environment configuration; it covers the five-second query deadline, the two-second evidence window, and scheduling margin. A clean drain exits 0. Drain bound exhaustion or an HTTP server failure emits only a fixed safe log message (no error values, request data, or DSNs) and exits non-zero. A second signal during the drain forces immediate exit. Shutdown introduces no background queue or disk buffer, and process crash, host loss, power loss, forced second signal, and `kill -9` remain outside the durability guarantee.
 
 ## Shared Guards
 - `QueryGuard` is constructed once and reused by execution, explain, and saved-statement services.
