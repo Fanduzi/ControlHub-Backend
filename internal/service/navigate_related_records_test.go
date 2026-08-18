@@ -579,19 +579,8 @@ func TestNavigateRelatedRecords_InspectorError(t *testing.T) {
 // response or evidence.
 func TestNavigateRelatedRecords_InspectorCanceled_RecordsFailedCanceled(t *testing.T) {
 	t.Parallel()
-	repo := &fakeExecRepo{
-		credentials: map[uint64]model.QueryCredentialMetadata{
-			9001: enabledCred(model.QueryEnvPolicyNonProdOnly),
-		},
-	}
-	inspector := &fakeNavSchemaInspector{err: context.Canceled}
-	svc := NewQueryExecutionService(
-		fakeTargetRepo{targets: []model.QueryTarget{mysqlTarget("Staging")}},
-		repo, &fakeResolver{dsn: testResolverDSN}, &fakeExecutor{},
-		NewQueryGuard(QueryGuardConfig{DefaultMaxRows: 100, HardMaxRows: 500}),
-		&fakeClock{t: time.Now()},
-		inspector, &fakeDisclosureService{},
-	)
+	svc, repo, _, inspector := navTestScaffold(t)
+	inspector.err = context.Canceled
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
@@ -622,6 +611,17 @@ func TestNavigateRelatedRecords_InspectorCanceled_RecordsFailedCanceled(t *testi
 	if rec.ErrorMessage != "query canceled" {
 		t.Fatalf("error message = %q, want fixed 'query canceled'", rec.ErrorMessage)
 	}
+	// Pre-resolution safe metadata: fixed generic preview/digest plus the
+	// resolved target/actor identity — never the raw inspector error.
+	if rec.TargetResourceID != 9001 || rec.ActorUserID != 1 || rec.Engine != "mysql" {
+		t.Fatalf("safe navigation metadata = %+v, want target 9001 / actor 1 / engine mysql", rec)
+	}
+	if rec.StatementPreview != "related:unresolved" || rec.StatementDigest != "nav:unresolved" {
+		t.Fatalf("preview/digest = %q/%q, want fixed pre-resolution related:unresolved/nav:unresolved", rec.StatementPreview, rec.StatementDigest)
+	}
+	if len(repo.auditEvents) != 1 || repo.auditEvents[0].result != "failed" {
+		t.Fatalf("audit events = %+v, want one failed", repo.auditEvents)
+	}
 	if strings.Contains(asString(rec), "context canceled") {
 		t.Fatalf("raw inspector error leaked into evidence: %s", asString(rec))
 	}
@@ -639,19 +639,8 @@ func TestNavigateRelatedRecords_InspectorCanceled_RecordsFailedCanceled(t *testi
 // the pair write still runs in a live bounded persistence context.
 func TestNavigateRelatedRecords_InspectorDeadline_RecordsTimeoutEvidence(t *testing.T) {
 	t.Parallel()
-	repo := &fakeExecRepo{
-		credentials: map[uint64]model.QueryCredentialMetadata{
-			9001: enabledCred(model.QueryEnvPolicyNonProdOnly),
-		},
-	}
-	inspector := &fakeNavSchemaInspector{err: context.DeadlineExceeded}
-	svc := NewQueryExecutionService(
-		fakeTargetRepo{targets: []model.QueryTarget{mysqlTarget("Staging")}},
-		repo, &fakeResolver{dsn: testResolverDSN}, &fakeExecutor{},
-		NewQueryGuard(QueryGuardConfig{DefaultMaxRows: 100, HardMaxRows: 500}),
-		&fakeClock{t: time.Now()},
-		inspector, &fakeDisclosureService{},
-	)
+	svc, repo, _, inspector := navTestScaffold(t)
+	inspector.err = context.DeadlineExceeded
 	ctx, cancel := context.WithDeadline(context.Background(), time.Now().Add(-time.Second))
 	defer cancel()
 
@@ -678,6 +667,17 @@ func TestNavigateRelatedRecords_InspectorDeadline_RecordsTimeoutEvidence(t *test
 	if rec.ErrorMessage != "query exceeded the time limit" {
 		t.Fatalf("error message = %q, want fixed timeout message", rec.ErrorMessage)
 	}
+	// Pre-resolution safe metadata: fixed generic preview/digest plus the
+	// resolved target/actor identity — never the raw inspector error.
+	if rec.TargetResourceID != 9001 || rec.ActorUserID != 1 || rec.Engine != "mysql" {
+		t.Fatalf("safe navigation metadata = %+v, want target 9001 / actor 1 / engine mysql", rec)
+	}
+	if rec.StatementPreview != "related:unresolved" || rec.StatementDigest != "nav:unresolved" {
+		t.Fatalf("preview/digest = %q/%q, want fixed pre-resolution related:unresolved/nav:unresolved", rec.StatementPreview, rec.StatementDigest)
+	}
+	if len(repo.auditEvents) != 1 || repo.auditEvents[0].result != "timeout" {
+		t.Fatalf("audit events = %+v, want one timeout", repo.auditEvents)
+	}
 	assertDetachedEvidenceWindow(t, repo)
 }
 
@@ -688,20 +688,9 @@ func TestNavigateRelatedRecords_InspectorDeadline_RecordsTimeoutEvidence(t *test
 // other navigation and execution paths do (Issue #34/#36).
 func TestNavigateRelatedRecords_InspectorCanceled_PairFailure_StillReturnsBackendError(t *testing.T) {
 	t.Parallel()
-	repo := &fakeExecRepo{
-		credentials: map[uint64]model.QueryCredentialMetadata{
-			9001: enabledCred(model.QueryEnvPolicyNonProdOnly),
-		},
-		pairErr: errors.New("evidence store down"),
-	}
-	inspector := &fakeNavSchemaInspector{err: context.Canceled}
-	svc := NewQueryExecutionService(
-		fakeTargetRepo{targets: []model.QueryTarget{mysqlTarget("Staging")}},
-		repo, &fakeResolver{dsn: testResolverDSN}, &fakeExecutor{},
-		NewQueryGuard(QueryGuardConfig{DefaultMaxRows: 100, HardMaxRows: 500}),
-		&fakeClock{t: time.Now()},
-		inspector, &fakeDisclosureService{},
-	)
+	svc, repo, _, inspector := navTestScaffold(t)
+	inspector.err = context.Canceled
+	repo.pairErr = errors.New("evidence store down")
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
@@ -709,8 +698,18 @@ func TestNavigateRelatedRecords_InspectorCanceled_PairFailure_StillReturnsBacken
 	if !errors.Is(err, errPersistAttempt) {
 		t.Fatalf("error = %v, want errPersistAttempt (controlled backend failure)", err)
 	}
-	if len(repo.insertedAttempts) != 0 {
-		t.Fatalf("failed pair must record nothing; got %d rows", len(repo.insertedAttempts))
+	// The atomic pair was attempted exactly once and failed atomically:
+	// nothing is recorded, and the fixed value-free telemetry contract (one
+	// counter increment, one safe log category) is repository-owned and
+	// proven at the repository seam, not through a new service surface.
+	if len(repo.pairCalls) != 1 {
+		t.Fatalf("atomic pair must be attempted exactly once, got %d calls", len(repo.pairCalls))
+	}
+	if len(repo.insertedAttempts) != 0 || len(repo.auditEvents) != 0 {
+		t.Fatalf("failed pair must record nothing; got %d rows / %d audit events", len(repo.insertedAttempts), len(repo.auditEvents))
+	}
+	if strings.Contains(err.Error(), "evidence store down") {
+		t.Fatal("raw persistence error must not surface")
 	}
 }
 
