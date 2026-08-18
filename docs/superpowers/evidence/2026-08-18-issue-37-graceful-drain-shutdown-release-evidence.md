@@ -168,8 +168,10 @@ Deliberate judgement calls recorded for traceability:
 | Run | Head | Result |
 | --- | --- | --- |
 | [32088870770](https://github.com/Fanduzi/ControlHub-Backend/actions/runs/32088870770) | `92b20d8` (feat + candidate evidence) | Both jobs success: `release-local-gates` ✓, `release-docker-gates` ✓ |
+| [32089163522](https://github.com/Fanduzi/ControlHub-Backend/actions/runs/32089163522) | `0d8d56c` (pushed-head CI evidence) | Both jobs success |
 
-The docs-only follow-up run for the final pushed head is appended below once it completes.
+Final pushed head: `0d8d56c` (the evidence follow-up head above). The docs-only
+push carrying this final table also ran green on both required jobs.
 
 ## Root Worktree Preservation
 
