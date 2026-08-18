@@ -232,3 +232,17 @@ success; deadline expiry keeps its separate `timeout` outcome, and a genuine
 disclosure-policy rejection stays `rejected`. No statement values, template
 values, credentials, DSNs, or raw errors are ever stored with cancellation
 evidence.
+
+### Workbench Request Terminal State
+
+The visible settled state of a current Query Workbench request: authorized
+content, an empty result, or a controlled error. Superseded requests never
+change the visible state, and a current request never remains indefinitely in
+loading after it succeeds or fails.
+
+### Schema Metadata Identity
+
+The Query Workbench ownership boundary for database, object, and completion
+metadata: one query target and one database. Worksheets may share metadata only
+while this identity is unchanged; changing either part immediately makes the
+prior metadata unavailable.
