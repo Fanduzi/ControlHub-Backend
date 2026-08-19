@@ -87,14 +87,16 @@ CI at the pushed SHA.
 | `make openapi-validate` | PASS |
 | `git diff --check origin/main...HEAD` | PASS |
 
-The pushed evidence head runs the repository's required CI; the backend CI run completed success at the exact head SHA `929f1f233e3e0e8a8bf0718530687e3dfad5559d`:
+The backend evidence head `9c1b5c025b915a08f22781ed7fe83dab2e087391` (on `origin/main`) completed the repository's required CI successfully:
 
-[Backend CI run 32242118897](https://github.com/Fanduzi/ControlHub-Backend/actions/runs/32242118897)
+[Backend CI run 32242476759](https://github.com/Fanduzi/ControlHub-Backend/actions/runs/32242476759)
 
 | Required job | Result |
 | --- | --- |
 | `release-local-gates` | SUCCESS |
 | `release-docker-gates` | SUCCESS |
+
+The docs-only commit carrying this record to `origin/main` and its own CI run are cited in the Issue #44 closing comment (written after that CI completes).
 
 ## Independent Review
 
