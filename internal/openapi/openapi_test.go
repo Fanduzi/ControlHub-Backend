@@ -30,6 +30,41 @@ func TestOpenAPIYAMLIsValid(t *testing.T) {
 	}
 }
 
+// TestOpenAPIQueryEvidenceMetricsExactOneField proves the Issue #34 metrics
+// operation documents an exact one-field response: the schema declares
+// additionalProperties: false so the published contract cannot gain identity,
+// target, statement, value, credential, DSN, request, or raw error fields.
+func TestOpenAPIQueryEvidenceMetricsExactOneField(t *testing.T) {
+	loader := openapi3.NewLoader()
+	doc, err := loader.LoadFromData(openapi.YAML)
+	if err != nil {
+		t.Fatalf("failed to parse openapi.yaml: %v", err)
+	}
+
+	operation := doc.Paths.Value("/ops/query-evidence-metrics").Get
+	if operation == nil {
+		t.Fatal(`path /ops/query-evidence-metrics GET not found in openapi.yaml`)
+	}
+	resp := operation.Responses.Value("200")
+	if resp == nil || resp.Value == nil {
+		t.Fatal(`/ops/query-evidence-metrics must document a 200 response`)
+	}
+	schema := resp.Value.Content["application/json"].Schema.Value
+	if schema == nil {
+		t.Fatal("200 response must declare an application/json schema")
+	}
+	props := schema.Properties
+	if len(props) != 1 {
+		t.Fatalf("response schema properties = %d, want exactly 1; got %v", len(props), keys(props))
+	}
+	if _, ok := props["queryEvidencePersistenceFailures"]; !ok {
+		t.Fatalf("response schema must contain exactly queryEvidencePersistenceFailures, got %v", keys(props))
+	}
+	if schema.AdditionalProperties.Has == nil || *schema.AdditionalProperties.Has {
+		t.Fatal("response schema must declare additionalProperties: false to enforce the exact one-field contract")
+	}
+}
+
 func TestOpenAPINumericIDsUseInt64(t *testing.T) {
 	loader := openapi3.NewLoader()
 	doc, err := loader.LoadFromData(openapi.YAML)

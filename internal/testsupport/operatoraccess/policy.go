@@ -1,7 +1,7 @@
 // Package operatoraccess is test-support metadata describing every protected
 // API operation and its authorization class. It is imported only by tests.
 // input: standard library only
-// output: Class, Operation, All
+// output: Class, Operation, All (incl. admin-only /ops/query-evidence-metrics, Issue #34)
 // pos: Single source of truth for protected-operation coverage, shared by the
 // router boundary test, the OpenAPI contract test, and integration tests
 // note: if this file changes, update header and README.md
@@ -86,6 +86,8 @@ func All() []Operation {
 		// Router-admin audit reads.
 		{RouterAdmin, "GET", "/audit-events", "/audit-events"},
 		{RouterAdmin, "GET", "/resources/{id}/audit-events", "/resources/1/audit-events"},
+		// Router-admin operational metrics.
+		{RouterAdmin, "GET", "/ops/query-evidence-metrics", "/ops/query-evidence-metrics"},
 		// Fresh-any-role query surfaces.
 		{FreshAnyRole, "POST", "/query-targets/{id}/execute", "/query-targets/22/execute"},
 		{FreshAnyRole, "POST", "/query-targets/{id}/explain", "/query-targets/22/explain"},

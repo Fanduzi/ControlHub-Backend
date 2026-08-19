@@ -1,7 +1,7 @@
 // Package service provides tests for the Phase 37/38S query execution service.
-// input: context, errors, strings, testing, time, internal/model
+// input: context, errors, fmt, strings, testing, time, internal/model
 // output: TestExecute_*, TestReadyDerivation_*, TestCredentialResolver_* (fakes for repos/resolver/executor/clock)
-// pos: Unit tests for execute gating, compiler-owned template executor dispatch, governed result pages, the environment-policy matrix, history/audit recording, and credential fail-closed behavior
+// pos: Unit tests for execute gating, compiler-owned template executor dispatch, governed result pages, the environment-policy matrix, atomic Execution Evidence Pair history/audit recording (Issue #34), cancellation-durable terminal evidence via the detached two-second Evidence Persistence Window (Issue #35), and credential fail-closed behavior
 // note: if this file changes, update header and README.md
 package service
 
@@ -11,6 +11,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"sort"
 	"strconv"
 	"strings"
@@ -58,8 +59,26 @@ type fakeExecRepo struct {
 		result string
 	}
 	// Failure injection for the audit/history guarantee tests.
-	insertExecErr  error
 	insertAuditErr error
+	// Issue #34 (38X-3A): atomic Execution Evidence Pair observability. The
+	// pair path records the record + audit parameters in one call; the split
+	// counters prove no standalone history/audit write happens on the
+	// ordinary/paged/template paths.
+	pairErr   error
+	pairCalls []struct {
+		rec    model.QueryExecutionRecord
+		event  string
+		result string
+	}
+	// Issue #35: the context the atomic pair write received (must be the
+	// detached two-second Evidence Persistence Window, never the request ctx).
+	// Err/deadline are captured AT CALL TIME (the service's defer cancel()
+	// resolves the window handle immediately after the write, so a post-hoc
+	// ctx.Err() on the stored handle would see an already-canceled context).
+	lastPairCtx        context.Context
+	pairCtxErr         error
+	pairCtxDeadline    time.Time
+	pairCtxHasDeadline bool
 	// Captures the last ListExecutions query for mode-dispatch assertions.
 	lastQuery model.QueryExecutionListQuery
 }
@@ -73,15 +92,6 @@ func (f *fakeExecRepo) GetCredentialByResourceID(_ context.Context, resourceID u
 		return model.QueryCredentialMetadata{}, sql.ErrNoRows
 	}
 	return c, nil
-}
-
-func (f *fakeExecRepo) InsertExecution(_ context.Context, rec model.QueryExecutionRecord) (uint64, error) {
-	if f.insertExecErr != nil {
-		return 0, f.insertExecErr
-	}
-	rec.ID = uint64(len(f.insertedAttempts)) + 1
-	f.insertedAttempts = append(f.insertedAttempts, rec)
-	return rec.ID, nil
 }
 
 func (f *fakeExecRepo) ListExecutions(_ context.Context, q model.QueryExecutionListQuery) ([]model.QueryExecutionRecord, int, error) {
@@ -143,6 +153,9 @@ func (f *fakeExecRepo) ListExecutions(_ context.Context, q model.QueryExecutionL
 	return items, len(items), nil
 }
 
+// InsertAuditEvent mirrors the audit-only seam still used by explain/schema
+// services; the governed query execution and navigation services never call it
+// — every Evidence-Bearing Query Attempt routes through InsertExecutionWithAudit.
 func (f *fakeExecRepo) InsertAuditEvent(_ context.Context, actor, target uint64, etype, result string) error {
 	if f.insertAuditErr != nil {
 		return f.insertAuditErr
@@ -155,6 +168,38 @@ func (f *fakeExecRepo) InsertAuditEvent(_ context.Context, actor, target uint64,
 	}{actor, target, etype, result})
 	return nil
 }
+
+// InsertExecutionWithAudit is the Issue #34 atomic Execution Evidence Pair
+// primitive mirror. It records one atomic call; on injection failure nothing is
+// recorded (atomic rollback semantics), otherwise the history row and its
+// audit event are recorded together. Issue #35: it captures the context the
+// service hands the pair write so tests can assert it is the detached,
+// two-second Evidence Persistence Window, not the (possibly canceled) request
+// context.
+func (f *fakeExecRepo) InsertExecutionWithAudit(ctx context.Context, rec model.QueryExecutionRecord, eventType, result string) (uint64, error) {
+	f.lastPairCtx = ctx
+	f.pairCtxErr = ctx.Err()
+	f.pairCtxDeadline, f.pairCtxHasDeadline = ctx.Deadline()
+	rec.ID = uint64(len(f.insertedAttempts)) + 1
+	f.pairCalls = append(f.pairCalls, struct {
+		rec    model.QueryExecutionRecord
+		event  string
+		result string
+	}{rec, eventType, result})
+	if f.pairErr != nil {
+		return 0, f.pairErr
+	}
+	f.insertedAttempts = append(f.insertedAttempts, rec)
+	f.auditEvents = append(f.auditEvents, struct {
+		actor  uint64
+		target uint64
+		etype  string
+		result string
+	}{rec.ActorUserID, rec.TargetResourceID, eventType, result})
+	return rec.ID, nil
+}
+
+func (f *fakeExecRepo) QueryEvidencePersistenceFailures() int64 { return 0 }
 
 // fakeResolver mirrors the real resolver contract: validate the ref first (fail
 // closed), then return the configured DSN/error. It records whether it was
@@ -191,6 +236,9 @@ type fakeExecutor struct {
 	gotDSN        string
 	gotNavInput   *RelatedRecordsQueryInput
 	templateCalls int
+	// Issue #35: cancels the request context at result-production time (the
+	// query completed successfully before the client cancellation arrived).
+	cancelOnQuery context.CancelFunc
 }
 
 func (f *fakeExecutor) Query(ctx context.Context, dsn string, guarded GuardedQuery) (QueryDatabaseResult, error) {
@@ -198,6 +246,12 @@ func (f *fakeExecutor) Query(ctx context.Context, dsn string, guarded GuardedQue
 	f.queryCalls++
 	f.queries = append(f.queries, guarded)
 	f.gotDSN = dsn
+	// Issue #35: when a test sets cancelOnQuery, the client disconnect arrives
+	// after the query already produced its result — the executor still returns
+	// the completed result and the service must keep the success evidence.
+	if f.cancelOnQuery != nil {
+		f.cancelOnQuery()
+	}
 	if f.delay > 0 {
 		select {
 		case <-ctx.Done():
@@ -251,6 +305,7 @@ func (c *fakeClock) Now() time.Time { return c.t }
 
 type fakeDisclosureService struct {
 	blockErr         error
+	preflightErr     error
 	preflightCalls   int
 	preflightQueries []GuardedQuery
 }
@@ -258,6 +313,9 @@ type fakeDisclosureService struct {
 func (f *fakeDisclosureService) Preflight(_ context.Context, _ string, _ uint64, guarded GuardedQuery) (DisclosurePlan, error) {
 	f.preflightCalls++
 	f.preflightQueries = append(f.preflightQueries, guarded)
+	if f.preflightErr != nil {
+		return DisclosurePlan{}, f.preflightErr
+	}
 	if f.blockErr != nil {
 		return DisclosurePlan{}, f.blockErr
 	}
@@ -265,6 +323,9 @@ func (f *fakeDisclosureService) Preflight(_ context.Context, _ string, _ uint64,
 }
 
 func (f *fakeDisclosureService) PreflightRelatedRecords(_ context.Context, _ string, _ uint64, _, _ string) (DisclosurePlan, error) {
+	if f.preflightErr != nil {
+		return DisclosurePlan{}, f.preflightErr
+	}
 	if f.blockErr != nil {
 		return DisclosurePlan{}, f.blockErr
 	}
@@ -558,11 +619,12 @@ func TestExecute_RecordsRejectedAttempt(t *testing.T) {
 func TestExecute_HistoryWriteFailureOnSuccess_ReturnsBackendError(t *testing.T) {
 	t.Parallel()
 	svc, repo, _, _ := executionTestScaffold(t)
-	repo.insertExecErr = errors.New("history db down")
+	repo.pairErr = errors.New("history db down")
 
-	// WHY: Phase 37 guarantees every attempt is recorded. If the history row
-	// cannot be written, the service must NOT pretend success (no executionId=0
-	// success response); it returns a controlled backend failure.
+	// WHY: Phase 37 guarantees every attempt is recorded. If the pair (history
+	// + audit) cannot be written, the service must NOT pretend success (no
+	// executionId=0 success response); it returns a controlled backend failure
+	// and no history row is committed.
 	resp, err := svc.Execute(context.Background(), 7, 9001, model.QueryExecuteRequest{Statement: "select 1", MaxRows: 10})
 	if !errors.Is(err, ErrQueryBackendFailure) {
 		t.Fatalf("error = %v, want ErrQueryBackendFailure", err)
@@ -573,25 +635,104 @@ func TestExecute_HistoryWriteFailureOnSuccess_ReturnsBackendError(t *testing.T) 
 	if resp.ExecutionID != 0 {
 		t.Fatalf("ExecutionID = %d, want 0 (no successful record)", resp.ExecutionID)
 	}
+	if len(repo.insertedAttempts) != 0 {
+		t.Fatalf("history rows = %d, want 0 (atomic pair rolled back)", len(repo.insertedAttempts))
+	}
 }
 
 func TestExecute_AuditWriteFailureOnSuccess_ReturnsBackendError(t *testing.T) {
 	t.Parallel()
 	svc, repo, _, _ := executionTestScaffold(t)
-	repo.insertAuditErr = errors.New("audit db down")
+	repo.pairErr = errors.New("audit db down")
 
-	// WHY: the audit event is part of the recording guarantee; if it cannot be
-	// written the request fails closed rather than reporting an unaudited run.
+	// WHY: the audit event is part of the recording guarantee; if the pair
+	// write fails the request fails closed rather than reporting an unaudited
+	// run, and the atomic rollback leaves no history row.
 	_, err := svc.Execute(context.Background(), 7, 9001, model.QueryExecuteRequest{Statement: "select 1", MaxRows: 10})
 	if !errors.Is(err, ErrQueryBackendFailure) {
 		t.Fatalf("error = %v, want ErrQueryBackendFailure", err)
+	}
+	if len(repo.insertedAttempts) != 0 {
+		t.Fatalf("history rows = %d, want 0 (failed pair must commit no history)", len(repo.insertedAttempts))
+	}
+}
+
+// TestExecute_SuccessUsesSingleAtomicPairWrite proves the ordinary execution
+// path records its history row and audit event through ONE repository-owned
+// atomic pair call — never two independent writes. This is the Issue #34
+// expand-step invariant.
+func TestExecute_SuccessUsesSingleAtomicPairWrite(t *testing.T) {
+	t.Parallel()
+	svc, repo, _, _ := executionTestScaffold(t)
+
+	resp, err := svc.Execute(context.Background(), 7, 9001, model.QueryExecuteRequest{Statement: "select 1", MaxRows: 10})
+	if err != nil {
+		t.Fatalf("execute: %v", err)
+	}
+	if len(repo.pairCalls) != 1 {
+		t.Fatalf("atomic pair calls = %d, want 1 (history+audit must share one transaction)", len(repo.pairCalls))
+	}
+	if repo.pairCalls[0].event != "query.executed" || repo.pairCalls[0].result != "success" {
+		t.Fatalf("pair audit params = %q/%q, want query.executed/success", repo.pairCalls[0].event, repo.pairCalls[0].result)
+	}
+	if resp.ExecutionID == 0 {
+		t.Fatal("ExecutionID = 0, want the committed execution id")
+	}
+	if repo.pairCalls[0].rec.ID != resp.ExecutionID {
+		t.Fatalf("committed id = %d, want %d", repo.pairCalls[0].rec.ID, resp.ExecutionID)
+	}
+}
+
+// TestExecute_PagedSuccessUsesSingleAtomicPairWritePerPage proves every fresh
+// paged execution records through the same one-call atomic pair.
+func TestExecute_PagedSuccessUsesSingleAtomicPairWritePerPage(t *testing.T) {
+	t.Parallel()
+	svc, repo, _, _ := executionTestScaffold(t)
+
+	resp, err := svc.Execute(context.Background(), 7, 9001, model.QueryExecuteRequest{
+		Statement:  "select value from metrics limit 100",
+		MaxRows:    100,
+		Pagination: &model.QueryExecutePaginationRequest{Page: 2, PageSize: 10},
+	})
+	if err != nil {
+		t.Fatalf("execute paged: %v", err)
+	}
+	if len(repo.pairCalls) != 1 {
+		t.Fatalf("atomic pair calls = %d, want 1 for one governed page execution", len(repo.pairCalls))
+	}
+	if resp.ExecutionID == 0 {
+		t.Fatal("paged execution returned no committed execution id")
+	}
+}
+
+// TestExecute_PairWriteFailureOnSuccess_ReturnsBackendError_NoHistory proves
+// the audit-failure path: the pair write fails, the request surfaces the
+// existing controlled backend failure, and NOTHING is committed to history —
+// the atomic rollback invariant at the service seam.
+func TestExecute_PairWriteFailureOnSuccess_ReturnsBackendError_NoHistory(t *testing.T) {
+	t.Parallel()
+	svc, repo, _, _ := executionTestScaffold(t)
+	repo.pairErr = errors.New("evidence store down")
+
+	_, err := svc.Execute(context.Background(), 7, 9001, model.QueryExecuteRequest{Statement: "select 1", MaxRows: 10})
+	if !errors.Is(err, ErrQueryBackendFailure) {
+		t.Fatalf("error = %v, want ErrQueryBackendFailure", err)
+	}
+	if len(repo.pairCalls) != 1 {
+		t.Fatalf("pair calls = %d, want 1", len(repo.pairCalls))
+	}
+	if len(repo.insertedAttempts) != 0 {
+		t.Fatalf("history rows = %d, want 0 (failed pair must commit no history)", len(repo.insertedAttempts))
+	}
+	if len(repo.auditEvents) != 0 {
+		t.Fatalf("audit events = %d, want 0 (failed pair must commit no audit)", len(repo.auditEvents))
 	}
 }
 
 func TestExecute_RejectedAttempt_PersistFailure_ReturnsBackendError(t *testing.T) {
 	t.Parallel()
 	svc, repo, _, executor := executionTestScaffold(t)
-	repo.insertExecErr = errors.New("history db down")
+	repo.pairErr = errors.New("history db down")
 
 	// WHY: even for a rejected attempt, a recording failure must surface as a
 	// controlled backend failure (never silently swallow + claim "recorded").
@@ -601,6 +742,9 @@ func TestExecute_RejectedAttempt_PersistFailure_ReturnsBackendError(t *testing.T
 	}
 	if executor.called {
 		t.Fatal("rejected attempt must not reach the executor")
+	}
+	if len(repo.insertedAttempts) != 0 {
+		t.Fatalf("history rows = %d, want 0 (failed pair must not commit a rejection row)", len(repo.insertedAttempts))
 	}
 }
 
@@ -630,6 +774,322 @@ func TestExecute_DisclosureBlocked_Rejected(t *testing.T) {
 	if len(repo.insertedAttempts) != 1 || repo.insertedAttempts[0].Status != model.QueryExecutionRejected {
 		t.Fatalf("disclosure-blocked attempt must be recorded as rejected: %+v", repo.insertedAttempts)
 	}
+}
+
+// --- Issue #35 (38X-3B): cancellation-durable terminal evidence ---
+
+// assertDetachedEvidenceWindow proves the service hands the repository an
+// evidence-persistence context that is NOT the request context: detached from
+// client cancellation and bounded to the fixed two-second Evidence Persistence
+// Window (Issue #35). The write is a single bounded attempt with no retry,
+// queue, worker, or disk buffer.
+func assertDetachedEvidenceWindow(t *testing.T, f *fakeExecRepo) {
+	t.Helper()
+	if f.lastPairCtx == nil {
+		t.Fatal("evidence persistence context is nil")
+	}
+	if f.pairCtxErr != nil {
+		t.Fatalf("evidence persistence context must be detached from request cancellation, got Err() = %v", f.pairCtxErr)
+	}
+	if !f.pairCtxHasDeadline {
+		t.Fatal("evidence persistence context must carry the fixed Evidence Persistence Window deadline")
+	}
+	remaining := time.Until(f.pairCtxDeadline)
+	if remaining <= 0 || remaining > 2*time.Second {
+		t.Fatalf("evidence persistence window remaining = %v, want within (0s, 2s]", remaining)
+	}
+}
+
+// TestExecute_PairWriteFailureOnCanceledRequest_StillReturnsBackendError proves
+// AC 7 on the canceled path: even when the client is gone, a genuine
+// persistence failure is never silent — the pair rollback leaves nothing
+// recorded and the request surfaces the existing controlled backend-error
+// response instead (the exact-once telemetry increment is proven by the
+// repository and integration tests on the InsertExecutionWithAudit seam).
+func TestExecute_PairWriteFailureOnCanceledRequest_StillReturnsBackendError(t *testing.T) {
+	t.Parallel()
+	repo := &fakeExecRepo{
+		credentials: map[uint64]model.QueryCredentialMetadata{
+			9001: enabledCred(model.QueryEnvPolicyNonProdOnly),
+		},
+		pairErr: errors.New("evidence store down"),
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	svc := NewQueryExecutionService(
+		fakeTargetRepo{targets: []model.QueryTarget{mysqlTarget("Staging")}},
+		repo, &fakeResolver{dsn: testResolverDSN}, &fakeExecutor{err: context.Canceled},
+		NewQueryGuard(QueryGuardConfig{DefaultMaxRows: 100, HardMaxRows: 500}),
+		&fakeClock{t: time.Now()},
+		nil, &fakeDisclosureService{},
+	)
+
+	_, err := svc.Execute(ctx, 7, 9001, model.QueryExecuteRequest{Statement: "select 1", MaxRows: 10})
+	if !errors.Is(err, errPersistAttempt) {
+		t.Fatalf("error = %v, want errPersistAttempt (controlled backend failure)", err)
+	}
+	if len(repo.insertedAttempts) != 0 {
+		t.Fatalf("failed pair must record nothing; got %d rows", len(repo.insertedAttempts))
+	}
+}
+
+// TestExecute_ClientCanceledDuringExecution_RecordsFailedCanceled proves the
+// client-cancellation outcome: the executor returns context.Canceled (driver
+// abort after disconnect) and the attempt must be recorded as failed with the
+// fixed query_canceled code and a fixed safe message — never a raw error —
+// persisted through the DETACHED two-second window, not the canceled request
+// context.
+func TestExecute_ClientCanceledDuringExecution_RecordsFailedCanceled(t *testing.T) {
+	t.Parallel()
+	repo := &fakeExecRepo{
+		credentials: map[uint64]model.QueryCredentialMetadata{
+			9001: enabledCred(model.QueryEnvPolicyNonProdOnly),
+		},
+	}
+	// Request context already canceled: the client disconnected mid-query.
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	svc := NewQueryExecutionService(
+		fakeTargetRepo{targets: []model.QueryTarget{mysqlTarget("Staging")}},
+		repo, &fakeResolver{dsn: testResolverDSN}, &fakeExecutor{err: context.Canceled},
+		NewQueryGuard(QueryGuardConfig{DefaultMaxRows: 100, HardMaxRows: 500}),
+		&fakeClock{t: time.Now()},
+		nil, &fakeDisclosureService{},
+	)
+
+	_, err := svc.Execute(ctx, 7, 9001, model.QueryExecuteRequest{Statement: "select 1", MaxRows: 10})
+	if !errors.Is(err, ErrQueryBackendFailure) {
+		t.Fatalf("error = %v, want ErrQueryBackendFailure", err)
+	}
+	if !strings.Contains(err.Error(), "query canceled") {
+		t.Fatalf("error = %q, want fixed safe 'query canceled' message", err)
+	}
+	if len(repo.insertedAttempts) != 1 {
+		t.Fatalf("canceled attempt must be recorded, got %d rows", len(repo.insertedAttempts))
+	}
+	rec := repo.insertedAttempts[0]
+	if rec.Status != model.QueryExecutionFailed {
+		t.Fatalf("status = %q, want failed", rec.Status)
+	}
+	if rec.ErrorCode != "query_canceled" {
+		t.Fatalf("error code = %q, want query_canceled", rec.ErrorCode)
+	}
+	if rec.ErrorMessage != "query canceled" {
+		t.Fatalf("error message = %q, want fixed 'query canceled'", rec.ErrorMessage)
+	}
+	if len(repo.auditEvents) != 1 || repo.auditEvents[0].result != "failed" {
+		t.Fatalf("audit result = %+v, want one failed", repo.auditEvents)
+	}
+	if strings.Contains(asString(rec), testResolverDSN) {
+		t.Fatal("DSN leaked into evidence")
+	}
+	assertDetachedEvidenceWindow(t, repo)
+}
+
+// TestExecute_PagedClientCanceledDuringExecution_RecordsFailedCanceled proves
+// the paged cancellation path (Issue #35 AC: ordinary, paged, and template
+// cancellation paths are covered): a canceled paged query records the same
+// failed/query_canceled evidence through the detached window.
+func TestExecute_PagedClientCanceledDuringExecution_RecordsFailedCanceled(t *testing.T) {
+	t.Parallel()
+	repo := &fakeExecRepo{
+		credentials: map[uint64]model.QueryCredentialMetadata{
+			9001: enabledCred(model.QueryEnvPolicyNonProdOnly),
+		},
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	svc := NewQueryExecutionService(
+		fakeTargetRepo{targets: []model.QueryTarget{mysqlTarget("Staging")}},
+		repo, &fakeResolver{dsn: testResolverDSN}, &fakeExecutor{err: context.Canceled},
+		NewQueryGuard(QueryGuardConfig{DefaultMaxRows: 100, HardMaxRows: 500}),
+		&fakeClock{t: time.Now()},
+		nil, &fakeDisclosureService{},
+	)
+
+	_, err := svc.Execute(ctx, 7, 9001, model.QueryExecuteRequest{
+		Statement:  "select value from metrics limit 100",
+		MaxRows:    100,
+		Pagination: &model.QueryExecutePaginationRequest{Page: 1, PageSize: 10},
+	})
+	if !errors.Is(err, ErrQueryBackendFailure) {
+		t.Fatalf("error = %v, want ErrQueryBackendFailure", err)
+	}
+	if len(repo.insertedAttempts) != 1 || repo.insertedAttempts[0].Status != model.QueryExecutionFailed {
+		t.Fatalf("paged canceled attempt must be recorded as failed: %+v", repo.insertedAttempts)
+	}
+	if repo.insertedAttempts[0].ErrorCode != "query_canceled" {
+		t.Fatalf("error code = %q, want query_canceled", repo.insertedAttempts[0].ErrorCode)
+	}
+	assertDetachedEvidenceWindow(t, repo)
+}
+
+// TestExecute_ClientCanceledDuringDisclosure_RecordsFailedCanceled proves the
+// disclosure-work cancellation outcome: a public disclosure-policy rejection
+// stays rejected ONLY when no cancellation is involved; a canceled disclosure
+// read (cancellation blended into the disclosure service's blocked wrap) must
+// be recorded as failed/query_canceled — never as a policy rejection.
+func TestExecute_ClientCanceledDuringDisclosure_RecordsFailedCanceled(t *testing.T) {
+	t.Parallel()
+	// Both wrap shapes a canceled disclosure read can arrive in must classify
+	// as failed/query_canceled, never as a policy rejection: the backend
+	// sentinel (the real disclosure service's wrap for inspector/read
+	// failures) and a defensive blocked-blend (any future regression that
+	// folds a cancelable cause back into the blocked wrap).
+	for name, wrapErr := range map[string]error{
+		"backend-sentinel-blend": fmt.Errorf("%w: %w", ErrQueryDisclosureBackendFailure, context.Canceled),
+		"blocked-blend":          fmt.Errorf("%w: %w", ErrQueryDisclosureBlocked, context.Canceled),
+	} {
+		t.Run(name, func(t *testing.T) {
+			repo := &fakeExecRepo{
+				credentials: map[uint64]model.QueryCredentialMetadata{
+					9001: enabledCred(model.QueryEnvPolicyNonProdOnly),
+				},
+			}
+			executor := &fakeExecutor{result: QueryDatabaseResult{RowCount: 1}}
+			disclosure := &fakeDisclosureService{preflightErr: wrapErr}
+			ctx, cancel := context.WithCancel(context.Background())
+			cancel()
+			svc := NewQueryExecutionService(
+				fakeTargetRepo{targets: []model.QueryTarget{mysqlTarget("Staging")}},
+				repo, &fakeResolver{dsn: testResolverDSN}, executor,
+				NewQueryGuard(QueryGuardConfig{DefaultMaxRows: 100, HardMaxRows: 500}),
+				&fakeClock{t: time.Now()},
+				nil, disclosure,
+			)
+
+			_, err := svc.Execute(ctx, 7, 9001, model.QueryExecuteRequest{Statement: "select 1", MaxRows: 10})
+			if !errors.Is(err, ErrQueryBackendFailure) {
+				t.Fatalf("error = %v, want ErrQueryBackendFailure for canceled disclosure work", err)
+			}
+			if executor.called {
+				t.Fatal("executor must not run when disclosure fails")
+			}
+			if len(repo.insertedAttempts) != 1 || repo.insertedAttempts[0].Status != model.QueryExecutionFailed {
+				t.Fatalf("canceled disclosure attempt must be recorded as failed: %+v", repo.insertedAttempts)
+			}
+			if repo.insertedAttempts[0].ErrorCode != "query_canceled" {
+				t.Fatalf("error code = %q, want query_canceled", repo.insertedAttempts[0].ErrorCode)
+			}
+			assertDetachedEvidenceWindow(t, repo)
+		})
+	}
+}
+
+// TestExecute_DisclosurePreflightTimeout_RecordsTimeoutEvidence proves a
+// deadline-expired disclosure read is recorded as the existing timeout outcome
+// with evidence — never as a policy rejection.
+func TestExecute_DisclosurePreflightTimeout_RecordsTimeoutEvidence(t *testing.T) {
+	t.Parallel()
+	repo := &fakeExecRepo{
+		credentials: map[uint64]model.QueryCredentialMetadata{
+			9001: enabledCred(model.QueryEnvPolicyNonProdOnly),
+		},
+	}
+	executor := &fakeExecutor{result: QueryDatabaseResult{RowCount: 1}}
+	disclosure := &fakeDisclosureService{preflightErr: fmt.Errorf("%w: %w", ErrQueryDisclosureBackendFailure, context.DeadlineExceeded)}
+	svc := NewQueryExecutionService(
+		fakeTargetRepo{targets: []model.QueryTarget{mysqlTarget("Staging")}},
+		repo, &fakeResolver{dsn: testResolverDSN}, executor,
+		NewQueryGuard(QueryGuardConfig{DefaultMaxRows: 100, HardMaxRows: 500}),
+		&fakeClock{t: time.Now()},
+		nil, disclosure,
+	)
+
+	_, err := svc.Execute(context.Background(), 7, 9001, model.QueryExecuteRequest{Statement: "select 1", MaxRows: 10})
+	if !errors.Is(err, ErrQueryTimeout) {
+		t.Fatalf("error = %v, want ErrQueryTimeout", err)
+	}
+	if executor.called {
+		t.Fatal("executor must not run when disclosure times out")
+	}
+	if len(repo.insertedAttempts) != 1 || repo.insertedAttempts[0].Status != model.QueryExecutionTimeout {
+		t.Fatalf("disclosure timeout attempt must be recorded as timeout: %+v", repo.insertedAttempts)
+	}
+	if repo.insertedAttempts[0].ErrorCode != "query_timeout" {
+		t.Fatalf("error code = %q, want query_timeout", repo.insertedAttempts[0].ErrorCode)
+	}
+}
+
+// TestExecute_DisclosurePreflightTerminalFailure_RecordsFailedEvidence proves
+// all other post-target disclosure terminal failures reach the shared atomic
+// evidence path as fixed safe failed evidence with a controlled backend-error
+// response, never a raw 500 and never silent.
+func TestExecute_DisclosurePreflightTerminalFailure_RecordsFailedEvidence(t *testing.T) {
+	t.Parallel()
+	repo := &fakeExecRepo{
+		credentials: map[uint64]model.QueryCredentialMetadata{
+			9001: enabledCred(model.QueryEnvPolicyNonProdOnly),
+		},
+	}
+	executor := &fakeExecutor{result: QueryDatabaseResult{RowCount: 1}}
+	disclosure := &fakeDisclosureService{preflightErr: fmt.Errorf("%w: %w", ErrQueryDisclosureBackendFailure, errors.New("disclosure engine unreachable"))}
+	svc := NewQueryExecutionService(
+		fakeTargetRepo{targets: []model.QueryTarget{mysqlTarget("Staging")}},
+		repo, &fakeResolver{dsn: testResolverDSN}, executor,
+		NewQueryGuard(QueryGuardConfig{DefaultMaxRows: 100, HardMaxRows: 500}),
+		&fakeClock{t: time.Now()},
+		nil, disclosure,
+	)
+
+	_, err := svc.Execute(context.Background(), 7, 9001, model.QueryExecuteRequest{Statement: "select 1", MaxRows: 10})
+	if !errors.Is(err, ErrQueryBackendFailure) {
+		t.Fatalf("error = %v, want ErrQueryBackendFailure", err)
+	}
+	if executor.called {
+		t.Fatal("executor must not run when disclosure fails")
+	}
+	if len(repo.insertedAttempts) != 1 || repo.insertedAttempts[0].Status != model.QueryExecutionFailed {
+		t.Fatalf("disclosure failure must be recorded as failed: %+v", repo.insertedAttempts)
+	}
+	if repo.insertedAttempts[0].ErrorCode != "query_disclosure_backend_error" {
+		t.Fatalf("error code = %q, want query_disclosure_backend_error", repo.insertedAttempts[0].ErrorCode)
+	}
+	if repo.insertedAttempts[0].ErrorMessage != "query disclosure governance failed" {
+		t.Fatalf("error message = %q, want fixed safe disclosure-failure message", repo.insertedAttempts[0].ErrorMessage)
+	}
+}
+
+// TestExecute_CompletedQueryBeforeClientCancel_RemainsSuccess proves a query
+// that completed successfully before the client cancellation arrived stays
+// recorded as success: the cancellation never retroactively downgrades or drops
+// the success evidence, and the pair write still runs in the detached window.
+func TestExecute_CompletedQueryBeforeClientCancel_RemainsSuccess(t *testing.T) {
+	t.Parallel()
+	repo := &fakeExecRepo{
+		credentials: map[uint64]model.QueryCredentialMetadata{
+			9001: enabledCred(model.QueryEnvPolicyNonProdOnly),
+		},
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	executor := &fakeExecutor{
+		result: QueryDatabaseResult{
+			Columns:  []model.QueryResultColumn{{Name: "value", DatabaseType: "BIGINT"}},
+			Rows:     [][]any{{int64(1)}},
+			RowCount: 1,
+		},
+		// The client disconnect lands right after the query produced its result.
+		cancelOnQuery: cancel,
+	}
+	svc := NewQueryExecutionService(
+		fakeTargetRepo{targets: []model.QueryTarget{mysqlTarget("Staging")}},
+		repo, &fakeResolver{dsn: testResolverDSN}, executor,
+		NewQueryGuard(QueryGuardConfig{DefaultMaxRows: 100, HardMaxRows: 500}),
+		&fakeClock{t: time.Now()},
+		nil, &fakeDisclosureService{},
+	)
+
+	resp, err := svc.Execute(ctx, 7, 9001, model.QueryExecuteRequest{Statement: "select 1", MaxRows: 10})
+	if err != nil {
+		t.Fatalf("completed-before-cancel execution must not fail: %v", err)
+	}
+	if resp.Status != model.QueryExecutionSuccess {
+		t.Fatalf("response status = %q, want success", resp.Status)
+	}
+	if len(repo.insertedAttempts) != 1 || repo.insertedAttempts[0].Status != model.QueryExecutionSuccess {
+		t.Fatalf("completed-before-cancel attempt must be recorded as success: %+v", repo.insertedAttempts)
+	}
+	assertDetachedEvidenceWindow(t, repo)
 }
 
 func TestExecute_CredentialEngineMismatch_Rejected(t *testing.T) {
@@ -1212,10 +1672,10 @@ func TestListHistory_Offset_SetsExplicitOffsetMode(t *testing.T) {
 func TestExecute_AuditHistoryFailureCannotProduceSuccess(t *testing.T) {
 	t.Parallel()
 	svc, repo, _, _ := executionTestScaffold(t)
-	// Phase 38S: if the audit/history write fails for any page, the overall
+	// Phase 38S: if the audit/history pair write fails for any page, the overall
 	// response must NOT be a success. This is the same guarantee as Phase 37
 	// but extended to per-page recording.
-	repo.insertExecErr = errors.New("history db down")
+	repo.pairErr = errors.New("history db down")
 	resp, err := svc.Execute(context.Background(), 7, 9001, model.QueryExecuteRequest{Statement: "select 1", MaxRows: 10})
 	if !errors.Is(err, ErrQueryBackendFailure) {
 		t.Fatalf("error = %v, want ErrQueryBackendFailure (audit/history failure must not produce success)", err)
@@ -1536,13 +1996,13 @@ func TestExecute_PagedSuccessRequiresHistoryAndAudit(t *testing.T) {
 		{
 			name: "history write fails",
 			configure: func(repo *fakeExecRepo) {
-				repo.insertExecErr = errors.New("history db down")
+				repo.pairErr = errors.New("history db down")
 			},
 		},
 		{
 			name: "audit write fails",
 			configure: func(repo *fakeExecRepo) {
-				repo.insertAuditErr = errors.New("audit db down")
+				repo.pairErr = errors.New("audit db down")
 			},
 		},
 	} {

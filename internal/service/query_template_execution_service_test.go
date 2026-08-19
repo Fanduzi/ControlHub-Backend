@@ -1,7 +1,8 @@
 // Package service provides tests for governed saved-statement (template) execution.
 // input: context, database/sql, encoding/json, errors, strings, testing, time, internal/model
-// output: TestExecuteSavedStatement* (reread, authorization matrix, typed values, per-page chain, no-value persistence)
-// pos: Unit tests for the fresh-query-actor template-execution route through the existing governed chain
+// output: TestExecuteSavedStatement* (reread, authorization matrix, typed values, per-page chain, no-value persistence, atomic Execution Evidence Pair writes)
+// pos: Unit tests for the fresh-query-actor template-execution route through the existing governed chain, incl. cancellation-durable evidence (Issue #35)
+// note: if this file changes, update header and README.md
 package service
 
 import (
@@ -58,6 +59,49 @@ func templateExecuteRequest(values map[string]string) model.QuerySavedStatementE
 		raw[name] = json.RawMessage(value)
 	}
 	return model.QuerySavedStatementExecuteRequest{Values: raw, MaxRows: 100}
+}
+
+// TestExecuteSavedStatementUsesSingleAtomicPairWrite proves the template
+// execution path records history + audit through one atomic pair write per
+// execution (Issue #34 expand step), never the split seams.
+func TestExecuteSavedStatementUsesSingleAtomicPairWrite(t *testing.T) {
+	svc, repo, _, _ := newTemplateExecutionTestService(
+		templateStatement(7, model.QuerySavedStatementPersonal, "select 1", nil), nil,
+	)
+
+	_, err := svc.ExecuteSavedStatement(context.Background(), 7, 9001, 7, templateExecuteRequest(nil))
+	if err != nil {
+		t.Fatalf("execute saved statement: %v", err)
+	}
+	if len(repo.pairCalls) != 1 {
+		t.Fatalf("atomic pair calls = %d, want 1 for template execution", len(repo.pairCalls))
+	}
+	if repo.pairCalls[0].event != "query.executed" || repo.pairCalls[0].result != "success" {
+		t.Fatalf("pair audit params = %q/%q, want query.executed/success", repo.pairCalls[0].event, repo.pairCalls[0].result)
+	}
+}
+
+// TestExecuteSavedStatementValidationRejectionUsesAtomicPairWrite proves the
+// template validation-rejection path also records through the atomic pair.
+func TestExecuteSavedStatementValidationRejectionUsesAtomicPairWrite(t *testing.T) {
+	svc, repo, _, _ := newTemplateExecutionTestService(
+		templateStatement(7, model.QuerySavedStatementPersonal, "select 1", []model.QuerySavedStatementParameterDefinition{
+			{Name: "v", Type: model.QuerySavedStatementParameterInteger},
+		}), nil,
+	)
+
+	// A non-integer value for an integer parameter fails validation after the
+	// target has been resolved, so the rejected attempt must be pair-recorded.
+	_, err := svc.ExecuteSavedStatement(context.Background(), 7, 9001, 7, templateExecuteRequest(map[string]string{"v": "\"oops\""}))
+	if err == nil {
+		t.Fatal("expected validation failure")
+	}
+	if len(repo.pairCalls) != 1 {
+		t.Fatalf("atomic pair calls = %d, want 1 for rejected template validation", len(repo.pairCalls))
+	}
+	if repo.pairCalls[0].result != "validation_failed" {
+		t.Fatalf("pair audit result = %q, want validation_failed", repo.pairCalls[0].result)
+	}
 }
 
 func TestExecuteSavedStatementRunsPersonalTemplateThroughGovernedChain(t *testing.T) {
@@ -411,4 +455,50 @@ func TestExecuteSavedStatementRecordsRejectedAttemptForAccessDenial(t *testing.T
 	if executor.templateCalls != 0 {
 		t.Fatalf("QueryTemplate calls = %d, want 0", executor.templateCalls)
 	}
+}
+
+// TestExecuteSavedStatement_ClientCanceledDuringExecution_RecordsFailedCanceled
+// proves the template cancellation path (Issue #35 AC: ordinary, paged, and
+// template cancellation paths are covered): a canceled template execution
+// records failed/query_canceled with the fixed safe message through the
+// detached two-second Evidence Persistence Window, never the canceled request
+// context, and no template values or statement text are persisted.
+func TestExecuteSavedStatement_ClientCanceledDuringExecution_RecordsFailedCanceled(t *testing.T) {
+	t.Parallel()
+	statement := templateStatement(7, model.QuerySavedStatementPersonal,
+		"select id from orders where status = :status",
+		[]model.QuerySavedStatementParameterDefinition{{Name: "status", Type: model.QuerySavedStatementParameterString}})
+	svc, repo, executor, _ := newTemplateExecutionTestService(statement, nil)
+	executor.err = context.Canceled
+
+	// Request context already canceled: the client disconnected mid-query.
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	_, err := svc.ExecuteSavedStatement(ctx, 7, 9001, statement.ID,
+		templateExecuteRequest(map[string]string{"status": `"paid"`}))
+	if !errors.Is(err, ErrQueryBackendFailure) {
+		t.Fatalf("error = %v, want ErrQueryBackendFailure", err)
+	}
+	if len(repo.insertedAttempts) != 1 || repo.insertedAttempts[0].Status != model.QueryExecutionFailed {
+		t.Fatalf("canceled template attempt must be recorded as failed: %+v", repo.insertedAttempts)
+	}
+	rec := repo.insertedAttempts[0]
+	if rec.ErrorCode != "query_canceled" {
+		t.Fatalf("error code = %q, want query_canceled", rec.ErrorCode)
+	}
+	if rec.ErrorMessage != "query canceled" {
+		t.Fatalf("error message = %q, want fixed 'query canceled'", rec.ErrorMessage)
+	}
+	if len(repo.auditEvents) != 1 || repo.auditEvents[0].result != "failed" {
+		t.Fatalf("audit result = %+v, want one failed", repo.auditEvents)
+	}
+	// Template values never reach the evidence record. The statement digest and
+	// safe preview (table/column identifiers, placeholders only) are recorded
+	// exactly as on the success path — forbidden content is values, credentials,
+	// DSNs, and raw errors.
+	if strings.Contains(asString(rec), "paid") || strings.Contains(asString(rec), testResolverDSN) {
+		t.Fatal("template value or DSN leaked into canceled-attempt evidence")
+	}
+	assertDetachedEvidenceWindow(t, repo)
 }

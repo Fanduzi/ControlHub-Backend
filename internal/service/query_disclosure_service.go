@@ -4,7 +4,7 @@
 // serialization. Absence of an exact matching policy is blocked (fail-closed).
 // input: context, database/sql, errors, fmt, mysql DSN, internal/model, QuerySchemaInspector, QueryTargetRepository
 // output: QueryDisclosureService, DisclosurePlan, ColumnDisclosure, QueryDisclosureReader/Writer, ErrQueryDisclosure* sentinels
-// pos: fail-closed disclosure governance for governed query results (Phase 38Q)
+// pos: fail-closed disclosure governance for governed query results (Phase 38Q); preflight policy-refusal errors stay blocked while disclosure machinery failures (inspector/read/parse) use a distinct backend sentinel so the execution service records them as terminal failed/timeout/canceled evidence, not policy rejections (Issue #35)
 // note: if this file changes, update header and README.md
 package service
 
@@ -22,6 +22,15 @@ import (
 // ErrQueryDisclosureBlocked is returned when any column in a query's
 // projection lacks an exact disclosure policy. It is the fail-closed default.
 var ErrQueryDisclosureBlocked = errors.New("query blocked by result disclosure policy")
+
+// ErrQueryDisclosureBackendFailure is returned when disclosure governance
+// machinery itself fails (inspector/read/parse infrastructure), as opposed to a
+// policy refusal. The execution service classifies it as a terminal failed
+// attempt (Issue #35 AC 4: disclosure policy rejections stay rejected; all
+// other post-target disclosure terminal failures record fixed safe failed or
+// timeout evidence). The inner cause is %w-wrapped so a canceled or
+// deadline-expired disclosure read stays classifiable.
+var ErrQueryDisclosureBackendFailure = errors.New("query disclosure governance failed")
 
 // ErrQueryDisclosurePolicyConflict is returned when a policy already exists
 // for the requested scope (UNIQUE scope invariant).
@@ -138,7 +147,7 @@ func (s *QueryDisclosureService) Preflight(
 ) (DisclosurePlan, error) {
 	cfg, err := mysql.ParseDSN(dsn)
 	if err != nil {
-		return DisclosurePlan{}, fmt.Errorf("parse dsn for disclosure preflight: %w", err)
+		return DisclosurePlan{}, fmt.Errorf("%w: %w", ErrQueryDisclosureBackendFailure, err)
 	}
 
 	projection, err := resolveExecuteProjection(ctx, s.inspector, executeProjectionInput{
@@ -147,7 +156,15 @@ func (s *QueryDisclosureService) Preflight(
 		guarded:  guarded,
 	})
 	if err != nil {
-		return DisclosurePlan{}, fmt.Errorf("%w: %v", ErrQueryDisclosureBlocked, err)
+		// Unsupported/unresolvable projection shape is a governance refusal
+		// (blocked). Anything else in the projection read is disclosure
+		// machinery failure (infra/read), not a policy rejection: the cause is
+		// %w-wrapped so the execution service can classify cancellation and
+		// deadline via errors.Is (Issue #35).
+		if errors.Is(err, errProjectionUnsupported) {
+			return DisclosurePlan{}, fmt.Errorf("%w: %v", ErrQueryDisclosureBlocked, err)
+		}
+		return DisclosurePlan{}, fmt.Errorf("%w: %w", ErrQueryDisclosureBackendFailure, err)
 	}
 
 	if len(projection.Columns) == 0 {
@@ -169,7 +186,11 @@ func (s *QueryDisclosureService) PreflightRelatedRecords(
 ) (DisclosurePlan, error) {
 	detail, err := s.inspector.GetObjectDetails(ctx, dsn, referencedDatabase, referencedTable, "table")
 	if err != nil {
-		return DisclosurePlan{}, fmt.Errorf("inspect related-record source for disclosure: %w", err)
+		// Inspector/read infrastructure failure is disclosure machinery
+		// failure, not a policy refusal: wrap it in the backend sentinel so the
+		// navigation service classifies it as fixed failed evidence exactly
+		// like core execution (Issue #35 AC 4 / Issue #36).
+		return DisclosurePlan{}, fmt.Errorf("%w: %w", ErrQueryDisclosureBackendFailure, err)
 	}
 	if detail == nil {
 		return DisclosurePlan{}, fmt.Errorf("%w: related-record metadata is missing", ErrQueryDisclosureBlocked)
@@ -272,7 +293,10 @@ func (s *QueryDisclosureService) buildDisclosurePlan(ctx context.Context, target
 			if errors.Is(err, sql.ErrNoRows) {
 				return DisclosurePlan{}, fmt.Errorf("%w: no policy for %s.%s.%s", ErrQueryDisclosureBlocked, col.SourceDatabase, col.SourceObject, col.SourceColumn)
 			}
-			return DisclosurePlan{}, fmt.Errorf("lookup disclosure policy: %w", err)
+			// Policy-read infrastructure failure: not a policy refusal, so the
+			// execution service records it as a terminal failed attempt instead of
+			// a rejected one (Issue #35 AC 4).
+			return DisclosurePlan{}, fmt.Errorf("%w: %w", ErrQueryDisclosureBackendFailure, err)
 		}
 		if err := policy.Mode.Validate(); err != nil {
 			return DisclosurePlan{}, fmt.Errorf("%w: invalid stored mode for %s.%s.%s: %v", ErrQueryDisclosureBlocked, col.SourceDatabase, col.SourceObject, col.SourceColumn, err)

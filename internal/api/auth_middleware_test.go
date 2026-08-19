@@ -697,9 +697,10 @@ func testOpsRouter(t *testing.T) *chi.Mux {
 	now := time.Date(2026, 8, 12, 12, 0, 0, 0, time.UTC)
 	cfg := QueryExecutionAuthConfig{Clock: fixedClock(now)}
 	deps := Dependencies{
-		AuthService:        svc,
-		AuthAuditEmitter:   emitter,
-		QueryExecutionAuth: cfg,
+		AuthService:           svc,
+		AuthAuditEmitter:      emitter,
+		QueryExecutionAuth:    cfg,
+		QueryExecutionService: &stubQueryExec{},
 	}
 	return NewRouter(deps)
 }

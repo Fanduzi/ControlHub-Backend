@@ -1,7 +1,7 @@
 // Package api provides HTTP handlers and routing for the ControlHub REST API.
 // input: chi/v5, time, internal/service (all services)
 // output: Dependencies struct, NewRouter, corsLocalDev
-// pos: HTTP routing entry point, wires service dependencies to handlers; wraps the AuthAuditEmitter in the fixed 60/min per-process untrusted-Bearer budget
+// pos: HTTP routing entry point, wires service dependencies to handlers; wraps the AuthAuditEmitter in the fixed 60/min per-process untrusted-Bearer budget; admin-gated ops metrics routes incl. /ops/query-evidence-metrics (Issue #34)
 // note: if this file changes, update header and README.md
 package api
 
@@ -132,6 +132,7 @@ func NewRouter(deps Dependencies) *chi.Mux {
 			r.Get("/audit-events", handleListAuditEvents(deps.AuditService))
 			r.Get("/admin/legacy-hash-count", handleGetLegacyHashCount(deps.AuthService))
 			r.Get("/ops/auth-audit-metrics", handleAuthAuditMetrics())
+			r.Get("/ops/query-evidence-metrics", handleQueryEvidenceMetrics(deps.QueryExecutionService))
 		})
 	})
 

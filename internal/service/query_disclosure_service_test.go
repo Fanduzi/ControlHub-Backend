@@ -72,6 +72,58 @@ func newTestDisclosureService(
 
 // --- tests ---
 
+// TestPreflight_InspectorReadFailure_ReturnsBackendSentinel proves disclosure
+// machinery failures (inspector/read infra) are NOT policy rejections: Preflight
+// returns the backend sentinel with the cause %w-wrapped (Issue #35 AC 4), so
+// the execution service records them as terminal failed/canceled/timeout
+// evidence instead of rejected. This test fails if the inspector error is
+// folded into the blocked wrap or the cause loses its %w.
+func TestPreflight_InspectorReadFailure_ReturnsBackendSentinel(t *testing.T) {
+	t.Parallel()
+
+	inspector := &fakeSchemaInspector{err: errors.New("inspector unreachable")}
+	targets := &fakeTargetRepo{targets: []model.QueryTarget{{ResourceID: 1}}}
+	svc := newTestDisclosureService(&fakeDisclosureReader{}, inspector, targets)
+
+	_, err := svc.Preflight(context.Background(), testDSN, 1, GuardedQuery{
+		OriginalStatement: "SELECT id FROM users",
+	})
+	if err == nil {
+		t.Fatal("Preflight() error = nil, want the backend-failure wrap around the inspector error")
+	}
+	if errors.Is(err, ErrQueryDisclosureBlocked) {
+		t.Fatalf("Preflight() inspector failure must not be a policy rejection: %v", err)
+	}
+	if !errors.Is(err, ErrQueryDisclosureBackendFailure) {
+		t.Fatalf("Preflight() error = %v, want ErrQueryDisclosureBackendFailure", err)
+	}
+}
+
+// TestPreflight_CanceledInspectorRead_KeepsCancellationUnwrapable proves a
+// canceled disclosure read stays errors.Is-unwrapable through the backend
+// sentinel wrap, so the execution service classifies it failed/query_canceled
+// instead of a policy rejection (Issue #35).
+func TestPreflight_CanceledInspectorRead_KeepsCancellationUnwrapable(t *testing.T) {
+	t.Parallel()
+
+	inspector := &fakeSchemaInspector{err: context.Canceled}
+	targets := &fakeTargetRepo{targets: []model.QueryTarget{{ResourceID: 1}}}
+	svc := newTestDisclosureService(&fakeDisclosureReader{}, inspector, targets)
+
+	_, err := svc.Preflight(context.Background(), testDSN, 1, GuardedQuery{
+		OriginalStatement: "SELECT id FROM users",
+	})
+	if err == nil {
+		t.Fatal("Preflight() error = nil, want the backend-failure wrap around the canceled read")
+	}
+	if !errors.Is(err, ErrQueryDisclosureBackendFailure) {
+		t.Fatalf("Preflight() error = %v, want ErrQueryDisclosureBackendFailure", err)
+	}
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("canceled preflight read must stay unwrapable through the backend wrap (Issue #35); errors.Is(context.Canceled) = false on %v", err)
+	}
+}
+
 func TestPreflight_AllRawCopyAllowed(t *testing.T) {
 	t.Parallel()
 
@@ -330,6 +382,43 @@ func TestPreflightRelatedRecords_MissingPolicyBlocks(t *testing.T) {
 	}
 	if !isDisclosureBlocked(err) {
 		t.Errorf("PreflightRelatedRecords() error = %v, want wrapped ErrQueryDisclosureBlocked", err)
+	}
+}
+
+// TestPreflightRelatedRecords_InspectorFailure_ReturnsBackendSentinel proves
+// related-record disclosure machinery failures (inspector read infrastructure)
+// are NOT policy rejections: PreflightRelatedRecords wraps them in
+// ErrQueryDisclosureBackendFailure with the cause %w-preserved (Issue #35 AC 4
+// / Issue #36), so the navigation service classifies them as fixed failed
+// disclosure evidence exactly like core execution — never as a rejection.
+func TestPreflightRelatedRecords_InspectorFailure_ReturnsBackendSentinel(t *testing.T) {
+	t.Parallel()
+
+	// Given: the schema inspector fails while reading the referenced table.
+	inspectorErr := errors.New("inspector connection refused")
+	inspector := &fakeSchemaInspector{
+		err: inspectorErr,
+	}
+	reader := &fakeDisclosureReader{policies: map[string]model.ResultDisclosurePolicy{}}
+	targets := &fakeTargetRepo{targets: []model.QueryTarget{{ResourceID: 1}}}
+	svc := newTestDisclosureService(reader, inspector, targets)
+
+	// When: PreflightRelatedRecords tries to resolve disclosure for the table.
+	_, err := svc.PreflightRelatedRecords(context.Background(), testDSN, 1, "testdb", "orders")
+
+	// Then: the backend sentinel is returned with the raw cause preserved for
+	// classification, and it is NOT a policy rejection.
+	if err == nil {
+		t.Fatal("PreflightRelatedRecords() error = nil, want ErrQueryDisclosureBackendFailure")
+	}
+	if !errors.Is(err, ErrQueryDisclosureBackendFailure) {
+		t.Errorf("PreflightRelatedRecords() error = %v, want wrapped ErrQueryDisclosureBackendFailure", err)
+	}
+	if !errors.Is(err, inspectorErr) {
+		t.Errorf("PreflightRelatedRecords() must wrap-preserve the inspector cause for classification: %v", err)
+	}
+	if isDisclosureBlocked(err) {
+		t.Errorf("PreflightRelatedRecords() error = %v, must not be a policy rejection", err)
 	}
 }
 

@@ -5,7 +5,7 @@ HTTP handlers, chi routing, CORS middleware, and fake-repo test infrastructure.
 ## Files
 | File | Responsibility |
 |------|---------------|
-| router.go | Route registration, Operator Access Boundary middleware (authenticated Inventory/dictionary reads; fresh-token query surfaces), Dependencies struct, CORS middleware, process-shared bounded untrusted-Bearer audit persistence wiring |
+| router.go | Route registration, Operator Access Boundary middleware (authenticated Inventory/dictionary reads; fresh-token query surfaces; admin-gated ops metrics), Dependencies struct, CORS middleware, process-shared bounded untrusted-Bearer audit persistence wiring |
 | health_handler.go | GET /health endpoint |
 | resource_handler.go | Resource list, detail, and profile handlers |
 | profile_handler.go | PUT/PATCH/DELETE /resources/{id}/profile handlers with strict single-JSON-object decoding |
@@ -33,16 +33,20 @@ HTTP handlers, chi routing, CORS middleware, and fake-repo test infrastructure.
 | query_saved_statement_handler_test.go | Saved statement handler tests |
 | query_saved_statement_execution_handler_test.go | Template-execution handler tests (strict request decoding, controlled field errors) |
 | operator_access_boundary_test.go | Anonymous, editor, and admin router authorization matrix driven by the shared operatoraccess policy, including 38R conditional saved statements (personal by owner — editor or admin — and shared templates admin-only) |
+| ops_handler.go | Admin-only operational metrics handlers: `handleAuthAuditMetrics` (auth audit persistence failures + untrusted-Bearer suppression) and `handleQueryEvidenceMetrics` (Issue #34 — exactly `queryEvidencePersistenceFailures`, read through the service layer) |
+| query_evidence_metrics_test.go | Query-evidence metrics endpoint tests: anonymous/editor/admin 401/403/200 matrix, exactly-one-field response, published counter |
 
 ## Routes
 | Method | Path | Description |
 |--------|------|-------------|
 | GET | /query-targets/{id}/schema/table-definition | Get MySQL table definition (base tables only) |
 | POST | /query-targets/{id}/execute | Execute a governed read-only statement, with optional page-number result paging for SELECT |
+| POST | /query-targets/{id}/related-records | Governed FK related-record navigation (Issue #36: records through the same atomic Execution Evidence Pair as execution) |
 | GET | /query-disclosure-policies | List disclosure policies (handler-admin) |
 | POST | /query-disclosure-policies | Create a disclosure policy (handler-admin) |
 | PUT | /query-disclosure-policies | Update a disclosure policy (handler-admin) |
 | DELETE | /query-disclosure-policies | Delete a disclosure policy (handler-admin) |
+| GET | /ops/query-evidence-metrics | Admin-only query-evidence persistence-failure counter (Issue #34) |
 
 Disclosure policy error mapping: a duplicate-scope POST answers `409` with the
 `disclosure_policy_conflict` code, and updating a scope with no existing policy
