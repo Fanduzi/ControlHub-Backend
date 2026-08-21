@@ -1,7 +1,7 @@
 // Package service provides tests for the Phase 37/38S query execution service.
 // input: context, errors, fmt, strings, testing, time, internal/model
 // output: TestExecute_*, TestReadyDerivation_*, TestCredentialResolver_* (fakes for repos/resolver/executor/clock)
-// pos: Unit tests for execute gating, compiler-owned template executor dispatch, governed result pages, the environment-policy matrix, atomic Execution Evidence Pair history/audit recording (Issue #34), cancellation-durable terminal evidence via the detached two-second Evidence Persistence Window (Issue #35), credential fail-closed behavior, and execute-path disclosure wrapping ErrQueryDisclosureBlocked for HTTP (Issue #48)
+// pos: Unit tests for execute gating, compiler-owned template executor dispatch, governed result pages, the environment-policy matrix, atomic Execution Evidence Pair history/audit recording (Issue #34), cancellation-durable terminal evidence via the detached two-second Evidence Persistence Window (Issue #35), credential fail-closed behavior, and execute-path Preflight/Apply disclosure wrapping ErrQueryDisclosureBlocked for HTTP (Issue #48)
 // note: if this file changes, update header and README.md
 package service
 
@@ -306,6 +306,7 @@ func (c *fakeClock) Now() time.Time { return c.t }
 type fakeDisclosureService struct {
 	blockErr         error
 	preflightErr     error
+	applyErr         error
 	preflightCalls   int
 	preflightQueries []GuardedQuery
 }
@@ -333,6 +334,9 @@ func (f *fakeDisclosureService) PreflightRelatedRecords(_ context.Context, _ str
 }
 
 func (f *fakeDisclosureService) Apply(_ DisclosurePlan, columns []model.QueryResultColumn, rows [][]any) ([]model.QueryResultColumn, [][]any, error) {
+	if f.applyErr != nil {
+		return nil, nil, f.applyErr
+	}
 	return columns, rows, nil
 }
 
@@ -776,6 +780,46 @@ func TestExecute_DisclosureBlocked_Rejected(t *testing.T) {
 	}
 	if len(repo.insertedAttempts) != 1 || repo.insertedAttempts[0].Status != model.QueryExecutionRejected {
 		t.Fatalf("disclosure-blocked attempt must be recorded as rejected: %+v", repo.insertedAttempts)
+	}
+}
+
+// TestExecute_ApplyDisclosureBlocked_Rejected proves a disclosure block after
+// a successful executor run (Apply) returns ErrQueryDisclosureBlocked — not
+// only ErrQueryNotAllowed — so HTTP can publish query_result_disclosure_blocked.
+// WHY: Preflight reject wraps both sentinels; Apply goes through
+// classifyExecutorError, which used to collapse the block to ErrQueryNotAllowed.
+func TestExecute_ApplyDisclosureBlocked_Rejected(t *testing.T) {
+	t.Parallel()
+	repo := &fakeExecRepo{
+		credentials: map[uint64]model.QueryCredentialMetadata{
+			9001: enabledCred(model.QueryEnvPolicyNonProdOnly),
+		},
+	}
+	executor := &fakeExecutor{result: QueryDatabaseResult{
+		Columns:  []model.QueryResultColumn{{Name: "value", DatabaseType: "BIGINT"}},
+		Rows:     [][]any{{int64(1)}},
+		RowCount: 1,
+	}}
+	svc := NewQueryExecutionService(
+		fakeTargetRepo{targets: []model.QueryTarget{mysqlTarget("Staging")}},
+		repo, &fakeResolver{dsn: testResolverDSN}, executor,
+		NewQueryGuard(QueryGuardConfig{DefaultMaxRows: 100, HardMaxRows: 500}),
+		&fakeClock{t: time.Now()},
+		nil, &fakeDisclosureService{applyErr: ErrQueryDisclosureBlocked},
+	)
+
+	_, err := svc.Execute(context.Background(), 7, 9001, model.QueryExecuteRequest{Statement: "select 1", MaxRows: 10})
+	if !errors.Is(err, ErrQueryDisclosureBlocked) {
+		t.Fatalf("error = %v, want ErrQueryDisclosureBlocked so HTTP can publish query_result_disclosure_blocked", err)
+	}
+	if !executor.called {
+		t.Fatal("executor must run before Apply blocks the result")
+	}
+	if len(repo.insertedAttempts) != 1 || repo.insertedAttempts[0].Status != model.QueryExecutionRejected {
+		t.Fatalf("apply-path disclosure block must be recorded as rejected: %+v", repo.insertedAttempts)
+	}
+	if repo.insertedAttempts[0].ErrorCode != "query_result_disclosure_blocked" {
+		t.Fatalf("error code = %q, want query_result_disclosure_blocked", repo.insertedAttempts[0].ErrorCode)
 	}
 }
 

@@ -1,7 +1,7 @@
 // Package api provides tests for the query execution handlers.
 // input: bytes, context, encoding/json, fmt, net/http, net/http/httptest, strings, testing, time, chi, internal/model, internal/service
-// output: TestQueryExecution_* (execute success/errors including query_result_disclosure_blocked vs query_not_allowed, auth, history; actor taken from token not body)
-// pos: Handler + auth middleware + error-mapping coverage for the Phase 37 query sandbox endpoints, Phase 38S governed result paging, Issue #48 execute-path disclosure Controlled Error Code
+// output: TestQueryExecution_* (execute success/errors including Preflight and Apply-path query_result_disclosure_blocked vs query_not_allowed, auth, history; actor taken from token not body)
+// pos: Handler + auth middleware + error-mapping coverage for the Phase 37 query sandbox endpoints, Phase 38S governed result paging, Issue #48 execute-path disclosure Controlled Error Code including Apply after executor success
 // note: if this file changes, update header and README.md
 package api
 
@@ -217,6 +217,33 @@ func TestQueryExecution_Execute_DisclosureBlocked(t *testing.T) {
 	router := newQueryExecRouter(&stubQueryExec{
 		executeErr: fmt.Errorf("%w: %w", service.ErrQueryNotAllowed, service.ErrQueryDisclosureBlocked),
 	})
+	token := mintToken(t, "qe-test-secret", 42, "admin", qeTestNow)
+
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, qeRequest(http.MethodPost, "/query-targets/22/execute", `{"statement":"select 1"}`, token))
+
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, want 403; body=%s", rec.Code, rec.Body.String())
+	}
+	var body struct {
+		Error string `json:"error"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode body: %v", err)
+	}
+	if body.Error != "query_result_disclosure_blocked" {
+		t.Fatalf("error = %q, want query_result_disclosure_blocked", body.Error)
+	}
+}
+
+// TestQueryExecution_Execute_ApplyDisclosureBlocked proves an Apply-path
+// disclosure block (after the executor returns rows) publishes
+// query_result_disclosure_blocked through the real service and handler.
+// WHY: classifyExecutorError used to return ErrQueryNotAllowed for Apply
+// failures, so the HTTP envelope lied even after Preflight wrapping was fixed.
+func TestQueryExecution_Execute_ApplyDisclosureBlocked(t *testing.T) {
+	svc := newApplyPathBlockedService()
+	router := newQueryExecRouter(svc)
 	token := mintToken(t, "qe-test-secret", 42, "admin", qeTestNow)
 
 	rec := httptest.NewRecorder()
@@ -1090,4 +1117,159 @@ func TestQueryExecution_Execute_MetadataStatementWithPaginationAccepted(t *testi
 	if rec.Code != http.StatusOK {
 		t.Errorf("metadata statement with pagination should be accepted, got %d; body=%s", rec.Code, rec.Body.String())
 	}
+}
+
+// apply-path disclosure HTTP fixture: real QueryExecutionService so Apply
+// failures go through classifyExecutorError into writeQueryExecutionError /
+// writeNavigationError. Target 22 matches existing execute-handler URLs.
+
+const applyPathDSN = "rouser:secret-dsn-do-not-leak@tcp(db.internal:3306)/sandbox"
+
+func applyPathTarget() model.QueryTarget {
+	return model.QueryTarget{
+		ResourceID: 22,
+		ConnectionContext: model.QueryTargetConnectionContext{
+			Environment: "Staging",
+			Engine:      "mysql",
+			Host:        "db.internal",
+			Port:        3306,
+		},
+	}
+}
+
+type applyPathTargets struct{}
+
+func (applyPathTargets) ListQueryTargets(_ context.Context, q model.QueryTargetListQuery) ([]model.QueryTarget, int, error) {
+	t := applyPathTarget()
+	if q.TargetID != 0 && q.TargetID != t.ResourceID {
+		return nil, 0, nil
+	}
+	return []model.QueryTarget{t}, 1, nil
+}
+
+type applyPathRepo struct{}
+
+func (applyPathRepo) GetCredentialByResourceID(_ context.Context, resourceID uint64) (model.QueryCredentialMetadata, error) {
+	if resourceID != 22 {
+		return model.QueryCredentialMetadata{}, fmt.Errorf("unknown resource")
+	}
+	return model.QueryCredentialMetadata{
+		ResourceID:        22,
+		Enabled:           true,
+		Engine:            "mysql",
+		CredentialRef:     "ORDER_MYSQL_RO",
+		EnvironmentPolicy: model.QueryEnvPolicyNonProdOnly,
+	}, nil
+}
+
+func (applyPathRepo) ListExecutions(context.Context, model.QueryExecutionListQuery) ([]model.QueryExecutionRecord, int, error) {
+	return nil, 0, nil
+}
+
+func (applyPathRepo) InsertAuditEvent(context.Context, uint64, uint64, string, string) error {
+	return nil
+}
+
+func (applyPathRepo) InsertExecutionWithAudit(_ context.Context, rec model.QueryExecutionRecord, _, _ string) (uint64, error) {
+	return rec.ID + 1, nil
+}
+
+func (applyPathRepo) QueryEvidencePersistenceFailures() int64 { return 0 }
+
+type applyPathResolver struct{}
+
+func (applyPathResolver) Resolve(_ context.Context, ref string) (string, error) {
+	if err := model.ValidateCredentialRef(ref); err != nil {
+		return "", err
+	}
+	return applyPathDSN, nil
+}
+
+type applyPathExecutor struct{}
+
+func (applyPathExecutor) Query(context.Context, string, service.GuardedQuery) (service.QueryDatabaseResult, error) {
+	return service.QueryDatabaseResult{
+		Columns:  []model.QueryResultColumn{{Name: "value", DatabaseType: "BIGINT"}},
+		Rows:     [][]any{{int64(1)}},
+		RowCount: 1,
+	}, nil
+}
+
+func (applyPathExecutor) QueryTemplate(context.Context, string, service.GuardedTemplateStatement) (service.QueryDatabaseResult, error) {
+	return service.QueryDatabaseResult{}, nil
+}
+
+func (applyPathExecutor) QueryRelatedRecords(context.Context, string, service.RelatedRecordsQueryInput) (service.QueryDatabaseResult, error) {
+	return service.QueryDatabaseResult{
+		Columns:  []model.QueryResultColumn{{Name: "id", DatabaseType: "BIGINT"}},
+		Rows:     [][]any{{int64(100)}},
+		RowCount: 1,
+	}, nil
+}
+
+type applyPathClock struct{ t time.Time }
+
+func (c applyPathClock) Now() time.Time { return c.t }
+
+type applyPathDisclosure struct{}
+
+func (applyPathDisclosure) Preflight(context.Context, string, uint64, service.GuardedQuery) (service.DisclosurePlan, error) {
+	return service.DisclosurePlan{}, nil
+}
+
+func (applyPathDisclosure) PreflightRelatedRecords(context.Context, string, uint64, string, string) (service.DisclosurePlan, error) {
+	return service.DisclosurePlan{}, nil
+}
+
+func (applyPathDisclosure) Apply(service.DisclosurePlan, []model.QueryResultColumn, [][]any) ([]model.QueryResultColumn, [][]any, error) {
+	return nil, nil, service.ErrQueryDisclosureBlocked
+}
+
+type applyPathInspector struct{}
+
+func (applyPathInspector) ListDatabases(context.Context, string, string, bool, int, int) ([]service.DatabaseSummary, model.PageInfo, error) {
+	return nil, model.PageInfo{}, nil
+}
+
+func (applyPathInspector) ListObjects(context.Context, string, string, string, string, int, int) ([]service.ObjectSummary, model.PageInfo, error) {
+	return nil, model.PageInfo{}, nil
+}
+
+func (applyPathInspector) GetObjectDetails(_ context.Context, _ string, _, name, kind string) (*service.ObjectDetail, error) {
+	return &service.ObjectDetail{
+		Name: name,
+		Kind: kind,
+		ForeignKeys: []service.FKSummary{
+			{
+				Name: "fk",
+				Columns: []service.FKColumn{{
+					Column:           "order_id",
+					ReferencedSchema: "db",
+					ReferencedTable:  "orders",
+					ReferencedColumn: "id",
+				}},
+			},
+		},
+	}, nil
+}
+
+func (applyPathInspector) GetTableDefinition(context.Context, string, string, string) (*service.TableDefinition, error) {
+	return nil, nil
+}
+
+func (applyPathInspector) GetRelationshipMap(context.Context, string, string, string) (*service.RelationshipMapResult, error) {
+	return nil, nil
+}
+
+func newApplyPathBlockedService() *service.QueryExecutionService {
+	return service.NewQueryExecutionService(
+		applyPathTargets{},
+		applyPathRepo{},
+		applyPathResolver{},
+		applyPathExecutor{},
+		service.NewQueryGuard(service.QueryGuardConfig{DefaultMaxRows: 100, HardMaxRows: 500}),
+		applyPathClock{t: qeTestNow},
+		applyPathInspector{},
+		applyPathDisclosure{},
+	)
 }

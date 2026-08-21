@@ -1,7 +1,7 @@
 // Package api provides tests for the related-record navigation handler.
 // input: bytes, context, encoding/json, fmt, net/http, net/http/httptest, strings, testing, time, chi, internal/model, internal/service
-// output: TestNavigateRelatedRecords_* (handler auth, body validation, error mapping including query_result_disclosure_blocked vs query_not_allowed, response shape)
-// pos: Handler + auth middleware coverage for POST /query-targets/{id}/related-records (Phase 38J, Issue #48 disclosure Controlled Error Code)
+// output: TestNavigateRelatedRecords_* (handler auth, body validation, error mapping including Preflight and Apply-path query_result_disclosure_blocked vs query_not_allowed, response shape)
+// pos: Handler + auth middleware coverage for POST /query-targets/{id}/related-records (Phase 38J, Issue #48 disclosure Controlled Error Code including Apply after executor success)
 // note: if this file changes, update header and README.md
 package api
 
@@ -256,6 +256,32 @@ func TestNavigateRelatedRecords_DisclosureBlocked(t *testing.T) {
 	body := `{"source":{"database":"db","object":"tbl","kind":"table","foreignKey":"fk"},"localValues":["1"]}`
 	rec := httptest.NewRecorder()
 	router.ServeHTTP(rec, qeRequest(http.MethodPost, "/query-targets/9001/related-records", body, token))
+
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, want 403; body=%s", rec.Code, rec.Body.String())
+	}
+	var env struct {
+		Error string `json:"error"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &env); err != nil {
+		t.Fatalf("decode body: %v", err)
+	}
+	if env.Error != "query_result_disclosure_blocked" {
+		t.Fatalf("error = %q, want query_result_disclosure_blocked", env.Error)
+	}
+}
+
+// TestNavigateRelatedRecords_ApplyDisclosureBlocked proves a related-record
+// Apply-path disclosure block publishes query_result_disclosure_blocked
+// through the real service and handler, not query_not_allowed.
+func TestNavigateRelatedRecords_ApplyDisclosureBlocked(t *testing.T) {
+	svc := newApplyPathBlockedService()
+	router := newNavRouter(svc)
+	token := navBearer(t)
+
+	body := `{"source":{"database":"db","object":"tbl","kind":"table","foreignKey":"fk"},"localValues":["1"]}`
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, qeRequest(http.MethodPost, "/query-targets/22/related-records", body, token))
 
 	if rec.Code != http.StatusForbidden {
 		t.Fatalf("status = %d, want 403; body=%s", rec.Code, rec.Body.String())

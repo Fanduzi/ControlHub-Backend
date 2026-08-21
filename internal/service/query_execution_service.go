@@ -1,7 +1,7 @@
 // Package service provides business logic for the Phase 37/38S read-only query sandbox.
 // input: context, errors, fmt, net, strconv, strings, time, go-sql-driver/mysql, internal/model
 // output: QueryExecutionService, query execution repository/resolver/executor/clock interfaces, sentinel errors, NewQueryExecutionService, Execute, ListHistory, validateDSNBinding
-// pos: Orchestrates governed MySQL/TiDB query execution, compiler-owned template execution, and FK related-record navigation — target/policy/guard/disclosure gating, paged result windows, timed execution, and guaranteed per-attempt atomic Execution Evidence Pair history + audit (Issue #34) persisted in a fixed two-second Evidence Persistence Window detached from request cancellation/deadline (Issue #35), including navigation (Issue #36) with inspector-phase cancellation/deadline classified as terminal failed/timeout evidence (Issue #40). Public disclosure rejections wrap both ErrQueryNotAllowed and ErrQueryDisclosureBlocked so HTTP can publish query_result_disclosure_blocked (Issue #48).
+// pos: Orchestrates governed MySQL/TiDB query execution, compiler-owned template execution, and FK related-record navigation — target/policy/guard/disclosure gating, paged result windows, timed execution, and guaranteed per-attempt atomic Execution Evidence Pair history + audit (Issue #34) persisted in a fixed two-second Evidence Persistence Window detached from request cancellation/deadline (Issue #35), including navigation (Issue #36) with inspector-phase cancellation/deadline classified as terminal failed/timeout evidence (Issue #40). Public Preflight disclosure rejections wrap both ErrQueryNotAllowed and ErrQueryDisclosureBlocked; Apply-path classifyExecutorError returns ErrQueryDisclosureBlocked as the HTTP sentinel so both publish query_result_disclosure_blocked (Issue #48).
 // note: if this file changes, update header and README.md
 package service
 
@@ -797,10 +797,11 @@ func validateRelatedRecordsFKMetadata(fk *FKSummary) error {
 // classifyExecutorError maps an executor error to a history status, a sentinel
 // for the handler, an audit/error code, and a client-safe message. A timeout is
 // 408; an oversized result is 400 (validation); a disclosure policy block is
-// 403; a client cancellation is recorded failed/query_canceled with a fixed
-// safe message (Issue #35); anything else from the target database is 502. The
-// returned message is fixed and never echoes the raw executor error, which may
-// contain DSN fragments from the driver.
+// 403 with HTTP sentinel ErrQueryDisclosureBlocked (Issue #48); a client
+// cancellation is recorded failed/query_canceled with a fixed safe message
+// (Issue #35); anything else from the target database is 502. The returned
+// message is fixed and never echoes the raw executor error, which may contain
+// DSN fragments from the driver.
 func classifyExecutorError(err error) (model.QueryExecutionStatus, error, string, string) {
 	switch {
 	case errors.Is(err, context.DeadlineExceeded):
@@ -818,7 +819,7 @@ func classifyExecutorError(err error) (model.QueryExecutionStatus, error, string
 	case errors.Is(err, ErrQueryResultTooLarge):
 		return model.QueryExecutionRejected, ErrQueryValidationFailed, "validation_failed", "result set exceeds configured limits"
 	case errors.Is(err, ErrQueryDisclosureBlocked):
-		return model.QueryExecutionRejected, ErrQueryNotAllowed, "query_result_disclosure_blocked", "query blocked by result disclosure policy"
+		return model.QueryExecutionRejected, ErrQueryDisclosureBlocked, "query_result_disclosure_blocked", "query blocked by result disclosure policy"
 	default:
 		return model.QueryExecutionFailed, ErrQueryBackendFailure, "query_backend_error", "target database query failed"
 	}

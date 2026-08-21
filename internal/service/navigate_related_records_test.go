@@ -1,7 +1,7 @@
 // Package service provides tests for the Phase 38J related-record navigation.
 // input: context, errors, strings, testing, time, internal/model
 // output: TestNavigateRelatedRecords_* (fakes for inspector, executor bound queries)
-// pos: Unit tests for FK navigation governance, parameter binding, history/audit, error mapping including ErrQueryDisclosureBlocked wrap for HTTP (Issue #48), and inspector-phase cancellation/deadline terminal evidence (Issue #40)
+// pos: Unit tests for FK navigation governance, parameter binding, history/audit, error mapping including Preflight/Apply ErrQueryDisclosureBlocked wrap for HTTP (Issue #48), and inspector-phase cancellation/deadline terminal evidence (Issue #40)
 // note: if this file changes, update header and README.md
 package service
 
@@ -412,6 +412,56 @@ func TestNavigateRelatedRecords_DisclosureBlocked(t *testing.T) {
 	}
 	if len(repo.insertedAttempts) != 1 || repo.insertedAttempts[0].Status != model.QueryExecutionRejected {
 		t.Fatalf("disclosure-blocked attempt must be recorded as rejected: %+v", repo.insertedAttempts)
+	}
+}
+
+// TestNavigateRelatedRecords_ApplyDisclosureBlocked proves related-record
+// Apply blocks after a successful executor run return ErrQueryDisclosureBlocked
+// so HTTP publishes query_result_disclosure_blocked, not query_not_allowed.
+func TestNavigateRelatedRecords_ApplyDisclosureBlocked(t *testing.T) {
+	t.Parallel()
+	repo := &fakeExecRepo{
+		credentials: map[uint64]model.QueryCredentialMetadata{
+			9001: enabledCred(model.QueryEnvPolicyNonProdOnly),
+		},
+	}
+	executor := &fakeExecutor{result: QueryDatabaseResult{
+		Columns:  []model.QueryResultColumn{{Name: "id", DatabaseType: "BIGINT"}},
+		Rows:     [][]any{{int64(100)}},
+		RowCount: 1,
+	}}
+	inspector := &fakeNavSchemaInspector{
+		detail: &ObjectDetail{
+			Name: "order_items",
+			Kind: "table",
+			ForeignKeys: []FKSummary{
+				{
+					Name:    "fk_order_items_order",
+					Columns: []FKColumn{{Column: "order_id", ReferencedSchema: "orders", ReferencedTable: "orders", ReferencedColumn: "id"}},
+				},
+			},
+		},
+	}
+	svc := NewQueryExecutionService(
+		fakeTargetRepo{targets: []model.QueryTarget{mysqlTarget("Staging")}},
+		repo, &fakeResolver{dsn: testResolverDSN}, executor,
+		NewQueryGuard(QueryGuardConfig{DefaultMaxRows: 100, HardMaxRows: 500}),
+		&fakeClock{t: time.Now()},
+		inspector, &fakeDisclosureService{applyErr: ErrQueryDisclosureBlocked},
+	)
+
+	_, err := svc.NavigateRelatedRecords(context.Background(), 1, 9001, validNavRequest())
+	if !errors.Is(err, ErrQueryDisclosureBlocked) {
+		t.Fatalf("error = %v, want ErrQueryDisclosureBlocked so HTTP can publish query_result_disclosure_blocked", err)
+	}
+	if !executor.called {
+		t.Fatal("executor must run before Apply blocks the related-record result")
+	}
+	if len(repo.insertedAttempts) != 1 || repo.insertedAttempts[0].Status != model.QueryExecutionRejected {
+		t.Fatalf("apply-path disclosure block must be recorded as rejected: %+v", repo.insertedAttempts)
+	}
+	if repo.insertedAttempts[0].ErrorCode != "query_result_disclosure_blocked" {
+		t.Fatalf("error code = %q, want query_result_disclosure_blocked", repo.insertedAttempts[0].ErrorCode)
 	}
 }
 

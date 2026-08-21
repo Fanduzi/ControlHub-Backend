@@ -30,8 +30,8 @@ HTTP handlers, chi routing, CORS middleware, and fake-repo test infrastructure.
 | dictionary_handler_test.go | Dictionary endpoint tests |
 | query_credential_handler_test.go | Credential metadata handler tests |
 | query_disclosure_handler_test.go | Disclosure policy handler tests |
-| query_execution_handler_test.go | Query execution handler tests, including execute-path `query_result_disclosure_blocked` vs `query_not_allowed` |
-| navigate_related_records_handler_test.go | Related-record navigation handler tests, including disclosure vs not-allowed Controlled Error Codes |
+| query_execution_handler_test.go | Query execution handler tests, including Preflight and Apply-path `query_result_disclosure_blocked` vs `query_not_allowed` |
+| navigate_related_records_handler_test.go | Related-record navigation handler tests, including Preflight and Apply-path disclosure vs not-allowed Controlled Error Codes |
 | query_saved_statement_handler_test.go | Saved statement handler tests |
 | query_saved_statement_execution_handler_test.go | Template-execution handler tests (strict request decoding, controlled field errors) |
 | operator_access_boundary_test.go | Anonymous, editor, and admin router authorization matrix driven by the shared operatoraccess policy, including 38R conditional saved statements (personal by owner — editor or admin — and shared templates admin-only) |
@@ -53,8 +53,9 @@ HTTP handlers, chi routing, CORS middleware, and fake-repo test infrastructure.
 Disclosure policy error mapping: a duplicate-scope POST answers `409` with the
 `disclosure_policy_conflict` code, and updating a scope with no existing policy
 answers `404` with `disclosure_policy_not_found`. Execute and related-record
-disclosure blocks publish `403` with `query_result_disclosure_blocked`;
-target-not-enabled refusals remain `query_not_allowed`.
+disclosure blocks — including Apply after a successful executor run — publish
+`403` with `query_result_disclosure_blocked`; target-not-enabled refusals
+remain `query_not_allowed`.
 | GET | /query-targets/{id}/saved-statements | List saved statements for a query target |
 | POST | /query-targets/{id}/saved-statements | Create a saved statement |
 | PUT | /query-targets/{id}/saved-statements/{statementId} | Update a saved statement |
