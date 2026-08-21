@@ -1,12 +1,13 @@
 // Package openapi_test verifies the embedded OpenAPI contract.
 // input: embedded OpenAPI YAML, kin-openapi parser, internal/model
-// output: OpenAPI schema, topology, pagination, and executions contract tests
+// output: OpenAPI schema, topology, pagination, executions, and closed ErrorResponse.error enum tests
 // pos: Prevents documented API contracts from drifting from router behavior
 // note: if this file changes, update header and README.md
 package openapi_test
 
 import (
 	"context"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -360,4 +361,83 @@ func keys(m map[string]*openapi3.SchemaRef) []string {
 		out = append(out, k)
 	}
 	return out
+}
+
+// TestOpenAPIErrorResponseErrorIsClosedControlledErrorCodeEnum proves
+// ErrorResponse.error is a closed enum of every inventoried Controlled Error
+// Code (writeJSONError literals plus Console BFF snake_case codes). Adding a
+// code is an OpenAPI contract change. query_result_disclosure_blocked must be
+// present so execute-path disclosure is not published as an unconstrained string.
+func TestOpenAPIErrorResponseErrorIsClosedControlledErrorCodeEnum(t *testing.T) {
+	loader := openapi3.NewLoader()
+	doc, err := loader.LoadFromData(openapi.YAML)
+	if err != nil {
+		t.Fatalf("failed to parse openapi.yaml: %v", err)
+	}
+
+	property := findSchemaProperty(t, doc, "ErrorResponse", "error")
+	if property.Type == nil || !property.Type.Is("string") {
+		t.Fatalf("expected ErrorResponse.error type string, got %#v", property.Type)
+	}
+	if len(property.Enum) == 0 {
+		t.Fatal("ErrorResponse.error must be a closed enum of Controlled Error Codes")
+	}
+
+	got := make([]string, 0, len(property.Enum))
+	seen := make(map[string]struct{}, len(property.Enum))
+	for i, raw := range property.Enum {
+		code, ok := raw.(string)
+		if !ok || code == "" {
+			t.Fatalf("ErrorResponse.error enum[%d] = %#v, want non-empty string", i, raw)
+		}
+		if _, dup := seen[code]; dup {
+			t.Fatalf("ErrorResponse.error enum contains duplicate %q", code)
+		}
+		seen[code] = struct{}{}
+		got = append(got, code)
+	}
+	slices.Sort(got)
+
+	want := []string{
+		"disclosure_policy_conflict",
+		"disclosure_policy_not_found",
+		"environment_not_found",
+		"forbidden",
+		"forbidden_header",
+		"internal_error",
+		"invalid_credentials",
+		"invalid_payload",
+		"invalid_request",
+		"malformed_json",
+		"not_found",
+		"owner_not_found",
+		"payload_too_large",
+		"profile_not_supported",
+		"query_backend_error",
+		"query_explain_not_supported",
+		"query_not_allowed",
+		"query_result_disclosure_blocked",
+		"query_target_not_found",
+		"query_timeout",
+		"relation_conflict",
+		"relation_not_found",
+		"relationship_map_not_supported",
+		"resource_archived",
+		"resource_conflict",
+		"resource_not_found",
+		"saved_statement_not_found",
+		"schema_backend_error",
+		"schema_definition_not_supported",
+		"schema_not_allowed",
+		"schema_object_not_found",
+		"schema_target_not_found",
+		"schema_timeout",
+		"schema_validation_failed",
+		"service_unavailable",
+		"unauthorized",
+		"validation_failed",
+	}
+	if !slices.Equal(got, want) {
+		t.Fatalf("ErrorResponse.error enum = %v\nwant closed Controlled Error Code set %v", got, want)
+	}
 }

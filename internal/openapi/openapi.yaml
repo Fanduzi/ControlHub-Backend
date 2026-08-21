@@ -4769,7 +4769,49 @@ components:
       properties:
         error:
           type: string
-          description: Machine-readable error code
+          description: >
+            Closed Controlled Error Code. Identity of a JSON error envelope.
+            HTTP status and message are not the failure class. The set is the
+            union of backend writeJSONError codes and Console BFF synthesized
+            snake_case codes.
+          enum:
+            - disclosure_policy_conflict
+            - disclosure_policy_not_found
+            - environment_not_found
+            - forbidden
+            - forbidden_header
+            - internal_error
+            - invalid_credentials
+            - invalid_payload
+            - invalid_request
+            - malformed_json
+            - not_found
+            - owner_not_found
+            - payload_too_large
+            - profile_not_supported
+            - query_backend_error
+            - query_explain_not_supported
+            - query_not_allowed
+            - query_result_disclosure_blocked
+            - query_target_not_found
+            - query_timeout
+            - relation_conflict
+            - relation_not_found
+            - relationship_map_not_supported
+            - resource_archived
+            - resource_conflict
+            - resource_not_found
+            - saved_statement_not_found
+            - schema_backend_error
+            - schema_definition_not_supported
+            - schema_not_allowed
+            - schema_object_not_found
+            - schema_target_not_found
+            - schema_timeout
+            - schema_validation_failed
+            - service_unavailable
+            - unauthorized
+            - validation_failed
         message:
           type: string
           description: Human-readable error description
