@@ -1,7 +1,7 @@
 // Package service provides tests for the Phase 37/38S query execution service.
 // input: context, errors, fmt, strings, testing, time, internal/model
 // output: TestExecute_*, TestReadyDerivation_*, TestCredentialResolver_* (fakes for repos/resolver/executor/clock)
-// pos: Unit tests for execute gating, compiler-owned template executor dispatch, governed result pages, the environment-policy matrix, atomic Execution Evidence Pair history/audit recording (Issue #34), cancellation-durable terminal evidence via the detached two-second Evidence Persistence Window (Issue #35), and credential fail-closed behavior
+// pos: Unit tests for execute gating, compiler-owned template executor dispatch, governed result pages, the environment-policy matrix, atomic Execution Evidence Pair history/audit recording (Issue #34), cancellation-durable terminal evidence via the detached two-second Evidence Persistence Window (Issue #35), credential fail-closed behavior, and execute-path disclosure wrapping ErrQueryDisclosureBlocked for HTTP (Issue #48)
 // note: if this file changes, update header and README.md
 package service
 
@@ -767,6 +767,9 @@ func TestExecute_DisclosureBlocked_Rejected(t *testing.T) {
 	_, err := svc.Execute(context.Background(), 7, 9001, model.QueryExecuteRequest{Statement: "select 1", MaxRows: 10})
 	if !errors.Is(err, ErrQueryNotAllowed) {
 		t.Fatalf("error = %v, want ErrQueryNotAllowed (wrapping ErrQueryDisclosureBlocked)", err)
+	}
+	if !errors.Is(err, ErrQueryDisclosureBlocked) {
+		t.Fatalf("error = %v, want ErrQueryDisclosureBlocked so HTTP can publish query_result_disclosure_blocked", err)
 	}
 	if executor.called {
 		t.Fatal("executor must not be reached when disclosure blocks the query")

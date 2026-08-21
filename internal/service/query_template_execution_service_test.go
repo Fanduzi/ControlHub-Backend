@@ -1,7 +1,7 @@
 // Package service provides tests for governed saved-statement (template) execution.
 // input: context, database/sql, encoding/json, errors, strings, testing, time, internal/model
 // output: TestExecuteSavedStatement* (reread, authorization matrix, typed values, per-page chain, no-value persistence, atomic Execution Evidence Pair writes)
-// pos: Unit tests for the fresh-query-actor template-execution route through the existing governed chain, incl. cancellation-durable evidence (Issue #35)
+// pos: Unit tests for the fresh-query-actor template-execution route through the existing governed chain, incl. cancellation-durable evidence (Issue #35) and per-page disclosure wrapping ErrQueryDisclosureBlocked (Issue #48)
 // note: if this file changes, update header and README.md
 package service
 
@@ -408,6 +408,9 @@ func TestExecuteSavedStatementDisclosureChangeAffectsLaterPage(t *testing.T) {
 	_, err := svc.ExecuteSavedStatement(context.Background(), 1, 9001, 7, pageTwo)
 	if !errors.Is(err, ErrQueryNotAllowed) {
 		t.Fatalf("page 2 error = %v, want ErrQueryNotAllowed", err)
+	}
+	if !errors.Is(err, ErrQueryDisclosureBlocked) {
+		t.Fatalf("page 2 error = %v, want ErrQueryDisclosureBlocked so HTTP can publish query_result_disclosure_blocked", err)
 	}
 	if executor.templateCalls != 1 {
 		t.Fatalf("QueryTemplate calls = %d, want 1 (page 2 blocked before execution)", executor.templateCalls)

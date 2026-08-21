@@ -1,7 +1,7 @@
 // Package service provides business logic for the Phase 37/38S read-only query sandbox.
 // input: context, errors, fmt, net, strconv, strings, time, go-sql-driver/mysql, internal/model
 // output: QueryExecutionService, query execution repository/resolver/executor/clock interfaces, sentinel errors, NewQueryExecutionService, Execute, ListHistory, validateDSNBinding
-// pos: Orchestrates governed MySQL/TiDB query execution, compiler-owned template execution, and FK related-record navigation — target/policy/guard/disclosure gating, paged result windows, timed execution, and guaranteed per-attempt atomic Execution Evidence Pair history + audit (Issue #34) persisted in a fixed two-second Evidence Persistence Window detached from request cancellation/deadline (Issue #35), including navigation (Issue #36) with inspector-phase cancellation/deadline classified as terminal failed/timeout evidence (Issue #40)
+// pos: Orchestrates governed MySQL/TiDB query execution, compiler-owned template execution, and FK related-record navigation — target/policy/guard/disclosure gating, paged result windows, timed execution, and guaranteed per-attempt atomic Execution Evidence Pair history + audit (Issue #34) persisted in a fixed two-second Evidence Persistence Window detached from request cancellation/deadline (Issue #35), including navigation (Issue #36) with inspector-phase cancellation/deadline classified as terminal failed/timeout evidence (Issue #40). Public disclosure rejections wrap both ErrQueryNotAllowed and ErrQueryDisclosureBlocked so HTTP can publish query_result_disclosure_blocked (Issue #48).
 // note: if this file changes, update header and README.md
 package service
 
@@ -302,7 +302,7 @@ func (s *QueryExecutionService) executeGuardedChain(
 		// outcome and must reach the shared atomic evidence path (Issue #35).
 		if errors.Is(err, ErrQueryDisclosureBlocked) && !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded) {
 			return s.reject(ctx, target, actorUserID, guarded, "query_result_disclosure_blocked", "query blocked by result disclosure policy",
-				fmt.Errorf("%w: %v", ErrQueryNotAllowed, err), start)
+				fmt.Errorf("%w: %w", ErrQueryNotAllowed, err), start)
 		}
 		// All other post-target disclosure terminal failures record fixed safe
 		// failed or timeout evidence and surface the existing controlled error.
@@ -597,7 +597,7 @@ func (s *QueryExecutionService) NavigateRelatedRecords(ctx context.Context, acto
 		// (Issue #35), exactly as core query execution does.
 		if errors.Is(err, ErrQueryDisclosureBlocked) && !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded) {
 			return s.rejectNavigation(ctx, target, actorUserID, matchedFK, "query_result_disclosure_blocked", "query blocked by result disclosure policy",
-				fmt.Errorf("%w: %v", ErrQueryNotAllowed, err), start)
+				fmt.Errorf("%w: %w", ErrQueryNotAllowed, err), start)
 		}
 		// All other post-target disclosure terminal failures record fixed
 		// safe failed or timeout evidence and surface the existing controlled

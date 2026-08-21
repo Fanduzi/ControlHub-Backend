@@ -15,7 +15,7 @@ HTTP handlers, chi routing, CORS middleware, and fake-repo test infrastructure.
 | auth_middleware.go | Bearer, role, Authorization Version, and query-freshness middleware; missing Authorization emits no audit event; supplied untrusted Bearer rejection emits the fixed event within the 60/min per-process budget |
 | dictionary_handler.go | Dictionary list handlers (environments, owners, roles, resource-types, relation-types, lifecycle-statuses, health-statuses) |
 | query_schema_handler.go | handleGetTableDefinition for MySQL table-definition requests |
-| query_execution_handler.go | POST execute, POST saved-statement template execute, and GET execution-history handlers, including optional governed result paging |
+| query_execution_handler.go | POST execute, POST saved-statement template execute, POST related-records, and GET execution-history handlers, including optional governed result paging; execute/related disclosure blocks publish `query_result_disclosure_blocked` |
 | query_credential_handler.go | Phase 38A credential metadata handlers (GET/PUT/DELETE) |
 | query_disclosure_handler.go | Phase 38Q disclosure policy CRUD/list handlers (handler-admin) |
 | query_saved_statement_handler.go | Phase 38W saved statement CRUD handlers with strict typed parameter declaration decoding |
@@ -30,6 +30,8 @@ HTTP handlers, chi routing, CORS middleware, and fake-repo test infrastructure.
 | dictionary_handler_test.go | Dictionary endpoint tests |
 | query_credential_handler_test.go | Credential metadata handler tests |
 | query_disclosure_handler_test.go | Disclosure policy handler tests |
+| query_execution_handler_test.go | Query execution handler tests, including execute-path `query_result_disclosure_blocked` vs `query_not_allowed` |
+| navigate_related_records_handler_test.go | Related-record navigation handler tests, including disclosure vs not-allowed Controlled Error Codes |
 | query_saved_statement_handler_test.go | Saved statement handler tests |
 | query_saved_statement_execution_handler_test.go | Template-execution handler tests (strict request decoding, controlled field errors) |
 | operator_access_boundary_test.go | Anonymous, editor, and admin router authorization matrix driven by the shared operatoraccess policy, including 38R conditional saved statements (personal by owner — editor or admin — and shared templates admin-only) |
@@ -50,7 +52,9 @@ HTTP handlers, chi routing, CORS middleware, and fake-repo test infrastructure.
 
 Disclosure policy error mapping: a duplicate-scope POST answers `409` with the
 `disclosure_policy_conflict` code, and updating a scope with no existing policy
-answers `404` with `disclosure_policy_not_found`.
+answers `404` with `disclosure_policy_not_found`. Execute and related-record
+disclosure blocks publish `403` with `query_result_disclosure_blocked`;
+target-not-enabled refusals remain `query_not_allowed`.
 | GET | /query-targets/{id}/saved-statements | List saved statements for a query target |
 | POST | /query-targets/{id}/saved-statements | Create a saved statement |
 | PUT | /query-targets/{id}/saved-statements/{statementId} | Update a saved statement |

@@ -1,13 +1,14 @@
 // Package api provides tests for the query execution handlers.
-// input: bytes, context, fmt, net/http, net/http/httptest, strings, testing, time, chi, internal/model, internal/service
-// output: TestQueryExecution_* (execute success/errors, auth, history; actor taken from token not body)
-// pos: Handler + auth middleware + error-mapping coverage for the Phase 37 query sandbox endpoints, Phase 38S governed result paging
+// input: bytes, context, encoding/json, fmt, net/http, net/http/httptest, strings, testing, time, chi, internal/model, internal/service
+// output: TestQueryExecution_* (execute success/errors including query_result_disclosure_blocked vs query_not_allowed, auth, history; actor taken from token not body)
+// pos: Handler + auth middleware + error-mapping coverage for the Phase 37 query sandbox endpoints, Phase 38S governed result paging, Issue #48 execute-path disclosure Controlled Error Code
 // note: if this file changes, update header and README.md
 package api
 
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -204,6 +205,34 @@ func TestQueryExecution_Execute_DisabledTarget(t *testing.T) {
 	}
 	if !strings.Contains(rec.Body.String(), "query_not_allowed") {
 		t.Fatalf("body = %s, want query_not_allowed", rec.Body.String())
+	}
+}
+
+// TestQueryExecution_Execute_DisclosureBlocked proves execute-path disclosure
+// refusals publish query_result_disclosure_blocked, not query_not_allowed.
+// WHY: wrapping both sentinels used to collapse to query_not_allowed because
+// writeQueryExecutionError matched ErrQueryNotAllowed first; operators then
+// could not tell a policy block from a target that is not enabled.
+func TestQueryExecution_Execute_DisclosureBlocked(t *testing.T) {
+	router := newQueryExecRouter(&stubQueryExec{
+		executeErr: fmt.Errorf("%w: %w", service.ErrQueryNotAllowed, service.ErrQueryDisclosureBlocked),
+	})
+	token := mintToken(t, "qe-test-secret", 42, "admin", qeTestNow)
+
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, qeRequest(http.MethodPost, "/query-targets/22/execute", `{"statement":"select 1"}`, token))
+
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, want 403; body=%s", rec.Code, rec.Body.String())
+	}
+	var body struct {
+		Error string `json:"error"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode body: %v", err)
+	}
+	if body.Error != "query_result_disclosure_blocked" {
+		t.Fatalf("error = %q, want query_result_disclosure_blocked", body.Error)
 	}
 }
 

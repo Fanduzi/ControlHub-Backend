@@ -1,11 +1,13 @@
 // Package api provides tests for the related-record navigation handler.
-// input: bytes, context, net/http, net/http/httptest, strings, testing, time, chi, internal/model, internal/service
-// output: TestNavigateRelatedRecords_* (handler auth, body validation, error mapping, response shape)
-// pos: Handler + auth middleware coverage for POST /query-targets/{id}/related-records (Phase 38J)
+// input: bytes, context, encoding/json, fmt, net/http, net/http/httptest, strings, testing, time, chi, internal/model, internal/service
+// output: TestNavigateRelatedRecords_* (handler auth, body validation, error mapping including query_result_disclosure_blocked vs query_not_allowed, response shape)
+// pos: Handler + auth middleware coverage for POST /query-targets/{id}/related-records (Phase 38J, Issue #48 disclosure Controlled Error Code)
 // note: if this file changes, update header and README.md
 package api
 
 import (
+	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -238,6 +240,34 @@ func TestNavigateRelatedRecords_NotAllowed(t *testing.T) {
 	}
 	if !strings.Contains(rec.Body.String(), "query_not_allowed") {
 		t.Fatalf("body = %s, want query_not_allowed", rec.Body.String())
+	}
+}
+
+// TestNavigateRelatedRecords_DisclosureBlocked proves related-record disclosure
+// refusals publish query_result_disclosure_blocked, not query_not_allowed.
+// WHY: the navigation mapper shared the execute collapse; a policy block must
+// not look like the target itself forbade navigation.
+func TestNavigateRelatedRecords_DisclosureBlocked(t *testing.T) {
+	router := newNavRouter(&stubQueryExec{
+		navErr: fmt.Errorf("%w: %w", service.ErrQueryNotAllowed, service.ErrQueryDisclosureBlocked),
+	})
+	token := navBearer(t)
+
+	body := `{"source":{"database":"db","object":"tbl","kind":"table","foreignKey":"fk"},"localValues":["1"]}`
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, qeRequest(http.MethodPost, "/query-targets/9001/related-records", body, token))
+
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, want 403; body=%s", rec.Code, rec.Body.String())
+	}
+	var env struct {
+		Error string `json:"error"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &env); err != nil {
+		t.Fatalf("decode body: %v", err)
+	}
+	if env.Error != "query_result_disclosure_blocked" {
+		t.Fatalf("error = %q, want query_result_disclosure_blocked", env.Error)
 	}
 }
 

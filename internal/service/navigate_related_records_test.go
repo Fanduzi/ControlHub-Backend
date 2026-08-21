@@ -1,7 +1,7 @@
 // Package service provides tests for the Phase 38J related-record navigation.
 // input: context, errors, strings, testing, time, internal/model
 // output: TestNavigateRelatedRecords_* (fakes for inspector, executor bound queries)
-// pos: Unit tests for FK navigation governance, parameter binding, history/audit, error mapping, and inspector-phase cancellation/deadline terminal evidence (Issue #40)
+// pos: Unit tests for FK navigation governance, parameter binding, history/audit, error mapping including ErrQueryDisclosureBlocked wrap for HTTP (Issue #48), and inspector-phase cancellation/deadline terminal evidence (Issue #40)
 // note: if this file changes, update header and README.md
 package service
 
@@ -403,6 +403,9 @@ func TestNavigateRelatedRecords_DisclosureBlocked(t *testing.T) {
 	_, err := svc.NavigateRelatedRecords(context.Background(), 1, 9001, validNavRequest())
 	if !errors.Is(err, ErrQueryNotAllowed) {
 		t.Fatalf("error = %v, want ErrQueryNotAllowed (wrapping ErrQueryDisclosureBlocked)", err)
+	}
+	if !errors.Is(err, ErrQueryDisclosureBlocked) {
+		t.Fatalf("error = %v, want ErrQueryDisclosureBlocked so HTTP can publish query_result_disclosure_blocked", err)
 	}
 	if executor.called {
 		t.Fatal("executor must not be reached when disclosure blocks the query")

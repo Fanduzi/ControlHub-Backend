@@ -1,7 +1,7 @@
 // Package api provides HTTP handlers and routing for the ControlHub REST API.
 // input: bytes, context, errors, fmt, io, net/http, strconv, strings, time, chi, internal/model, internal/service
-// output: handleExecuteQuery, handleExecuteSavedStatement, handleListQueryExecutions, writeQueryExecutionError, writeTemplateExecutionError, queryExecutionAPI interface
-// pos: HTTP handlers for POST /query-targets/{id}/execute, POST /query-targets/{id}/saved-statements/{statementId}/execute, and GET /query-targets/{id}/executions (Phase 37 read-only query sandbox, Phase 38S governed result paging, Phase 38W template execution)
+// output: handleExecuteQuery, handleExecuteSavedStatement, handleListQueryExecutions, handleNavigateRelatedRecords, writeQueryExecutionError, writeNavigationError, writeTemplateExecutionError, queryExecutionAPI interface
+// pos: HTTP handlers for POST /query-targets/{id}/execute, POST /query-targets/{id}/saved-statements/{statementId}/execute, POST /query-targets/{id}/related-records, and GET /query-targets/{id}/executions (Phase 37 read-only query sandbox, Phase 38S governed result paging, Phase 38W template execution). Execute/related disclosure blocks publish query_result_disclosure_blocked (Issue #48); target-not-enabled remains query_not_allowed.
 // note: if this file changes, update header and README.md
 package api
 
@@ -253,10 +253,14 @@ func parseExecutionFilters(r *http.Request) (status *model.QueryExecutionStatus,
 
 // writeQueryExecutionError maps a service sentinel to a controlled HTTP response.
 // No guard, policy, credential, or target-database validation issue becomes a 500.
+// ErrQueryDisclosureBlocked is matched before ErrQueryNotAllowed because execute
+// rejections wrap both; matching the other way published query_not_allowed.
 func writeQueryExecutionError(w http.ResponseWriter, err error) {
 	switch {
 	case errors.Is(err, service.ErrQueryValidationFailed):
 		writeJSONError(w, http.StatusBadRequest, "validation_failed", err.Error())
+	case errors.Is(err, service.ErrQueryDisclosureBlocked):
+		writeJSONError(w, http.StatusForbidden, "query_result_disclosure_blocked", err.Error())
 	case errors.Is(err, service.ErrQueryNotAllowed):
 		writeJSONError(w, http.StatusForbidden, "query_not_allowed", err.Error())
 	case errors.Is(err, service.ErrQueryTargetNotFound):
@@ -367,13 +371,16 @@ func handleNavigateRelatedRecords(svc queryExecutionAPI) http.HandlerFunc {
 
 // writeNavigationError maps a service sentinel to a controlled HTTP response.
 // It reuses the same error mapping as writeQueryExecutionError since navigation
-// shares the same governance and sentinel vocabulary.
+// shares the same governance and sentinel vocabulary. Disclosure is matched
+// before not-allowed for the same wrap-order reason as writeQueryExecutionError.
 func writeNavigationError(w http.ResponseWriter, err error) {
 	switch {
 	case errors.Is(err, service.ErrQueryValidationFailed),
 		errors.Is(err, service.ErrNavigationSourceNotFound),
 		errors.Is(err, service.ErrNavigationValueMismatch):
 		writeJSONError(w, http.StatusBadRequest, "validation_failed", err.Error())
+	case errors.Is(err, service.ErrQueryDisclosureBlocked):
+		writeJSONError(w, http.StatusForbidden, "query_result_disclosure_blocked", err.Error())
 	case errors.Is(err, service.ErrQueryNotAllowed):
 		writeJSONError(w, http.StatusForbidden, "query_not_allowed", err.Error())
 	case errors.Is(err, service.ErrQueryTargetNotFound):
