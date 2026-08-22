@@ -41,12 +41,11 @@ Parent `Fanduzi/ControlHub-Backend#11` stays open.
 | Backend evidence base | `768a75142e0539b48c4d9987078a87d0144471e1` |
 | Backend evidence branch | `issue-53-publication-evidence-20260822` |
 | Backend evidence worktree | `/private/tmp/controlhub-evidence-53-20260822` |
+| Backend evidence body SHA | `644986672b3241263bf19309ecd47e6f473b9304` |
+| Backend evidence push | Fast-forward `768a751..6449866` as `6449866:main`; normal push, no force |
+| Backend `origin/main` after evidence body push | `644986672b3241263bf19309ecd47e6f473b9304` |
 | Tracker | https://github.com/Fanduzi/ControlHub-Backend/issues/53 |
 | Parent | https://github.com/Fanduzi/ControlHub-Backend/issues/11 (OPEN) |
-
-The evidence-body SHA, evidence-push range, and backend CI of that SHA are
-recorded in the follow-on cite commit after that CI completes (same pattern as
-Issues #47 and #48). They are not guessed here.
 
 ## Backend Merged Commit (fast-forward `85bb8e9..b28cd34`)
 
@@ -240,6 +239,24 @@ Required frontend jobs: `release-local` and `release-e2e`. Both succeeded.
 `release-local` logged `Controlled Error Code check passed (37 codes).` and
 vitest **100** files / **1562** tests passed. Node.js 20 deprecation
 annotations on the actions did not fail or skip either job.
+
+## Backend Evidence CI
+
+[Backend CI run 32545282740](https://github.com/Fanduzi/ControlHub-Backend/actions/runs/32545282740)
+completed successfully at exact evidence body SHA
+`644986672b3241263bf19309ecd47e6f473b9304`:
+
+| Required job | Result |
+|--------------|--------|
+| `release-local-gates` | SUCCESS (1m3s) |
+| `release-docker-gates` | SUCCESS (2m23s) |
+
+The Node.js action-runtime deprecation annotations did not fail or skip either
+required job. Argon2id budget ran as part of `release-local-gates` and
+succeeded. Merged-root local gates, Argon2id budget, integration, and OpenAPI
+fuzz were also re-run from `/private/tmp/controlhub-evidence-53-20260822` at
+the same SHA before push; fuzz served `http://127.0.0.1:60812` and reported
+2041 generated / 2041 passed.
 
 ## E2E / Docker-backed backend gates
 
