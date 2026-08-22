@@ -119,6 +119,20 @@ used to obtain green anywhere in the range.
 Required frontend jobs: `release-local` and `release-e2e`. Both succeeded on
 the final merged HEAD used for closure.
 
+## Backend Evidence CI
+
+[Backend CI run 32579413326](https://github.com/Fanduzi/ControlHub-Backend/actions/runs/32579413326)
+completed successfully at evidence body SHA
+`664d0dbc35032b52d5cfcb96e3295fae3754693a`:
+
+| Required job | Result |
+|--------------|--------|
+| `release-local-gates` | SUCCESS |
+| `release-docker-gates` | SUCCESS |
+
+Job conclusions verified independently via the GitHub API
+(`actions/runs/32579413326/jobs`).
+
 ## Root WIP Preservation
 
 Dirty-path manifests taken immediately before evidence commit and compared with
