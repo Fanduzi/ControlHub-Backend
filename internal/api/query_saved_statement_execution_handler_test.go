@@ -1,7 +1,8 @@
 // Package api provides tests for the template-execution handler.
 // input: encoding/json, errors, net/http, net/http/httptest, strings, testing, chi, internal/model, internal/service
-// output: TestTemplateExecute_* (strict request decoding, controlled field errors, error mapping, actor from token)
-// pos: Handler + auth coverage for POST /query-targets/{id}/saved-statements/{statementId}/execute (Phase 38W)
+// output: TestTemplateExecute_* (strict request decoding, controlled field errors, error mapping including query_result_disclosure_blocked, actor from token)
+// pos: Handler + auth coverage for POST /query-targets/{id}/saved-statements/{statementId}/execute (Phase 38W); disclosure blocks publish query_result_disclosure_blocked (Issue #48)
+// note: if this file changes, update header and README.md
 package api
 
 import (
@@ -208,5 +209,30 @@ func TestTemplateExecute_ErrorMapping(t *testing.T) {
 				t.Fatalf("status = %d, want %d; body=%s", rec.Code, tc.want, rec.Body.String())
 			}
 		})
+	}
+}
+
+// TestTemplateExecute_DisclosureBlocked proves saved-statement execute
+// publishes query_result_disclosure_blocked, not query_not_allowed.
+// WHY: the template execute handler shares writeQueryExecutionError with
+// ordinary execute; a status-only 403 mapping would still hide a policy block
+// behind target-not-enabled.
+func TestTemplateExecute_DisclosureBlocked(t *testing.T) {
+	stub := &stubQueryExec{templateErr: service.ErrQueryDisclosureBlocked}
+	router := newTemplateExecRouter(stub)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, qeRequest(http.MethodPost, "/query-targets/22/saved-statements/7/execute",
+		`{"values":{"status":"paid"}}`, templateExecToken(t)))
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, want 403; body=%s", rec.Code, rec.Body.String())
+	}
+	var body struct {
+		Error string `json:"error"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode body: %v", err)
+	}
+	if body.Error != "query_result_disclosure_blocked" {
+		t.Fatalf("error = %q, want query_result_disclosure_blocked", body.Error)
 	}
 }

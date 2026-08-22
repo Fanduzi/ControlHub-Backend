@@ -3,7 +3,7 @@
 // validation, and error mapping.
 // input: net/http, net/http/httptest, testing, chi router, internal/model, internal/service
 // output: TestDisclosure_* handler tests
-// pos: Verifies bearer/admin authorization, strict decoding, and 400/403/404/409 error mapping
+// pos: Verifies bearer/admin authorization, strict decoding, and 400/403/404/409 error mapping including list query_result_disclosure_blocked
 // note: if this file changes, update header and README.md
 package api
 
@@ -385,14 +385,25 @@ func TestDisclosure_DeleteMissingScopeParams(t *testing.T) {
 }
 
 // TestDisclosure_ListBlockedByPolicy proves a disclosure-blocked error maps to
-// 403 with the correct error code.
+// 403 with query_result_disclosure_blocked. WHY: status 403 alone also covers
+// other forbidden outcomes; the Controlled Error Code is what operators use
+// to tell a policy block from a generic refusal.
 func TestDisclosure_ListBlockedByPolicy(t *testing.T) {
 	stub := &stubQueryDisclosure{listErr: service.ErrQueryDisclosureBlocked}
 	router := newDisclosureRouter(stub)
 	rec := httptest.NewRecorder()
 	router.ServeHTTP(rec, disclosureRequest(http.MethodGet, "/query-disclosure-policies?targetResourceId=22", "", disclosureAdminToken(t)))
 	if rec.Code != http.StatusForbidden {
-		t.Fatalf("blocked = %d, want 403", rec.Code)
+		t.Fatalf("blocked = %d, want 403; body=%s", rec.Code, rec.Body.String())
+	}
+	var body struct {
+		Error string `json:"error"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode body: %v", err)
+	}
+	if body.Error != "query_result_disclosure_blocked" {
+		t.Fatalf("error = %q, want query_result_disclosure_blocked", body.Error)
 	}
 }
 
