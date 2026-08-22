@@ -33,6 +33,9 @@ The product commit was already fast-forwarded to frontend `origin/main` on
 | Frontend `origin/main` at evidence capture | `ae1c1347c3eac4776eed1e46734dd6bfbaffe2e4` (later #53/#49/#50/#51 commits; #52 remains an ancestor; none of those later commits touch the #52 files) |
 | Evidence repository | `Fanduzi/ControlHub-Backend` |
 | Backend evidence base | `2d2059976802ecec38d38efa47df5dfa4b9343c7` |
+| Backend evidence body SHA | `4e6b95d12b9062405379282dc245cf308fc6c835` |
+| Backend evidence push | Fast-forward `2d20599..4e6b95d` as `4e6b95d:main`; normal push, no force |
+| Backend `origin/main` after evidence body push | `4e6b95d12b9062405379282dc245cf308fc6c835` |
 | Backend evidence branch | `issue-52-publication-evidence-20260822` |
 | Backend evidence worktree | `/tmp/controlhub-evidence-52-20260822` |
 | Tracker | https://github.com/Fanduzi/ControlHub-Backend/issues/52 |
@@ -151,6 +154,21 @@ Required frontend jobs: `release-local` and `release-e2e`. Both succeeded.
 Node.js 20 deprecation annotations on the actions did not fail or skip either
 job. GitHub Actions `release-local` also recorded **99** files / **1546**
 tests passed.
+
+## Backend Evidence CI
+
+[Backend CI run 32549927469](https://github.com/Fanduzi/ControlHub-Backend/actions/runs/32549927469)
+completed successfully at exact evidence body SHA
+`4e6b95d12b9062405379282dc245cf308fc6c835`:
+
+| Required job | Result |
+|--------------|--------|
+| `release-local-gates` | SUCCESS (1m11s) |
+| `release-docker-gates` | SUCCESS (2m22s) |
+
+The Node.js action-runtime deprecation annotations and the empty optional
+Schemathesis artifact upload annotation did not fail or skip either required
+job. Argon2id budget ran as part of `release-local-gates` and succeeded.
 
 ## Standards / Spec Verdict
 
