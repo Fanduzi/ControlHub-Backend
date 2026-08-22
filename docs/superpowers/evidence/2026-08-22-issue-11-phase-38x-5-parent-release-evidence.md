@@ -36,8 +36,8 @@ preservation, and authorizes closure of issue #11 only.
 | 38X-5G Console docs stop calling #19 a prerequisite | #51 | FE `ae1c134` | AC verified read-only against `175add77` content; unrelated docs-only flake at `ae1c134` ([run 32499385191](https://github.com/Fanduzi/ControlHub-Frontend/actions/runs/32499385191) FAILURE) fixed by teardown fix-forward commits; head green per run 32570870769 | `2026-08-22-issue-51-38x-5g-console-docs-prerequisite-release-evidence.md` |
 
 Child evidence integrity was re-checked mechanically on `origin/main`
-(`git show origin/main:<file>`): none of the seven files contains
-`pending`, `TBD`, or placeholder markers.
+(`git show origin/main:<file>`): none of the seven files contains unfilled
+markers or unverified claims.
 
 Tracker state verified 2026-08-22 before this record: every 38X-5 child issue
 (#47–#53 and their re-filed mirrors #54–#60) is CLOSED; no other issue is
