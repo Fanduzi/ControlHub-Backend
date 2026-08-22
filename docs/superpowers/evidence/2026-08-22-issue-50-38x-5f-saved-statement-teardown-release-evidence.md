@@ -180,6 +180,20 @@ Reviewed in three rounds:
 | P1 | 0 | — |
 | P2 | 0 | Both prior P2s resolved |
 
+## Backend Evidence CI
+
+[Backend CI run 32576159983](https://github.com/Fanduzi/ControlHub-Backend/actions/runs/32576159983)
+completed successfully at evidence body SHA
+`848d2cc9a56c3cae79b5301acef37038030b8976`:
+
+| Required job | Result |
+|--------------|--------|
+| `release-local-gates` | SUCCESS (1m18s) |
+| `release-docker-gates` | SUCCESS (2m18s) |
+
+The Node.js action-runtime deprecation annotations did not fail or skip either
+required job.
+
 ## Root WIP Preservation
 
 Dirty-path manifests taken immediately before evidence commit and compared with
