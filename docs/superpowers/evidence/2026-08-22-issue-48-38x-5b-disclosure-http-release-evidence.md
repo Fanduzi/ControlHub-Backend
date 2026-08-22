@@ -33,12 +33,13 @@ Issue #53.
 | P2 test candidate SHA | `ec8941a1929b56525279fca3379f832bdcedd963` — `test(query): lock Apply-path disclosure sentinel exclusive of not-allowed (#48)` |
 | P2 / evidence candidate branch | `issue-48-p2-apply-tests-20260822` |
 | P2 / evidence candidate worktree | `/Users/fan/GolangProjects/ControlHub-wt-issue-48-p2-tests-20260822` |
+| Evidence worktree | `/private/tmp/controlhub-evidence-48-20260822` |
+| Evidence branch | `issue-48-publication-evidence-20260822` |
+| Backend evidence body SHA | `af2a7c6b84260134df5ec478cb81e7cc146962bd` |
+| Backend evidence push | Fast-forward `db3e35f..af2a7c6` (2 commits: P2 tests + this evidence body) as `af2a7c6:main`; normal push, no force |
+| Backend `origin/main` after evidence body push | `af2a7c6b84260134df5ec478cb81e7cc146962bd` |
 | Tracker | https://github.com/Fanduzi/ControlHub-Backend/issues/48 |
 | Parent | https://github.com/Fanduzi/ControlHub-Backend/issues/11 (OPEN) |
-
-The evidence-body SHA, evidence-push range, and backend CI of that SHA are
-recorded in the follow-on cite commit after that CI completes (same pattern as
-Issue #47). They are not guessed here.
 
 ## Product Commits (already on `origin/main`, range `518f791..85bb8e9`)
 
@@ -168,6 +169,24 @@ upload did not fail or skip either required job.
 `origin/main` `db3e35f` (closure start) already has later green runs for #53
 and #47 evidence; those SHAs are not this product tip. Product closure uses
 the exact-head green run above.
+
+## Backend Evidence CI
+
+[Backend CI run 32542833340](https://github.com/Fanduzi/ControlHub-Backend/actions/runs/32542833340)
+completed successfully at exact evidence body SHA
+`af2a7c6b84260134df5ec478cb81e7cc146962bd`:
+
+| Required job | Result |
+|--------------|--------|
+| `release-local-gates` | SUCCESS (1m16s) |
+| `release-docker-gates` | SUCCESS (2m19s) |
+
+The Node.js action-runtime deprecation annotations did not fail or skip either
+required job. Argon2id budget ran as part of `release-local-gates` and
+succeeded. Merged-root local gates, Argon2id budget, integration, and OpenAPI
+fuzz were also re-run from `/private/tmp/controlhub-evidence-48-20260822` at
+the same SHA before push; fuzz served `http://127.0.0.1:58606` and reported
+2041 generated / 2041 passed.
 
 ## Standards / Spec Verdict
 
