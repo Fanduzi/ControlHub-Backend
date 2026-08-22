@@ -31,6 +31,9 @@ The product commit was already fast-forwarded to frontend `origin/main` on
 | Frontend `origin/main` at evidence capture | `ae1c1347c3eac4776eed1e46734dd6bfbaffe2e4` (later #50/#51 commits; #49 remains an ancestor; none of those later commits touch the #49 files) |
 | Evidence repository | `Fanduzi/ControlHub-Backend` |
 | Backend evidence base | `6c0926132be155e71fc775e37f70bc93d44d35b2` |
+| Backend evidence body SHA | `71b63333edd59caa1a58fecfc8878bcb7036ed7f` |
+| Backend evidence push | Fast-forward `6c09261..71b6333` as `71b6333:main`; normal push, no force |
+| Backend `origin/main` after evidence body push | `71b63333edd59caa1a58fecfc8878bcb7036ed7f` |
 | Backend evidence branch | `issue-49-publication-evidence-20260822` |
 | Backend evidence worktree | `/tmp/controlhub-evidence-49-20260822` |
 | Tracker | https://github.com/Fanduzi/ControlHub-Backend/issues/49 |
@@ -144,6 +147,21 @@ Node.js 20 deprecation annotations on the actions did not fail or skip either
 job. GitHub Actions `release-local` also recorded **101** files / **1568**
 tests passed. `check:e2e-governance` printed
 `E2E governance check passed (14 spec files scanned).`
+
+## Backend Evidence CI
+
+[Backend CI run 32551581714](https://github.com/Fanduzi/ControlHub-Backend/actions/runs/32551581714)
+completed successfully at exact evidence body SHA
+`71b63333edd59caa1a58fecfc8878bcb7036ed7f`:
+
+| Required job | Result |
+|--------------|--------|
+| `release-local-gates` | SUCCESS (1m19s) |
+| `release-docker-gates` | SUCCESS (2m21s) |
+
+The Node.js action-runtime deprecation annotations did not fail or skip either
+required job. Argon2id budget ran as part of `release-local-gates` and
+succeeded.
 
 ## Standards / Spec Verdict
 
