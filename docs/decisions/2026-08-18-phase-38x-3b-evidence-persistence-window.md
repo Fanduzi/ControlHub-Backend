@@ -39,9 +39,9 @@ rejection.
    worker, or disk buffer**. A window expiry or any persistence failure
    surfaces the existing controlled backend error and the existing
    `queryEvidencePersistenceFailures` counter (Issue #34 semantics unchanged).
-   The window lives in the service choke point `persistAttempt`, so it covers
-   success, rejection, timeout, failure, and cancellation evidence on the
-   ordinary, paged, and template paths uniformly.
+   The window lives in the service choke point `persistEvidencePair`, so it
+   covers success, rejection, timeout, failure, and cancellation evidence on
+   ordinary, paged, template, and related-record navigation paths uniformly.
 
 2. **Client-cancellation classification.** `context.Canceled` from the executor
    (driver abort after disconnect) or from disclosure work is classified as

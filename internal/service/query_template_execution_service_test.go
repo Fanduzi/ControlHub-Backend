@@ -135,7 +135,11 @@ func TestExecuteSavedStatementRunsPersonalTemplateThroughGovernedChain(t *testin
 	if record.Status != model.QueryExecutionSuccess {
 		t.Fatalf("history status = %q, want success", record.Status)
 	}
-	// History stores the placeholder SQL only — never bound values.
+	// WHY: Template Execution evidence identifies only the actor, target, and
+	// outcome; neither placeholder SQL nor bound values belong in evidence.
+	if record.StatementPreview != "" || record.StatementDigest != "" {
+		t.Fatalf("template execution evidence contains SQL identity: preview=%q digest=%q", record.StatementPreview, record.StatementDigest)
+	}
 	for _, leaked := range []string{"paid", "100.50"} {
 		if strings.Contains(record.StatementPreview, leaked) || strings.Contains(record.StatementDigest, leaked) {
 			t.Fatalf("history leaks value %q: preview=%q digest=%q", leaked, record.StatementPreview, record.StatementDigest)
@@ -245,6 +249,23 @@ func TestExecuteSavedStatementRejectsMissingStatement(t *testing.T) {
 	}
 }
 
+func TestExecuteSavedStatementEvidenceFailureOverridesMissingStatement(t *testing.T) {
+	t.Parallel()
+	svc, repo, executor, _ := newTemplateExecutionTestService(model.QuerySavedStatement{}, sql.ErrNoRows)
+	repo.pairErr = errors.New("pair write failed")
+
+	_, err := svc.ExecuteSavedStatement(context.Background(), 1, 9001, 7, templateExecuteRequest(nil))
+	// WHY: once target access is resolved, an unrecorded terminal attempt must
+	// fail closed instead of returning the original not-found outcome.
+	if !errors.Is(err, ErrQueryBackendFailure) {
+		t.Fatalf("error = %v, want ErrQueryBackendFailure", err)
+	}
+	if executor.templateCalls != 0 || len(repo.insertedAttempts) != 0 || len(repo.auditEvents) != 0 {
+		t.Fatalf("failed pair must execute nothing and commit nothing: template=%d history=%d audit=%d",
+			executor.templateCalls, len(repo.insertedAttempts), len(repo.auditEvents))
+	}
+}
+
 func TestExecuteSavedStatementRecordsStatementReadFailure(t *testing.T) {
 	t.Parallel()
 	readerErr := errors.New("sensitive repository detail")
@@ -288,6 +309,30 @@ func TestExecuteSavedStatementRecordsRequestValidationRejection(t *testing.T) {
 	// be durable evidence even though no statement is compiled or executed.
 	if len(repo.pairCalls) != 1 || repo.pairCalls[0].rec.Status != model.QueryExecutionRejected {
 		t.Fatalf("request validation evidence = %+v, want one rejected pair", repo.pairCalls)
+	}
+}
+
+func TestExecuteSavedStatementCompilerRejectionEvidenceHidesParameterNames(t *testing.T) {
+	t.Parallel()
+	statement := templateStatement(1, model.QuerySavedStatementPersonal, "select 1",
+		[]model.QuerySavedStatementParameterDefinition{{Name: "secret_name", Type: model.QuerySavedStatementParameterString}})
+	svc, repo, executor, _ := newTemplateExecutionTestService(statement, nil)
+
+	_, err := svc.ExecuteSavedStatement(context.Background(), 1, 9001, 7,
+		templateExecuteRequest(map[string]string{"secret_name": `"x"`}))
+	if !errors.Is(err, ErrQueryValidationFailed) {
+		t.Fatalf("error = %v, want ErrQueryValidationFailed", err)
+	}
+	if executor.templateCalls != 0 {
+		t.Fatalf("QueryTemplate calls = %d, want 0", executor.templateCalls)
+	}
+	// WHY: compiler diagnostics may name author-declared parameters, but evidence
+	// for a rejected Template Execution must contain only a fixed safe message.
+	if len(repo.pairCalls) != 1 {
+		t.Fatalf("atomic pair calls = %d, want 1", len(repo.pairCalls))
+	}
+	if got := repo.pairCalls[0].rec.ErrorMessage; got != "saved statement validation failed" || strings.Contains(got, "secret_name") {
+		t.Fatalf("compiler rejection evidence message = %q", got)
 	}
 }
 
@@ -565,10 +610,12 @@ func TestExecuteSavedStatement_ClientCanceledDuringExecution_RecordsFailedCancel
 	if len(repo.auditEvents) != 1 || repo.auditEvents[0].result != "failed" {
 		t.Fatalf("audit result = %+v, want one failed", repo.auditEvents)
 	}
-	// Template values never reach the evidence record. The statement digest and
-	// safe preview (table/column identifiers, placeholders only) are recorded
-	// exactly as on the success path — forbidden content is values, credentials,
-	// DSNs, and raw errors.
+	// WHY: cancellation does not weaken Template Execution privacy; evidence
+	// contains neither statement identity nor values, credentials, DSNs, or raw
+	// errors.
+	if rec.StatementDigest != "" || rec.StatementPreview != "" {
+		t.Fatalf("canceled template evidence contains SQL identity: %+v", rec)
+	}
 	if strings.Contains(asString(rec), "paid") || strings.Contains(asString(rec), testResolverDSN) {
 		t.Fatal("template value or DSN leaked into canceled-attempt evidence")
 	}

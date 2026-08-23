@@ -1,8 +1,8 @@
 // Package service provides the governed template-execution adapter.
-// input: bytes, context, database/sql, encoding/json, errors, fmt, time, internal/model
+// input: bytes, context, database/sql, encoding/json, errors, fmt, internal/model
 // output: TemplateValueValidationError, QueryExecutionService.WithTemplateExecution, QueryExecutionService.ExecuteSavedStatement
 // pos: Fresh-query-actor execution of saved statements — re-reads the latest authorized statement, records every post-target terminal outcome without template identity/values, validates typed values, compiles server-side, then runs the governed chain per page
-// note: if this file changes, update this header and module README.md
+// note: if this file changes, update this header and module README.md.
 package service
 
 import (
@@ -113,7 +113,7 @@ func (s *QueryExecutionService) ExecuteSavedStatement(ctx context.Context, actor
 		guardedTemplate, err = s.compiler.CompileAndGuard(s.guard, input, maxRows)
 	}
 	if err != nil {
-		return s.reject(ctx, target, actorUserID, &guardedTemplate.query, "validation_failed", err.Error(),
+		return s.reject(ctx, target, actorUserID, nil, "validation_failed", "saved statement validation failed",
 			fmt.Errorf("%w: %v", ErrQueryValidationFailed, err), start)
 	}
 
@@ -124,7 +124,10 @@ func (s *QueryExecutionService) ExecuteSavedStatement(ctx context.Context, actor
 	if req.Pagination != nil {
 		page, pageSize = req.Pagination.Page, req.Pagination.PageSize
 	}
-	return s.executeGuardedChain(ctx, target, actorUserID, access.dsn, &guardedTemplate.query,
+	evidenceSafeQuery := guardedTemplate.query
+	evidenceSafeQuery.StatementDigest = ""
+	evidenceSafeQuery.StatementPreview = ""
+	return s.executeGuardedChain(ctx, target, actorUserID, access.dsn, &evidenceSafeQuery,
 		func(execCtx context.Context, dsn string) (QueryDatabaseResult, error) {
 			return s.executor.QueryTemplate(execCtx, dsn, guardedTemplate)
 		}, page, pageSize, start)
