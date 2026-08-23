@@ -1,7 +1,8 @@
 // Package service provides the governed template-execution adapter.
 // input: bytes, context, database/sql, encoding/json, errors, fmt, time, internal/model
 // output: TemplateValueValidationError, QueryExecutionService.WithTemplateExecution, QueryExecutionService.ExecuteSavedStatement
-// pos: Fresh-query-actor execution of saved statements — re-reads the latest authorized statement, validates typed values, compiles server-side, then runs the existing access/guard/disclosure/executor/history/audit chain per page
+// pos: Fresh-query-actor execution of saved statements — re-reads the latest authorized statement, records every post-target terminal outcome without template identity/values, validates typed values, compiles server-side, then runs the governed chain per page
+// note: if this file changes, update this header and module README.md
 package service
 
 import (
@@ -67,16 +68,23 @@ func (s *QueryExecutionService) ExecuteSavedStatement(ctx context.Context, actor
 	statement, err := s.statements.GetByID(ctx, targetID, statementID)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
-			return model.QueryExecuteResponse{}, ErrQuerySavedStatementNotFound
+			return s.reject(ctx, target, actorUserID, nil, "saved_statement_not_found", "saved statement not found",
+				ErrQuerySavedStatementNotFound, start)
+		}
+		if _, perr := s.persistAttempt(ctx, target, actorUserID, nil, model.QueryExecutionFailed, 0,
+			"query_backend_error", "saved statement read failed", start); perr != nil {
+			return model.QueryExecuteResponse{}, errPersistAttempt
 		}
 		return model.QueryExecuteResponse{}, fmt.Errorf("get saved statement: %w", err)
 	}
 	if statement.Scope == model.QuerySavedStatementPersonal && statement.OwnerUserID != actorUserID {
-		return model.QueryExecuteResponse{}, ErrQuerySavedStatementNotFound
+		return s.reject(ctx, target, actorUserID, nil, "saved_statement_not_found", "saved statement not found",
+			ErrQuerySavedStatementNotFound, start)
 	}
 
 	if err := req.Validate(); err != nil {
-		return model.QueryExecuteResponse{}, fmt.Errorf("%w: %v", ErrQueryValidationFailed, err)
+		return s.reject(ctx, target, actorUserID, nil, "validation_failed", err.Error(),
+			fmt.Errorf("%w: %v", ErrQueryValidationFailed, err), start)
 	}
 
 	definitions := make([]TemplateParameterDefinition, len(statement.Parameters))

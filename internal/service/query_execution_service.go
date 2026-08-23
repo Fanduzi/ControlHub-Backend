@@ -1,8 +1,8 @@
 // Package service provides business logic for the Phase 37/38S read-only query sandbox.
 // input: context, errors, fmt, net, strconv, strings, time, go-sql-driver/mysql, internal/model
 // output: QueryExecutionService, query execution repository/resolver/executor/clock interfaces, sentinel errors, NewQueryExecutionService, Execute, ListHistory, validateDSNBinding
-// pos: Orchestrates governed MySQL/TiDB query execution, compiler-owned template execution, and FK related-record navigation — target/policy/guard/disclosure gating, paged result windows, timed execution, and guaranteed per-attempt atomic Execution Evidence Pair history + audit (Issue #34) persisted in a fixed two-second Evidence Persistence Window detached from request cancellation/deadline (Issue #35), including navigation (Issue #36) with inspector-phase cancellation/deadline classified as terminal failed/timeout evidence (Issue #40). Public Preflight disclosure rejections wrap both ErrQueryNotAllowed and ErrQueryDisclosureBlocked; Apply-path classifyExecutorError returns ErrQueryDisclosureBlocked as the HTTP sentinel so both publish query_result_disclosure_blocked (Issue #48).
-// note: if this file changes, update header and README.md
+// pos: Orchestrates governed MySQL/TiDB query execution, compiler-owned template execution, and FK related-record navigation — one private persistence implementation guarantees atomic Execution Evidence Pair history + audit (Issues #34/#61) in the detached two-second window (Issue #35), including navigation (Issue #36); Preflight and Apply disclosure blocks both publish query_result_disclosure_blocked (Issue #48)
+// note: if this file changes, update this header and module README.md.
 package service
 
 import (
@@ -62,6 +62,13 @@ const (
 // can never drop terminal evidence — and is a single synchronous attempt with
 // no retry, queue, worker, or disk buffer.
 const evidencePersistenceWindow = 2 * time.Second
+
+type executionEvidenceKind string
+
+const (
+	executionEvidenceQuery      executionEvidenceKind = "query"
+	executionEvidenceNavigation executionEvidenceKind = "navigation"
+)
 
 // QueryExecutionRepository persists query execution history and audit events and
 // reads credential metadata. The concrete MySQL implementation lives in
@@ -736,26 +743,10 @@ func (s *QueryExecutionService) persistNavigationAttempt(ctx context.Context, ta
 		digest = fmt.Sprintf("nav:%s.%s/%s", refSchema, refTable, fk.Name)
 	}
 
-	rec := model.QueryExecutionRecord{
-		TargetResourceID: target.ResourceID,
-		ActorUserID:      actorUserID,
-		Engine:           target.ConnectionContext.Engine,
-		StatementDigest:  truncateString(digest, 128),
-		StatementPreview: truncateString(preview, 256),
-		Status:           status,
-		RowCount:         rowCount,
-		DurationMs:       s.clock.Now().Sub(start).Milliseconds(),
-		ErrorCode:        truncateString(code, 64),
-		ErrorMessage:     truncateString(msg, 512),
-		CreatedAt:        s.clock.Now(),
-	}
-	windowCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), evidencePersistenceWindow)
-	defer cancel()
-	id, err := s.executions.InsertExecutionWithAudit(windowCtx, rec, "related_record_navigation", auditResultFor(status))
-	if err != nil {
-		return 0, err
-	}
-	return id, nil
+	rec := s.buildRecord(target, actorUserID, nil, status, rowCount, code, msg, start)
+	rec.StatementDigest = truncateString(digest, 128)
+	rec.StatementPreview = truncateString(preview, 256)
+	return s.persistEvidencePair(ctx, rec, executionEvidenceNavigation)
 }
 
 // quoteMySQLIdentifier quotes a MySQL identifier with backticks and doubles
@@ -878,9 +869,21 @@ func (s *QueryExecutionService) recordTerminalOutcome(ctx context.Context, targe
 // failure still surfaces the existing controlled backend failure.
 func (s *QueryExecutionService) persistAttempt(ctx context.Context, target model.QueryTarget, actorUserID uint64, guarded *GuardedQuery, status model.QueryExecutionStatus, rowCount int, code, msg string, start time.Time) (uint64, error) {
 	rec := s.buildRecord(target, actorUserID, guarded, status, rowCount, code, msg, start)
+	return s.persistEvidencePair(ctx, rec, executionEvidenceQuery)
+}
+
+// persistEvidencePair is the single persistence implementation for every
+// Evidence-Bearing Query Attempt. The private kind selects fixed server-owned
+// audit metadata; callers cannot pass request-controlled event text.
+func (s *QueryExecutionService) persistEvidencePair(ctx context.Context, rec model.QueryExecutionRecord, kind executionEvidenceKind) (uint64, error) {
 	windowCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), evidencePersistenceWindow)
 	defer cancel()
-	id, err := s.executions.InsertExecutionWithAudit(windowCtx, rec, "query.executed", auditResultFor(status))
+
+	eventType := "query.executed"
+	if kind == executionEvidenceNavigation {
+		eventType = "related_record_navigation"
+	}
+	id, err := s.executions.InsertExecutionWithAudit(windowCtx, rec, eventType, auditResultFor(rec.Status))
 	if err != nil {
 		return 0, err
 	}

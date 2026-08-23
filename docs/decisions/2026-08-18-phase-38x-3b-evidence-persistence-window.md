@@ -70,9 +70,9 @@ rejection.
    `success`; the cancellation never retroactively downgrades or drops it.
 
 5. **Scope boundary.** Unknown targets and failures before target resolution
-   remain outside execution evidence. #36 related-record navigation stays on
-   its standalone history/audit seam (Issue #34 expand step) and is not
-   covered by this decision.
+   remain outside execution evidence. At acceptance, related-record navigation
+   remained on its standalone history/audit seam; Issue #36 subsequently moved
+   it onto the atomic Execution Evidence Pair and the same persistence window.
 
 ## Consequences
 

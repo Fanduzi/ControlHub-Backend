@@ -1,8 +1,8 @@
 // Package service provides tests for governed saved-statement (template) execution.
 // input: context, database/sql, encoding/json, errors, strings, testing, time, internal/model
-// output: TestExecuteSavedStatement* (reread, authorization matrix, typed values, per-page chain, no-value persistence, atomic Execution Evidence Pair writes)
-// pos: Unit tests for the fresh-query-actor template-execution route through the existing governed chain, incl. cancellation-durable evidence (Issue #35) and per-page disclosure wrapping ErrQueryDisclosureBlocked (Issue #48)
-// note: if this file changes, update header and README.md
+// output: TestExecuteSavedStatement* (reread, authorization matrix, typed values, per-page chain, post-target no-value evidence, atomic Execution Evidence Pair writes)
+// pos: Unit tests for Template Execution rejected/failed evidence, cancellation durability (Issues #35/#61), and per-page disclosure wrapping ErrQueryDisclosureBlocked (Issue #48)
+// note: if this file changes, update this header and module README.md.
 package service
 
 import (
@@ -187,8 +187,18 @@ func TestExecuteSavedStatementRejectsForeignPersonalTemplate(t *testing.T) {
 	if executor.templateCalls != 0 {
 		t.Fatalf("QueryTemplate calls = %d, want 0 for unauthorized personal template", executor.templateCalls)
 	}
-	if len(repo.insertedAttempts) != 0 {
-		t.Fatalf("history rows = %d, want 0 for unauthorized personal template", len(repo.insertedAttempts))
+	// WHY: authorization rejection after target resolution is evidence-bearing,
+	// but the record must not prove that the requested personal template exists.
+	if len(repo.pairCalls) != 2 {
+		t.Fatalf("atomic pair calls = %d, want 2 for two unauthorized attempts", len(repo.pairCalls))
+	}
+	for _, call := range repo.pairCalls {
+		if call.rec.Status != model.QueryExecutionRejected || call.rec.ErrorCode != "saved_statement_not_found" {
+			t.Fatalf("unauthorized evidence = %q/%q, want rejected/saved_statement_not_found", call.rec.Status, call.rec.ErrorCode)
+		}
+		if call.rec.StatementDigest != "" || call.rec.StatementPreview != "" {
+			t.Fatalf("unauthorized evidence exposes statement identity: %+v", call.rec)
+		}
 	}
 }
 
@@ -210,7 +220,7 @@ func TestExecuteSavedStatementAllowsSharedTemplateForAnyActor(t *testing.T) {
 
 func TestExecuteSavedStatementRejectsMissingStatement(t *testing.T) {
 	t.Parallel()
-	svc, _, executor, _ := newTemplateExecutionTestService(model.QuerySavedStatement{}, sql.ErrNoRows)
+	svc, repo, executor, _ := newTemplateExecutionTestService(model.QuerySavedStatement{}, sql.ErrNoRows)
 
 	_, err := svc.ExecuteSavedStatement(context.Background(), 1, 9001, 7,
 		templateExecuteRequest(map[string]string{"status": `"paid"`}))
@@ -219,6 +229,65 @@ func TestExecuteSavedStatementRejectsMissingStatement(t *testing.T) {
 	}
 	if executor.templateCalls != 0 {
 		t.Fatalf("QueryTemplate calls = %d, want 0", executor.templateCalls)
+	}
+	// WHY: target resolution makes this an Evidence-Bearing Query Attempt even
+	// when the saved statement does not exist; the evidence must reveal neither
+	// the requested statement ID nor statement content.
+	if len(repo.pairCalls) != 1 {
+		t.Fatalf("atomic pair calls = %d, want 1 for missing saved statement", len(repo.pairCalls))
+	}
+	rec := repo.pairCalls[0].rec
+	if rec.Status != model.QueryExecutionRejected || rec.ErrorCode != "saved_statement_not_found" {
+		t.Fatalf("missing statement evidence = %q/%q, want rejected/saved_statement_not_found", rec.Status, rec.ErrorCode)
+	}
+	if rec.StatementDigest != "" || rec.StatementPreview != "" {
+		t.Fatalf("missing statement evidence exposes statement identity: %+v", rec)
+	}
+}
+
+func TestExecuteSavedStatementRecordsStatementReadFailure(t *testing.T) {
+	t.Parallel()
+	readerErr := errors.New("sensitive repository detail")
+	svc, repo, executor, _ := newTemplateExecutionTestService(model.QuerySavedStatement{}, readerErr)
+
+	_, err := svc.ExecuteSavedStatement(context.Background(), 1, 9001, 7, templateExecuteRequest(nil))
+	if !errors.Is(err, readerErr) {
+		t.Fatalf("error = %v, want wrapped reader error", err)
+	}
+	if executor.templateCalls != 0 {
+		t.Fatalf("QueryTemplate calls = %d, want 0", executor.templateCalls)
+	}
+	// WHY: an internal read failure after target resolution is a failed
+	// Evidence-Bearing Query Attempt, but repository details are never evidence.
+	if len(repo.pairCalls) != 1 {
+		t.Fatalf("atomic pair calls = %d, want 1 for statement read failure", len(repo.pairCalls))
+	}
+	rec := repo.pairCalls[0].rec
+	if rec.Status != model.QueryExecutionFailed || rec.ErrorCode != "query_backend_error" || rec.ErrorMessage != "saved statement read failed" {
+		t.Fatalf("read failure evidence = %q/%q/%q", rec.Status, rec.ErrorCode, rec.ErrorMessage)
+	}
+	if strings.Contains(rec.ErrorMessage, readerErr.Error()) || rec.StatementDigest != "" || rec.StatementPreview != "" {
+		t.Fatalf("read failure evidence exposes protected detail: %+v", rec)
+	}
+}
+
+func TestExecuteSavedStatementRecordsRequestValidationRejection(t *testing.T) {
+	t.Parallel()
+	statement := templateStatement(1, model.QuerySavedStatementPersonal, "select 1", nil)
+	svc, repo, executor, _ := newTemplateExecutionTestService(statement, nil)
+
+	_, err := svc.ExecuteSavedStatement(context.Background(), 1, 9001, 7,
+		model.QuerySavedStatementExecuteRequest{MaxRows: -1})
+	if !errors.Is(err, ErrQueryValidationFailed) {
+		t.Fatalf("error = %v, want ErrQueryValidationFailed", err)
+	}
+	if executor.templateCalls != 0 {
+		t.Fatalf("QueryTemplate calls = %d, want 0", executor.templateCalls)
+	}
+	// WHY: request validation occurs after target resolution, so rejection must
+	// be durable evidence even though no statement is compiled or executed.
+	if len(repo.pairCalls) != 1 || repo.pairCalls[0].rec.Status != model.QueryExecutionRejected {
+		t.Fatalf("request validation evidence = %+v, want one rejected pair", repo.pairCalls)
 	}
 }
 
