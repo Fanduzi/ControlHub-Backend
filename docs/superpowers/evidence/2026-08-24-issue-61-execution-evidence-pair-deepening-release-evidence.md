@@ -130,3 +130,23 @@ The delivery worktree, local delivery branch, remote candidate branch, and its
 ignored `.argon2id-budget/` output are intentionally retained until the `main`
 push, final CI, independent closure verification, and Issue #61 closure finish.
 No other worktree or branch is a cleanup target.
+
+## Published Main Attestation
+
+Backend `main` was pushed normally, without force, from
+`dfdeb19ab3e56a561c376ccfb9e90c2d179cbc09` to the merged product-and-evidence
+body SHA `f4f7efa3f3d5ab554c437f1d93605b205acf9d0b`.
+
+[Backend CI 32678870332](https://github.com/Fanduzi/ControlHub-Backend/actions/runs/32678870332)
+completed successfully for exact `headSha`
+`f4f7efa3f3d5ab554c437f1d93605b205acf9d0b`.
+
+| Required job | Job ID | Result |
+|--------------|--------|--------|
+| `release-local-gates` | `97291868220` | SUCCESS (1m19s) |
+| `release-docker-gates` | `97291868141` | SUCCESS (2m16s) |
+
+This attestation update is a separate docs-only closure commit and intentionally
+does not name its own commit SHA. The independent verifier records that final
+evidence-commit SHA and confirms its exact CI run in the Issue #61 closing
+comment, avoiding a self-referential SHA/documentation loop.
