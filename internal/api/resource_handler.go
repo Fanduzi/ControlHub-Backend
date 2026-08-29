@@ -1,7 +1,7 @@
 // Package api provides HTTP handlers and routing for the ControlHub REST API.
 // input: net/http, encoding/json, internal/service, internal/model
-// output: resource list/detail, rich/structured inventory filtering, audited inventory writes, and non-audited health observation ingestion
-// pos: HTTP boundary for resource inventory and operational health evidence, including inventory search
+// output: resource list/detail, rich inventory filtering, audited writes, health observations, effective-value reads, and versioned override set/clear
+// pos: HTTP boundary for inventory search, operational health evidence, effective-value provenance, and audited manual overrides
 // note: if this file changes, update this header and module README.md.
 package api
 
@@ -22,6 +22,15 @@ import (
 type errorResponse struct {
 	Error   string `json:"error"`
 	Message string `json:"message"`
+}
+
+type manualOverrideRequest struct {
+	Value           any    `json:"value"`
+	ExpectedVersion uint64 `json:"expectedVersion"`
+}
+
+type clearManualOverrideRequest struct {
+	ExpectedVersion uint64 `json:"expectedVersion"`
 }
 
 func handleListResources(resourceService *service.ResourceService) http.HandlerFunc {
@@ -60,6 +69,77 @@ func handleGetResource(resourceService *service.ResourceService) http.HandlerFun
 		writeJSON(w, http.StatusOK, struct {
 			Resource interface{} `json:"resource"`
 		}{Resource: item})
+	}
+}
+
+func handleGetResourceEffectiveValues(resourceService *service.ResourceService) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		id, err := parseUint64IDParam(chi.URLParam(r, "id"), "resource id")
+		if err != nil {
+			writeJSONError(w, http.StatusBadRequest, "validation_failed", err.Error())
+			return
+		}
+		values, err := resourceService.GetEffectiveValues(r.Context(), id)
+		if err != nil {
+			writeServiceError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, struct {
+			Values map[string]model.EffectiveValue `json:"values"`
+		}{Values: values})
+	}
+}
+
+func handleSetResourceOverride(resourceService *service.ResourceService) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		id, err := parseUint64IDParam(chi.URLParam(r, "id"), "resource id")
+		if err != nil {
+			writeJSONError(w, http.StatusBadRequest, "validation_failed", err.Error())
+			return
+		}
+		var input manualOverrideRequest
+		if err := decodeJSONBody(r, &input); err != nil {
+			writeJSONError(w, http.StatusBadRequest, "malformed_json", "request body must be valid JSON")
+			return
+		}
+		actorUserID, ok := actorUserIDFromContext(r.Context())
+		if !ok {
+			writeJSONError(w, http.StatusInternalServerError, "internal_error", "authenticated actor missing")
+			return
+		}
+		version, err := resourceService.SetManualOverride(r.Context(), actorUserID, id, chi.URLParam(r, "field"), input.Value, input.ExpectedVersion)
+		if err != nil {
+			writeServiceError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, struct {
+			Version uint64 `json:"version"`
+		}{Version: version})
+	}
+}
+
+func handleClearResourceOverride(resourceService *service.ResourceService) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		id, err := parseUint64IDParam(chi.URLParam(r, "id"), "resource id")
+		if err != nil {
+			writeJSONError(w, http.StatusBadRequest, "validation_failed", err.Error())
+			return
+		}
+		var input clearManualOverrideRequest
+		if err := decodeJSONBody(r, &input); err != nil {
+			writeJSONError(w, http.StatusBadRequest, "malformed_json", "request body must be valid JSON")
+			return
+		}
+		actorUserID, ok := actorUserIDFromContext(r.Context())
+		if !ok {
+			writeJSONError(w, http.StatusInternalServerError, "internal_error", "authenticated actor missing")
+			return
+		}
+		if err := resourceService.ClearManualOverride(r.Context(), actorUserID, id, chi.URLParam(r, "field"), input.ExpectedVersion); err != nil {
+			writeServiceError(w, err)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
 	}
 }
 

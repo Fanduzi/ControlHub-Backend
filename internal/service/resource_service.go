@@ -1,7 +1,7 @@
 // Package service provides business logic for resource reads, writes, and typed profile assembly.
-// input: internal/model resource identity, typed profiles, health observations, writes, and read contracts
-// output: resource CRUD, governed-profile reads, health observation ingestion, and audited inventory mutations
-// pos: Business logic for governed resource identity, typed profiles, and operational health evidence
+// input: internal/model resource identity, typed profiles, health observations, effective values, writes, and read contracts
+// output: resource CRUD, governed-profile reads, health ingestion, effective-value projections, and audited inventory/override mutations
+// pos: Business logic for governed resource identity, typed profiles, operational health evidence, and effective values
 // note: if this file changes, update this header and module README.md.
 package service
 
@@ -59,6 +59,12 @@ type healthObservationRepository interface {
 	UpsertHealthObservation(ctx context.Context, resourceID uint64, observation model.HealthObservation) error
 }
 
+type effectiveValueRepository interface {
+	GetEffectiveValues(ctx context.Context, resourceID uint64) (map[string]model.EffectiveValue, error)
+	SetManualOverrideWithAudit(ctx context.Context, resourceID uint64, field string, value any, expectedVersion, actorUserID uint64) (uint64, error)
+	ClearManualOverrideWithAudit(ctx context.Context, resourceID uint64, field string, expectedVersion, actorUserID uint64) error
+}
+
 func NewResourceService(repo ResourceRepository) *ResourceService {
 	return &ResourceService{repo: repo}
 }
@@ -89,6 +95,39 @@ func (s *ResourceService) GetProfile(id uint64) (*model.ResourceProfileResponse,
 		return nil, err
 	}
 	return profile, nil
+}
+
+func (s *ResourceService) GetEffectiveValues(ctx context.Context, id uint64) (map[string]model.EffectiveValue, error) {
+	if _, err := s.Get(id); err != nil {
+		return nil, err
+	}
+	repo, ok := s.repo.(effectiveValueRepository)
+	if !ok {
+		return nil, errors.New("effective value repository is required")
+	}
+	return repo.GetEffectiveValues(ctx, id)
+}
+
+func (s *ResourceService) SetManualOverride(ctx context.Context, actorUserID, id uint64, field string, value any, expectedVersion uint64) (uint64, error) {
+	if actorUserID == 0 {
+		return 0, errors.New("inventory audit actor is required")
+	}
+	repo, ok := s.repo.(effectiveValueRepository)
+	if !ok {
+		return 0, errors.New("effective value repository is required")
+	}
+	return repo.SetManualOverrideWithAudit(ctx, id, field, value, expectedVersion, actorUserID)
+}
+
+func (s *ResourceService) ClearManualOverride(ctx context.Context, actorUserID, id uint64, field string, expectedVersion uint64) error {
+	if actorUserID == 0 {
+		return errors.New("inventory audit actor is required")
+	}
+	repo, ok := s.repo.(effectiveValueRepository)
+	if !ok {
+		return errors.New("effective value repository is required")
+	}
+	return repo.ClearManualOverrideWithAudit(ctx, id, field, expectedVersion, actorUserID)
 }
 
 func (s *ResourceService) Create(ctx context.Context, input model.ResourceCreateInput) (*model.Resource, error) {

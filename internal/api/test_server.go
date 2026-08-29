@@ -1,7 +1,7 @@
 // Package api provides HTTP handlers and routing for the ControlHub REST API.
 // input: internal/api, internal/model, internal/service, net/http
 // output: TestServer struct, NewTestServer
-// pos: Test infrastructure — fake repositories for typed profiles and health observations plus a pre-wired handler router
+// pos: Test infrastructure — fake resource, typed-profile, health-observation, and effective-value repositories plus a pre-wired handler router
 // note: if this file changes, update this header and module README.md.
 package api
 
@@ -23,11 +23,48 @@ type TestServer struct {
 }
 
 type fakeResourceRepo struct {
-	resources map[uint64]model.Resource
-	listOrder []uint64
-	profiles  map[uint64]*model.ResourceProfileResponse
-	nextID    uint64
-	now       time.Time
+	resources       map[uint64]model.Resource
+	listOrder       []uint64
+	profiles        map[uint64]*model.ResourceProfileResponse
+	effectiveValues map[uint64]map[string]model.EffectiveValue
+	nextID          uint64
+	now             time.Time
+}
+
+func (f *fakeResourceRepo) GetEffectiveValues(_ context.Context, resourceID uint64) (map[string]model.EffectiveValue, error) {
+	values := make(map[string]model.EffectiveValue, len(f.effectiveValues[resourceID]))
+	for field, value := range f.effectiveValues[resourceID] {
+		values[field] = value
+	}
+	return values, nil
+}
+
+func (f *fakeResourceRepo) SetManualOverrideWithAudit(_ context.Context, resourceID uint64, field string, value any, expectedVersion, _ uint64) (uint64, error) {
+	if _, err := f.GetResource(resourceID); err != nil {
+		return 0, err
+	}
+	if f.effectiveValues[resourceID] == nil {
+		f.effectiveValues[resourceID] = map[string]model.EffectiveValue{}
+	}
+	current := f.effectiveValues[resourceID][field].Provenance.Version
+	if current != expectedVersion {
+		return 0, service.ErrResourceConflict
+	}
+	next := current + 1
+	f.effectiveValues[resourceID][field] = model.EffectiveValue{Value: value, Provenance: model.ValueProvenance{Kind: "manual_override", Version: next}}
+	return next, nil
+}
+
+func (f *fakeResourceRepo) ClearManualOverrideWithAudit(_ context.Context, resourceID uint64, field string, expectedVersion, _ uint64) error {
+	value, ok := f.effectiveValues[resourceID][field]
+	if !ok {
+		return service.ErrResourceNotFound
+	}
+	if value.Provenance.Version != expectedVersion {
+		return service.ErrResourceConflict
+	}
+	delete(f.effectiveValues[resourceID], field)
+	return nil
 }
 
 func (f *fakeResourceRepo) GetResourceProfile(id uint64) (*model.ResourceProfileResponse, error) {
@@ -1063,6 +1100,7 @@ func NewTestServer() *TestServer {
 	healthObservedAt := time.Date(2026, 4, 11, 19, 55, 0, 0, time.UTC)
 	healthyOverride := model.HealthStatusHealthy
 	resourceRepo := &fakeResourceRepo{
+		effectiveValues: map[uint64]map[string]model.EffectiveValue{},
 		resources: map[uint64]model.Resource{
 			1: {ID: 1, ResourceType: model.ResourceTypeDatabaseInstance, ResourceSubtype: "mysql", Name: "order-mysql-prod", DisplayName: "Order MySQL Prod", EnvironmentID: 1, OwnerID: 2, LifecycleStatus: "running", HealthStatus: "healthy", HealthFreshness: model.HealthFreshnessFresh, HealthObservedAt: &healthObservedAt, HealthObserver: "prometheus", ManualHealthOverride: &healthyOverride, Source: "manual", ExternalID: "ext-order-mysql", Labels: map[string]string{"team": "order"}, CreatedAt: time.Date(2026, 4, 11, 20, 0, 0, 0, time.UTC), UpdatedAt: time.Date(2026, 4, 11, 20, 0, 0, 0, time.UTC)},
 			2: {ID: 2, ResourceType: model.ResourceTypeHost, ResourceSubtype: "vm", Name: "prod-host-01", DisplayName: "Prod Host 01", EnvironmentID: 2, OwnerID: 3, LifecycleStatus: "degraded", HealthStatus: "warning", Source: "manual", ExternalID: "ext-prod-host", Labels: map[string]string{"team": "platform"}, CreatedAt: time.Date(2026, 4, 11, 20, 0, 0, 0, time.UTC), UpdatedAt: time.Date(2026, 4, 11, 20, 0, 0, 0, time.UTC)},

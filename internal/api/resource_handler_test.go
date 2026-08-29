@@ -1,7 +1,7 @@
 // Package api provides HTTP handlers and routing for the ControlHub REST API.
 // input: internal/api, internal/model, net/http, net/http/httptest, encoding/json
-// output: Governed identity/profile tests plus rich inventory filtering, resource health reads, observation ingestion, and override clearing
-// pos: Validates governed identity, typed profiles, search filters, and Issue 81 health evidence at the HTTP seam
+// output: Governed identity/profile, inventory filtering, health evidence, effective-value provenance, and versioned override tests
+// pos: Validates identity, typed profiles, search, Issue 81 health evidence, and Issue 78 override conflicts at the HTTP seam
 // note: if this file changes, update this header and module README.md.
 package api
 
@@ -31,6 +31,68 @@ type paginatedResourceResponse struct {
 type apiErrorResponse struct {
 	Error   string `json:"error"`
 	Message string `json:"message"`
+}
+
+func TestResourceEffectiveValuesAndVersionedOverride(t *testing.T) {
+	server := NewTestServer()
+	do := func(method, path, body string) *httptest.ResponseRecorder {
+		t.Helper()
+		req := httptest.NewRequest(method, path, strings.NewReader(body))
+		rec := httptest.NewRecorder()
+		server.Router.ServeHTTP(rec, req)
+		return rec
+	}
+
+	rec := do(http.MethodPut, "/resources/1/overrides/displayName", `{"value":"Operator name","expectedVersion":0}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("set override status = %d body=%s", rec.Code, rec.Body.String())
+	}
+	var set struct {
+		Version uint64 `json:"version"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&set); err != nil || set.Version != 1 {
+		t.Fatalf("set override response = version %d, err %v", set.Version, err)
+	}
+
+	rec = do(http.MethodGet, "/resources/1/effective-values", "")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("get effective values status = %d body=%s", rec.Code, rec.Body.String())
+	}
+	var effective struct {
+		Values map[string]model.EffectiveValue `json:"values"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&effective); err != nil {
+		t.Fatalf("decode effective values: %v", err)
+	}
+	value := effective.Values["displayName"]
+	if value.Value != "Operator name" || value.Provenance.Kind != "manual_override" || value.Provenance.Version != 1 {
+		t.Fatalf("effective displayName = %#v", value)
+	}
+
+	rec = do(http.MethodPut, "/resources/1/overrides/displayName", `{"value":"Stale write","expectedVersion":0}`)
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("stale override status = %d body=%s", rec.Code, rec.Body.String())
+	}
+	var conflict apiErrorResponse
+	if err := json.NewDecoder(rec.Body).Decode(&conflict); err != nil || conflict.Error != "resource_conflict" {
+		t.Fatalf("stale override response = %#v, err %v", conflict, err)
+	}
+
+	rec = do(http.MethodDelete, "/resources/1/overrides/displayName", `{"expectedVersion":1}`)
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("clear override status = %d body=%s", rec.Code, rec.Body.String())
+	}
+	rec = do(http.MethodGet, "/resources/1/effective-values", "")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("get cleared effective values status = %d body=%s", rec.Code, rec.Body.String())
+	}
+	effective.Values = nil
+	if err := json.NewDecoder(rec.Body).Decode(&effective); err != nil {
+		t.Fatalf("decode cleared effective values: %v", err)
+	}
+	if _, exists := effective.Values["displayName"]; exists {
+		t.Fatalf("cleared override still effective: %#v", effective.Values["displayName"])
+	}
 }
 
 func TestCreateResource(t *testing.T) {
