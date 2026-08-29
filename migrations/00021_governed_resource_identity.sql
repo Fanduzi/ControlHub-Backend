@@ -53,8 +53,6 @@ create table resource_aliases (
   alias varchar(255) not null,
   created_at datetime not null default current_timestamp,
   constraint chk_resource_alias_normalized check (binary alias = binary lower(trim(alias)) and alias <> ''),
-  constraint fk_resource_alias_resource foreign key (resource_id) references resources(id) on delete cascade,
-  constraint fk_resource_alias_environment foreign key (environment_id) references environments(id),
   unique key uq_resource_alias_env (environment_id, alias),
   unique key uq_resource_alias_resource (resource_id, alias)
 ) engine=innodb default charset=utf8mb4 collate=utf8mb4_0900_ai_ci;
@@ -71,7 +69,6 @@ create table resource_external_identifiers (
     binary external_system = binary lower(trim(external_system))
     and trim(external_value) <> ''
   ),
-  constraint fk_resource_external_identifier_resource foreign key (resource_id) references resources(id) on delete cascade,
   unique key uq_resource_external_identifier (external_system, external_value),
   unique key uq_resource_external_identifier_resource (resource_id, external_system, external_value)
 ) engine=innodb default charset=utf8mb4 collate=utf8mb4_0900_ai_ci;

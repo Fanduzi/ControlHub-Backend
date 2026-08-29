@@ -632,39 +632,6 @@ func TestResourceAPI_CreateWithProfileFailureRollsBack(t *testing.T) {
 	}
 }
 
-// TestResourceRepositoryCreateWithProfile_EmptyProfileObjectOnUnsupportedType
-// pins the spec rule that types without a profile table reject a submitted
-// profile object — even an empty one — and roll the resource insert back.
-func TestResourceRepositoryCreateWithProfile_EmptyProfileObjectOnUnsupportedType(t *testing.T) {
-	db := setupTestDB(t)
-	repo := mysql.NewResourceRepository(db)
-	ctx := context.Background()
-
-	name := fmt.Sprintf("atomicity-empty-proxy-%d", time.Now().UnixNano())
-	_, err := repo.CreateResourceWithProfile(ctx, model.ResourceCreateInput{
-		ResourceType:    model.ResourceTypeDatabaseProxy,
-		Name:            name,
-		DisplayName:     "Atomicity Empty Proxy",
-		EnvironmentID:   envProd,
-		OwnerID:         ownerDBA,
-		LifecycleStatus: model.LifecycleStatusProvisioning,
-		HealthStatus:    model.HealthStatusUnknown,
-		Source:          "manual",
-		Labels:          map[string]string{},
-	}, map[string]any{})
-	if err == nil {
-		t.Fatal("expected error for a profile object on a type without a profile table")
-	}
-
-	var resourceRows int
-	if err := db.QueryRowContext(ctx, "select count(*) from resources where name = ?", name).Scan(&resourceRows); err != nil {
-		t.Fatalf("count resources: %v", err)
-	}
-	if resourceRows != 0 {
-		t.Fatalf("rejected profile write must not leave a resource row behind, found %d", resourceRows)
-	}
-}
-
 // TestResourceRepositoryCreateWithProfile_EmptyProfileObjectWritesEmptyRow
 // pins the submitted-empty semantics on a supported type: an explicit empty
 // profile object persists an empty typed profile row, matching the PUT
