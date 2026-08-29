@@ -23,6 +23,23 @@ func NewMachinePrincipalRepository(db *sql.DB) *MachinePrincipalRepository {
 	return &MachinePrincipalRepository{db: db}
 }
 
+func (r *MachinePrincipalRepository) List(ctx context.Context) ([]model.MachinePrincipal, error) {
+	rows, err := r.db.QueryContext(ctx, `SELECT id, name, created_by_user_id, created_at FROM machine_principals ORDER BY id`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := make([]model.MachinePrincipal, 0)
+	for rows.Next() {
+		var item model.MachinePrincipal
+		if err := rows.Scan(&item.ID, &item.Name, &item.CreatedByUserID, &item.CreatedAt); err != nil {
+			return nil, err
+		}
+		items = append(items, item)
+	}
+	return items, rows.Err()
+}
+
 func (r *MachinePrincipalRepository) Create(ctx context.Context, actorID uint64, name string, credential service.MachineCredentialInsert) (model.MachinePrincipal, model.MachineCredential, error) {
 	tx, err := r.db.BeginTx(ctx, nil)
 	if err != nil {

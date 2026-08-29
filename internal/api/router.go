@@ -61,6 +61,7 @@ type Dependencies struct {
 	// a fresh bearer token (same freshness policy as query execution).
 	QuerySavedStatementService querySavedStatementAPI
 	NamedInventoryViewService  namedInventoryViewAPI
+	MachinePrincipalService    machinePrincipalAPI
 	// AuthAuditEmitter records authentication and authorization outcomes.
 	// Nil is treated as NoopEmitter; fail-open semantics apply.
 	AuthAuditEmitter service.AuthAuditEmitter
@@ -150,6 +151,12 @@ func NewRouter(deps Dependencies) *chi.Mux {
 			r.Get("/admin/legacy-hash-count", handleGetLegacyHashCount(deps.AuthService))
 			r.Get("/ops/auth-audit-metrics", handleAuthAuditMetrics())
 			r.Get("/ops/query-evidence-metrics", handleQueryEvidenceMetrics(deps.QueryExecutionService))
+			if deps.MachinePrincipalService != nil {
+				r.Get("/admin/machine-principals", handleListMachinePrincipals(deps.MachinePrincipalService))
+				r.Post("/admin/machine-principals", handleCreateMachinePrincipal(deps.MachinePrincipalService))
+				r.Post("/admin/machine-credentials/{credentialId}/rotate", handleRotateMachineCredential(deps.MachinePrincipalService))
+				r.Post("/admin/machine-credentials/{credentialId}/revoke", handleRevokeMachineCredential(deps.MachinePrincipalService))
+			}
 		})
 	})
 

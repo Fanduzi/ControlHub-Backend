@@ -45,11 +45,19 @@ type MachineCredentialAuthentication struct {
 }
 
 type MachinePrincipalRepository interface {
+	List(context.Context) ([]model.MachinePrincipal, error)
 	Create(context.Context, uint64, string, MachineCredentialInsert) (model.MachinePrincipal, model.MachineCredential, error)
 	Rotate(context.Context, uint64, uint64, MachineCredentialInsert) (model.MachinePrincipal, model.MachineCredential, error)
 	Revoke(context.Context, uint64, uint64, time.Time) error
 	FindCredential(context.Context, string) (MachineCredentialAuthentication, error)
 	MarkUsed(context.Context, uint64, time.Time) error
+}
+
+func (s *MachinePrincipalService) List(ctx context.Context, actor AuthenticatedUser) ([]model.MachinePrincipal, error) {
+	if err := requireMachinePrincipalAdmin(actor); err != nil {
+		return nil, err
+	}
+	return s.repo.List(ctx)
 }
 
 func (s *MachinePrincipalService) Rotate(ctx context.Context, actor AuthenticatedUser, oldCredentialID uint64, req model.MachineCredentialRotateRequest) (model.MachineCredentialIssue, error) {

@@ -163,6 +163,10 @@ type fakeMachinePrincipalRepository struct {
 	used        []uint64
 }
 
+func (f *fakeMachinePrincipalRepository) List(context.Context) ([]model.MachinePrincipal, error) {
+	return nil, nil
+}
+
 func (f *fakeMachinePrincipalRepository) Create(_ context.Context, actorID uint64, name string, credential MachineCredentialInsert) (model.MachinePrincipal, model.MachineCredential, error) {
 	f.createCalls++
 	f.created = credential
