@@ -1,7 +1,7 @@
 // Package api provides HTTP handlers and routing for the ControlHub REST API.
 // input: context, errors, net/http, net/http/httptest, strings, testing, internal/model, internal/service
-// output: table-driven machine read/collector route scopes, truthful execute identity, user-only sibling-route, and controlled-error contract tests
-// pos: Router-level regression boundary for independent machine authentication, collector writes, and ordinary governed execution
+// output: table-driven machine read/collector route scopes, verified health observer attribution, truthful execute identity, user-only sibling-route, and controlled-error contract tests
+// pos: Router-level regression boundary for independent machine authentication, principal-bound collector health writes, and ordinary governed execution
 // note: if this file changes, update this header and module README.md.
 package api
 
@@ -31,7 +31,7 @@ func (s *scopeMatrixMachineService) Authenticate(_ context.Context, _ string, re
 	if required != s.granted {
 		return model.MachinePrincipalIdentity{}, service.ErrMachineScopeDenied
 	}
-	return model.MachinePrincipalIdentity{ID: 91, CredentialID: 92, Scopes: []model.MachineScope{s.granted}}, nil
+	return model.MachinePrincipalIdentity{ID: 91, Name: "collector-a", CredentialID: 92, Scopes: []model.MachineScope{s.granted}}, nil
 }
 
 func (*scopeMatrixMachineService) List(context.Context, service.AuthenticatedUser) ([]model.MachinePrincipalListItem, error) {
@@ -135,6 +135,28 @@ func TestMachineRouteScopeMatrix(t *testing.T) {
 				t.Fatalf("ListShared called = %t, want %t", views.shared, tc.wantShared)
 			}
 		})
+	}
+}
+
+func TestMachineHealthObservationUsesVerifiedPrincipalObserver(t *testing.T) {
+	machine := &scopeMatrixMachineService{granted: model.MachineScopeHealthWrite}
+	server := NewTestServer()
+	server.deps.MachineCredentialService = machine
+	req := httptest.NewRequest(http.MethodPost, "/resources/1/health-observations", strings.NewReader(`{"status":"warning","observedAt":"2026-08-30T00:00:00Z","observer":"spoofed"}`))
+	req.Header.Set("Authorization", "Bearer chmp_route-test.secret")
+	rec := httptest.NewRecorder()
+
+	NewRouter(server.deps).ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("status = %d, want 204; body=%s", rec.Code, rec.Body.String())
+	}
+	resource, err := server.deps.ResourceService.Get(1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resource.HealthObserver != "machine:collector-a" {
+		t.Fatalf("observer = %q, want verified machine principal", resource.HealthObserver)
 	}
 }
 

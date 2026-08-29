@@ -1,7 +1,7 @@
 // Package api provides HTTP handlers and routing for the ControlHub REST API.
-// input: net/http, encoding/json, internal/service, internal/model
-// output: resource list/detail, rich inventory filtering, audited writes, health observations, effective-value reads, versioned override set/clear, and admin bulk preview/confirm handlers
-// pos: HTTP boundary for inventory search, operational health evidence, effective-value provenance, audited manual overrides, and bulk mutation review
+// input: net/http, encoding/json, verified user-or-machine context, internal/service, internal/model
+// output: resource list/detail, rich inventory filtering, audited writes, principal-bound machine health observations, effective-value reads, versioned override set/clear, and admin bulk preview/confirm handlers
+// pos: HTTP boundary for inventory search, trustworthy operational health attribution, effective-value provenance, audited manual overrides, and bulk mutation review
 // note: if this file changes, update this header and module README.md.
 package api
 
@@ -202,6 +202,9 @@ func handleRecordHealthObservation(resourceService *service.ResourceService) htt
 		if err := decodeJSONBody(r, &observation); err != nil {
 			writeJSONError(w, http.StatusBadRequest, "malformed_json", "request body must be valid JSON")
 			return
+		}
+		if machine, ok := machinePrincipalFromContext(r.Context()); ok {
+			observation.Observer = "machine:" + machine.Name
 		}
 		if err := resourceService.ObserveHealth(r.Context(), id, observation); err != nil {
 			writeServiceError(w, err)
