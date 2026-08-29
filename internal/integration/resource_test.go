@@ -2,9 +2,9 @@
 
 // Package integration provides real-MySQL coverage for repository, API, and
 // migration behavior against disposable Testcontainers databases.
-// input: database/sql, testing, internal/model, internal/repository/mysql, internal/service
-// output: TestResource* and TestResourceService* integration cases
-// pos: Proves resource repository CRUD, filtering, and create-with-profile atomicity against real MySQL
+// input: database/sql, testing, time, internal/model, internal/repository/mysql, internal/service
+// output: TestResource* and TestResourceService* integration cases, including observation-derived cluster rollups
+// pos: Proves resource CRUD, filtering, effective-health rollups, and create-with-profile atomicity against real MySQL
 // note: if this file changes, update header and README.md
 package integration
 
@@ -293,6 +293,45 @@ func TestResourceRepository_ResourceSubtypeWithResourceType(t *testing.T) {
 		if item.ResourceSubtype != "mysql" {
 			t.Errorf("got subtype %q, want mysql", item.ResourceSubtype)
 		}
+	}
+}
+
+func TestResourceRepository_ObservationDerivedClusterOperationalSummary(t *testing.T) {
+	db := setupTestDB(t)
+	repo := mysql.NewResourceRepository(db)
+	ctx := context.Background()
+
+	var clusterID, memberID uint64
+	if err := db.QueryRow(`select id from resources where name = 'analytics-ch-cluster-prod'`).Scan(&clusterID); err != nil {
+		t.Fatalf("find cluster: %v", err)
+	}
+	if err := db.QueryRow(`select id from resources where name = 'analytics-ch-node-01-prod'`).Scan(&memberID); err != nil {
+		t.Fatalf("find member: %v", err)
+	}
+	if _, err := db.Exec(`update resources set health_status = null where id = ?`, memberID); err != nil {
+		t.Fatalf("clear manual override: %v", err)
+	}
+	if err := repo.UpsertHealthObservation(ctx, memberID, model.HealthObservation{
+		Status:     model.HealthStatusCritical,
+		ObservedAt: time.Now(),
+		Observer:   "cluster-rollup-test",
+	}); err != nil {
+		t.Fatalf("record observation: %v", err)
+	}
+
+	cluster, err := repo.GetResource(clusterID)
+	if err != nil {
+		t.Fatalf("get cluster: %v", err)
+	}
+	summary := cluster.DatabaseOperationalSummary
+	if summary == nil {
+		t.Fatal("expected database operational summary")
+	}
+	if summary.CriticalMemberCount != 2 {
+		t.Fatalf("CriticalMemberCount = %d, want 2", summary.CriticalMemberCount)
+	}
+	if summary.WorstMemberID == nil || *summary.WorstMemberID != int64(memberID) {
+		t.Fatalf("WorstMemberID = %v, want %d", summary.WorstMemberID, memberID)
 	}
 }
 

@@ -448,6 +448,18 @@ func TestPatchResourceClearsManualHealthOverride(t *testing.T) {
 	}
 }
 
+func TestPatchResourceRejectsUnknownFieldWhenClearingHealthOverride(t *testing.T) {
+	server := NewTestServer()
+	req := httptest.NewRequest(http.MethodPatch, "/resources/1", strings.NewReader(`{"healthStatus":null,"typo":true}`))
+	rec := httptest.NewRecorder()
+
+	server.Router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+}
+
 func TestRecordHealthObservation(t *testing.T) {
 	server := NewTestServer()
 	body := `{"status":"warning","observedAt":"2026-04-11T19:59:00Z","observer":"prometheus"}`

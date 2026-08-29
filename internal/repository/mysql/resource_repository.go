@@ -1493,24 +1493,22 @@ func (r *ResourceRepository) fetchDatabaseOperationalSummaries(ctx context.Conte
 		args[i] = id
 	}
 
-	countQuery := `SELECT
+	memberQuery := `SELECT
 		rr.to_resource_id AS cluster_id,
-		COUNT(*) AS member_count,
-		SUM(CASE WHEN child.health_status = 'critical' THEN 1 ELSE 0 END) AS critical_member_count,
-		SUM(CASE WHEN child.health_status = 'warning' THEN 1 ELSE 0 END) AS warning_member_count,
-		SUM(CASE WHEN child.lifecycle_status = 'stopped' THEN 1 ELSE 0 END) AS stopped_member_count,
-		SUM(CASE WHEN child.lifecycle_status = 'degraded' THEN 1 ELSE 0 END) AS degraded_member_count
+		child.id,
+		child.display_name,
+		child.resource_type,
+		child.lifecycle_status,
+		child.health_status
 	FROM resource_relations rr
 	JOIN resources child ON child.id = rr.from_resource_id
 	WHERE rr.relation_type = 'member_of'
-	  AND rr.to_resource_id IN (` + ph + `)
-	GROUP BY rr.to_resource_id`
+	  AND rr.to_resource_id IN (` + ph + `)`
 
-	rows, err := r.db.QueryContext(ctx, countQuery, args...)
+	rows, err := r.db.QueryContext(ctx, memberQuery, args...)
 	if err != nil {
 		return nil
 	}
-	defer rows.Close()
 
 	type counts struct {
 		memberCount         int64
@@ -1519,17 +1517,101 @@ func (r *ResourceRepository) fetchDatabaseOperationalSummaries(ctx context.Conte
 		stoppedMemberCount  int64
 		degradedMemberCount int64
 	}
+	type member struct {
+		clusterID uint64
+		resource  model.Resource
+	}
+	type worstInfo struct {
+		id            int64
+		name          string
+		status        string
+		healthRank    int
+		lifecycleRank int
+	}
+	members := make([]member, 0)
+	healthResources := make([]model.Resource, 0)
 	countMap := make(map[uint64]*counts)
 	for rows.Next() {
-		var cid uint64
-		var c counts
-		if err := rows.Scan(&cid, &c.memberCount, &c.criticalMemberCount, &c.warningMemberCount, &c.stoppedMemberCount, &c.degradedMemberCount); err != nil {
+		var item member
+		var manualHealth sql.NullString
+		if err := rows.Scan(
+			&item.clusterID,
+			&item.resource.ID,
+			&item.resource.DisplayName,
+			&item.resource.ResourceType,
+			&item.resource.LifecycleStatus,
+			&manualHealth,
+		); err != nil {
+			rows.Close()
 			return nil
 		}
-		countMap[cid] = &c
+		setManualHealthOverride(&item.resource, manualHealth)
+		members = append(members, item)
+		healthResources = append(healthResources, item.resource)
 	}
 	if err := rows.Err(); err != nil {
+		rows.Close()
 		return nil
+	}
+	rows.Close()
+	if err := r.attachHealthObservations(ctx, healthResources); err != nil {
+		return nil
+	}
+	worstMap := make(map[uint64]*worstInfo)
+	for i, item := range members {
+		resource := healthResources[i]
+		c := countMap[item.clusterID]
+		if c == nil {
+			c = &counts{}
+			countMap[item.clusterID] = c
+		}
+		c.memberCount++
+		switch resource.HealthStatus {
+		case string(model.HealthStatusCritical):
+			c.criticalMemberCount++
+		case string(model.HealthStatusWarning):
+			c.warningMemberCount++
+		}
+		if resource.LifecycleStatus == "stopped" {
+			c.stoppedMemberCount++
+		} else if resource.LifecycleStatus == "degraded" {
+			c.degradedMemberCount++
+		}
+
+		healthRank := 1
+		switch resource.HealthStatus {
+		case string(model.HealthStatusCritical):
+			healthRank = 4
+		case string(model.HealthStatusWarning):
+			healthRank = 3
+		case string(model.HealthStatusUnknown):
+			healthRank = 2
+		}
+		lifecycleRank := 0
+		status := resource.HealthStatus
+		if resource.LifecycleStatus == "stopped" {
+			lifecycleRank = 2
+			if status == "healthy" || status == "" {
+				status = "stopped"
+			}
+		} else if resource.LifecycleStatus == "degraded" {
+			lifecycleRank = 1
+			if status == "healthy" || status == "" {
+				status = "degraded"
+			}
+		}
+		current := worstMap[item.clusterID]
+		if current == nil || healthRank > current.healthRank ||
+			(healthRank == current.healthRank && lifecycleRank > current.lifecycleRank) ||
+			(healthRank == current.healthRank && lifecycleRank == current.lifecycleRank && resource.DisplayName < current.name) {
+			worstMap[item.clusterID] = &worstInfo{
+				id:            int64(resource.ID),
+				name:          resource.DisplayName,
+				status:        status,
+				healthRank:    healthRank,
+				lifecycleRank: lifecycleRank,
+			}
+		}
 	}
 
 	// Fetch role counts from instance profiles.
@@ -1566,66 +1648,6 @@ func (r *ResourceRepository) fetchDatabaseOperationalSummaries(ctx context.Conte
 			roleMap[cid] = &rc
 		}
 		roleRows.Close()
-	}
-
-	// Fetch worst member for each cluster.
-	worstQuery := `SELECT
-		rr.to_resource_id AS cluster_id,
-		child.id AS member_id,
-		child.display_name AS member_name,
-		CASE child.health_status
-			WHEN 'critical' THEN 4
-			WHEN 'warning' THEN 3
-			WHEN 'unknown' THEN 2
-			ELSE 1
-		END AS health_rank,
-		CASE child.lifecycle_status
-			WHEN 'stopped' THEN 2
-			WHEN 'degraded' THEN 1
-			ELSE 0
-		END AS lifecycle_rank,
-		child.health_status,
-		child.lifecycle_status
-	FROM resource_relations rr
-	JOIN resources child ON child.id = rr.from_resource_id
-	WHERE rr.relation_type = 'member_of'
-	  AND rr.to_resource_id IN (` + ph + `)
-	ORDER BY cluster_id, health_rank DESC, lifecycle_rank DESC, child.display_name ASC`
-
-	worstRows, err := r.db.QueryContext(ctx, worstQuery, args...)
-	if err != nil {
-		return nil
-	}
-	defer worstRows.Close()
-
-	type worstInfo struct {
-		id     int64
-		name   string
-		status string
-	}
-	worstMap := make(map[uint64]*worstInfo)
-	for worstRows.Next() {
-		var cid uint64
-		var wi worstInfo
-		var healthRank, lifecycleRank int
-		var healthStatus, lifecycleStatus string
-		if err := worstRows.Scan(&cid, &wi.id, &wi.name, &healthRank, &lifecycleRank, &healthStatus, &lifecycleStatus); err != nil {
-			return nil
-		}
-		if _, exists := worstMap[cid]; !exists {
-			wi.status = healthStatus
-			if healthStatus == "healthy" || healthStatus == "" {
-				if lifecycleStatus == "stopped" {
-					wi.status = "stopped"
-				} else if lifecycleStatus == "degraded" {
-					wi.status = "degraded"
-				}
-			}
-			worstMap[cid] = &wi
-		}
-	}
-	if err := worstRows.Err(); err != nil {
-		return nil
 	}
 
 	result := make(map[uint64]*model.DatabaseOperationalSummary, len(clusterIDs))

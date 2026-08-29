@@ -2,8 +2,8 @@
 
 // Package integration provides real-MySQL schema proofs for goose migrations.
 // input: database/sql, Testcontainers database, and schema migrations
-// output: migration version, tables, columns, constraints, typed-profile identity, and seed regression tests
-// pos: real-MySQL schema contract coverage, including governed identity and all typed-profile tables
+// output: migration version, tables, columns, constraints, governed identity, health observations, and seed regression tests
+// pos: real-MySQL schema contract coverage through migration 22, including governed identity, typed profiles, and no foreign keys
 // note: if this file changes, update header and README.md
 package integration
 
@@ -64,6 +64,7 @@ func TestSchemaUsesBigintPrimaryKeysWithoutForeignKeys(t *testing.T) {
 		"resources",
 		"resource_aliases",
 		"resource_external_identifiers",
+		"resource_health_observations",
 		"resource_relations",
 		"resource_profiles_host",
 		"resource_profiles_database_instance",
@@ -122,13 +123,14 @@ func assertSchemaChainBaseline(t *testing.T, db *sql.DB) {
 	if err != nil {
 		t.Fatalf("query max version: %v", err)
 	}
-	if maxVersion < 19 {
+	if maxVersion < 22 {
 		t.Fatalf("expected at least 22 migrations applied, got version %d", maxVersion)
 	}
 
 	expectedTables := []string{
 		"roles", "users", "environments", "owners", "resources",
 		"resource_aliases", "resource_external_identifiers",
+		"resource_health_observations",
 		"resource_relations",
 		"resource_profiles_host",
 		"resource_profiles_database_instance",

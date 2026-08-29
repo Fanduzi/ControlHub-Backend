@@ -78,6 +78,7 @@ func (r *RelationRepository) ListRelationViewsByResourceID(resourceID uint64) ([
 	defer rows.Close()
 
 	items := make([]model.ResourceRelationView, 0)
+	healthResources := make([]model.Resource, 0)
 	for rows.Next() {
 		var item model.ResourceRelationView
 		var manualHealth sql.NullString
@@ -102,15 +103,25 @@ func (r *RelationRepository) ListRelationViewsByResourceID(resourceID uint64) ([
 		} else {
 			item.Direction = "incoming"
 		}
-		related, err := NewResourceRepository(r.db).GetResource(item.RelatedResourceID)
-		if err != nil {
-			return nil, err
+		healthResource := model.Resource{
+			ID:           item.RelatedResourceID,
+			ResourceType: model.ResourceType(item.RelatedResourceType),
 		}
-		item.RelatedResourceHealthStatus = related.HealthStatus
+		setManualHealthOverride(&healthResource, manualHealth)
+		healthResources = append(healthResources, healthResource)
 		items = append(items, item)
 	}
-
-	return items, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	rows.Close()
+	if err := NewResourceRepository(r.db).attachHealthObservations(context.Background(), healthResources); err != nil {
+		return nil, err
+	}
+	for i := range items {
+		items[i].RelatedResourceHealthStatus = healthResources[i].HealthStatus
+	}
+	return items, nil
 }
 
 func (r *RelationRepository) ListClusterMembers(clusterID uint64) ([]model.ClusterMemberView, error) {
@@ -129,6 +140,7 @@ func (r *RelationRepository) ListClusterMembers(clusterID uint64) ([]model.Clust
 	defer rows.Close()
 
 	items := make([]model.ClusterMemberView, 0)
+	healthResources := make([]model.Resource, 0)
 	for rows.Next() {
 		var item model.ClusterMemberView
 		var manualHealth sql.NullString
@@ -143,16 +155,26 @@ func (r *RelationRepository) ListClusterMembers(clusterID uint64) ([]model.Clust
 		); err != nil {
 			return nil, err
 		}
-		resource, err := NewResourceRepository(r.db).GetResource(item.ResourceID)
-		if err != nil {
-			return nil, err
+		healthResource := model.Resource{
+			ID:           item.ResourceID,
+			ResourceType: model.ResourceType(item.ResourceType),
 		}
-		item.HealthStatus = resource.HealthStatus
-		item.ProfileSummary = r.fetchMemberProfileSummary(item.ResourceID, item.ResourceType)
+		setManualHealthOverride(&healthResource, manualHealth)
+		healthResources = append(healthResources, healthResource)
 		items = append(items, item)
 	}
-
-	return items, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	rows.Close()
+	if err := NewResourceRepository(r.db).attachHealthObservations(context.Background(), healthResources); err != nil {
+		return nil, err
+	}
+	for i := range items {
+		items[i].HealthStatus = healthResources[i].HealthStatus
+		items[i].ProfileSummary = r.fetchMemberProfileSummary(items[i].ResourceID, items[i].ResourceType)
+	}
+	return items, nil
 }
 
 func (r *RelationRepository) fetchMemberProfileSummary(resourceID uint64, resourceType string) *model.ProfileSummary {

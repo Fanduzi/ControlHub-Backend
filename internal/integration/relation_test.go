@@ -1,7 +1,7 @@
 //go:build integration
 
 // Package integration provides real-MySQL coverage for relation repository behavior.
-// input: context, database/sql, testing, internal/model, internal/repository/mysql, internal/service
+// input: context, database/sql, testing, time, internal/model, internal/repository/mysql, internal/service
 // output: TestResourceRepository relation and profile-summary cases
 // pos: Proves relation queries and profile summaries against disposable MySQL
 // note: if this file changes, update header and README.md
@@ -12,6 +12,7 @@ import (
 	"database/sql"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/fan/controlhub/internal/model"
 	"github.com/fan/controlhub/internal/repository/mysql"
@@ -195,6 +196,54 @@ func TestRelationRepository_ListRelationViewsByResourceID(t *testing.T) {
 		}
 		if v.Direction != "outgoing" && v.Direction != "incoming" {
 			t.Errorf("expected direction, got %q", v.Direction)
+		}
+	}
+}
+
+func TestRelationRepository_BatchesObservedHealthAfterRowsClose(t *testing.T) {
+	db := setupTestDB(t)
+	resourceRepo := mysql.NewResourceRepository(db)
+	relationRepo := mysql.NewRelationRepository(db)
+	ctx := context.Background()
+	clusterID := lookupResourceID(t, db, "payment-mysql-cluster-prod")
+	memberID := lookupResourceID(t, db, "payment-mysql-primary-prod")
+
+	if _, err := db.Exec(`update resources set health_status = null where id = ?`, memberID); err != nil {
+		t.Fatalf("clear manual override: %v", err)
+	}
+	if err := resourceRepo.UpsertHealthObservation(ctx, memberID, model.HealthObservation{
+		Status:     model.HealthStatusCritical,
+		ObservedAt: time.Now(),
+		Observer:   "relation-test",
+	}); err != nil {
+		t.Fatalf("record observation: %v", err)
+	}
+	db.SetMaxOpenConns(1)
+
+	views, err := relationRepo.ListRelationViewsByResourceID(clusterID)
+	if err != nil {
+		t.Fatalf("list relation views: %v", err)
+	}
+	foundView := false
+	for _, view := range views {
+		if view.RelatedResourceID == memberID {
+			foundView = true
+			if view.RelatedResourceHealthStatus != string(model.HealthStatusCritical) {
+				t.Fatalf("relation health = %q, want critical", view.RelatedResourceHealthStatus)
+			}
+		}
+	}
+	if !foundView {
+		t.Fatal("observed member relation not found")
+	}
+
+	members, err := relationRepo.ListClusterMembers(clusterID)
+	if err != nil {
+		t.Fatalf("list cluster members: %v", err)
+	}
+	for _, member := range members {
+		if member.ResourceID == memberID && member.HealthStatus != string(model.HealthStatusCritical) {
+			t.Fatalf("member health = %q, want critical", member.HealthStatus)
 		}
 	}
 }
