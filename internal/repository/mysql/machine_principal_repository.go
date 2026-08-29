@@ -147,7 +147,23 @@ func (r *MachinePrincipalRepository) FindCredential(ctx context.Context, lookupI
 func (r *MachinePrincipalRepository) MarkUsed(ctx context.Context, credentialID uint64, usedAt time.Time) error {
 	result, err := r.db.ExecContext(ctx, `UPDATE machine_principal_credentials SET last_used_at = ?
 		WHERE id = ? AND revoked_at IS NULL AND expires_at > ?`, usedAt, credentialID, usedAt)
-	return requireMachineCredentialRow(result, err)
+	if err != nil {
+		return err
+	}
+	rows, err := result.RowsAffected()
+	if err != nil || rows != 0 {
+		return err
+	}
+	var active bool
+	if err := r.db.QueryRowContext(ctx, `SELECT EXISTS(
+		SELECT 1 FROM machine_principal_credentials
+		WHERE id = ? AND revoked_at IS NULL AND expires_at > ?)`, credentialID, usedAt).Scan(&active); err != nil {
+		return err
+	}
+	if !active {
+		return sql.ErrNoRows
+	}
+	return nil
 }
 
 func insertMachineCredential(ctx context.Context, tx *sql.Tx, principalID, actorID uint64, credential service.MachineCredentialInsert) (model.MachineCredential, error) {

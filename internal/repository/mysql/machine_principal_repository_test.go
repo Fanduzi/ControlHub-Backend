@@ -1,6 +1,6 @@
 // Package mysql provides MySQL-backed repository implementations.
 // input: crypto/sha256, database/sql, database/sql/driver, encoding/json, strings, testing, time, sqlmock, internal/model, internal/service
-// output: machine-principal credential persistence, audit safety, and rollback tests
+// output: machine-principal persistence, audit safety, idempotent last-use, and rollback tests
 // pos: SQL transaction contract coverage for the machine-principal security boundary
 // note: if this file changes, update this header and module README.md.
 package mysql
@@ -151,6 +151,30 @@ func TestMachinePrincipalRepositoryRevokeAndMarkUsedAreStateBounded(t *testing.T
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	if err := repo.MarkUsed(t.Context(), 21, now); err != nil {
 		t.Fatalf("MarkUsed: %v", err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("unmet expectations: %v", err)
+	}
+}
+
+func TestMachinePrincipalRepositoryMarkUsedAcceptsSameTimestamp(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock.New: %v", err)
+	}
+	defer db.Close()
+	repo := NewMachinePrincipalRepository(db)
+	now := time.Date(2026, 8, 31, 12, 0, 0, 0, time.UTC)
+
+	mock.ExpectExec("UPDATE machine_principal_credentials SET last_used_at").
+		WithArgs(now, uint64(21), now).
+		WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectQuery("SELECT EXISTS").
+		WithArgs(uint64(21), now).
+		WillReturnRows(sqlmock.NewRows([]string{"active"}).AddRow(true))
+
+	if err := repo.MarkUsed(t.Context(), 21, now); err != nil {
+		t.Fatalf("MarkUsed at unchanged timestamp: %v", err)
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatalf("unmet expectations: %v", err)
