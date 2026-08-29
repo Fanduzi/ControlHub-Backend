@@ -1,7 +1,7 @@
 // Package mysql provides MySQL-backed repository implementations.
 // input: database/sql, internal/model, and effective-health resource reads
-// output: relation CRUD plus relation/member projections, topology candidates, and derived health
-// pos: MySQL data access for resource relations, topology resource lookup, and workspace candidate reads
+// output: relation CRUD with stable endpoint locks plus relation/member projections, topology candidates, and derived health
+// pos: MySQL data access and shared resource-row lock discipline for relations, topology resource lookup, and workspace candidate reads
 // note: if this file changes, update this header and module README.md.
 package mysql
 
@@ -228,7 +228,22 @@ func (r *RelationRepository) GetResource(id uint64) (*model.Resource, error) {
 }
 
 func (r *RelationRepository) CreateRelation(ctx context.Context, input model.RelationCreateInput) (*model.ResourceRelation, error) {
-	return insertRelation(ctx, r.db, input)
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, fmt.Errorf("begin relationship transaction: %w", err)
+	}
+	defer tx.Rollback()
+	if err := lockResourceRows(ctx, tx, input.FromResourceID, input.ToResourceID); err != nil {
+		return nil, err
+	}
+	created, err := insertRelation(ctx, tx, input)
+	if err != nil {
+		return nil, err
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, fmt.Errorf("commit relationship transaction: %w", err)
+	}
+	return created, nil
 }
 
 func insertRelation(ctx context.Context, execer sqlExecer, input model.RelationCreateInput) (*model.ResourceRelation, error) {
@@ -264,6 +279,9 @@ func (r *RelationRepository) CreateRelationWithAudit(ctx context.Context, input 
 		return nil, fmt.Errorf("begin inventory relationship transaction: %w", err)
 	}
 	defer tx.Rollback()
+	if err := lockResourceRows(ctx, tx, input.FromResourceID, input.ToResourceID); err != nil {
+		return nil, err
+	}
 	created, err := insertRelation(ctx, tx, input)
 	if err != nil {
 		return nil, err
@@ -288,7 +306,19 @@ func (r *RelationRepository) CreateRelationWithAudit(ctx context.Context, input 
 }
 
 func (r *RelationRepository) DeleteRelation(ctx context.Context, relationID uint64) error {
-	result, err := r.db.ExecContext(ctx, `delete from resource_relations where id = ?`, relationID)
+	relation, err := r.getRelation(ctx, relationID)
+	if err != nil {
+		return err
+	}
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin relationship transaction: %w", err)
+	}
+	defer tx.Rollback()
+	if err := lockResourceRows(ctx, tx, relation.FromResourceID, relation.ToResourceID); err != nil {
+		return err
+	}
+	result, err := tx.ExecContext(ctx, `delete from resource_relations where id = ?`, relationID)
 	if err != nil {
 		return fmt.Errorf("delete relation: %w", err)
 	}
@@ -296,26 +326,32 @@ func (r *RelationRepository) DeleteRelation(ctx context.Context, relationID uint
 	if affected == 0 {
 		return service.ErrRelationNotFound
 	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit relationship transaction: %w", err)
+	}
 	return nil
 }
 
 func (r *RelationRepository) DeleteRelationWithAudit(ctx context.Context, relationID, actorUserID uint64, eventType string) error {
+	relation, err := r.getRelation(ctx, relationID)
+	if err != nil {
+		return err
+	}
 	tx, err := r.db.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("begin inventory relationship transaction: %w", err)
 	}
 	defer tx.Rollback()
-	var relation model.ResourceRelation
-	if err := tx.QueryRowContext(ctx, `select id, from_resource_id, to_resource_id, relation_type, created_at
-		from resource_relations where id = ? for update`, relationID).Scan(
-		&relation.ID, &relation.FromResourceID, &relation.ToResourceID, &relation.RelationType, &relation.CreatedAt,
-	); errors.Is(err, sql.ErrNoRows) {
-		return service.ErrRelationNotFound
-	} else if err != nil {
-		return fmt.Errorf("lock relation: %w", err)
+	if err := lockResourceRows(ctx, tx, relation.FromResourceID, relation.ToResourceID); err != nil {
+		return err
 	}
-	if _, err := tx.ExecContext(ctx, `delete from resource_relations where id = ?`, relationID); err != nil {
+	result, err := tx.ExecContext(ctx, `delete from resource_relations where id = ?`, relationID)
+	if err != nil {
 		return fmt.Errorf("delete relation: %w", err)
+	}
+	affected, _ := result.RowsAffected()
+	if affected == 0 {
+		return service.ErrRelationNotFound
 	}
 	field := "relationships." + string(relation.RelationType)
 	if err := insertInventoryAuditTx(ctx, tx, actorUserID, relation.FromResourceID, eventType, []model.AuditChange{{
@@ -334,6 +370,21 @@ func (r *RelationRepository) DeleteRelationWithAudit(ctx context.Context, relati
 		return fmt.Errorf("commit inventory relationship transaction: %w", err)
 	}
 	return nil
+}
+
+func (r *RelationRepository) getRelation(ctx context.Context, relationID uint64) (model.ResourceRelation, error) {
+	var relation model.ResourceRelation
+	err := r.db.QueryRowContext(ctx, `select id, from_resource_id, to_resource_id, relation_type, created_at
+		from resource_relations where id = ?`, relationID).Scan(
+		&relation.ID, &relation.FromResourceID, &relation.ToResourceID, &relation.RelationType, &relation.CreatedAt,
+	)
+	if errors.Is(err, sql.ErrNoRows) {
+		return relation, service.ErrRelationNotFound
+	}
+	if err != nil {
+		return relation, fmt.Errorf("get relation: %w", err)
+	}
+	return relation, nil
 }
 
 func (r *RelationRepository) ListRelationsByResourceIDs(ids []uint64) ([]model.ResourceRelation, error) {

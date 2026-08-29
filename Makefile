@@ -1,4 +1,4 @@
-.PHONY: test test-integration test-openapi-fuzz run run-query-dev openapi-validate migrate-up migrate-status migrate-down-one migrate-reset-dev cutover-local seed-query-dev-credential seed-query-dev-target query-e2e-mysql-up query-e2e-mysql-down query-e2e-mysql-status argon2id-budget release-local-gates release-docker-gates release-readiness-gates
+.PHONY: test test-integration test-ingestion-integration test-openapi-fuzz run run-query-dev openapi-validate migrate-up migrate-status migrate-down-one migrate-reset-dev cutover-local seed-query-dev-credential seed-query-dev-target query-e2e-mysql-up query-e2e-mysql-down query-e2e-mysql-status argon2id-budget release-local-gates release-docker-gates release-readiness-gates
 
 GOOSE := $(shell go env GOPATH)/bin/goose
 GOOSE_DRIVER := mysql
@@ -18,6 +18,9 @@ test:
 
 test-integration: ## Run all integration tests except the dedicated OpenAPI fuzz test against disposable MySQL via Testcontainers (requires Docker)
 	go test -tags=integration -count=1 -v -run '^Test' -skip '^TestOpenAPIFuzz$$' ./internal/integration
+
+test-ingestion-integration: ## Run issue #83 ingestion confirmation tests against disposable MySQL (requires Docker)
+	go test -tags=integration -count=1 -v -run '^TestIngestionConfirmation' ./internal/integration
 
 test-openapi-fuzz: ## Run only the OpenAPI fuzz test against disposable MySQL server (requires Docker + schemathesis)
 	go test -tags=integration -count=1 -v -run '^TestOpenAPIFuzz$$' ./internal/integration

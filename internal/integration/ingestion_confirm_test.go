@@ -2,8 +2,8 @@
 
 // Package integration runs real-MySQL ingestion confirmation tests.
 // input: database/sql, errors, testing, internal/model, internal/repository/mysql, internal/service
-// output: TestIngestionConfirm* repository/service atomic confirmation cases
-// pos: Proves issue #83 minimal atomic ingestion confirmation against disposable MySQL
+// output: TestIngestionConfirmation* atomic confirmation and shared relation-lock cases
+// pos: Proves issue #83 confirmation semantics and relation serialization against disposable MySQL
 // note: if this file changes, update this header and module README.md.
 package integration
 
@@ -12,6 +12,7 @@ import (
 	"database/sql"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/fan/controlhub/internal/model"
 	"github.com/fan/controlhub/internal/repository/mysql"
@@ -20,7 +21,7 @@ import (
 
 const ingestionActor uint64 = 1
 
-func TestIngestionConfirmMultiRowSuccessAndIdempotentReconfirm(t *testing.T) {
+func TestIngestionConfirmationSuccessAndIdempotentNoOp(t *testing.T) {
 	db := setupTestDB(t)
 	ctx := context.Background()
 	repo := mysql.NewResourceRepository(db)
@@ -133,7 +134,7 @@ func TestIngestionConfirmMultiRowSuccessAndIdempotentReconfirm(t *testing.T) {
 	}
 }
 
-func TestIngestionConfirmConflictFingerprintDriftAndRollback(t *testing.T) {
+func TestIngestionConfirmationConflictFingerprintDriftAndAuditRollback(t *testing.T) {
 	db := setupTestDB(t)
 	ctx := context.Background()
 	repo := mysql.NewResourceRepository(db)
@@ -203,7 +204,7 @@ func TestIngestionConfirmConflictFingerprintDriftAndRollback(t *testing.T) {
 	}
 }
 
-func TestIngestionConfirmPreservesManualOverride(t *testing.T) {
+func TestIngestionConfirmationPreservesManualOverride(t *testing.T) {
 	db := setupTestDB(t)
 	ctx := context.Background()
 	repo := mysql.NewResourceRepository(db)
@@ -238,6 +239,152 @@ func TestIngestionConfirmPreservesManualOverride(t *testing.T) {
 	}
 	if count != 1 {
 		t.Fatalf("override rows = %d, want 1", count)
+	}
+}
+
+func TestIngestionConfirmationRejectsExternalIdentifierCITypeConflict(t *testing.T) {
+	db := setupTestDB(t)
+	ctx := context.Background()
+	repo := mysql.NewResourceRepository(db)
+	resource := mustCreateIngestionHost(t, repo, "ingest-type-conflict", "Type Conflict")
+	identifiers := []model.ResourceExternalIdentifier{{System: "asset", Value: "immutable-type"}}
+	if _, err := repo.UpdateResource(ctx, resource.ID, model.ResourceUpdateInput{ExternalIdentifiers: &identifiers}); err != nil {
+		t.Fatalf("seed external identifier: %v", err)
+	}
+	rows := []service.IngestionRow{{
+		EnvironmentID: envProd,
+		CIType:        model.ResourceTypeService,
+		Name:          "different-service",
+		ExternalIdentifiers: []model.ResourceExternalIdentifier{{
+			System: "asset", Value: "immutable-type",
+		}},
+	}}
+
+	preview, err := repo.PreviewIngestion(ctx, rows)
+	if err != nil {
+		t.Fatalf("preview: %v", err)
+	}
+	if preview.Confirmable || preview.Rows[0].Action != service.PreviewConflict {
+		t.Fatalf("immutable ciType mismatch must conflict: %+v", preview)
+	}
+	if _, err := repo.ConfirmIngestion(ctx, rows, preview.Fingerprint, ingestionActor); !errors.Is(err, service.ErrIngestionConflict) {
+		t.Fatalf("confirm error = %v, want ingestion conflict", err)
+	}
+	got, err := repo.GetResource(resource.ID)
+	if err != nil {
+		t.Fatalf("get resource: %v", err)
+	}
+	if got.ResourceType != model.ResourceTypeHost {
+		t.Fatalf("resource type = %q, want host", got.ResourceType)
+	}
+}
+
+func TestIngestionConfirmationObservedValuesAreAdditive(t *testing.T) {
+	db := setupTestDB(t)
+	ctx := context.Background()
+	repo := mysql.NewResourceRepository(db)
+	resource := mustCreateIngestionHost(t, repo, "ingest-observed-additive", "Observed Additive")
+	if err := repo.PutObservedValues(ctx, resource.ID, "agent", map[string]any{
+		"displayName": "Agent Name", "lifecycleStatus": "running",
+	}); err != nil {
+		t.Fatalf("seed agent observations: %v", err)
+	}
+	if err := repo.PutObservedValues(ctx, resource.ID, "discovery", map[string]any{
+		"healthStatus": "healthy",
+	}); err != nil {
+		t.Fatalf("seed discovery observation: %v", err)
+	}
+	rows := []service.IngestionRow{{
+		EnvironmentID: envProd,
+		CIType:        model.ResourceTypeHost,
+		Name:          resource.Name,
+		DisplayName:   resource.DisplayName,
+		ObservedValues: map[string]service.ObservedValueInput{
+			"displayName": {Source: "cmdb", Value: "CMDB Name"},
+		},
+	}}
+
+	preview, err := repo.PreviewIngestion(ctx, rows)
+	if err != nil {
+		t.Fatalf("preview: %v", err)
+	}
+	if diff := preview.Rows[0].Diff.Observed; len(diff) != 1 || diff["displayName"].After == nil {
+		t.Fatalf("observed diff must contain only submitted fields: %+v", diff)
+	}
+	if _, err := repo.ConfirmIngestion(ctx, rows, preview.Fingerprint, ingestionActor); err != nil {
+		t.Fatalf("confirm: %v", err)
+	}
+	var count int
+	if err := db.QueryRowContext(ctx, `select count(*) from resource_observed_values where resource_id = ?`, resource.ID).Scan(&count); err != nil {
+		t.Fatalf("count observations: %v", err)
+	}
+	if count != 4 {
+		t.Fatalf("observation rows = %d, want 4 preserved sources/fields", count)
+	}
+}
+
+func TestIngestionConfirmationRelationMutationsUseSnapshotLocks(t *testing.T) {
+	db := setupTestDB(t)
+	ctx := context.Background()
+	resourceRepo := mysql.NewResourceRepository(db)
+	source, err := resourceRepo.CreateResource(ctx, model.ResourceCreateInput{
+		ResourceType: model.ResourceTypeService, ResourceSubtype: "api", Name: "ingest-lock-source",
+		DisplayName: "Lock Source", EnvironmentID: envProd, OwnerID: ownerDBA,
+		LifecycleStatus: model.LifecycleStatusRunning, HealthStatus: model.HealthStatusHealthy,
+		Origin: model.ResourceOriginManual, Labels: map[string]string{},
+	})
+	if err != nil {
+		t.Fatalf("create source: %v", err)
+	}
+	target := mustCreateIngestionHost(t, resourceRepo, "ingest-lock-target", "Lock Target")
+	relationRepo := mysql.NewRelationRepository(db)
+	input := model.RelationCreateInput{FromResourceID: source.ID, ToResourceID: target.ID, RelationType: model.RelationTypeRunsOn}
+
+	blocker, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		t.Fatalf("begin create blocker: %v", err)
+	}
+	if err := blocker.QueryRowContext(ctx, `select id from resources where id = ? for update`, source.ID).Scan(new(uint64)); err != nil {
+		t.Fatalf("lock source: %v", err)
+	}
+	blockedCtx, cancel := context.WithTimeout(ctx, 500*time.Millisecond)
+	_, blockedErr := relationRepo.CreateRelationWithAudit(blockedCtx, input, ingestionActor, "inventory.relationship.created")
+	cancel()
+	if blockedErr == nil {
+		t.Fatal("relation create interleaved with resource snapshot lock")
+	}
+	if err := blocker.Rollback(); err != nil {
+		t.Fatalf("release create blocker: %v", err)
+	}
+	if got := relationCount(t, db, source.ID, target.ID, model.RelationTypeRunsOn); got != 0 {
+		t.Fatalf("blocked create relation count = %d, want 0", got)
+	}
+	relation, err := relationRepo.CreateRelationWithAudit(ctx, input, ingestionActor, "inventory.relationship.created")
+	if err != nil {
+		t.Fatalf("create after lock release: %v", err)
+	}
+
+	blocker, err = db.BeginTx(ctx, nil)
+	if err != nil {
+		t.Fatalf("begin delete blocker: %v", err)
+	}
+	if err := blocker.QueryRowContext(ctx, `select id from resources where id = ? for update`, target.ID).Scan(new(uint64)); err != nil {
+		t.Fatalf("lock target: %v", err)
+	}
+	blockedCtx, cancel = context.WithTimeout(ctx, 500*time.Millisecond)
+	blockedErr = relationRepo.DeleteRelationWithAudit(blockedCtx, relation.ID, ingestionActor, "inventory.relationship.deleted")
+	cancel()
+	if blockedErr == nil {
+		t.Fatal("relation delete interleaved with resource snapshot lock")
+	}
+	if err := blocker.Rollback(); err != nil {
+		t.Fatalf("release delete blocker: %v", err)
+	}
+	if got := relationCount(t, db, source.ID, target.ID, model.RelationTypeRunsOn); got != 1 {
+		t.Fatalf("blocked delete relation count = %d, want 1", got)
+	}
+	if err := relationRepo.DeleteRelationWithAudit(ctx, relation.ID, ingestionActor, "inventory.relationship.deleted"); err != nil {
+		t.Fatalf("delete after lock release: %v", err)
 	}
 }
 
@@ -303,7 +450,7 @@ func assertObservedValue(t *testing.T, db *sql.DB, resourceID uint64, field, sou
 	}
 }
 
-func TestIngestionConfirmServiceDelegatesToRepository(t *testing.T) {
+func TestIngestionConfirmationServiceDelegatesToRepository(t *testing.T) {
 	db := setupTestDB(t)
 	ctx := context.Background()
 	repo := mysql.NewResourceRepository(db)

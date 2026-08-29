@@ -218,12 +218,19 @@ Run a specific integration test:
 go test -tags=integration -count=1 -v -run TestResourceRepository ./internal/integration
 ```
 
+Run the issue #83 ingestion confirmation suite:
+
+```bash
+make test-ingestion-integration
+```
+
 When to run which:
 
 | Command | When | Docker? | Extra deps |
 |---------|------|---------|------------|
 | `make test` | Every commit — fast unit tests | No | — |
 | `make test-integration` | Before merge — real MySQL validation | Yes | — |
+| `make test-ingestion-integration` | Issue #83 atomic confirmation validation | Yes | — |
 | `make test-openapi-fuzz` | Before merge — contract fuzzing | Yes | schemathesis |
 
 ### OpenAPI Fuzz Testing

@@ -1,6 +1,6 @@
 // Package service provides controlled CI ingestion parsing, preview reconciliation, and confirm service delegation.
 // input: stdlib CSV/JSON/SHA-256 utilities, context, and internal/model identity/relation types
-// output: ParseIngestion, PreviewIngestion, ResourceService.ConfirmIngestion, bounded input, validation, and explicit preview diff contracts
+// output: ParseIngestion, PreviewIngestion, ResourceService.ConfirmIngestion, immutable-type conflicts, additive observed diffs, and validation contracts
 // pos: Issue #83 ingestion checkpoint and service-owned validation before repository persistence
 // note: if this file changes, update this header and module README.md.
 package service
@@ -423,10 +423,14 @@ func PreviewIngestion(rows []IngestionRow, current []IngestionSnapshot) Ingestio
 		} else if chosen == 0 {
 			result.Action, result.Diff = PreviewCreate, diffIngestion(row, IngestionSnapshot{})
 		} else {
-			result.Action, result.MatchedID = PreviewUpdate, chosen
+			result.MatchedID = chosen
 			for _, snapshot := range current {
 				if snapshot.ID == chosen {
-					result.Diff = diffIngestion(row, snapshot)
+					if snapshot.CIType != row.CIType {
+						result.Action, result.Conflict, p.Confirmable = PreviewConflict, "ciType differs from matched CI", false
+					} else {
+						result.Action, result.Diff = PreviewUpdate, diffIngestion(row, snapshot)
+					}
 					break
 				}
 			}
@@ -480,8 +484,13 @@ func diffIngestion(row IngestionRow, before IngestionSnapshot) IngestionDiff {
 	addDiff(d.Fields, "aliases", canonicalAliases(before.Aliases), canonicalAliases(row.Aliases))
 	addDiff(d.Fields, "externalIdentifiers", canonicalExternalIdentifiers(before.ExternalIdentifiers), canonicalExternalIdentifiers(row.ExternalIdentifiers))
 	diffMaps(d.Profile, before.Profile, row.Profile)
-	oldObserved, newObserved := mapStringAny(before.ObservedValues), mapStringAny(row.ObservedValues)
-	diffMaps(d.Observed, oldObserved, newObserved)
+	for field, observed := range row.ObservedValues {
+		var prior any
+		if value, ok := before.ObservedValues[field]; ok {
+			prior = value
+		}
+		addDiff(d.Observed, field, prior, observed)
+	}
 	oldRelations, newRelations := canonicalRelations(before.Relations), canonicalRelations(row.Relations)
 	for _, relation := range newRelations {
 		if !containsRelation(oldRelations, relation) {
@@ -518,14 +527,6 @@ func diffMaps(dst map[string]ValueDiff, before, after map[string]any) {
 		}
 	}
 }
-func mapStringAny[T any](in map[string]T) map[string]any {
-	out := map[string]any{}
-	for k, v := range in {
-		out[k] = v
-	}
-	return out
-}
-
 func ingestionFingerprint(rows []IngestionRow, snapshots map[uint64]IngestionSnapshot) string {
 	type cleanSnapshot struct {
 		ID                  uint64                             `json:"id"`

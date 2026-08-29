@@ -8,6 +8,8 @@ Data access layer implementing service-layer repository interfaces with raw SQL 
 | resource_repository.go | Resource CRUD, governed identity and one-query batched typed-profile reads, latest-per-observer health evidence, effective-health derivation, per-source observed/effective values, read-only validated bulk previews, atomic audited identity/manual-override/bulk mutations, and issue #83 atomic ingestion confirmation |
 | bulk_resource_mutation_test.go | SQL-level bulk coverage for transaction commit/rollback, externalId persistence, locked archived-CI rejection, current resource/governed-identity lock queries, normal update validation parity, and audit-failure rollback |
 | relation_repository.go | Relation queries plus atomic create/delete, effective-health relation/member projections, topology resource lookup, and environment candidate starts |
+| resource_repository.go | Resource CRUD, governed identity and one-query batched typed-profile reads, latest-per-observer health evidence, effective-health derivation, per-source observed/effective values, read-only validated bulk previews, atomic audited identity/manual-override/bulk mutations, and additive issue #83 atomic ingestion confirmation |
+| relation_repository.go | Relation queries plus atomic create/delete serialized by stable endpoint resource-row locks, effective-health relation/member projections, topology resource lookup, and environment candidate starts |
 | audit_repository.go | Audit event queries (global and by resource), including pagination, actor/resource search, and JSON field changes |
 | user_repository.go | User credential lookup by email/id; Authorization Version mutators (role/active/password); UpgradePasswordHash for legacy-to-Argon2id migration; CountLegacyHashUsers for operator visibility |
 | dictionary_repository.go | Dictionary queries — DB-backed (environments, owners, roles) and static (resource types, relation types, lifecycle/health statuses) |
@@ -29,7 +31,6 @@ Data access layer implementing service-layer repository interfaces with raw SQL 
 - `QueryExecutionRepository.InsertExecutionWithAudit` — repository-owned atomic Execution Evidence Pair: one transaction commits the execution-history row and its fixed per-caller audit event (service passes `query.executed` for execution and `related_record_navigation` for navigation, Issue #36); on any failure both roll back, the counter increments once, and one fixed safe log line is emitted
 - `ResourceRepository.ConfirmBulkResourceMutation` — stable-order resource locking, normal update revalidation, in-transaction re-preview/fingerprint verification, typed field and explicit label mutation, and per-CI field audit in one commit
 - Repository structs satisfy service-layer interfaces
-- `ResourceRepository.PutObservedValues`, `GetEffectiveValues`, `SetManualOverrideWithAudit`, and `ClearManualOverrideWithAudit`
 - `ResourceRepository.PutObservedValues`, `GetEffectiveValues`, `SetManualOverrideWithAudit`, `ClearManualOverrideWithAudit`, `PreviewIngestion`, and `ConfirmIngestion`
 - `RelationRepository.ListTopologyCandidates` reuses resource reads to return environment-scoped Service, Database Cluster, Database Proxy, and abnormal CI starts for the topology workspace
 
@@ -42,10 +43,13 @@ versions and win only in the effective read projection; clearing one exposes
 the latest observation immediately.
 
 `ConfirmIngestion` receives already-parsed rows plus the reviewed preview
-fingerprint and actor ID, locks matched identity rows in ID order, re-runs the
-service preview inside one transaction, rejects conflicts or fingerprint drift,
-and commits resource, identity, typed-profile, observed-value, relation, and
-field-level audit writes together. No-op reconfirmation emits no audit row.
+fingerprint and actor ID, locks matched and submitted relation-endpoint resource
+rows in ID order, re-runs the service preview inside one transaction, rejects
+conflicts or fingerprint drift, and commits resource, identity, typed-profile,
+submitted observed-value, relation, and field-level audit writes together.
+Ordinary relation create/delete uses the same stable endpoint locks, so relation
+drift cannot interleave with the confirmation snapshot. Omitted observations
+and sibling sources are preserved. No-op reconfirmation emits no audit row.
 
 `resource_health_observations` stores one current row per resource/observer.
 Older evidence cannot replace a newer timestamp. Effective-health filters use

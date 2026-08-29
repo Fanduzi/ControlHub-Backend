@@ -1,7 +1,7 @@
 // Package service provides tests for controlled CI ingestion parsing and preview reconciliation.
 // input: internal/service ingestion APIs, internal/model, testing
-// output: TestParseIngestion* and TestPreviewIngestion* functions
-// pos: Validates strict parsing and pure exact-identity preview behavior
+// output: TestParseIngestion* and TestPreviewIngestion* parser, conflict, additive-diff, and fingerprint cases
+// pos: Validates strict parsing and pure exact-identity preview behavior, including immutable types and observation omissions
 // note: if this file changes, update header and README.md
 package service
 
@@ -68,7 +68,7 @@ func TestPreviewIngestionExactPrecedenceAndNoFuzzy(t *testing.T) {
 		{EnvironmentID: 1, CIType: "host", Name: "exact-nam"},
 	}
 	p := PreviewIngestion(rows, current)
-	if got := []PreviewAction{p.Rows[0].Action, p.Rows[1].Action, p.Rows[2].Action, p.Rows[3].Action}; mustJSONText(t, got) != `["update","update","update","create"]` {
+	if got := []PreviewAction{p.Rows[0].Action, p.Rows[1].Action, p.Rows[2].Action, p.Rows[3].Action}; mustJSONText(t, got) != `["conflict","update","update","create"]` {
 		t.Fatalf("actions: %v", got)
 	}
 	if p.Rows[0].MatchedID != 1 || p.Rows[1].MatchedID != 2 || p.Rows[2].MatchedID != 1 {
@@ -88,6 +88,22 @@ func TestPreviewIngestionConflictsOnAmbiguityOrIdentityDisagreement(t *testing.T
 	p := PreviewIngestion(rows, current)
 	if p.Confirmable || p.Rows[0].Action != PreviewConflict || p.Rows[1].Action != PreviewConflict {
 		t.Fatalf("expected non-confirmable conflicts: %+v", p)
+	}
+}
+
+func TestPreviewIngestionConflictsOnImmutableCIType(t *testing.T) {
+	current := []IngestionSnapshot{{
+		ID: 1, CIType: model.ResourceTypeHost,
+		ExternalIdentifiers: []model.ResourceExternalIdentifier{{System: "asset", Value: "shared-1"}},
+	}}
+	rows := []IngestionRow{{
+		EnvironmentID: 1, CIType: model.ResourceTypeService, Name: "service-1",
+		ExternalIdentifiers: []model.ResourceExternalIdentifier{{System: "asset", Value: "shared-1"}},
+	}}
+
+	p := PreviewIngestion(rows, current)
+	if p.Confirmable || p.Rows[0].Action != PreviewConflict {
+		t.Fatalf("immutable ciType mismatch must conflict: %+v", p)
 	}
 }
 
@@ -115,6 +131,25 @@ func TestPreviewIngestionDiffFingerprintAndPurity(t *testing.T) {
 	p3 := PreviewIngestion(rows, current)
 	if p2.Fingerprint == p3.Fingerprint {
 		t.Fatal("input drift did not change fingerprint")
+	}
+}
+
+func TestPreviewIngestionObservedDiffIsAdditive(t *testing.T) {
+	rows := []IngestionRow{{
+		EnvironmentID: 1, CIType: model.ResourceTypeHost, Name: "one",
+		ObservedValues: map[string]ObservedValueInput{"displayName": {Source: "discovery", Value: "new"}},
+	}}
+	current := []IngestionSnapshot{{
+		ID: 1, EnvironmentID: 1, CIType: model.ResourceTypeHost, Name: "one",
+		ObservedValues: map[string]ObservedValueInput{
+			"displayName": {Source: "discovery", Value: "old"},
+			"ipAddress":   {Source: "agent", Value: "10.0.0.1"},
+		},
+	}}
+
+	diff := PreviewIngestion(rows, current).Rows[0].Diff.Observed
+	if len(diff) != 1 || diff["ipAddress"].After != nil {
+		t.Fatalf("observed diff must contain only submitted fields: %+v", diff)
 	}
 }
 

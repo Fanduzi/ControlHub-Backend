@@ -1,7 +1,7 @@
 // Package mysql provides MySQL-backed repository implementations.
 // input: database/sql, time, internal/model, internal/service
-// output: resource CRUD, governed identity and batched typed-profile reads, rich inventory filtering, health observations/effective health, observed/effective values, validated previews, audited versioned manual overrides, atomic bulk mutation, and atomic ingestion confirmation
-// pos: MySQL data access for resources, identity, typed-profile projections, current health evidence, effective values, inventory search, and bulk/ingestion transactions reusing normal update validation under row locks
+// output: resource CRUD, governed identity and batched typed-profile reads, rich inventory filtering, health observations/effective health, observed/effective values, validated previews, audited versioned manual overrides, atomic bulk mutation, and additive atomic ingestion confirmation
+// pos: MySQL resource persistence, identity and typed-profile projections, current health evidence, effective values, inventory search, and shared stable resource-row lock authority for bulk/ingestion transactions and relations
 // note: if this file changes, update this header and module README.md.
 package mysql
 
@@ -1300,17 +1300,27 @@ func (r *ResourceRepository) ConfirmIngestion(ctx context.Context, rows []servic
 	if err := service.ValidateIngestionRows(rows); err != nil {
 		return nil, err
 	}
+	ids, err := findIngestionCandidateIDs(ctx, r.db, rows)
+	if err != nil {
+		return nil, err
+	}
+	candidateIDs := sortedIDSet(ids)
 	tx, err := r.db.BeginTx(ctx, nil)
 	if err != nil {
 		return nil, fmt.Errorf("begin ingestion confirmation transaction: %w", err)
 	}
 	defer tx.Rollback()
 
-	ids, err := findIngestionCandidateIDs(ctx, tx, rows)
-	if err != nil {
+	lockIDs := append([]uint64(nil), candidateIDs...)
+	for _, row := range rows {
+		for _, relation := range row.Relations {
+			lockIDs = append(lockIDs, relation.TargetID)
+		}
+	}
+	if err := lockResourceRows(ctx, tx, lockIDs...); err != nil {
 		return nil, err
 	}
-	snapshots, err := loadIngestionSnapshots(ctx, tx, sortedIDSet(ids), true)
+	snapshots, err := loadIngestionSnapshots(ctx, tx, candidateIDs, false)
 	if err != nil {
 		return nil, err
 	}
@@ -1854,6 +1864,24 @@ func getResourceForUpdate(ctx context.Context, tx *sql.Tx, id uint64) (*model.Re
 		return nil, err
 	}
 	return &item, nil
+}
+
+func lockResourceRows(ctx context.Context, tx *sql.Tx, ids ...uint64) error {
+	sort.Slice(ids, func(i, j int) bool { return ids[i] < ids[j] })
+	var last uint64
+	for _, id := range ids {
+		if id == last {
+			continue
+		}
+		var locked uint64
+		if err := tx.QueryRowContext(ctx, `select id from resources where id = ? for update`, id).Scan(&locked); errors.Is(err, sql.ErrNoRows) {
+			return service.ErrResourceNotFound
+		} else if err != nil {
+			return fmt.Errorf("lock resource %d: %w", id, err)
+		}
+		last = id
+	}
+	return nil
 }
 
 type resourceIdentityQueryer interface {
