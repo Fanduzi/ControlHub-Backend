@@ -14,6 +14,9 @@ Business logic layer with interface-based repository dependencies. Each service 
 | relation_service.go | Shared relation read/write entry point; validates server-owned rules before fail-closed audited persistence |
 | relation_rules.go | Single relationship matrix authority plus source-specific discovery response |
 | completeness.go | Pure seven-group, server-derived resource completeness projection using typed-profile minima and matrix-valid structural endpoints; Domain Name has no structural-edge requirement |
+| topology_service.go | Environment-scoped topology workspace and rooted graph traversal with default depth 2, deterministic node/edge caps, and candidate starts |
+| topology_service_test.go | Topology traversal tests for depth, direction, cycles, caps, environment scope, and candidate starts |
+| topology_semantics_test.go | Topology semantic classification tests for roles, layers, replication metadata, and problem summaries |
 | audit_service.go | Audit event listing (global and per-resource) |
 | auth_service.go | Login, versioned Backend Bearer issuance, current-state VerifyToken (Authorization Version), role/disable/password invalidation, legacy-to-Argon2id transparent migration |
 | auth_audit_emitter.go | AuthAuditEmitter interface, NoopEmitter, and BoundedAuthAuditEmitter decorator capping untrusted Bearer rejection persistence at 60/min per process (fail-open) |
@@ -59,6 +62,7 @@ Business logic layer with interface-based repository dependencies. Each service 
 - `ValidateResourceUpdate` — normal update validation against an already-read current resource, reused by locked bulk mutations
 - `PreviewBulkResourceMutation` — pure preview of ordered targets against current snapshots; `ResourceService` delegates persisted preview/confirm reads to its resource repository
 - `BulkResourceMutationRequest`, `BulkResourceMutationTarget`, `ResourceMutationSnapshot`, `LabelOperations`, `BulkResourcePreview` — bulk mutation preview contract values
+- `TopologyService.BuildTopology` — builds rooted or environment-start topology responses with node/edge caps and `truncated`
 - `NewMemoryUserStore`, `AuthService.WithClock`, `AuthService.ChangeUserRole`/`SetUserActive`/`ResetUserPassword` — Authorization Version seams
 - `AuthAuditEmitter`, `NoopEmitter` — fail-open authentication/authorization audit emission interface and discard implementation
 - `BoundedAuthAuditEmitter`, `NewBoundedAuthAuditEmitter`, `BearerRejectBudget`, `NewBearerRejectBudget`, `ProcessBearerRejectBudget`, `BoundedBearerRejectedLimit`, `AuthAuditSuppressedRejections` — process-shared budget capping untrusted Bearer rejection persistence at 60 events/min per server process (all routers draw from one budget); suppression counter exposed only via the admin auth-audit metrics surface

@@ -2,7 +2,7 @@
 // input: internal/model (TopologyQuery, TopologyResponse, TopologyNode, TopologyEdge, TopologyGroup)
 // output: NewTopologyService, TopologyService.BuildTopology, TopologyRepository interface
 // pos: Business logic for building topology read model from resources and relations
-// note: if this file changes, update header and README.md
+// note: if this file changes, update this header and module README.md.
 package service
 
 import (
@@ -75,6 +75,7 @@ func (s *TopologyService) BuildTopology(query model.TopologyQuery) (*model.Topol
 		if err != nil {
 			return nil, err
 		}
+		sortTopologyRelations(relations)
 
 		var nextFrontier []uint64
 		for _, rel := range relations {
@@ -198,6 +199,21 @@ func (s *TopologyService) buildTopologyCandidates(query model.TopologyQuery) (*m
 		Truncated:          truncated,
 		Problems:           buildProblemSummaries(nodes),
 	}, nil
+}
+
+func sortTopologyRelations(relations []model.ResourceRelation) {
+	sort.Slice(relations, func(i, j int) bool {
+		if relations[i].RelationType != relations[j].RelationType {
+			return relations[i].RelationType < relations[j].RelationType
+		}
+		if relations[i].FromResourceID != relations[j].FromResourceID {
+			return relations[i].FromResourceID < relations[j].FromResourceID
+		}
+		if relations[i].ToResourceID != relations[j].ToResourceID {
+			return relations[i].ToResourceID < relations[j].ToResourceID
+		}
+		return relations[i].ID < relations[j].ID
+	})
 }
 
 func isTopologyCandidate(res *model.Resource) bool {

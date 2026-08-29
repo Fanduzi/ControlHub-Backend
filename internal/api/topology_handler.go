@@ -1,8 +1,8 @@
 // Package api provides HTTP handlers and routing for the ControlHub REST API.
 // input: net/http, internal/service, internal/model
-// output: handleGetTopology
-// pos: HTTP handler for GET /resources/{id}/topology
-// note: if this file changes, update header and README.md
+// output: handleGetTopology, handleGetEnvironmentTopology
+// pos: HTTP handlers for resource-rooted and environment-scoped topology workspace reads
+// note: if this file changes, update this header and module README.md.
 package api
 
 import (
@@ -24,9 +24,9 @@ func handleGetTopology(topologyService *service.TopologyService) http.HandlerFun
 		}
 
 		q := r.URL.Query()
-		depth := parseIntDefault(q.Get("depth"), 1)
-		if depth < 1 || depth > 2 {
-			writeJSONError(w, http.StatusBadRequest, "validation_failed", "depth must be 1 or 2")
+		depth, err := parseTopologyDepth(q.Get("depth"))
+		if err != nil {
+			writeJSONError(w, http.StatusBadRequest, "validation_failed", err.Error())
 			return
 		}
 
@@ -60,6 +60,61 @@ func handleGetTopology(topologyService *service.TopologyService) http.HandlerFun
 	}
 }
 
+func handleGetEnvironmentTopology(topologyService *service.TopologyService) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		environmentID, err := parseUint64IDParam(chi.URLParam(r, "id"), "environment id")
+		if err != nil {
+			writeJSONError(w, http.StatusBadRequest, "validation_failed", err.Error())
+			return
+		}
+
+		q := r.URL.Query()
+		depth, err := parseTopologyDepth(q.Get("depth"))
+		if err != nil {
+			writeJSONError(w, http.StatusBadRequest, "validation_failed", err.Error())
+			return
+		}
+
+		rootID := uint64(0)
+		if rawRootID := q.Get("rootResourceId"); rawRootID != "" {
+			rootID, err = parseUint64IDParam(rawRootID, "rootResourceId")
+			if err != nil {
+				writeJSONError(w, http.StatusBadRequest, "validation_failed", err.Error())
+				return
+			}
+		}
+
+		direction := parseDirection(q.Get("direction"))
+		if direction == "" {
+			writeJSONError(w, http.StatusBadRequest, "validation_failed", "direction must be both, upstream, or downstream")
+			return
+		}
+
+		var relationType model.RelationType
+		if rt := q.Get("relationType"); rt != "" {
+			relationType = model.RelationType(rt)
+			if err := relationType.Validate(); err != nil {
+				writeJSONError(w, http.StatusBadRequest, "validation_failed", "relationType is not supported")
+				return
+			}
+		}
+
+		resp, err := topologyService.BuildTopology(model.TopologyQuery{
+			EnvironmentID: environmentID,
+			RootID:        rootID,
+			Depth:         depth,
+			Direction:     direction,
+			RelationType:  relationType,
+		})
+		if err != nil {
+			writeServiceError(w, err)
+			return
+		}
+
+		writeJSON(w, http.StatusOK, resp)
+	}
+}
+
 func parseDirection(s string) model.TopologyDirection {
 	if s == "" {
 		return model.TopologyDirectionBoth
@@ -72,10 +127,13 @@ func parseDirection(s string) model.TopologyDirection {
 	return ""
 }
 
-// parseIntParam parses a query parameter as int with a default.
-func parseIntParam(s string, def int) (int, error) {
+func parseTopologyDepth(s string) (int, error) {
 	if s == "" {
-		return def, nil
+		return 0, nil
 	}
-	return strconv.Atoi(s)
+	depth, err := strconv.Atoi(s)
+	if err != nil || depth < 1 {
+		return 0, service.ErrInvalidDepth
+	}
+	return depth, nil
 }

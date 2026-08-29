@@ -1,7 +1,7 @@
 // Package api provides HTTP handlers and routing for the ControlHub REST API.
 // input: internal/api, internal/model, internal/service, net/http
-// output: TestServer struct, NewTestServer with fake batch-profile, relation, health, effective-value, and bulk preview/confirm data
-// pos: Test infrastructure — fake repositories for typed profiles, completeness relations, health observations, effective values, bulk mutation review, and a pre-wired handler router
+// output: TestServer struct, NewTestServer with fake batch-profile, relation, health, effective-value, bulk preview/confirm, and topology data
+// pos: Test infrastructure — fake repositories for typed profiles, completeness relations, health observations, effective values, bulk mutation review, topology candidates, and a pre-wired handler router
 // note: if this file changes, update this header and module README.md.
 package api
 
@@ -885,6 +885,17 @@ func (f *fakeTopologyRepo) ListRelationsByResourceIDs(ids []uint64) ([]model.Res
 	return result, nil
 }
 
+func (f *fakeTopologyRepo) ListTopologyCandidates(environmentID uint64) ([]model.Resource, error) {
+	result := make([]model.Resource, 0)
+	for _, resource := range f.resources.resources {
+		if resource.EnvironmentID != environmentID {
+			continue
+		}
+		result = append(result, resource)
+	}
+	return result, nil
+}
+
 type fakeAuditRepo struct{}
 
 func (fakeAuditRepo) ListAuditEvents(_ context.Context, q model.AuditListQuery) ([]model.AuditEvent, int, error) {
@@ -1186,6 +1197,7 @@ func NewTestServer() *TestServer {
 			7: {ID: 7, ResourceType: model.ResourceTypeHost, ResourceSubtype: "vm", Name: "bare-host", DisplayName: "Bare Host", EnvironmentID: 1, OwnerID: 3, LifecycleStatus: "running", HealthStatus: "healthy", Source: "manual", Labels: map[string]string{}, CreatedAt: time.Date(2026, 4, 11, 20, 0, 0, 0, time.UTC), UpdatedAt: time.Date(2026, 4, 11, 20, 0, 0, 0, time.UTC)},
 			8: {ID: 8, ResourceType: model.ResourceTypeHost, ResourceSubtype: "vm", Name: "archived-host", DisplayName: "Archived Host", EnvironmentID: 1, OwnerID: 3, LifecycleStatus: "decommissioned", HealthStatus: "unknown", Source: "manual", Labels: map[string]string{}, CreatedAt: time.Date(2026, 4, 11, 19, 0, 0, 0, time.UTC), UpdatedAt: time.Date(2026, 4, 11, 19, 0, 0, 0, time.UTC), ArchivedAt: &archivedAt, ArchiveReason: &archiveReason},
 			9: {ID: 9, ResourceType: model.ResourceTypeDatabaseCluster, ResourceSubtype: "clickhouse", Name: "analytics-ch-cluster-prod", DisplayName: "Analytics ClickHouse Cluster Production", EnvironmentID: 1, OwnerID: 2, LifecycleStatus: "running", HealthStatus: "healthy", Source: "manual", Labels: map[string]string{"team": "analytics"}, DatabaseOperationalSummary: &model.DatabaseOperationalSummary{MemberCount: 2, CriticalMemberCount: 1, WarningMemberCount: 0, StoppedMemberCount: 0, DegradedMemberCount: 0, UnknownRoleCount: 0, PrimaryMemberCount: 0, ReplicaMemberCount: 2, WorstMemberID: ptrInt64(10), WorstMemberName: "Analytics ClickHouse Node 02", WorstMemberStatus: "critical"}, CreatedAt: time.Date(2026, 4, 11, 20, 0, 0, 0, time.UTC), UpdatedAt: time.Date(2026, 4, 11, 20, 0, 0, 0, time.UTC)},
+			10: {ID: 10, ResourceType: model.ResourceTypeDatabaseProxy, ResourceSubtype: "proxysql", Name: "order-proxy-prod", DisplayName: "Order Proxy Prod", EnvironmentID: 1, OwnerID: 2, LifecycleStatus: "running", HealthStatus: "healthy", Source: "manual", Labels: map[string]string{"team": "order"}, CreatedAt: time.Date(2026, 4, 11, 20, 0, 0, 0, time.UTC), UpdatedAt: time.Date(2026, 4, 11, 20, 0, 0, 0, time.UTC)},
 		},
 		listOrder: []uint64{1, 2, 8, 9},
 		profiles: map[uint64]*model.ResourceProfileResponse{
@@ -1265,7 +1277,7 @@ func authenticatedTestRouter(next http.Handler, token string) http.Handler {
 }
 
 func testRouteNeedsDefaultActor(path string) bool {
-	if path == "/resources" || strings.HasPrefix(path, "/resources/") || path == "/resource-relations" || strings.HasPrefix(path, "/resource-relations/") {
+	if path == "/resources" || strings.HasPrefix(path, "/resources/") || path == "/resource-relations" || strings.HasPrefix(path, "/resource-relations/") || strings.HasPrefix(path, "/environments/") {
 		return true
 	}
 	switch path {

@@ -3812,7 +3812,7 @@ paths:
       description: >
         Read-only topology projection around a root resource, built from
         existing resources and relations. Returns nodes, edges, and
-        optional groups for graph visualization. Supports depth (1 or 2)
+        optional groups for graph visualization. Defaults to depth 2
         and directional filtering (upstream, downstream, or both).
       operationId: getResourceTopology
       parameters:
@@ -3827,9 +3827,9 @@ paths:
           name: depth
           schema:
             type: integer
-            enum: [1, 2]
-            default: 1
-          description: Traversal depth (1 = direct neighbors, 2 = two hops)
+            minimum: 1
+            default: 2
+          description: Traversal depth (1 = direct neighbors, 2 = two hops, larger values are bounded by output caps)
         - in: query
           name: direction
           schema:
@@ -3858,6 +3858,7 @@ paths:
                 depth: 1
                 direction: both
                 isDatabaseTopology: true
+                truncated: false
                 nodes:
                   - id: 4000000000000000001
                     resourceType: database_cluster
@@ -3922,6 +3923,76 @@ paths:
                 $ref: "#/components/schemas/ErrorResponse"
         "404":
           description: Root resource not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+  /environments/{id}/topology:
+    get:
+      summary: Get environment topology workspace
+      description: >
+        Environment-scoped topology workspace read. Without rootResourceId,
+        returns current-environment starting points: anomalous resources plus
+        service, database_cluster, and database_proxy resources. With
+        rootResourceId, expands the rooted graph inside the same environment.
+        Output is capped and reports truncated=true when incomplete.
+      operationId: getEnvironmentTopology
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: integer
+            format: int64
+            minimum: 1
+          description: Environment ID
+        - in: query
+          name: rootResourceId
+          schema:
+            type: integer
+            format: int64
+            minimum: 1
+          description: Optional root resource ID selected by the operator
+        - in: query
+          name: depth
+          schema:
+            type: integer
+            minimum: 1
+            default: 2
+          description: Traversal depth used when rootResourceId is supplied
+        - in: query
+          name: direction
+          schema:
+            type: string
+            enum: [both, upstream, downstream]
+            default: both
+          description: Expansion direction relative to the root or current frontier
+        - in: query
+          name: relationType
+          schema:
+            $ref: "#/components/schemas/RelationType"
+          description: Optional filter to include only edges of this relation type
+      responses:
+        "200":
+          description: Environment topology workspace
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TopologyResponse"
+        "400":
+          description: Invalid path or query parameters
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "401":
+          description: Missing or invalid Bearer token
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "404":
+          description: Root resource not found in this environment
           content:
             application/json:
               schema:
@@ -6199,7 +6270,7 @@ components:
           description: Pagination metadata for offset mode (when ?page= is provided). Omitted in cursor mode.
     TopologyResponse:
       type: object
-      required: [rootResourceId, depth, direction, nodes, edges, groups, isDatabaseTopology]
+      required: [rootResourceId, depth, direction, nodes, edges, groups, isDatabaseTopology, truncated]
       properties:
         rootResourceId:
           type: integer
@@ -6237,6 +6308,9 @@ components:
             True if any node is a database_cluster or database_instance.
             Frontend uses this flag to switch to the layered database
             graph renderer.
+        truncated:
+          type: boolean
+          description: True when node or edge output caps made the response incomplete.
     TopologyNode:
       type: object
       required:

@@ -1,5 +1,11 @@
 //go:build integration
 
+// Package integration verifies topology behavior against disposable MySQL.
+// input: internal/model, internal/repository/mysql, internal/service, Testcontainers-backed MySQL
+// output: topology service and repository integration tests
+// pos: Proves topology traversal and workspace candidates against real MySQL
+// note: if this file changes, update this header and module README.md.
+
 package integration
 
 import (
@@ -92,6 +98,60 @@ func createTopologyFixturesWithName(t *testing.T, resRepo *mysql.ResourceReposit
 	}
 
 	return hostA.ID, instanceB.ID, clusterC.ID
+}
+
+func TestRelationRepositoryListTopologyCandidates(t *testing.T) {
+	db := setupTestDB(t)
+	resRepo := mysql.NewResourceRepository(db)
+	relRepo := mysql.NewRelationRepository(db)
+	ctx := context.Background()
+
+	serviceRes := createTopologyCandidateResource(t, resRepo, ctx, "topo-candidate-service", model.ResourceTypeService, "api", envProd, model.HealthStatusHealthy)
+	cluster := createTopologyCandidateResource(t, resRepo, ctx, "topo-candidate-cluster", model.ResourceTypeDatabaseCluster, "mysql", envProd, model.HealthStatusHealthy)
+	proxy := createTopologyCandidateResource(t, resRepo, ctx, "topo-candidate-proxy", model.ResourceTypeDatabaseProxy, "proxysql", envProd, model.HealthStatusHealthy)
+	warningHost := createTopologyCandidateResource(t, resRepo, ctx, "topo-candidate-warning-host", model.ResourceTypeHost, "vm", envProd, model.HealthStatusWarning)
+	healthyHost := createTopologyCandidateResource(t, resRepo, ctx, "topo-candidate-healthy-host", model.ResourceTypeHost, "vm", envProd, model.HealthStatusHealthy)
+	otherEnvService := createTopologyCandidateResource(t, resRepo, ctx, "topo-candidate-other-env-service", model.ResourceTypeService, "api", 2, model.HealthStatusHealthy)
+
+	items, err := relRepo.ListTopologyCandidates(envProd)
+	if err != nil {
+		t.Fatalf("list topology candidates: %v", err)
+	}
+
+	got := map[uint64]bool{}
+	for _, item := range items {
+		got[item.ID] = true
+	}
+	for _, id := range []uint64{serviceRes.ID, cluster.ID, proxy.ID, warningHost.ID} {
+		if !got[id] {
+			t.Fatalf("missing candidate %d in %v", id, got)
+		}
+	}
+	for _, id := range []uint64{healthyHost.ID, otherEnvService.ID} {
+		if got[id] {
+			t.Fatalf("unexpected candidate %d in %v", id, got)
+		}
+	}
+}
+
+func createTopologyCandidateResource(t *testing.T, repo *mysql.ResourceRepository, ctx context.Context, name string, resourceType model.ResourceType, subtype string, environmentID uint64, health model.HealthStatus) *model.Resource {
+	t.Helper()
+	created, err := repo.CreateResource(ctx, model.ResourceCreateInput{
+		ResourceType:    resourceType,
+		ResourceSubtype: subtype,
+		Name:            name,
+		DisplayName:     name,
+		EnvironmentID:   environmentID,
+		OwnerID:         ownerDBA,
+		LifecycleStatus: model.LifecycleStatusRunning,
+		HealthStatus:    health,
+		Source:          "manual",
+		Labels:          map[string]string{},
+	})
+	if err != nil {
+		t.Fatalf("create %s: %v", name, err)
+	}
+	return created
 }
 
 func TestTopology_Depth1_ReturnsDirectNeighbors(t *testing.T) {

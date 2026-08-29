@@ -5,7 +5,7 @@ Embeds and validates the OpenAPI contract served by the API documentation route.
 ## Files
 | File | Responsibility |
 |------|---------------|
-| openapi.yaml | Source OpenAPI contract for resource-list search filters, named inventory views, admin bulk mutation preview/confirmation, governed typed-profile identity, health observations, relationship-rule discovery, access security, audit pagination/search and field diffs, metrics, and controlled errors |
+| openapi.yaml | Source OpenAPI contract for resource-list search filters, named inventory views, admin bulk mutation preview/confirmation, governed typed-profile identity, health observations, topology workspace reads, relationship-rule discovery, access security, audit pagination/search and field diffs, metrics, and controlled errors |
 | embed.go | Embeds the YAML for serving and tests |
 | openapi_test.go | Validates schema, topology, pagination, and executions contract tests |
 | operator_access_boundary_test.go | Proves every protected operation documents the status codes its operatoraccess class requires |
@@ -24,6 +24,7 @@ Embeds and validates the OpenAPI contract served by the API documentation route.
 - `AuditEvent.changes`: optional server-owned add/update/remove field evidence with before/after values; absent on legacy and non-inventory events.
 - `Resource` always exposes read-only completeness, effective status, freshness, observed time, observer, and nullable manual override; POST observations are operational and PATCH null clears the audited override.
 - `GET /resources/{id}/relation-rules`: source-specific relation types, target resource types, and same-environment constraints consumed by the console; writes revalidate the same server matrix.
+- `GET /resources/{id}/topology` and `GET /environments/{id}/topology`: authenticated topology reads with default depth 2, optional environment-scoped root selection, output caps, and required `truncated`.
 - `GET /audit-events?q=...`: optional search over operator identity and target resource name, combined with the existing filters.
 - `GET /resources?q=...&ownerId=...&label=key:value`: inventory identifier search, exact owner filtering, and repeatable exact labels combined with AND.
 

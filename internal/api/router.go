@@ -1,7 +1,7 @@
 // Package api provides HTTP handlers and routing for the ControlHub REST API.
 // input: chi/v5, time, internal/service (all services)
-// output: Dependencies struct, NewRouter, CORS, health observation, relationship-rule discovery, named inventory view routes, and admin bulk mutation routes
-// pos: HTTP routing entry point for authenticated inventory, named views, health evidence, relationship discovery, bulk mutation review, query, and admin operations
+// output: Dependencies struct, NewRouter, CORS, health observation, relationship-rule discovery, named inventory view, bulk mutation, and topology workspace routes
+// pos: HTTP routing entry point for authenticated inventory, named views, topology, health evidence, relationship discovery, bulk mutation review, query, and admin operations
 // note: if this file changes, update this header and module README.md.
 package api
 
@@ -110,6 +110,7 @@ func NewRouter(deps Dependencies) *chi.Mux {
 		r.Get("/resources/{id}/relation-rules", handleGetResourceRelationRules(deps.RelationService))
 		r.Get("/resources/{id}/members", handleGetResourceMembers(deps.RelationService))
 		r.Get("/resources/{id}/topology", handleGetTopology(deps.TopologyService))
+		r.Get("/environments/{id}/topology", handleGetEnvironmentTopology(deps.TopologyService))
 		r.Get("/environments", handleListEnvironments(deps.EnvironmentService))
 		r.Get("/owners", handleListOwners(deps.OwnerService))
 		r.Get("/roles", handleListRoles(deps.RoleService))

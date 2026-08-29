@@ -1,7 +1,7 @@
 // Package mysql provides MySQL-backed repository implementations.
 // input: database/sql, internal/model, and effective-health resource reads
-// output: relation CRUD plus relation/member projections with derived health
-// pos: MySQL data access for resource relations and topology resource lookup
+// output: relation CRUD plus relation/member projections, topology candidates, and derived health
+// pos: MySQL data access for resource relations, topology resource lookup, and workspace candidate reads
 // note: if this file changes, update this header and module README.md.
 package mysql
 
@@ -380,4 +380,27 @@ func (r *RelationRepository) ListRelationsByResourceIDs(ids []uint64) ([]model.R
 	}
 
 	return items, rows.Err()
+}
+
+func (r *RelationRepository) ListTopologyCandidates(environmentID uint64) ([]model.Resource, error) {
+	resourceRepo := NewResourceRepository(r.db)
+	query := model.ResourceListQuery{
+		ResourceTypes:  []string{string(model.ResourceTypeService), string(model.ResourceTypeDatabaseCluster), string(model.ResourceTypeDatabaseProxy)},
+		EnvironmentIDs: []uint64{environmentID},
+		Page:           1,
+		PageSize:       model.MaxPageSize,
+	}
+	typed, _, err := resourceRepo.ListResources(context.Background(), query)
+	if err != nil {
+		return nil, err
+	}
+
+	query.ResourceTypes = nil
+	query.HealthStatuses = []string{string(model.HealthStatusWarning), string(model.HealthStatusCritical)}
+	abnormal, _, err := resourceRepo.ListResources(context.Background(), query)
+	if err != nil {
+		return nil, err
+	}
+
+	return append(typed, abnormal...), nil
 }

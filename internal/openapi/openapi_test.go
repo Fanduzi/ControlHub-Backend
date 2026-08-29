@@ -202,6 +202,8 @@ func TestOpenAPINumericIDsUseInt64(t *testing.T) {
 	assertPathParamInt64(t, doc, "/resource-relations/{id}", "delete", "id")
 	assertPathParamInt64(t, doc, "/resources/{id}/audit-events", "get", "id")
 	assertPathParamInt64(t, doc, "/resources/{id}/topology", "get", "id")
+	assertPathParamInt64(t, doc, "/environments/{id}/topology", "get", "id")
+	assertQueryParamInt64(t, doc, "/environments/{id}/topology", "get", "rootResourceId")
 	assertQueryParamArrayItemsInt64(t, doc, "/resources", "get", "environmentId")
 	assertQueryParamInt64(t, doc, "/audit-events", "get", "targetResourceId")
 
@@ -227,6 +229,9 @@ func TestOpenAPINumericIDsUseInt64(t *testing.T) {
 	assertSchemaPropertyInt64(t, doc, "OverrideVersionResponse", "version")
 	assertSchemaPropertyInt64(t, doc, "RelationCreateInput", "toResourceId")
 	assertSchemaPropertyInt64(t, doc, "TopologyResponse", "rootResourceId")
+	if !slices.Contains(doc.Components.Schemas["TopologyResponse"].Value.Required, "truncated") {
+		t.Fatal("TopologyResponse.truncated must be required")
+	}
 	assertSchemaPropertyInt64(t, doc, "TopologyNode", "id")
 	assertSchemaPropertyInt64(t, doc, "TopologyNode", "environmentId")
 	assertSchemaPropertyInt64(t, doc, "TopologyNode", "ownerId")

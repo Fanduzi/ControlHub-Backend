@@ -5,11 +5,12 @@ HTTP handlers, chi routing, CORS middleware, and fake-repo test infrastructure.
 ## Files
 | File | Responsibility |
 |------|---------------|
-| router.go | Route registration, including authenticated inventory/dictionary/named-view reads, admin health observation ingestion, Operator Access Boundary middleware, Dependencies, CORS, and bounded auth-audit wiring |
+| router.go | Route registration, including authenticated inventory/dictionary/named-view/topology reads, admin health observation ingestion, Operator Access Boundary middleware, Dependencies, CORS, and bounded auth-audit wiring |
 | health_handler.go | GET /health endpoint |
 | resource_handler.go | Resource list/detail identity, health, and server-derived completeness fields; explicit identity conflicts, non-audited observation ingestion, and PATCH changes through atomic inventory audit |
 | profile_handler.go | PUT/PATCH/DELETE /resources/{id}/profile handlers with strict decoding and token-derived atomic inventory audit |
 | relation_handler.go | Resource relation reads, source-specific rule discovery, and token-derived atomic audited create/delete handlers |
+| topology_handler.go | Resource-rooted and environment-scoped topology workspace read handlers |
 | audit_handler.go | Audit event list handlers (global and per-resource), including pagination, filters, search, and inventory field changes |
 | auth_handler.go | POST /auth/login handler |
 | auth_middleware.go | Bearer, role, Authorization Version, and query-freshness middleware; missing Authorization emits no audit event; supplied untrusted Bearer rejection emits the fixed event within the 60/min per-process budget |
@@ -27,6 +28,7 @@ HTTP handlers, chi routing, CORS middleware, and fake-repo test infrastructure.
 | resource_handler_test.go | Resource and profile endpoint tests, including list/detail completeness projection, strict rejection of client completeness, governed identity, explicit conflicts, immutable origin, create-with-profile atomicity, minimum manual identity, and all typed-profile identities at the HTTP seam |
 | profile_handler_test.go | PUT full-replacement and PATCH partial-merge tests: strict JSON decoding, field validation, no-op empty PATCH, Domain Name normalization, and Database Proxy role contract |
 | relation_handler_test.go | Relation endpoint tests |
+| topology_handler_test.go | Topology endpoint tests, including default depth, deeper traversals, and environment workspace starts |
 | audit_handler_test.go | Audit list contract tests, including field-level before/after changes |
 | auth_handler_test.go | Auth endpoint tests |
 | dictionary_handler_test.go | Dictionary endpoint tests |
@@ -55,6 +57,8 @@ HTTP handlers, chi routing, CORS middleware, and fake-repo test infrastructure.
 | DELETE | /inventory/views/{viewId} | Delete an owned personal view or admin-managed shared view |
 | POST | /resources/bulk-mutations/preview | Admin-only side-effect-free bulk mutation preview with ordered per-CI diffs/errors and a review fingerprint |
 | POST | /resources/bulk-mutations/confirm | Admin-only reviewed bulk mutation confirmation; current-state or fingerprint conflicts return 409 |
+| GET | /resources/{id}/topology | Get a rooted topology graph; depth defaults to 2 and larger depths are bounded by output caps |
+| GET | /environments/{id}/topology | Get an environment-scoped topology workspace; `rootResourceId` is optional |
 | GET | /query-targets/{id}/schema/table-definition | Get MySQL table definition (base tables only) |
 | POST | /query-targets/{id}/execute | Execute a governed read-only statement, with optional page-number result paging for SELECT |
 | POST | /query-targets/{id}/related-records | Governed FK related-record navigation (Issue #36: records through the same atomic Execution Evidence Pair as execution) |

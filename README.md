@@ -282,6 +282,8 @@ Dependency flow (strict, one-directional): `cmd/server` → `api` → `service` 
 | POST | /resources/{id}/health-observations | Store an observer's latest health evidence without inventory audit |
 | GET | /resources/{id}/profile | Get resource typed profile projection |
 | GET | /resources/{id}/relations | List relations for a resource |
+| GET | /resources/{id}/topology | Get a rooted topology graph |
+| GET | /environments/{id}/topology | Get an environment-scoped topology workspace |
 | GET | /resources/{id}/audit-events | List audit events for a resource |
 | GET | /audit-events | List audit events |
 | GET | /inventory/views | List owned personal and shared Inventory views |
