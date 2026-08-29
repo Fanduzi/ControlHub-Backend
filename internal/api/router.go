@@ -1,7 +1,7 @@
 // Package api provides HTTP handlers and routing for the ControlHub REST API.
-// input: chi/v5, time, internal/service (all services)
-// output: Dependencies struct, NewRouter, CORS, health observation, relationship-rule discovery, named inventory view, bulk mutation, topology workspace, and ingestion routes
-// pos: HTTP routing entry point for authenticated inventory, named views, topology, health evidence, relationship discovery, bulk mutation review, query, and admin ingestion operations
+// input: chi/v5, time, internal/model, internal/service (all services)
+// output: Dependencies, NewRouter, CORS, user-or-machine scoped reads, and user-only health observation, bulk mutation, ingestion, and admin routes
+// pos: HTTP routing entry point for the closed machine route/scope matrix and authenticated inventory, named-view, topology, query, and admin operations
 // note: if this file changes, update this header and module README.md.
 package api
 
@@ -10,6 +10,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
+	"github.com/fan/controlhub/internal/model"
 	"github.com/fan/controlhub/internal/service"
 )
 
@@ -62,6 +63,7 @@ type Dependencies struct {
 	QuerySavedStatementService querySavedStatementAPI
 	NamedInventoryViewService  namedInventoryViewAPI
 	MachinePrincipalService    machinePrincipalAPI
+	MachineCredentialService   machineCredentialAPI
 	// AuthAuditEmitter records authentication and authorization outcomes.
 	// Nil is treated as NoopEmitter; fail-open semantics apply.
 	AuthAuditEmitter service.AuthAuditEmitter
@@ -101,17 +103,16 @@ func NewRouter(deps Dependencies) *chi.Mux {
 	router.Post("/auth/login", handleLogin(deps.AuthService, emitter))
 	router.Get("/openapi.yaml", handleOpenAPIYAML)
 	router.Get("/docs", handleDocs)
+	requireUser := requireAuthenticatedActor(deps.AuthService, deps.QueryExecutionAuth, emitter)
+	requireAdmin := func(next http.Handler) http.Handler {
+		return requireUser(requireAdminActor(emitter)(next))
+	}
 	router.Group(func(r chi.Router) {
-		r.Use(requireAuthenticatedActor(deps.AuthService, deps.QueryExecutionAuth, emitter))
+		r.Use(requireUserOrMachineCredential(deps.MachineCredentialService, model.MachineScopeInventoryRead, requireUser))
 		r.Get("/resources", handleListResources(deps.ResourceService))
 		r.Get("/resources/{id}", handleGetResource(deps.ResourceService))
 		r.Get("/resources/{id}/profile", handleGetResourceProfile(deps.ResourceService))
 		r.Get("/resources/{id}/effective-values", handleGetResourceEffectiveValues(deps.ResourceService))
-		r.Get("/resources/{id}/relations", handleListResourceRelations(deps.RelationService))
-		r.Get("/resources/{id}/relation-rules", handleGetResourceRelationRules(deps.RelationService))
-		r.Get("/resources/{id}/members", handleGetResourceMembers(deps.RelationService))
-		r.Get("/resources/{id}/topology", handleGetTopology(deps.TopologyService))
-		r.Get("/environments/{id}/topology", handleGetEnvironmentTopology(deps.TopologyService))
 		r.Get("/environments", handleListEnvironments(deps.EnvironmentService))
 		r.Get("/owners", handleListOwners(deps.OwnerService))
 		r.Get("/roles", handleListRoles(deps.RoleService))
@@ -120,14 +121,33 @@ func NewRouter(deps Dependencies) *chi.Mux {
 		r.Get("/lifecycle-statuses", handleListLifecycleStatuses(deps.LifecycleStatusService))
 		r.Get("/health-statuses", handleListHealthStatuses(deps.HealthStatusService))
 		r.Get("/resource-subtypes", handleListResourceSubtypes(deps.ResourceSubtypeService))
+	})
+	router.Group(func(r chi.Router) {
+		r.Use(requireUserOrMachineCredential(deps.MachineCredentialService, model.MachineScopeRelationsRead, requireUser))
+		r.Get("/resources/{id}/relations", handleListResourceRelations(deps.RelationService))
+		r.Get("/resources/{id}/relation-rules", handleGetResourceRelationRules(deps.RelationService))
+		r.Get("/resources/{id}/members", handleGetResourceMembers(deps.RelationService))
+		r.Get("/resources/{id}/topology", handleGetTopology(deps.TopologyService))
+		r.Get("/environments/{id}/topology", handleGetEnvironmentTopology(deps.TopologyService))
+	})
+	router.Group(func(r chi.Router) {
+		r.Use(requireUserOrMachineCredential(deps.MachineCredentialService, model.MachineScopeGovernedSelect, requireUser))
 		r.Get("/query-targets", handleListQueryTargets(deps.QueryTargetService))
-		if deps.NamedInventoryViewService != nil {
-			r.Get("/inventory/views", handleListNamedInventoryViews(deps.NamedInventoryViewService))
-			r.Post("/inventory/views", handleCreateNamedInventoryView(deps.NamedInventoryViewService))
-			r.Put("/inventory/views/{viewId}", handleUpdateNamedInventoryView(deps.NamedInventoryViewService))
-			r.Delete("/inventory/views/{viewId}", handleDeleteNamedInventoryView(deps.NamedInventoryViewService))
-		}
-
+	})
+	if deps.NamedInventoryViewService != nil {
+		router.With(requireUserOrMachineCredential(deps.MachineCredentialService, model.MachineScopeNamedViewsRead, requireUser)).
+			Get("/inventory/views", handleListNamedInventoryViews(deps.NamedInventoryViewService))
+		router.With(requireUser).Post("/inventory/views", handleCreateNamedInventoryView(deps.NamedInventoryViewService))
+		router.With(requireUser).Put("/inventory/views/{viewId}", handleUpdateNamedInventoryView(deps.NamedInventoryViewService))
+		router.With(requireUser).Delete("/inventory/views/{viewId}", handleDeleteNamedInventoryView(deps.NamedInventoryViewService))
+	}
+	router.Group(func(r chi.Router) {
+		r.Use(requireUserOrMachineCredential(deps.MachineCredentialService, model.MachineScopeAuditRead, requireAdmin))
+		r.Get("/resources/{id}/audit-events", handleListResourceAuditEvents(deps.AuditService))
+		r.Get("/audit-events", handleListAuditEvents(deps.AuditService))
+	})
+	router.Group(func(r chi.Router) {
+		r.Use(requireUser)
 		r.Group(func(r chi.Router) {
 			r.Use(requireAdminActor(emitter))
 			r.Post("/admin/ingestions/preview", handlePreviewIngestion(deps.ResourceService))
@@ -146,8 +166,6 @@ func NewRouter(deps Dependencies) *chi.Mux {
 			r.Delete("/resources/{id}/profile", handleDeleteResourceProfile(deps.ProfileService))
 			r.Post("/resources/{id}/relations", handleCreateResourceRelation(deps.RelationService))
 			r.Delete("/resource-relations/{id}", handleDeleteResourceRelation(deps.RelationService))
-			r.Get("/resources/{id}/audit-events", handleListResourceAuditEvents(deps.AuditService))
-			r.Get("/audit-events", handleListAuditEvents(deps.AuditService))
 			r.Get("/admin/legacy-hash-count", handleGetLegacyHashCount(deps.AuthService))
 			r.Get("/ops/auth-audit-metrics", handleAuthAuditMetrics())
 			r.Get("/ops/query-evidence-metrics", handleQueryEvidenceMetrics(deps.QueryExecutionService))

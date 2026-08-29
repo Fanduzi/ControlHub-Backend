@@ -1,8 +1,8 @@
 // Package api provides HTTP handlers and routing for the ControlHub REST API.
 // input: context, net/http, strings, time, internal/service
-// output: MaxQueryTokenAge, QueryExecutionAuthConfig, requireAuthenticatedActor, requireAdminActor, requireFreshQueryActor, actorUserIDFromContext, actorRoleFromContext
-// pos: Bearer auth middleware — signature + current Authorization Version check; missing Authorization returns the generic 401 with no audit event; admin routes and query routes add role and freshness gates; untrusted Bearer rejection persistence is bounded by the router-wired per-process budget
-// note: if this file changes, update header and README.md
+// output: MaxQueryTokenAge, user-only auth/role/query-freshness middleware, actorUserIDFromContext, actorRoleFromContext
+// pos: User Bearer boundary — signature/current Authorization Version checks and explicit machine-credential rejection prevent user/session fallback; untrusted Bearer rejection persistence is bounded by the router-wired per-process budget
+// note: if this file changes, update this header and module README.md.
 package api
 
 import (
@@ -160,6 +160,10 @@ func requireFreshQueryActor(authService *service.AuthService, cfg QueryExecution
 func verifyBearer(authService *service.AuthService, emitter service.AuthAuditEmitter, w http.ResponseWriter, r *http.Request) (*service.AuthenticatedUser, bool) {
 	const prefix = "Bearer "
 	header := r.Header.Get("Authorization")
+	if strings.HasPrefix(header, prefix+"chmp_") {
+		writeMachineCredentialError(w, service.ErrMachineScopeDenied)
+		return nil, false
+	}
 	if header == "" {
 		// Missing Authorization is absence of a credential, not a rejected
 		// supplied credential (ADR 2026-08-15): the same controlled 401 with

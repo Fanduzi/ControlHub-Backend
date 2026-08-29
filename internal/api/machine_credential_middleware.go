@@ -1,7 +1,7 @@
 // Package api provides HTTP handlers and routing for the ControlHub REST API.
 // input: context, errors, net/http, strings, internal/model, internal/service
-// output: machine-credential authentication middleware and identity context
-// pos: Opaque non-browser credential boundary, independent of user sessions
+// output: machine-credential authentication, user-or-machine route guard, and identity context
+// pos: Opaque non-browser credential and scoped-route boundary, independent of user sessions
 // note: if this file changes, update this header and module README.md.
 package api
 
@@ -17,12 +17,16 @@ import (
 
 type machinePrincipalContextKey struct{}
 
+type machineCredentialAPI interface {
+	Authenticate(context.Context, string, model.MachineScope) (model.MachinePrincipalIdentity, error)
+}
+
 func machinePrincipalFromContext(ctx context.Context) (model.MachinePrincipalIdentity, bool) {
 	identity, ok := ctx.Value(machinePrincipalContextKey{}).(model.MachinePrincipalIdentity)
 	return identity, ok
 }
 
-func requireMachineCredential(svc *service.MachinePrincipalService, scope model.MachineScope) func(http.Handler) http.Handler {
+func requireMachineCredential(svc machineCredentialAPI, scope model.MachineScope) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			const prefix = "Bearer "
@@ -37,6 +41,20 @@ func requireMachineCredential(svc *service.MachinePrincipalService, scope model.
 				return
 			}
 			next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), machinePrincipalContextKey{}, identity)))
+		})
+	}
+}
+
+func requireUserOrMachineCredential(svc machineCredentialAPI, scope model.MachineScope, requireUser func(http.Handler) http.Handler) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		machine := requireMachineCredential(svc, scope)(next)
+		user := requireUser(next)
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if strings.HasPrefix(r.Header.Get("Authorization"), "Bearer chmp_") {
+				machine.ServeHTTP(w, r)
+				return
+			}
+			user.ServeHTTP(w, r)
 		})
 	}
 }

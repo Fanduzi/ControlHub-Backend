@@ -1,7 +1,7 @@
 // Package main provides the ControlHub application entry point.
 // input: config.LoadDotEnv/Load/ValidateJWTSecret/ErrQueryExecutionTokenMaxAgeRejected, mysql repositories, api.NewRouter, service constructors, os/signal Notify (SIGTERM/SIGINT), net.Listen
 // output: main() binary entry point; runServer() graceful-drain lifecycle
-// pos: Application bootstrap and lifecycle: validates the signing secret before opening the database, wires resource completeness and saved-statement template read services, then serves HTTP; SIGTERM/SIGINT stop new traffic and drain in-flight handlers for at most ten seconds (Issue #37)
+// pos: Application bootstrap and lifecycle: validates the signing secret before opening the database, wires resource completeness, governed query, saved-statement template reads, and independent machine credentials, then serves HTTP; SIGTERM/SIGINT stop new traffic and drain in-flight handlers for at most ten seconds (Issue #37)
 // note: if wiring, startup validation, or the shutdown contract changes, update this header and cmd/server/README.md
 package main
 
@@ -166,6 +166,7 @@ func buildDependencies(db *sql.DB, cfg config.Config) api.Dependencies {
 		QuerySavedStatementService: querySavedStatementSvc,
 		NamedInventoryViewService:  namedInventoryViewSvc,
 		MachinePrincipalService:    machinePrincipalSvc,
+		MachineCredentialService:   machinePrincipalSvc,
 		QueryExecutionAuth: api.QueryExecutionAuthConfig{
 			Clock: time.Now,
 		},

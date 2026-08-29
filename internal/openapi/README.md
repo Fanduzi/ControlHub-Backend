@@ -5,9 +5,10 @@ Embeds and validates the OpenAPI contract served by the API documentation route.
 ## Files
 | File | Responsibility |
 |------|---------------|
-| openapi.yaml | Source OpenAPI contract for resource-list search filters, named inventory views, admin bulk mutation preview/confirmation, governed typed-profile identity, strict multipart ingestion preview/confirm, health observations, topology workspace reads, relationship-rule discovery, access security, audit pagination/search and field diffs, metrics, and controlled errors |
+| openapi.yaml | Source OpenAPI contract for user and opaque machine security, scoped machine reads/admin lifecycle, resource-list search filters, named inventory views, admin bulk mutation preview/confirmation, governed typed-profile identity, strict multipart ingestion preview/confirm, health observations, topology workspace reads, relationship-rule discovery, audit pagination/search and field diffs, metrics, and controlled errors |
 | embed.go | Embeds the YAML for serving and tests |
-| openapi_test.go | Validates schema, strict ingestion multipart, topology, pagination, and executions contract tests |
+| openapi_test.go | Validates schema, strict ingestion multipart, bulk mutation, topology, pagination, executions, and the closed controlled-error enum |
+| machine_principal_contract_test.go | Validates machine security, closed route/scope mapping, admin routes, codes, and one-time-secret schemas |
 | operator_access_boundary_test.go | Proves every protected operation documents the status codes its operatoraccess class requires |
 | openapi_schema_helpers_test.go | Shared schema/parameter shape assertion helpers |
 
@@ -18,6 +19,8 @@ Embeds and validates the OpenAPI contract served by the API documentation route.
 - `GET /resources`: free-text `q` across CI identity fields (excluding owner and labels), exact `ownerId`, and repeatable exact `label=key:value` filters combined with AND.
 - `/inventory/views`: authenticated personal/shared named inventory view CRUD; shared mutations are admin-only and personal mutations are owner-only.
 - `/resources/bulk-mutations/preview` and `/resources/bulk-mutations/confirm`: admin-only reviewed bulk mutation contract with per-CI diffs/errors and fingerprint conflict protection.
+- `machineCredential`: independent opaque Bearer scheme; the documented closed route matrix grants inventory, relation/topology, query-target discovery, audit, and shared-only Named View reads without User/session fallback.
+- Machine credential plaintext appears only in `MachineCredentialIssue` create/rotate responses; reusable principal/credential schemas omit it.
 - `GET /ops/auth-audit-metrics` response schema: fixed admin-only shape with exactly `authAuditPersistenceFailures` and `authAuditSuppressedRejections` counters; carries no identity, request, or credential material
 - `GET /ops/query-evidence-metrics` response schema (Issue #34): fixed admin-only shape with exactly `queryEvidencePersistenceFailures`; carries no identity, target, statement, value, credential, DSN, request, or raw error material
 - `POST /admin/ingestions/preview` and `/confirm` use a strict multipart `format` (`csv` or `json`) plus one bounded `file`; confirm additionally requires the reviewed 64-hex fingerprint and returns a fresh preview in controlled 409 conflict/drift responses.

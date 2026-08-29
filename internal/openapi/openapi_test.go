@@ -1,6 +1,6 @@
 // Package openapi_test verifies the embedded OpenAPI contract.
 // input: embedded OpenAPI YAML, kin-openapi parser, internal/model
-// output: OpenAPI schema, resource completeness, health observation, effective-value override, ingestion multipart, bulk mutation, topology, pagination, execution, and closed error-enum tests
+// output: OpenAPI schema, resource completeness, health observation, effective-value override, ingestion multipart, bulk mutation, topology, pagination, execution, machine auth, and closed error-enum tests
 // pos: Prevents documented API contracts from drifting from router behavior
 // note: if this file changes, update this header and module README.md.
 package openapi_test
@@ -570,6 +570,10 @@ func TestOpenAPIErrorResponseErrorIsClosedControlledErrorCodeEnum(t *testing.T) 
 		"invalid_credentials",
 		"invalid_payload",
 		"invalid_request",
+		"machine_credential_expired",
+		"machine_credential_invalid",
+		"machine_credential_revoked",
+		"machine_scope_denied",
 		"malformed_json",
 		"not_found",
 		"owner_not_found",

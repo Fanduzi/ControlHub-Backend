@@ -1,6 +1,6 @@
 # input: public HTTP routes, model JSON shapes, and operator access policy
-# output: served OpenAPI 3.1 contract for ControlHub clients, including resource-list filters and bulk mutation review/confirmation
-# pos: canonical machine-readable API boundary, including inventory audit diffs
+# output: served OpenAPI 3.1 contract including machine credentials, scoped reads, resource-list filters, ingestion, and bulk mutation review/confirmation
+# pos: canonical machine-readable API boundary, including independent user/machine authentication and inventory audit diffs
 # note: if this file changes, update header and internal/openapi/README.md
 
 openapi: 3.1.0
@@ -16,6 +16,149 @@ servers:
 security:
   - bearerAuth: []
 paths:
+  /admin/machine-principals:
+    get:
+      summary: List machine principals
+      operationId: listMachinePrincipals
+      responses:
+        "200":
+          description: Machine principal list without credential secrets
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MachinePrincipalListResponse"
+        "401":
+          description: Missing or invalid user Bearer token
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "403":
+          description: Authenticated user is not an admin
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+    post:
+      summary: Create a machine principal and one-time credential
+      operationId: createMachinePrincipal
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/MachinePrincipalCreateRequest"
+      responses:
+        "201":
+          description: Machine principal and one-time credential secret
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MachineCredentialIssue"
+        "400":
+          description: Invalid name, scope, or expiry
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "401":
+          description: Missing or invalid user Bearer token
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "403":
+          description: Authenticated user is not an admin
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+  /admin/machine-credentials/{credentialId}/rotate:
+    post:
+      summary: Rotate a machine credential with overlap
+      operationId: rotateMachineCredential
+      parameters:
+        - in: path
+          name: credentialId
+          required: true
+          schema:
+            type: integer
+            format: int64
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/MachineCredentialRotateRequest"
+      responses:
+        "201":
+          description: Replacement credential and one-time secret; the prior credential remains active
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MachineCredentialIssue"
+        "400":
+          description: Invalid credential ID, scope, or expiry
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "401":
+          description: Missing or invalid user Bearer token
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "403":
+          description: Authenticated user is not an admin
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "404":
+          description: Credential not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+  /admin/machine-credentials/{credentialId}/revoke:
+    post:
+      summary: Revoke one machine credential
+      operationId: revokeMachineCredential
+      parameters:
+        - in: path
+          name: credentialId
+          required: true
+          schema:
+            type: integer
+            format: int64
+      responses:
+        "204":
+          description: Credential revoked
+        "400":
+          description: Invalid credential ID
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "401":
+          description: Missing or invalid user Bearer token
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "403":
+          description: Authenticated user is not an admin
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "404":
+          description: Credential not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
   /auth/login:
     post:
       summary: Login with local credentials
@@ -71,6 +214,10 @@ paths:
     get:
       summary: List query targets for the Query Workbench
       operationId: listQueryTargets
+      security:
+        - bearerAuth: []
+        - machineCredential: []
+      x-machine-scope: governed-select
       description: >-
         Read-only query target context derived from existing database instance
         resources. Returns the structured context a locked Query Workbench shell
@@ -1790,6 +1937,8 @@ paths:
         views. Requires a fresh Bearer token.
       security:
         - bearerAuth: []
+        - machineCredential: []
+      x-machine-scope: named-views:read
       responses:
         "200":
           description: Named inventory view list
@@ -2484,6 +2633,10 @@ paths:
     get:
       summary: List resources
       operationId: listResources
+      security:
+        - bearerAuth: []
+        - machineCredential: []
+      x-machine-scope: inventory:read
       parameters:
         - in: query
           name: resourceType
@@ -2795,6 +2948,10 @@ paths:
     get:
       summary: Get resource detail
       operationId: getResource
+      security:
+        - bearerAuth: []
+        - machineCredential: []
+      x-machine-scope: inventory:read
       parameters:
         - in: path
           name: id
@@ -3013,6 +3170,10 @@ paths:
     get:
       summary: Get effective resource values with provenance
       operationId: getResourceEffectiveValues
+      security:
+        - bearerAuth: []
+        - machineCredential: []
+      x-machine-scope: inventory:read
       parameters:
         - in: path
           name: id
@@ -3094,6 +3255,10 @@ paths:
         If the resource exists but has no typed profile row, `profile` is
         returned as an empty object `{}`.
       operationId: getResourceProfile
+      security:
+        - bearerAuth: []
+        - machineCredential: []
+      x-machine-scope: inventory:read
       parameters:
         - in: path
           name: id
@@ -3261,6 +3426,10 @@ paths:
         an embedded profile summary. Returns an empty array for non-cluster
         resources or clusters with no members.
       operationId: getResourceMembers
+      security:
+        - bearerAuth: []
+        - machineCredential: []
+      x-machine-scope: relations:read
       parameters:
         - in: path
           name: id
@@ -3303,6 +3472,10 @@ paths:
         include resolved metadata about the related resource (name, displayName,
         type, health, lifecycle status).
       operationId: listResourceRelations
+      security:
+        - bearerAuth: []
+        - machineCredential: []
+      x-machine-scope: relations:read
       parameters:
         - in: path
           name: id
@@ -3400,6 +3573,10 @@ paths:
         to constrain relation forms; POST /resources/{id}/relations always
         revalidates the same matrix and rejects every self-relation.
       operationId: getResourceRelationRules
+      security:
+        - bearerAuth: []
+        - machineCredential: []
+      x-machine-scope: relations:read
       parameters:
         - in: path
           name: id
@@ -3464,6 +3641,10 @@ paths:
         local development only; the long-term backing store will be
         ClickHouse.  The response shape will remain stable after migration.
       operationId: listResourceAuditEvents
+      security:
+        - bearerAuth: []
+        - machineCredential: []
+      x-machine-scope: audit:read
       parameters:
         - in: path
           name: id
@@ -3510,6 +3691,10 @@ paths:
         local development only; the long-term backing store will be
         ClickHouse.  The response shape will remain stable after migration.
       operationId: listAuditEvents
+      security:
+        - bearerAuth: []
+        - machineCredential: []
+      x-machine-scope: audit:read
       parameters:
         - in: query
           name: targetResourceId
@@ -3723,6 +3908,10 @@ paths:
     get:
       summary: List environments
       operationId: listEnvironments
+      security:
+        - bearerAuth: []
+        - machineCredential: []
+      x-machine-scope: inventory:read
       responses:
         "200":
           description: Environment list
@@ -3746,6 +3935,10 @@ paths:
     get:
       summary: List owners
       operationId: listOwners
+      security:
+        - bearerAuth: []
+        - machineCredential: []
+      x-machine-scope: inventory:read
       responses:
         "200":
           description: Owner list
@@ -3769,6 +3962,10 @@ paths:
     get:
       summary: List roles
       operationId: listRoles
+      security:
+        - bearerAuth: []
+        - machineCredential: []
+      x-machine-scope: inventory:read
       responses:
         "200":
           description: Role list
@@ -3792,6 +3989,10 @@ paths:
     get:
       summary: List resource types
       operationId: listResourceTypes
+      security:
+        - bearerAuth: []
+        - machineCredential: []
+      x-machine-scope: inventory:read
       responses:
         "200":
           description: Resource type dictionary
@@ -3815,6 +4016,10 @@ paths:
     get:
       summary: List relation types
       operationId: listRelationTypes
+      security:
+        - bearerAuth: []
+        - machineCredential: []
+      x-machine-scope: inventory:read
       responses:
         "200":
           description: Relation type dictionary
@@ -3838,6 +4043,10 @@ paths:
     get:
       summary: List lifecycle statuses
       operationId: listLifecycleStatuses
+      security:
+        - bearerAuth: []
+        - machineCredential: []
+      x-machine-scope: inventory:read
       responses:
         "200":
           description: Lifecycle status dictionary
@@ -3861,6 +4070,10 @@ paths:
     get:
       summary: List health statuses
       operationId: listHealthStatuses
+      security:
+        - bearerAuth: []
+        - machineCredential: []
+      x-machine-scope: inventory:read
       responses:
         "200":
           description: Health status dictionary
@@ -3884,6 +4097,10 @@ paths:
     get:
       summary: List resource subtypes for a given resource type
       operationId: listResourceSubtypes
+      security:
+        - bearerAuth: []
+        - machineCredential: []
+      x-machine-scope: inventory:read
       parameters:
         - in: query
           name: resourceType
@@ -3930,6 +4147,10 @@ paths:
         optional groups for graph visualization. Defaults to depth 2
         and directional filtering (upstream, downstream, or both).
       operationId: getResourceTopology
+      security:
+        - bearerAuth: []
+        - machineCredential: []
+      x-machine-scope: relations:read
       parameters:
         - in: path
           name: id
@@ -4045,6 +4266,10 @@ paths:
   /environments/{id}/topology:
     get:
       summary: Get environment topology workspace
+      security:
+        - bearerAuth: []
+        - machineCredential: []
+      x-machine-scope: relations:read
       description: >
         Environment-scoped topology workspace read. Without rootResourceId,
         returns current-environment starting points: anomalous resources plus
@@ -4114,6 +4339,14 @@ paths:
                 $ref: "#/components/schemas/ErrorResponse"
 components:
   securitySchemes:
+    machineCredential:
+      type: http
+      scheme: bearer
+      bearerFormat: opaque
+      description: >
+        Opaque chmp_ credential for a Machine Principal. It is validated only
+        by the independent machine credential boundary and never as a user token
+        or Operator Session.
     bearerAuth:
       type: http
       scheme: bearer
@@ -5995,6 +6228,119 @@ components:
           type: string
           maxLength: 512
           description: Optional human-readable reason for archiving. If provided, must be non-blank.
+    MachineScope:
+      type: string
+      enum: [inventory:read, relations:read, governed-select, audit:read, named-views:read]
+    MachinePrincipal:
+      type: object
+      additionalProperties: false
+      required: [id, name, createdByUserId, createdAt]
+      properties:
+        id:
+          type: integer
+          format: int64
+        name:
+          type: string
+        createdByUserId:
+          type: integer
+          format: int64
+        createdAt:
+          type: string
+          format: date-time
+    MachineCredential:
+      type: object
+      additionalProperties: false
+      required: [id, machinePrincipalId, lookupId, scopes, expiresAt, lastUsedAt, revokedAt, rotatedFromCredentialId, createdAt]
+      properties:
+        id:
+          type: integer
+          format: int64
+        machinePrincipalId:
+          type: integer
+          format: int64
+        lookupId:
+          type: string
+        scopes:
+          type: array
+          minItems: 1
+          maxItems: 5
+          uniqueItems: true
+          items:
+            $ref: "#/components/schemas/MachineScope"
+        expiresAt:
+          type: string
+          format: date-time
+        lastUsedAt:
+          type: string
+          format: date-time
+          nullable: true
+        revokedAt:
+          type: string
+          format: date-time
+          nullable: true
+        rotatedFromCredentialId:
+          type: integer
+          format: int64
+          nullable: true
+        createdAt:
+          type: string
+          format: date-time
+    MachinePrincipalCreateRequest:
+      type: object
+      additionalProperties: false
+      required: [name, scopes]
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 120
+        scopes:
+          type: array
+          minItems: 1
+          maxItems: 5
+          uniqueItems: true
+          items:
+            $ref: "#/components/schemas/MachineScope"
+        expiresAt:
+          type: string
+          format: date-time
+    MachineCredentialRotateRequest:
+      type: object
+      additionalProperties: false
+      required: [scopes]
+      properties:
+        scopes:
+          type: array
+          minItems: 1
+          maxItems: 5
+          uniqueItems: true
+          items:
+            $ref: "#/components/schemas/MachineScope"
+        expiresAt:
+          type: string
+          format: date-time
+    MachineCredentialIssue:
+      type: object
+      additionalProperties: false
+      required: [principal, credential, secret]
+      properties:
+        principal:
+          $ref: "#/components/schemas/MachinePrincipal"
+        credential:
+          $ref: "#/components/schemas/MachineCredential"
+        secret:
+          type: string
+          writeOnly: true
+          description: One-time plaintext returned only by create and rotate
+    MachinePrincipalListResponse:
+      type: object
+      additionalProperties: false
+      required: [items]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/MachinePrincipal"
     ErrorResponse:
       type: object
       required: [error, message]
@@ -6019,6 +6365,10 @@ components:
             - invalid_request
             - ingestion_conflict
             - ingestion_preview_stale
+            - machine_credential_expired
+            - machine_credential_invalid
+            - machine_credential_revoked
+            - machine_scope_denied
             - malformed_json
             - not_found
             - owner_not_found

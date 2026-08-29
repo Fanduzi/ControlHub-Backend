@@ -1,7 +1,7 @@
 // Package api exposes named inventory view HTTP handlers.
 // input: context, errors, net/http, chi/v5, internal/model, internal/service
-// output: authenticated list/create/update/delete handlers and controlled errors
-// pos: HTTP boundary for personal and shared named inventory views
+// output: user-visible/shared-only list, create/update/delete handlers, and controlled errors
+// pos: HTTP boundary for user personal/shared and machine shared-only named inventory views
 // note: if this file changes, update this header and module README.md.
 package api
 
@@ -23,8 +23,29 @@ type namedInventoryViewAPI interface {
 	Delete(context.Context, service.AuthenticatedUser, uint64) error
 }
 
+type sharedNamedInventoryViewAPI interface {
+	ListShared(context.Context) ([]model.NamedInventoryView, error)
+}
+
 func handleListNamedInventoryViews(svc namedInventoryViewAPI) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		if _, ok := machinePrincipalFromContext(r.Context()); ok {
+			shared, ok := svc.(sharedNamedInventoryViewAPI)
+			if !ok {
+				writeJSONError(w, http.StatusInternalServerError, "internal_error", "internal server error")
+				return
+			}
+			items, err := shared.ListShared(r.Context())
+			if err != nil {
+				writeNamedInventoryViewError(w, err)
+				return
+			}
+			writeJSON(w, http.StatusOK, struct {
+				Items           []model.NamedInventoryView `json:"items"`
+				CanManageShared bool                       `json:"canManageShared"`
+			}{items, false})
+			return
+		}
 		actor, ok := actorFromContext(r.Context())
 		if !ok {
 			writeJSONError(w, http.StatusInternalServerError, "internal_error", "authenticated actor missing")

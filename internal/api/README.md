@@ -5,7 +5,7 @@ HTTP handlers, chi routing, CORS middleware, and fake-repo test infrastructure.
 ## Files
 | File | Responsibility |
 |------|---------------|
-| router.go | Route registration, including authenticated inventory/dictionary/named-view/topology reads, admin health observation and ingestion, Operator Access Boundary middleware, Dependencies, CORS, and bounded auth-audit wiring |
+| router.go | Route registration, including user-or-machine scoped inventory/dictionary/named-view/topology reads, user-only mutations/admin health observation and ingestion, Operator Access Boundary middleware, Dependencies, CORS, and bounded auth-audit wiring |
 | ingestion_handler.go | Bounded strict multipart CSV/JSON ingestion preview and atomic confirmation handlers |
 | health_handler.go | GET /health endpoint |
 | resource_handler.go | Resource list/detail identity, health, and server-derived completeness fields; explicit identity conflicts, non-audited observation ingestion, and PATCH changes through atomic inventory audit |
@@ -14,14 +14,16 @@ HTTP handlers, chi routing, CORS middleware, and fake-repo test infrastructure.
 | topology_handler.go | Resource-rooted and environment-scoped topology workspace read handlers |
 | audit_handler.go | Audit event list handlers (global and per-resource), including pagination, filters, search, and inventory field changes |
 | auth_handler.go | POST /auth/login handler |
-| auth_middleware.go | Bearer, role, Authorization Version, and query-freshness middleware; missing Authorization emits no audit event; supplied untrusted Bearer rejection emits the fixed event within the 60/min per-process budget |
+| auth_middleware.go | User Bearer, role, Authorization Version, and query-freshness middleware; machine-prefixed credentials are rejected without User/session fallback |
+| machine_credential_middleware.go | Independent opaque machine authentication and the shared user-or-machine scope guard |
+| machine_principal_handler.go | Admin-only machine principal create/list and credential rotate/revoke handlers |
 | dictionary_handler.go | Dictionary list handlers (environments, owners, roles, resource-types, relation-types, lifecycle-statuses, health-statuses) |
 | query_schema_handler.go | handleGetTableDefinition for MySQL table-definition requests |
 | query_execution_handler.go | POST execute, POST saved-statement template execute, POST related-records, and GET execution-history handlers, including optional governed result paging; execute/related disclosure blocks publish `query_result_disclosure_blocked` |
 | query_credential_handler.go | Phase 38A credential metadata handlers (GET/PUT/DELETE) |
 | query_disclosure_handler.go | Phase 38Q disclosure policy CRUD/list handlers (handler-admin) |
 | query_saved_statement_handler.go | Phase 38W saved statement CRUD handlers with strict typed parameter declaration decoding |
-| named_inventory_view_handler.go | Authenticated personal/shared named inventory view CRUD with controlled validation, forbidden, and not-found errors |
+| named_inventory_view_handler.go | User personal/shared named-view CRUD plus machine-only `ListShared` reads |
 | legacy_hash_handler.go | Admin-only GET /admin/legacy-hash-count — non-identity-bearing legacy password hash count |
 | json_body.go | Shared strict JSON body decoding with unknown-field and multiple-value rejection |
 | test_server.go | Fake repositories, including batch profile reads, and NewTestServer() with a default admin actor for handler tests |
@@ -41,6 +43,7 @@ HTTP handlers, chi routing, CORS middleware, and fake-repo test infrastructure.
 | query_saved_statement_execution_handler_test.go | Template-execution handler tests (strict request decoding, controlled field errors, `query_result_disclosure_blocked`) |
 | named_inventory_view_handler_test.go | Named inventory view router tests, including authentication for every CRUD route, shared-management metadata, strict JSON, and controlled errors |
 | ingestion_handler_test.go | Admin multipart ingestion preview/confirm, validation, stale-fingerprint, and conflict response tests |
+| machine_route_scope_test.go | Closed table-driven machine route/scope matrix and secret-safe controlled error tests |
 | operator_access_boundary_test.go | Anonymous, editor, and admin router authorization matrix driven by the shared operatoraccess policy, including 38R conditional saved statements (personal by owner — editor or admin — and shared templates admin-only) |
 | ops_handler.go | Admin-only operational metrics handlers: `handleAuthAuditMetrics` (auth audit persistence failures + untrusted-Bearer suppression) and `handleQueryEvidenceMetrics` (Issue #34 — exactly `queryEvidencePersistenceFailures`, read through the service layer) |
 | query_evidence_metrics_test.go | Query-evidence metrics endpoint tests: anonymous/editor/admin 401/403/200 matrix, exactly-one-field response, published counter |
@@ -48,6 +51,13 @@ HTTP handlers, chi routing, CORS middleware, and fake-repo test infrastructure.
 ## Routes
 | Method | Path | Description |
 |--------|------|-------------|
+| GET | /resources and inventory dictionaries | `inventory:read` machine scope or authenticated user |
+| GET | /resources/{id}/relations, relation-rules, members, topology | `relations:read` machine scope or authenticated user |
+| GET | /query-targets | `governed-select` machine scope or authenticated user |
+| GET | /audit-events and /resources/{id}/audit-events | `audit:read` machine scope or admin user |
+| GET | /inventory/views | `named-views:read` returns shared views only for machines; users retain personal/shared behavior |
+| GET/POST | /admin/machine-principals | Admin user machine-principal administration |
+| POST | /admin/machine-credentials/{credentialId}/rotate or /revoke | Admin user credential lifecycle administration |
 | POST | /resources/{id}/health-observations | Store an observer's latest operational health evidence without inventory audit |
 | POST | /admin/ingestions/preview | Admin-only bounded CSV/JSON upload preview; no writes; returns exact-match create/update/conflict rows and fingerprint |
 | POST | /admin/ingestions/confirm | Admin-only atomic confirmation of resubmitted reviewed upload and fingerprint; conflicts or drift return 409 with a fresh preview |
