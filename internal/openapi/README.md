@@ -5,7 +5,7 @@ Embeds and validates the OpenAPI contract served by the API documentation route.
 ## Files
 | File | Responsibility |
 |------|---------------|
-| openapi.yaml | Source contract for governed typed-profile identity, health observations, relationship-rule discovery, access security, audit pagination/search and field diffs, metrics, and controlled errors |
+| openapi.yaml | Source OpenAPI contract for resource-list search filters, named inventory views, governed typed-profile identity, health observations, relationship-rule discovery, access security, audit pagination/search and field diffs, metrics, and controlled errors |
 | embed.go | Embeds the YAML for serving and tests |
 | openapi_test.go | Validates schema, topology, pagination, and executions contract tests |
 | operator_access_boundary_test.go | Proves every protected operation documents the status codes its operatoraccess class requires |
@@ -15,6 +15,8 @@ Embeds and validates the OpenAPI contract served by the API documentation route.
 - `YAML` - embedded OpenAPI specification bytes
 
 ## Contracts
+- `GET /resources`: free-text `q` across CI identity fields (excluding owner and labels), exact `ownerId`, and repeatable exact `label=key:value` filters combined with AND.
+- `/inventory/views`: authenticated personal/shared named inventory view CRUD; shared mutations are admin-only and personal mutations are owner-only.
 - `GET /ops/auth-audit-metrics` response schema: fixed admin-only shape with exactly `authAuditPersistenceFailures` and `authAuditSuppressedRejections` counters; carries no identity, request, or credential material
 - `GET /ops/query-evidence-metrics` response schema (Issue #34): fixed admin-only shape with exactly `queryEvidencePersistenceFailures`; carries no identity, target, statement, value, credential, DSN, request, or raw error material
 - `ErrorResponse.error`: closed Controlled Error Code enum (Issue #53). Adding a code is a contract change. The published set is backend `writeJSONError` literals plus Console BFF snake_case codes.
