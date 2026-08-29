@@ -5,7 +5,7 @@ Domain structs, taxonomy constants, validation methods, and dictionary definitio
 ## Files
 | File | Responsibility |
 |------|---------------|
-| resource.go | Resource governed identity, immutable origin, aliases, external identifiers, effective health evidence, profile response, and ResourceType |
+| resource.go | Resource governed identity, immutable origin, aliases, external identifiers, effective health evidence, read-only Completeness, profile response, and ResourceType |
 | resource_write.go | Resource create/update inputs, including managed identity collections and nullable manual health override |
 | health_observation.go | HealthObservation value and exact fresh/stale/never boundary calculation |
 | resource_effective_value.go | Effective CI value and observed/manual provenance response contracts |
@@ -33,7 +33,7 @@ Domain structs, taxonomy constants, validation methods, and dictionary definitio
 | query_saved_statement_test.go | Saved-statement scope, create, and update request validation tests (fail-closed scope, name bounds/control chars, statement size) |
 
 ## Exports
-- All domain structs (Resource, ResourceRelation, AuditEvent, etc.)
+- All domain structs (Resource, ResourceRelation, Completeness, AuditEvent, etc.)
 - `HealthObservation`, `HealthFreshness`, and `HealthObservation.FreshnessAt()`
 - `AuditChange`, `AuditChangeOperation`, and add/update/remove constants for extensible inventory evidence
 - `EffectiveValue` and `ValueProvenance` for effective CI projections

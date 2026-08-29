@@ -11,6 +11,7 @@ Business logic layer with interface-based repository dependencies. Each service 
 | profile_service_test.go | Profile write tests: validation, PATCH partial-merge semantics, not-found/archived/unsupported guards, and all typed-profile identity rules |
 | relation_service.go | Shared relation read/write entry point; validates server-owned rules before fail-closed audited persistence |
 | relation_rules.go | Single relationship matrix authority plus source-specific discovery response |
+| completeness.go | Pure seven-group, server-derived resource completeness projection using typed-profile minima and the relationship matrix |
 | audit_service.go | Audit event listing (global and per-resource) |
 | auth_service.go | Login, versioned Backend Bearer issuance, current-state VerifyToken (Authorization Version), role/disable/password invalidation, legacy-to-Argon2id transparent migration |
 | auth_audit_emitter.go | AuthAuditEmitter interface, NoopEmitter, and BoundedAuthAuditEmitter decorator capping untrusted Bearer rejection persistence at 60/min per process (fail-open) |
@@ -52,6 +53,7 @@ Business logic layer with interface-based repository dependencies. Each service 
 - `NewXxxService(repo) *XxxService` constructors for all services
 - `ResourceService.ObserveHealth` — validated operational evidence ingestion that never emits inventory audit events
 - `RelationService.Rules` returns source-specific relation types, target resource types, and environment constraints derived from the write validator's matrix
+- `DeriveCompleteness` — pure read-only score/status/missing-requirements projection; labels never satisfy a requirement
 - `NewMemoryUserStore`, `AuthService.WithClock`, `AuthService.ChangeUserRole`/`SetUserActive`/`ResetUserPassword` — Authorization Version seams
 - `AuthAuditEmitter`, `NoopEmitter` — fail-open authentication/authorization audit emission interface and discard implementation
 - `BoundedAuthAuditEmitter`, `NewBoundedAuthAuditEmitter`, `BearerRejectBudget`, `NewBearerRejectBudget`, `ProcessBearerRejectBudget`, `BoundedBearerRejectedLimit`, `AuthAuditSuppressedRejections` — process-shared budget capping untrusted Bearer rejection persistence at 60 events/min per server process (all routers draw from one budget); suppression counter exposed only via the admin auth-audit metrics surface

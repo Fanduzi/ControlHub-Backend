@@ -1,6 +1,6 @@
 // Package model provides domain entities for the resource management system.
 // input: errors, time packages
-// output: Resource struct with governed identity and health evidence, ResourceProfileResponse, ResourceType and identity types
+// output: Resource struct with governed identity and health evidence, Completeness, ResourceProfileResponse, ResourceType and identity types
 // pos: Core domain entity for the resource management system
 // note: if this file changes, update this header and module README.md.
 package model
@@ -32,6 +32,13 @@ func (o ResourceOrigin) Validate() error {
 type ResourceExternalIdentifier struct {
 	System string `json:"system"`
 	Value  string `json:"value"`
+}
+
+// Completeness is a server-derived read-only inventory-quality projection.
+type Completeness struct {
+	Score               int      `json:"score"`
+	Status              string   `json:"status"`
+	MissingRequirements []string `json:"missingRequirements"`
 }
 
 // ResourceProfileResponse is the read-only projection returned by
