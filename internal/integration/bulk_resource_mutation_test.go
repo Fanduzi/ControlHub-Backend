@@ -1,9 +1,9 @@
 //go:build integration
 
 // Package integration tests atomic bulk resource confirmation against MySQL.
-// input: context, database/sql, encoding/json, errors, strings, testing, time, internal/model, internal/repository/mysql, internal/service
+// input: context, database/sql, encoding/json, errors, testing, time, internal/model, internal/repository/mysql, internal/service
 // output: TestConfirmBulkResourceMutationMySQL
-// pos: Real-MySQL proof for stable previews, externalId audit, multi-target rollback, and two-connection lock/drift rejection
+// pos: Real-MySQL proof for stable previews, externalId audit, multi-target rollback, and archived/concurrent lock rejection
 // note: if this file changes, update this header and README.md.
 package integration
 
@@ -12,7 +12,6 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
-	"strings"
 	"testing"
 	"time"
 
@@ -103,10 +102,17 @@ func TestConfirmBulkResourceMutationMySQL(t *testing.T) {
 		if err := db.QueryRowContext(ctx, `select changes from audit_events where target_resource_id = ? and event_type = 'inventory.resource.bulk_updated' order by id desc limit 1`, created.ID).Scan(&raw); err != nil {
 			t.Fatal(err)
 		}
-		if !strings.Contains(raw, `"field":"identity.externalIdentifiers"`) ||
-			!strings.Contains(raw, `"value":"bulk-external-before"`) ||
-			!strings.Contains(raw, `"value":"bulk-external-after"`) {
-			t.Fatalf("externalId audit changes = %s", raw)
+		var changes []struct {
+			Field     string                             `json:"field"`
+			Operation model.AuditChangeOperation         `json:"operation"`
+			Before    []model.ResourceExternalIdentifier `json:"before"`
+			After     []model.ResourceExternalIdentifier `json:"after"`
+		}
+		if err := json.Unmarshal([]byte(raw), &changes); err != nil || len(changes) != 1 ||
+			changes[0].Field != "identity.externalIdentifiers" || changes[0].Operation != model.AuditChangeUpdate ||
+			len(changes[0].Before) != 1 || changes[0].Before[0].Value != "bulk-external-before" ||
+			len(changes[0].After) != 1 || changes[0].After[0].Value != "bulk-external-after" {
+			t.Fatalf("externalId audit changes = %#v, err = %v", changes, err)
 		}
 	})
 
@@ -204,6 +210,39 @@ func TestConfirmBulkResourceMutationMySQL(t *testing.T) {
 		}
 		if got.DisplayName != drifted {
 			t.Fatalf("display name after rejected confirm = %q, want %q", got.DisplayName, drifted)
+		}
+	})
+
+	t.Run("archived resource is rejected under lock", func(t *testing.T) {
+		created, err := repo.CreateResource(ctx, inventoryAuditResource("bulk-confirm-archived"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		request := service.BulkResourceMutationRequest{
+			Targets:    []service.BulkResourceMutationTarget{{ResourceID: created.ID, ExpectedVersion: created.UpdatedAt.UTC().Format(time.RFC3339Nano)}},
+			FieldPatch: map[string]any{"displayName": "must not commit"},
+		}
+		fingerprint := bulkReviewedFingerprint(t, request, *created)
+		archived, err := repo.ArchiveResource(ctx, created.ID, "integration lock validation")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !archived.UpdatedAt.Equal(created.UpdatedAt) {
+			t.Fatalf("archive changed reviewed version: %s != %s", archived.UpdatedAt, created.UpdatedAt)
+		}
+
+		preview, err := repo.ConfirmBulkResourceMutation(ctx, request, fingerprint, ownerDBA)
+		if !errors.Is(err, service.ErrBulkResourceMutationConflict) || len(preview.Items) != 1 ||
+			preview.Items[0].Conflict || len(preview.Items[0].Errors) == 0 {
+			t.Fatalf("confirm preview = %#v, err = %v", preview, err)
+		}
+		got, err := repo.GetResource(created.ID)
+		if err != nil || got.ArchivedAt == nil || got.DisplayName != created.DisplayName {
+			t.Fatalf("archived resource after rejected confirm = %#v, err = %v", got, err)
+		}
+		var audits int
+		if err := db.QueryRowContext(ctx, `select count(*) from audit_events where target_resource_id = ? and event_type = 'inventory.resource.bulk_updated'`, created.ID).Scan(&audits); err != nil || audits != 0 {
+			t.Fatalf("bulk audits after archived rejection = %d, err = %v", audits, err)
 		}
 	})
 
