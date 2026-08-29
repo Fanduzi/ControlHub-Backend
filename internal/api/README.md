@@ -12,7 +12,7 @@ HTTP handlers, chi routing, CORS middleware, and fake-repo test infrastructure.
 | profile_handler.go | PUT/PATCH/DELETE /resources/{id}/profile handlers with strict decoding and token-derived atomic inventory audit |
 | relation_handler.go | Resource relation reads, source-specific rule discovery, and token-derived atomic audited create/delete handlers |
 | topology_handler.go | Resource-rooted and environment-scoped topology workspace read handlers |
-| audit_handler.go | Audit event list handlers (global and per-resource), including pagination, filters, search, and inventory field changes |
+| audit_handler.go | Audit event list handlers (global and per-resource), including pagination, target-resource/environment filters, search, and inventory field changes |
 | auth_handler.go | POST /auth/login handler |
 | auth_middleware.go | User Bearer, role, Authorization Version, and query-freshness middleware; machine-prefixed credentials are rejected without User/session fallback |
 | machine_credential_middleware.go | Independent opaque machine authentication and the shared user-or-machine scope guard |

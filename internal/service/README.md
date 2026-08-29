@@ -19,7 +19,8 @@ Business logic layer with interface-based repository dependencies. Each service 
 | topology_semantics_test.go | Topology semantic classification tests for roles, layers, replication metadata, and problem summaries |
 | ingestion_preview.go | Strict bounded CSV/JSON parsing, exact-identity ingestion classification with immutable-type conflicts, additive observed-field diffs, drift fingerprinting, validation helpers, and repository-backed preview/confirmation delegation |
 | ingestion_preview_test.go | Parser equivalence/guard and pure preview precedence, immutable-type conflict, additive observed diff, fingerprint, and manual-override exclusion tests |
-| audit_service.go | Audit event listing (global and per-resource) |
+| audit_service.go | Audit event listing (global and per-resource), preserving optional target-resource environment filtering |
+| audit_service_test.go | Audit list query forwarding regression coverage |
 | auth_service.go | Login, versioned Backend Bearer issuance, current-state VerifyToken (Authorization Version), role/disable/password invalidation, legacy-to-Argon2id transparent migration |
 | auth_audit_emitter.go | AuthAuditEmitter interface, NoopEmitter, and BoundedAuthAuditEmitter decorator capping untrusted Bearer rejection persistence at 60/min per process (fail-open) |
 | password_hasher.go | Argon2id password hashing, legacy SHA-256 verification, hash format detection, resource budget enforcement |

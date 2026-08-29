@@ -1,6 +1,6 @@
 // Package model provides domain entities for the resource management system.
 // input: no external dependencies
-// output: PageInfo, ResourceListQuery with owner/label filters, ResourceLabelFilter, AuditListQuery (including actor/resource search), pagination constants, ComputeTotalPages, NormalizePagination
+// output: PageInfo, ResourceListQuery with owner/label filters, ResourceLabelFilter, AuditListQuery (including target environment filtering), pagination constants, ComputeTotalPages, NormalizePagination
 // pos: Shared pagination and filtering types for all list endpoints
 // note: if this file changes, update header and README.md
 package model
@@ -64,6 +64,7 @@ type ResourceLabelFilter struct {
 // Repeated query parameters are collected into slices for multi-select filtering.
 type AuditListQuery struct {
 	TargetResourceID *uint64  // kept single-value — naturally unique filter
+	EnvironmentID    *uint64  // target resource's environment; targetless events do not match
 	EventTypes       []string // repeated ?eventType= values
 	Results          []string // repeated ?result= values
 	Query            string   // free-text search over actor identity and resource name

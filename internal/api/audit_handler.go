@@ -1,6 +1,6 @@
 // Package api provides HTTP handlers and routing for the ControlHub REST API.
 // input: fmt, net/http, strconv, strings, internal/service, internal/model
-// output: handleListAuditEvents, handleListResourceAuditEvents
+// output: handleListAuditEvents, handleListResourceAuditEvents with target-resource environment filtering
 // pos: HTTP handlers for audit event listing with pagination, filtering, and search
 // note: if this file changes, update header and README.md
 package api
@@ -74,7 +74,17 @@ func parseAuditListQuery(r *http.Request) (model.AuditListQuery, error) {
 			return model.AuditListQuery{}, fmt.Errorf("targetResourceId must be a positive integer")
 		}
 		var err error
-		query.TargetResourceID, err = parseOptionalUint64QueryValue(values[0])
+		query.TargetResourceID, err = parseOptionalUint64QueryValue(values[0], "targetResourceId")
+		if err != nil {
+			return model.AuditListQuery{}, err
+		}
+	}
+	if values, ok := q["environmentId"]; ok {
+		if len(values) == 0 {
+			return model.AuditListQuery{}, fmt.Errorf("environmentId must be a positive integer")
+		}
+		var err error
+		query.EnvironmentID, err = parseOptionalUint64QueryValue(values[0], "environmentId")
 		if err != nil {
 			return model.AuditListQuery{}, err
 		}
@@ -82,13 +92,13 @@ func parseAuditListQuery(r *http.Request) (model.AuditListQuery, error) {
 	return query, nil
 }
 
-func parseOptionalUint64QueryValue(raw string) (*uint64, error) {
+func parseOptionalUint64QueryValue(raw, name string) (*uint64, error) {
 	if raw == "" {
-		return nil, fmt.Errorf("targetResourceId must be a positive integer")
+		return nil, fmt.Errorf("%s must be a positive integer", name)
 	}
 	id, err := strconv.ParseUint(raw, 10, 64)
 	if err != nil || id == 0 {
-		return nil, fmt.Errorf("targetResourceId must be a positive integer")
+		return nil, fmt.Errorf("%s must be a positive integer", name)
 	}
 	return &id, nil
 }

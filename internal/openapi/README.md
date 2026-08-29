@@ -5,7 +5,8 @@ Embeds and validates the OpenAPI contract served by the API documentation route.
 ## Files
 | File | Responsibility |
 |------|---------------|
-| openapi.yaml | Source OpenAPI contract for user and opaque machine security, scoped machine reads and ordinary governed execution, truthful evidence actors, admin lifecycle, resource-list search filters, named inventory views, bulk mutation and strict ingestion preview/confirmation, governed typed-profile identity, health observations, topology workspace reads, relationship-rule discovery, audit pagination/search and field diffs, metrics, and controlled errors |
+| openapi.yaml | Source OpenAPI contract for user and opaque machine security, scoped machine reads and ordinary governed execution, truthful evidence actors, admin lifecycle, resource-list search filters, named inventory views, bulk mutation and strict ingestion preview/confirmation, governed typed-profile identity, health observations, topology workspace reads, relationship-rule discovery, audit pagination/search/environment filtering and field diffs, metrics, and controlled errors |
+| audit_environment_contract_test.go | Audit environment-filter parameter contract regression test |
 | embed.go | Embeds the YAML for serving and tests |
 | openapi_test.go | Validates schema, strict ingestion multipart, bulk mutation, topology, pagination, executions, and the closed controlled-error enum |
 | machine_principal_contract_test.go | Validates machine security, the ordinary governed-execute scope, truthful execution/audit actors, closed sibling-route mapping, admin routes, codes, and one-time-secret schemas |
@@ -30,7 +31,7 @@ Embeds and validates the OpenAPI contract served by the API documentation route.
 - `Resource` always exposes read-only completeness, effective status, freshness, observed time, observer, and nullable manual override; POST observations are operational and PATCH null clears the audited override.
 - `GET /resources/{id}/relation-rules`: source-specific relation types, target resource types, and same-environment constraints consumed by the console; writes revalidate the same server matrix.
 - `GET /resources/{id}/topology` and `GET /environments/{id}/topology`: authenticated topology reads with default depth 2, optional environment-scoped root selection, output caps, and required `truncated`.
-- `GET /audit-events?q=...`: optional search over operator identity and target resource name, combined with the existing filters.
+- `GET /audit-events?q=...&environmentId=...`: optional search and positive target-resource environment filtering, combined with the existing filters; targetless events do not match an environment.
 - `GET /resources?q=...&ownerId=...&label=key:value`: inventory identifier search, exact owner filtering, and repeatable exact labels combined with AND.
 
 ## Dependencies

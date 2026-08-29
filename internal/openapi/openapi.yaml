@@ -3709,6 +3709,13 @@ paths:
             format: int64
           description: Filter by target resource ID
         - in: query
+          name: environmentId
+          schema:
+            type: integer
+            format: int64
+            minimum: 1
+          description: Filter by target resource environment ID; targetless events do not match
+        - in: query
           name: q
           schema:
             type: string

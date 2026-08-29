@@ -1,6 +1,6 @@
 // Package api provides HTTP handlers and routing for the ControlHub REST API.
 // input: internal/api, internal/model, net/http, net/http/httptest, encoding/json
-// output: TestParseAuditListQuery*, TestListAuditEvents*, TestListResourceAuditEvents_Unchanged
+// output: TestParseAuditListQuery*, TestListAuditEvents*, TestListResourceAuditEvents_Unchanged including environment filtering
 // pos: Validates audit event listing with pagination, filtering, and search
 // note: if this file changes, update header and README.md
 package api
@@ -23,6 +23,18 @@ func TestParseAuditListQuery_NormalizesSearchQuery(t *testing.T) {
 	}
 	if query.Query != "Admin" {
 		t.Fatalf("query = %q, want trimmed Admin", query.Query)
+	}
+}
+
+func TestParseAuditListQuery_ParsesEnvironmentID(t *testing.T) {
+	req := httptest.NewRequest(http.MethodGet, "/audit-events?environmentId=7", nil)
+
+	query, err := parseAuditListQuery(req)
+	if err != nil {
+		t.Fatalf("parse audit query: %v", err)
+	}
+	if query.EnvironmentID == nil || *query.EnvironmentID != 7 {
+		t.Fatalf("environmentId = %v, want 7", query.EnvironmentID)
 	}
 }
 
@@ -179,6 +191,49 @@ func TestListAuditEvents_FilterByTargetResourceId(t *testing.T) {
 	}
 	if resp.Items[0].TargetResourceID == nil || *resp.Items[0].TargetResourceID != 1 {
 		t.Fatalf("expected targetResourceId 1, got %v", resp.Items[0].TargetResourceID)
+	}
+}
+
+func TestListAuditEvents_FilterByEnvironmentID(t *testing.T) {
+	server := NewTestServer()
+	req := httptest.NewRequest(http.MethodGet, "/audit-events?environmentId=1", nil)
+	rec := httptest.NewRecorder()
+
+	server.Router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+
+	var resp paginatedAuditResponse
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if len(resp.Items) != 1 || resp.Items[0].ID != 1 || resp.PageInfo.TotalItems != 1 {
+		t.Fatalf("environment-filtered response = %#v, want only target resource event 1", resp)
+	}
+}
+
+func TestListAuditEvents_RejectsInvalidEnvironmentID(t *testing.T) {
+	for _, raw := range []string{"abc", "0"} {
+		t.Run(raw, func(t *testing.T) {
+			server := NewTestServer()
+			req := httptest.NewRequest(http.MethodGet, "/audit-events?environmentId="+raw, nil)
+			rec := httptest.NewRecorder()
+
+			server.Router.ServeHTTP(rec, req)
+
+			if rec.Code != http.StatusBadRequest {
+				t.Fatalf("expected 400, got %d; body: %s", rec.Code, rec.Body.String())
+			}
+			var resp apiErrorResponse
+			if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+				t.Fatalf("decode response: %v", err)
+			}
+			if resp.Error != "validation_failed" {
+				t.Fatalf("error = %q, want validation_failed", resp.Error)
+			}
+		})
 	}
 }
 

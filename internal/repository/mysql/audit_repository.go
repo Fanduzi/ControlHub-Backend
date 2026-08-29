@@ -1,6 +1,6 @@
 // Package mysql provides MySQL-backed repository implementations.
 // input: database/sql, internal/model
-// output: NewAuditRepository, user/machine-aware AuditRepository list and resource projections
+// output: NewAuditRepository, user/machine-aware AuditRepository list and resource-environment projections
 // pos: MySQL audit_events pagination, filtering, scan, and user/machine/resource search
 // note: if this file changes, update header and README.md
 package mysql
@@ -35,6 +35,10 @@ func (r *AuditRepository) ListAuditEvents(ctx context.Context, q model.AuditList
 	if q.TargetResourceID != nil {
 		conds = append(conds, "target_resource_id = ?")
 		args = append(args, *q.TargetResourceID)
+	}
+	if q.EnvironmentID != nil {
+		conds = append(conds, "r.environment_id = ?")
+		args = append(args, *q.EnvironmentID)
 	}
 	if len(q.EventTypes) > 0 {
 		ph := buildInClause(len(q.EventTypes))

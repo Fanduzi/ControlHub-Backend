@@ -37,7 +37,7 @@ Domain structs, taxonomy constants, validation methods, and dictionary definitio
 ## Exports
 - All domain structs (Resource, ResourceRelation, Completeness, AuditEvent, etc.)
 - `HealthObservation`, `HealthFreshness`, and `HealthObservation.FreshnessAt()`
-- `AuditChange`, `AuditChangeOperation`, and add/update/remove constants for extensible inventory evidence
+- `AuditChange`, `AuditChangeOperation`, and add/update/remove constants for extensible inventory evidence; `AuditListQuery` carries optional target-resource environment filtering
 - `EffectiveValue` and `ValueProvenance` for effective CI projections
 - Type constants and validation methods, including `ResourceOrigin`
 - `ResourceTypeDictionary()`, `RelationTypeDictionary()`, `LifecycleStatusDictionary()`, `HealthStatusDictionary()`
