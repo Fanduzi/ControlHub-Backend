@@ -1,7 +1,7 @@
 // Package mysql provides MySQL-backed repository implementations.
 // input: database/sql, time, internal/model, internal/service
-// output: resource CRUD, governed identity and typed profiles, latest health observations, effective health, and audited manual overrides
-// pos: MySQL data access for resources, identity, typed profiles, and current health evidence
+// output: resource CRUD, governed identity and typed profiles, rich/structured inventory filtering, latest health observations, effective health, and audited manual overrides
+// pos: MySQL data access for resources, identity, typed profiles, current health evidence, and inventory search
 // note: if this file changes, update this header and module README.md.
 package mysql
 
@@ -72,12 +72,27 @@ func (r *ResourceRepository) ListResources(ctx context.Context, q model.Resource
 			args = append(args, v)
 		}
 	}
+	if q.OwnerID != nil {
+		conds = append(conds, "r.owner_id = ?")
+		args = append(args, *q.OwnerID)
+	}
+	for _, label := range q.LabelFilters {
+		conds = append(conds, "json_contains(r.labels, json_object(?, ?))")
+		args = append(args, label.Key, label.Value)
+	}
 	if q.Query != "" {
-		pattern := "%" + q.Query + "%"
+		pattern := "%" + escapeLike(q.Query) + "%"
 		conds = append(conds, `(r.name like ? or r.display_name like ?
-			or exists (select 1 from resource_aliases ra where ra.resource_id = r.id and ra.alias like ?)
-			or exists (select 1 from resource_external_identifiers rei where rei.resource_id = r.id and (rei.external_system like ? or rei.external_value like ?)))`)
-		args = append(args, pattern, pattern, pattern, pattern, pattern)
+			or exists (select 1 from resource_aliases ra where ra.resource_id = r.id and ra.alias like ? escape '\\')
+			or exists (select 1 from resource_external_identifiers rei where rei.resource_id = r.id and rei.external_value like ? escape '\\')
+			or exists (select 1 from resource_profiles_host p where p.resource_id = r.id and (p.hostname like ? escape '\\' or p.ip_address like ? escape '\\'))
+			or exists (select 1 from resource_profiles_database_instance p where p.resource_id = r.id and p.host like ? escape '\\')
+			or exists (select 1 from resource_profiles_database_cluster p where p.resource_id = r.id and p.primary_endpoint like ? escape '\\')
+			or exists (select 1 from resource_profiles_domain_name p where p.resource_id = r.id and p.fqdn like ? escape '\\')
+			or exists (select 1 from resource_profiles_virtual_ip p where p.resource_id = r.id and p.ip_address like ? escape '\\')
+			or exists (select 1 from resource_profiles_database_proxy p where p.resource_id = r.id and p.host like ? escape '\\')
+			or exists (select 1 from resource_profiles_control_plane_component p where p.resource_id = r.id and p.endpoint like ? escape '\\'))`)
+		args = append(args, pattern, pattern, pattern, pattern, pattern, pattern, pattern, pattern, pattern, pattern, pattern, pattern)
 	}
 
 	if q.ArchivedOnly {

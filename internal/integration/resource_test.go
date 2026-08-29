@@ -335,6 +335,95 @@ func TestResourceRepository_ObservationDerivedClusterOperationalSummary(t *testi
 	}
 }
 
+func TestResourceRepository_RichSearchAndStructuredFilters(t *testing.T) {
+	db := setupTestDB(t)
+	repo := mysql.NewResourceRepository(db)
+	ctx := context.Background()
+	suffix := fmt.Sprint(time.Now().UnixNano())
+
+	create := func(resourceType model.ResourceType, name string, labels map[string]string, aliases []string, externalIDs []model.ResourceExternalIdentifier) model.Resource {
+		t.Helper()
+		item, err := repo.CreateResource(ctx, model.ResourceCreateInput{
+			ResourceType: resourceType, ResourceSubtype: "test", Name: name,
+			DisplayName: "Inventory Search " + suffix, EnvironmentID: envProd, OwnerID: ownerDBA,
+			LifecycleStatus: model.LifecycleStatusRunning, HealthStatus: model.HealthStatusHealthy,
+			Source: "manual", Labels: labels, Aliases: aliases, ExternalIdentifiers: externalIDs,
+		})
+		if err != nil {
+			t.Fatalf("create %s search fixture: %v", resourceType, err)
+		}
+		return *item
+	}
+
+	target := create(model.ResourceTypeHost, "inventory-search-host-"+suffix,
+		map[string]string{"team": "inventory-team-" + suffix, "tier": "inventory-tier-" + suffix},
+		[]string{"inventory-alias-" + suffix},
+		[]model.ResourceExternalIdentifier{{System: "cmdb", Value: "inventory-external-" + suffix}})
+	create(model.ResourceTypeHost, "inventory-search-label-decoy-"+suffix,
+		map[string]string{"team": "inventory-team-" + suffix}, nil, nil)
+	database := create(model.ResourceTypeDatabaseInstance, "inventory-search-database-"+suffix, map[string]string{}, nil, nil)
+	endpoint := create(model.ResourceType("control_plane_component"), "inventory-search-endpoint-"+suffix, map[string]string{}, nil, nil)
+
+	for _, statement := range []struct {
+		query string
+		args  []any
+	}{
+		{"insert into resource_profiles_host (resource_id, hostname, ip_address, os_name, spec) values (?, ?, ?, '', json_object())", []any{target.ID, "inventory-fqdn-" + suffix, "192.0.2.79"}},
+		{"insert into resource_profiles_database_instance (resource_id, engine, version, host, port, role, spec) values (?, 'mysql', '', ?, 3306, '', json_object())", []any{database.ID, "inventory-db-host-" + suffix}},
+		{"insert into resource_profiles_control_plane_component (resource_id, component_subtype, endpoint, version, role, spec) values (?, 'orchestrator', ?, '', 'active', json_object())", []any{endpoint.ID, "https://inventory-endpoint-" + suffix}},
+	} {
+		if _, err := db.ExecContext(ctx, statement.query, statement.args...); err != nil {
+			t.Fatalf("insert search profile: %v", err)
+		}
+	}
+
+	assertFinds := func(query string, wantID uint64) {
+		t.Helper()
+		items, total, err := repo.ListResources(ctx, model.ResourceListQuery{Query: query, Page: 1, PageSize: 100})
+		if err != nil {
+			t.Fatalf("search %q: %v", query, err)
+		}
+		for _, item := range items {
+			if item.ID == wantID {
+				return
+			}
+		}
+		t.Fatalf("search %q returned %d items but not resource %d", query, total, wantID)
+	}
+	assertFinds("inventory-alias-"+suffix, target.ID)
+	assertFinds("inventory-external-"+suffix, target.ID)
+	assertFinds("inventory-fqdn-"+suffix, target.ID)
+	assertFinds("192.0.2.79", target.ID)
+	assertFinds("inventory-db-host-"+suffix, database.ID)
+	assertFinds("inventory-endpoint-"+suffix, endpoint.ID)
+
+	ownerID := ownerDBA
+	items, total, err := repo.ListResources(ctx, model.ResourceListQuery{
+		OwnerID: &ownerID,
+		LabelFilters: []model.ResourceLabelFilter{
+			{Key: "team", Value: "inventory-team-" + suffix},
+			{Key: "tier", Value: "inventory-tier-" + suffix},
+		},
+		Page: 1, PageSize: 100,
+	})
+	if err != nil {
+		t.Fatalf("structured search: %v", err)
+	}
+	if total != 1 || len(items) != 1 || items[0].ID != target.ID {
+		t.Fatalf("structured search returned %d items, total %d; want only resource %d", len(items), total, target.ID)
+	}
+
+	for _, query := range []string{"inventory-team-" + suffix, "inventory-tier-" + suffix} {
+		_, total, err := repo.ListResources(ctx, model.ResourceListQuery{Query: query, Page: 1, PageSize: 100})
+		if err != nil {
+			t.Fatalf("free-text search %q: %v", query, err)
+		}
+		if total != 0 {
+			t.Fatalf("free-text search %q matched labels; total = %d, want 0", query, total)
+		}
+	}
+}
+
 func TestResourceRepository_DatabaseClusterOperationalSummary(t *testing.T) {
 	db := setupTestDB(t)
 	repo := mysql.NewResourceRepository(db)
