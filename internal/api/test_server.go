@@ -1,7 +1,7 @@
 // Package api provides HTTP handlers and routing for the ControlHub REST API.
 // input: internal/api, internal/model, internal/service, net/http
-// output: TestServer struct, NewTestServer
-// pos: Test infrastructure — fake resource, typed-profile, health-observation, and effective-value repositories plus a pre-wired handler router
+// output: TestServer struct, NewTestServer with fake profile, relation, health, and effective-value data
+// pos: Test infrastructure — fake repositories for typed profiles, completeness relations, health observations, and effective values plus a pre-wired handler router
 // note: if this file changes, update this header and module README.md.
 package api
 
@@ -597,6 +597,21 @@ func (f *fakeRelationRepo) ListByResourceID(resourceID uint64) ([]model.Resource
 	return items, nil
 }
 
+func (f *fakeRelationRepo) ListRelationsByResourceIDs(ids []uint64) ([]model.ResourceRelation, error) {
+	idSet := make(map[uint64]bool, len(ids))
+	for _, id := range ids {
+		idSet[id] = true
+	}
+	items := make([]model.ResourceRelation, 0)
+	for _, id := range f.order {
+		relation, ok := f.relations[id]
+		if ok && (idSet[relation.FromResourceID] || idSet[relation.ToResourceID]) {
+			items = append(items, relation)
+		}
+	}
+	return items, nil
+}
+
 func (f *fakeRelationRepo) ListRelationViewsByResourceID(resourceID uint64) ([]model.ResourceRelationView, error) {
 	items := make([]model.ResourceRelationView, 0)
 	for _, id := range f.order {
@@ -1102,9 +1117,9 @@ func NewTestServer() *TestServer {
 	resourceRepo := &fakeResourceRepo{
 		effectiveValues: map[uint64]map[string]model.EffectiveValue{},
 		resources: map[uint64]model.Resource{
-			1: {ID: 1, ResourceType: model.ResourceTypeDatabaseInstance, ResourceSubtype: "mysql", Name: "order-mysql-prod", DisplayName: "Order MySQL Prod", EnvironmentID: 1, OwnerID: 2, LifecycleStatus: "running", HealthStatus: "healthy", HealthFreshness: model.HealthFreshnessFresh, HealthObservedAt: &healthObservedAt, HealthObserver: "prometheus", ManualHealthOverride: &healthyOverride, Source: "manual", ExternalID: "ext-order-mysql", Labels: map[string]string{"team": "order"}, CreatedAt: time.Date(2026, 4, 11, 20, 0, 0, 0, time.UTC), UpdatedAt: time.Date(2026, 4, 11, 20, 0, 0, 0, time.UTC)},
+			1: {ID: 1, ResourceType: model.ResourceTypeDatabaseInstance, ResourceSubtype: "mysql", Name: "order-mysql-prod", DisplayName: "Order MySQL Prod", EnvironmentID: 1, OwnerID: 2, LifecycleStatus: "running", HealthStatus: "healthy", HealthFreshness: model.HealthFreshnessFresh, HealthObservedAt: &healthObservedAt, HealthObserver: "prometheus", ManualHealthOverride: &healthyOverride, Source: "manual", ExternalID: "ext-order-mysql", Labels: map[string]string{"team": "order", "engine": "label-does-not-count"}, CreatedAt: time.Date(2026, 4, 11, 20, 0, 0, 0, time.UTC), UpdatedAt: time.Date(2026, 4, 11, 20, 0, 0, 0, time.UTC)},
 			2: {ID: 2, ResourceType: model.ResourceTypeHost, ResourceSubtype: "vm", Name: "prod-host-01", DisplayName: "Prod Host 01", EnvironmentID: 2, OwnerID: 3, LifecycleStatus: "degraded", HealthStatus: "warning", Source: "manual", ExternalID: "ext-prod-host", Labels: map[string]string{"team": "platform"}, CreatedAt: time.Date(2026, 4, 11, 20, 0, 0, 0, time.UTC), UpdatedAt: time.Date(2026, 4, 11, 20, 0, 0, 0, time.UTC)},
-			3: {ID: 3, ResourceType: model.ResourceTypeDatabaseInstance, ResourceSubtype: "mysql", Name: "order-mysql-prod", DisplayName: "Order MySQL Prod", EnvironmentID: 1, OwnerID: 2, LifecycleStatus: "running", HealthStatus: "healthy", Source: "manual", Labels: map[string]string{"team": "order"}, ClusterId: ptrUint64(4), CreatedAt: time.Date(2026, 4, 11, 20, 0, 0, 0, time.UTC), UpdatedAt: time.Date(2026, 4, 11, 20, 0, 0, 0, time.UTC)},
+			3: {ID: 3, ResourceType: model.ResourceTypeDatabaseInstance, ResourceSubtype: "mysql", Name: "order-mysql-prod", DisplayName: "Order MySQL Prod", EnvironmentID: 1, OwnerID: 2, LifecycleStatus: "running", HealthStatus: "healthy", Source: "manual", Aliases: []string{"order-mysql-primary"}, Labels: map[string]string{"team": "order"}, ClusterId: ptrUint64(4), CreatedAt: time.Date(2026, 4, 11, 20, 0, 0, 0, time.UTC), UpdatedAt: time.Date(2026, 4, 11, 20, 0, 0, 0, time.UTC)},
 			4: {ID: 4, ResourceType: model.ResourceTypeDatabaseCluster, ResourceSubtype: "mysql", Name: "order-mysql-cluster-prod", DisplayName: "Order MySQL Cluster Prod", EnvironmentID: 1, OwnerID: 2, LifecycleStatus: "running", HealthStatus: "healthy", Source: "manual", Labels: map[string]string{"team": "order"}, CreatedAt: time.Date(2026, 4, 11, 20, 0, 0, 0, time.UTC), UpdatedAt: time.Date(2026, 4, 11, 20, 0, 0, 0, time.UTC)},
 			5: {ID: 5, ResourceType: model.ResourceTypeService, ResourceSubtype: "api", Name: "order-api-prod", DisplayName: "Order API Prod", EnvironmentID: 1, OwnerID: 3, LifecycleStatus: "running", HealthStatus: "healthy", Source: "manual", Labels: map[string]string{"team": "order"}, CreatedAt: time.Date(2026, 4, 11, 20, 0, 0, 0, time.UTC), UpdatedAt: time.Date(2026, 4, 11, 20, 0, 0, 0, time.UTC)},
 			6: {ID: 6, ResourceType: model.ResourceTypeHost, ResourceSubtype: "vm", Name: "prod-db-host-01", DisplayName: "Prod DB Host 01", EnvironmentID: 1, OwnerID: 3, LifecycleStatus: "running", HealthStatus: "healthy", Source: "manual", Labels: map[string]string{"team": "platform"}, CreatedAt: time.Date(2026, 4, 11, 20, 0, 0, 0, time.UTC), UpdatedAt: time.Date(2026, 4, 11, 20, 0, 0, 0, time.UTC)},
@@ -1140,7 +1155,7 @@ func NewTestServer() *TestServer {
 	credentialStore := &fakeCredentialMetadataStore{}
 
 	deps := Dependencies{
-		ResourceService: service.NewResourceService(resourceRepo),
+		ResourceService: service.NewResourceService(resourceRepo, relationRepo),
 		RelationService: service.NewRelationService(relationRepo),
 		TopologyService: service.NewTopologyService(topologyRepo),
 		AuditService:    service.NewAuditService(fakeAuditRepo{}),

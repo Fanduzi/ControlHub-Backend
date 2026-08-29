@@ -7,7 +7,7 @@ HTTP handlers, chi routing, CORS middleware, and fake-repo test infrastructure.
 |------|---------------|
 | router.go | Route registration, including authenticated inventory/dictionary/named-view reads, admin health observation ingestion, Operator Access Boundary middleware, Dependencies, CORS, and bounded auth-audit wiring |
 | health_handler.go | GET /health endpoint |
-| resource_handler.go | Resource list/detail identity and health fields, explicit identity conflicts, non-audited observation ingestion, and PATCH changes through atomic inventory audit |
+| resource_handler.go | Resource list/detail identity, health, and server-derived completeness fields; explicit identity conflicts, non-audited observation ingestion, and PATCH changes through atomic inventory audit |
 | profile_handler.go | PUT/PATCH/DELETE /resources/{id}/profile handlers with strict decoding and token-derived atomic inventory audit |
 | relation_handler.go | Resource relation reads, source-specific rule discovery, and token-derived atomic audited create/delete handlers |
 | audit_handler.go | Audit event list handlers (global and per-resource), including pagination, filters, search, and inventory field changes |
@@ -24,7 +24,7 @@ HTTP handlers, chi routing, CORS middleware, and fake-repo test infrastructure.
 | json_body.go | Shared strict JSON body decoding with unknown-field and multiple-value rejection |
 | test_server.go | Fake repositories and NewTestServer() with a default admin actor for handler tests |
 | health_handler_test.go | Health endpoint tests |
-| resource_handler_test.go | Resource and profile endpoint tests, including governed identity, explicit conflicts, immutable origin, create-with-profile atomicity, minimum manual identity, and all typed-profile identities at the HTTP seam |
+| resource_handler_test.go | Resource and profile endpoint tests, including list/detail completeness projection, strict rejection of client completeness, governed identity, explicit conflicts, immutable origin, create-with-profile atomicity, minimum manual identity, and all typed-profile identities at the HTTP seam |
 | profile_handler_test.go | PUT full-replacement and PATCH partial-merge tests: strict JSON decoding, field validation, no-op empty PATCH, Domain Name normalization, and Database Proxy role contract |
 | relation_handler_test.go | Relation endpoint tests |
 | audit_handler_test.go | Audit list contract tests, including field-level before/after changes |

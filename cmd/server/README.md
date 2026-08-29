@@ -5,7 +5,7 @@ Application bootstrap and manual dependency injection.
 ## Files
 | File | Responsibility |
 |------|---------------|
-| main.go | Load config (rejects removed QUERY_EXECUTION_TOKEN_MAX_AGE), validate JWT_SECRET before opening the DB, wire all services into api.Dependencies, start HTTP server |
+| main.go | Load config (rejects removed QUERY_EXECUTION_TOKEN_MAX_AGE), validate JWT_SECRET before opening the DB, wire resource/relation read projection services into api.Dependencies, start HTTP server |
 | shutdown.go | Graceful drain seam: serve until SIGTERM/SIGINT, stop new traffic and drain in-flight handlers for at most a fixed ten seconds (Issue #37) |
 
 ## Modules Wired

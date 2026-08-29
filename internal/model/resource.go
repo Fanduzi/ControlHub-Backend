@@ -1,7 +1,7 @@
 // Package model provides domain entities for the resource management system.
 // input: errors, time packages
-// output: Resource struct with governed identity and health evidence, Completeness, ResourceProfileResponse, ResourceType and identity types
-// pos: Core domain entity for the resource management system
+// output: Resource struct with governed identity, health evidence, and read-only Completeness, plus ResourceProfileResponse, ResourceType and identity types
+// pos: Core inventory entity and read-model contract
 // note: if this file changes, update this header and module README.md.
 package model
 
@@ -72,6 +72,7 @@ type Resource struct {
 	Source                     string                      `json:"source,omitempty"`
 	ExternalID                 string                      `json:"externalId,omitempty"`
 	Labels                     map[string]string           `json:"labels"`
+	Completeness               *Completeness               `json:"completeness,omitempty"`
 	ProfileSummary             *ProfileSummary             `json:"profileSummary,omitempty"`
 	DatabaseOperationalSummary *DatabaseOperationalSummary `json:"databaseOperationalSummary,omitempty"`
 	ClusterId                  *uint64                     `json:"clusterId,omitempty"`

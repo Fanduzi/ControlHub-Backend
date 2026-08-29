@@ -5,7 +5,7 @@ Business logic layer with interface-based repository dependencies. Each service 
 ## Files
 | File | Responsibility |
 |------|---------------|
-| resource_service.go | Resource reads/writes, governed-identity validation, minimum manual typed-profile identity, health observation ingestion, explicit conflicts, and fail-closed audited inventory updates |
+| resource_service.go | Resource reads/writes, list/detail server-derived completeness from governed identity, typed profiles, and one relation batch; governed-identity validation, minimum manual typed-profile identity, health observation ingestion, explicit conflicts, and fail-closed audited inventory updates |
 | resource_write_service_test.go | Resource/relation write-flow tests, including identity normalization/immutability, sensitive-label rejection, profile validation, and the manual-identity rule matrix |
 | profile_service.go | Typed profile PUT/PATCH/DELETE validation plus fail-closed audited mutations for all typed-profile identities |
 | profile_service_test.go | Profile write tests: validation, PATCH partial-merge semantics, not-found/archived/unsupported guards, and all typed-profile identity rules |

@@ -1,7 +1,7 @@
 // Package api provides HTTP handlers and routing for the ControlHub REST API.
 // input: internal/api, internal/model, net/http, net/http/httptest, encoding/json
-// output: Governed identity/profile, inventory filtering, health evidence, effective-value provenance, and versioned override tests
-// pos: Validates identity, typed profiles, search, Issue 81 health evidence, and Issue 78 override conflicts at the HTTP seam
+// output: Governed identity/profile tests plus list/detail completeness, rich inventory filtering, health reads, effective-value provenance, and versioned override tests
+// pos: Validates governed identity, typed profiles, server-derived completeness, search filters, Issue 81 health evidence, and Issue 78 override conflicts at the HTTP seam
 // note: if this file changes, update this header and module README.md.
 package api
 
@@ -567,6 +567,77 @@ func TestResourceListAndDetailExposeHealthEvidence(t *testing.T) {
 		t.Fatalf("decode detail: %v", err)
 	}
 	assertResourceHealthEvidence(t, detail.Resource)
+}
+
+func TestResourceListAndDetailExposeServerDerivedCompleteness(t *testing.T) {
+	server := NewTestServer()
+
+	listReq := httptest.NewRequest(http.MethodGet, "/resources?resourceType=database_instance&pageSize=100", nil)
+	listRec := httptest.NewRecorder()
+	server.Router.ServeHTTP(listRec, listReq)
+	if listRec.Code != http.StatusOK {
+		t.Fatalf("list status = %d; body: %s", listRec.Code, listRec.Body.String())
+	}
+
+	var list struct {
+		Items []struct {
+			ID           uint64 `json:"id"`
+			Completeness struct {
+				Score               int      `json:"score"`
+				Status              string   `json:"status"`
+				MissingRequirements []string `json:"missingRequirements"`
+			} `json:"completeness"`
+		} `json:"items"`
+	}
+	if err := json.NewDecoder(listRec.Body).Decode(&list); err != nil {
+		t.Fatalf("decode list: %v", err)
+	}
+	if len(list.Items) != 1 || list.Items[0].ID != 1 {
+		t.Fatalf("list items = %#v", list.Items)
+	}
+	if got := list.Items[0].Completeness; got.Score != 71 || got.Status != "partial" || !reflect.DeepEqual(got.MissingRequirements, []string{"minimumIdentity", "structuralRelationship"}) {
+		t.Fatalf("list completeness = %#v", got)
+	}
+
+	detailReq := httptest.NewRequest(http.MethodGet, "/resources/3", nil)
+	detailRec := httptest.NewRecorder()
+	server.Router.ServeHTTP(detailRec, detailReq)
+	if detailRec.Code != http.StatusOK {
+		t.Fatalf("detail status = %d; body: %s", detailRec.Code, detailRec.Body.String())
+	}
+	var detail struct {
+		Resource struct {
+			Completeness struct {
+				Score               int      `json:"score"`
+				Status              string   `json:"status"`
+				MissingRequirements []string `json:"missingRequirements"`
+			} `json:"completeness"`
+		} `json:"resource"`
+	}
+	if err := json.NewDecoder(detailRec.Body).Decode(&detail); err != nil {
+		t.Fatalf("decode detail: %v", err)
+	}
+	if got := detail.Resource.Completeness; got.Score != 100 || got.Status != "complete" || !reflect.DeepEqual(got.MissingRequirements, []string{}) {
+		t.Fatalf("detail completeness = %#v", got)
+	}
+}
+
+func TestResourceWritesRejectClientCompleteness(t *testing.T) {
+	server := NewTestServer()
+	for name, test := range map[string]struct {
+		method string
+		path   string
+		body   string
+	}{
+		"create": {http.MethodPost, "/resources", `{"resourceType":"service","resourceSubtype":"api","name":"complete-input","displayName":"Complete Input","environmentId":1,"ownerId":2,"lifecycleStatus":"running","healthStatus":"healthy","origin":"manual","labels":{},"profile":{"systemName":"complete-input"},"completeness":{"score":100}}`},
+		"patch":  {http.MethodPatch, "/resources/1", `{"completeness":{"score":100}}`},
+	} {
+		t.Run(name, func(t *testing.T) {
+			rec := httptest.NewRecorder()
+			server.Router.ServeHTTP(rec, httptest.NewRequest(test.method, test.path, strings.NewReader(test.body)))
+			assertAPIError(t, rec, http.StatusBadRequest, "malformed_json")
+		})
+	}
 }
 
 func assertResourceHealthEvidence(t *testing.T, resource model.Resource) {

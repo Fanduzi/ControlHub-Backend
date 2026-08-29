@@ -5,7 +5,7 @@ Domain structs, taxonomy constants, validation methods, and dictionary definitio
 ## Files
 | File | Responsibility |
 |------|---------------|
-| resource.go | Resource governed identity, immutable origin, aliases, external identifiers, effective health evidence, read-only Completeness, profile response, and ResourceType |
+| resource.go | Resource governed identity, immutable origin, aliases, external identifiers, effective health evidence, list/detail-only read-only Completeness, profile response, and ResourceType |
 | resource_write.go | Resource create/update inputs, including managed identity collections and nullable manual health override |
 | health_observation.go | HealthObservation value and exact fresh/stale/never boundary calculation |
 | resource_effective_value.go | Effective CI value and observed/manual provenance response contracts |
