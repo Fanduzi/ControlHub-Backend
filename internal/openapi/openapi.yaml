@@ -1,3 +1,8 @@
+# input: public HTTP routes, model JSON shapes, and operator access policy
+# output: served OpenAPI 3.1 contract for ControlHub clients
+# pos: canonical machine-readable API boundary, including inventory audit diffs
+# note: if this file changes, update header and internal/openapi/README.md
+
 openapi: 3.1.0
 info:
   title: ControlHub API
@@ -4572,6 +4577,20 @@ components:
         worstMemberStatus:
           type: string
           description: Health status of the worst-status member
+    AuditChange:
+      type: object
+      required: [field, operation]
+      properties:
+        field:
+          type: string
+          description: Server-owned domain field name; never copied from arbitrary request keys.
+        operation:
+          type: string
+          enum: [add, update, remove]
+        before:
+          description: Previous field value; omitted for additions.
+        after:
+          description: New field value; omitted for removals.
     AuditEvent:
       type: object
       required: [id, eventType, result, createdAt]
@@ -4591,6 +4610,11 @@ components:
           type: string
         result:
           type: string
+        changes:
+          type: array
+          description: Field-level inventory evidence; omitted for legacy and non-inventory events.
+          items:
+            $ref: "#/components/schemas/AuditChange"
         createdAt:
           type: string
           format: date-time

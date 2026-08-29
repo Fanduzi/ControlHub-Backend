@@ -11,6 +11,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"reflect"
+	"sort"
 	"strings"
 
 	"github.com/go-sql-driver/mysql"
@@ -291,99 +293,48 @@ func (r *ResourceRepository) GetResourceProfile(id uint64) (*model.ResourceProfi
 }
 
 func (r *ResourceRepository) fetchProfile(resourceID uint64, resourceType model.ResourceType) (map[string]any, error) {
-	ctx := context.Background()
+	return fetchProfile(context.Background(), r.db, resourceID, resourceType)
+}
 
+type profileQueryer interface {
+	QueryRowContext(context.Context, string, ...any) *sql.Row
+}
+
+func fetchProfile(ctx context.Context, q profileQueryer, id uint64, resourceType model.ResourceType) (map[string]any, error) {
+	var err error
 	switch resourceType {
 	case model.ResourceTypeDatabaseInstance:
-		return r.fetchDatabaseInstanceProfile(ctx, resourceID)
+		var engine, version, host, role string
+		var port int
+		err = q.QueryRowContext(ctx, `select engine, version, host, port, role from resource_profiles_database_instance where resource_id = ?`, id).Scan(&engine, &version, &host, &port, &role)
+		if err == nil {
+			return map[string]any{"engine": engine, "version": version, "host": host, "port": port, "role": role}, nil
+		}
 	case model.ResourceTypeDatabaseCluster:
-		return r.fetchDatabaseClusterProfile(ctx, resourceID)
+		var engine, topologyMode, primaryEndpoint string
+		err = q.QueryRowContext(ctx, `select engine, topology_mode, primary_endpoint from resource_profiles_database_cluster where resource_id = ?`, id).Scan(&engine, &topologyMode, &primaryEndpoint)
+		if err == nil {
+			return map[string]any{"engine": engine, "topologyMode": topologyMode, "primaryEndpoint": primaryEndpoint}, nil
+		}
 	case model.ResourceTypeService:
-		return r.fetchServiceProfile(ctx, resourceID)
+		var systemName, repositoryURL, runtimeEnv string
+		err = q.QueryRowContext(ctx, `select system_name, repository_url, runtime_env from resource_profiles_service where resource_id = ?`, id).Scan(&systemName, &repositoryURL, &runtimeEnv)
+		if err == nil {
+			return map[string]any{"systemName": systemName, "repositoryUrl": repositoryURL, "runtimeEnv": runtimeEnv}, nil
+		}
 	case model.ResourceTypeHost:
-		return r.fetchHostProfile(ctx, resourceID)
+		var hostname, ipAddress, osName string
+		err = q.QueryRowContext(ctx, `select hostname, ip_address, os_name from resource_profiles_host where resource_id = ?`, id).Scan(&hostname, &ipAddress, &osName)
+		if err == nil {
+			return map[string]any{"hostname": hostname, "ipAddress": ipAddress, "osName": osName}, nil
+		}
 	default:
 		return map[string]any{}, nil
 	}
-}
-
-func (r *ResourceRepository) fetchDatabaseInstanceProfile(ctx context.Context, id uint64) (map[string]any, error) {
-	var engine, version, host, role string
-	var port int
-	err := r.db.QueryRowContext(ctx,
-		`select engine, version, host, port, role from resource_profiles_database_instance where resource_id = ?`,
-		id,
-	).Scan(&engine, &version, &host, &port, &role)
 	if errors.Is(err, sql.ErrNoRows) {
 		return map[string]any{}, nil
 	}
-	if err != nil {
-		return nil, fmt.Errorf("fetch database_instance profile: %w", err)
-	}
-	return map[string]any{
-		"engine":  engine,
-		"version": version,
-		"host":    host,
-		"port":    port,
-		"role":    role,
-	}, nil
-}
-
-func (r *ResourceRepository) fetchDatabaseClusterProfile(ctx context.Context, id uint64) (map[string]any, error) {
-	var engine, topologyMode, primaryEndpoint string
-	err := r.db.QueryRowContext(ctx,
-		`select engine, topology_mode, primary_endpoint from resource_profiles_database_cluster where resource_id = ?`,
-		id,
-	).Scan(&engine, &topologyMode, &primaryEndpoint)
-	if errors.Is(err, sql.ErrNoRows) {
-		return map[string]any{}, nil
-	}
-	if err != nil {
-		return nil, fmt.Errorf("fetch database_cluster profile: %w", err)
-	}
-	return map[string]any{
-		"engine":          engine,
-		"topologyMode":    topologyMode,
-		"primaryEndpoint": primaryEndpoint,
-	}, nil
-}
-
-func (r *ResourceRepository) fetchServiceProfile(ctx context.Context, id uint64) (map[string]any, error) {
-	var systemName, repoURL, runtimeEnv string
-	err := r.db.QueryRowContext(ctx,
-		`select system_name, repository_url, runtime_env from resource_profiles_service where resource_id = ?`,
-		id,
-	).Scan(&systemName, &repoURL, &runtimeEnv)
-	if errors.Is(err, sql.ErrNoRows) {
-		return map[string]any{}, nil
-	}
-	if err != nil {
-		return nil, fmt.Errorf("fetch service profile: %w", err)
-	}
-	return map[string]any{
-		"systemName":    systemName,
-		"repositoryUrl": repoURL,
-		"runtimeEnv":    runtimeEnv,
-	}, nil
-}
-
-func (r *ResourceRepository) fetchHostProfile(ctx context.Context, id uint64) (map[string]any, error) {
-	var hostname, ipAddress, osName string
-	err := r.db.QueryRowContext(ctx,
-		`select hostname, ip_address, os_name from resource_profiles_host where resource_id = ?`,
-		id,
-	).Scan(&hostname, &ipAddress, &osName)
-	if errors.Is(err, sql.ErrNoRows) {
-		return map[string]any{}, nil
-	}
-	if err != nil {
-		return nil, fmt.Errorf("fetch host profile: %w", err)
-	}
-	return map[string]any{
-		"hostname":  hostname,
-		"ipAddress": ipAddress,
-		"osName":    osName,
-	}, nil
+	return nil, fmt.Errorf("fetch %s profile: %w", resourceType, err)
 }
 
 const (
@@ -504,13 +455,21 @@ func profileFieldIntPtr(fields map[string]any, key string) *int {
 // are written (explicit empty/zero values honored), and the row is created
 // when absent. The per-type field dispatch mirrors ProfileService.writeProfile
 // in internal/service/profile_service.go; keep the two mappings in sync.
+type sqlExecer interface {
+	ExecContext(context.Context, string, ...any) (sql.Result, error)
+}
+
 func (r *ResourceRepository) PatchProfile(ctx context.Context, resourceID uint64, resourceType model.ResourceType, fields map[string]any) error {
+	return patchProfile(ctx, r.db, resourceID, resourceType, fields)
+}
+
+func patchProfile(ctx context.Context, execer sqlExecer, resourceID uint64, resourceType model.ResourceType, fields map[string]any) error {
 	switch resourceType {
 	case model.ResourceTypeHost:
 		hostname := profileFieldStringPtr(fields, "hostname")
 		ipAddress := profileFieldStringPtr(fields, "ipAddress")
 		osName := profileFieldStringPtr(fields, "osName")
-		_, err := r.db.ExecContext(ctx, patchHostProfileSQL, resourceID, hostname, ipAddress, osName, hostname, ipAddress, osName)
+		_, err := execer.ExecContext(ctx, patchHostProfileSQL, resourceID, hostname, ipAddress, osName, hostname, ipAddress, osName)
 		return err
 	case model.ResourceTypeDatabaseInstance:
 		engine := profileFieldStringPtr(fields, "engine")
@@ -518,19 +477,19 @@ func (r *ResourceRepository) PatchProfile(ctx context.Context, resourceID uint64
 		host := profileFieldStringPtr(fields, "host")
 		port := profileFieldIntPtr(fields, "port")
 		role := profileFieldStringPtr(fields, "role")
-		_, err := r.db.ExecContext(ctx, patchDatabaseInstanceProfileSQL, resourceID, engine, version, host, port, role, engine, version, host, port, role)
+		_, err := execer.ExecContext(ctx, patchDatabaseInstanceProfileSQL, resourceID, engine, version, host, port, role, engine, version, host, port, role)
 		return err
 	case model.ResourceTypeDatabaseCluster:
 		engine := profileFieldStringPtr(fields, "engine")
 		topologyMode := profileFieldStringPtr(fields, "topologyMode")
 		primaryEndpoint := profileFieldStringPtr(fields, "primaryEndpoint")
-		_, err := r.db.ExecContext(ctx, patchDatabaseClusterProfileSQL, resourceID, engine, topologyMode, primaryEndpoint, engine, topologyMode, primaryEndpoint)
+		_, err := execer.ExecContext(ctx, patchDatabaseClusterProfileSQL, resourceID, engine, topologyMode, primaryEndpoint, engine, topologyMode, primaryEndpoint)
 		return err
 	case model.ResourceTypeService:
 		systemName := profileFieldStringPtr(fields, "systemName")
 		repositoryUrl := profileFieldStringPtr(fields, "repositoryUrl")
 		runtimeEnv := profileFieldStringPtr(fields, "runtimeEnv")
-		_, err := r.db.ExecContext(ctx, patchServiceProfileSQL, resourceID, systemName, repositoryUrl, runtimeEnv, systemName, repositoryUrl, runtimeEnv)
+		_, err := execer.ExecContext(ctx, patchServiceProfileSQL, resourceID, systemName, repositoryUrl, runtimeEnv, systemName, repositoryUrl, runtimeEnv)
 		return err
 	default:
 		return service.ErrProfileNotSupported
@@ -558,6 +517,10 @@ func (r *ResourceRepository) UpsertServiceProfile(ctx context.Context, resourceI
 }
 
 func (r *ResourceRepository) DeleteProfile(ctx context.Context, resourceID uint64, resourceType string) error {
+	return deleteProfile(ctx, r.db, resourceID, resourceType)
+}
+
+func deleteProfile(ctx context.Context, execer sqlExecer, resourceID uint64, resourceType string) error {
 	tableMap := map[string]string{
 		"host":              "resource_profiles_host",
 		"database_instance": "resource_profiles_database_instance",
@@ -568,8 +531,59 @@ func (r *ResourceRepository) DeleteProfile(ctx context.Context, resourceID uint6
 	if !ok {
 		return nil
 	}
-	_, err := r.db.ExecContext(ctx, "DELETE FROM "+table+" WHERE resource_id = ?", resourceID)
+	_, err := execer.ExecContext(ctx, "DELETE FROM "+table+" WHERE resource_id = ?", resourceID)
 	return err
+}
+
+func (r *ResourceRepository) PutProfileWithAudit(ctx context.Context, resourceID uint64, resourceType model.ResourceType, fields map[string]any, actorUserID uint64, eventType string) error {
+	return r.mutateProfileWithAudit(ctx, resourceID, resourceType, fields, actorUserID, eventType, "put")
+}
+
+func (r *ResourceRepository) PatchProfileWithAudit(ctx context.Context, resourceID uint64, resourceType model.ResourceType, fields map[string]any, actorUserID uint64, eventType string) error {
+	return r.mutateProfileWithAudit(ctx, resourceID, resourceType, fields, actorUserID, eventType, "patch")
+}
+
+func (r *ResourceRepository) DeleteProfileWithAudit(ctx context.Context, resourceID uint64, resourceType model.ResourceType, actorUserID uint64, eventType string) error {
+	return r.mutateProfileWithAudit(ctx, resourceID, resourceType, nil, actorUserID, eventType, "delete")
+}
+
+func (r *ResourceRepository) mutateProfileWithAudit(ctx context.Context, resourceID uint64, resourceType model.ResourceType, fields map[string]any, actorUserID uint64, eventType, mutation string) error {
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin inventory profile transaction: %w", err)
+	}
+	defer tx.Rollback()
+	if _, err := getResourceForUpdate(ctx, tx, resourceID); err != nil {
+		return err
+	}
+	before, err := fetchProfile(ctx, tx, resourceID, resourceType)
+	if err != nil {
+		return err
+	}
+	switch mutation {
+	case "put":
+		err = upsertProfileTx(ctx, tx, resourceID, resourceType, fields)
+	case "patch":
+		err = patchProfile(ctx, tx, resourceID, resourceType, fields)
+	case "delete":
+		err = deleteProfile(ctx, tx, resourceID, string(resourceType))
+	default:
+		return fmt.Errorf("unsupported profile mutation %q", mutation)
+	}
+	if err != nil {
+		return fmt.Errorf("%s inventory profile: %w", mutation, err)
+	}
+	after, err := fetchProfile(ctx, tx, resourceID, resourceType)
+	if err != nil {
+		return err
+	}
+	if err := insertInventoryAuditTx(ctx, tx, actorUserID, resourceID, eventType, auditMapChanges("profile.", before, after)); err != nil {
+		return err
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit inventory profile transaction: %w", err)
+	}
+	return nil
 }
 
 // insertResourceSQL is shared by CreateResource and CreateResourceWithProfile
@@ -666,59 +680,10 @@ func (r *ResourceRepository) UpdateResource(ctx context.Context, id uint64, inpu
 		return nil, err
 	}
 
-	setClauses := []string{}
-	args := []any{}
-
-	if input.Name != nil {
-		setClauses = append(setClauses, "name = ?")
-		args = append(args, *input.Name)
-	}
-	if input.ResourceSubtype != nil {
-		setClauses = append(setClauses, "resource_subtype = ?")
-		args = append(args, *input.ResourceSubtype)
-	}
-	if input.DisplayName != nil {
-		setClauses = append(setClauses, "display_name = ?")
-		args = append(args, *input.DisplayName)
-	}
-	if input.EnvironmentID != nil {
-		setClauses = append(setClauses, "environment_id = ?")
-		args = append(args, *input.EnvironmentID)
-	}
-	if input.OwnerID != nil {
-		setClauses = append(setClauses, "owner_id = ?")
-		args = append(args, *input.OwnerID)
-	}
-	if input.LifecycleStatus != nil {
-		setClauses = append(setClauses, "lifecycle_status = ?")
-		args = append(args, string(*input.LifecycleStatus))
-	}
-	if input.HealthStatus != nil {
-		setClauses = append(setClauses, "health_status = ?")
-		args = append(args, string(*input.HealthStatus))
-	}
-	if input.Source != nil {
-		setClauses = append(setClauses, "source = ?")
-		args = append(args, *input.Source)
-	}
-	if input.ExternalID != nil {
-		setClauses = append(setClauses, "external_id = ?")
-		args = append(args, *input.ExternalID)
-	}
-	if input.Labels != nil {
-		labelsJSON, _ := json.Marshal(*input.Labels)
-		setClauses = append(setClauses, "labels = ?")
-		args = append(args, string(labelsJSON))
-	}
-
-	if len(setClauses) == 0 {
+	query, args := resourceUpdateStatement(id, input)
+	if query == "" {
 		return existing, nil
 	}
-
-	setClauses = append(setClauses, "updated_at = NOW()")
-	args = append(args, id)
-
-	query := "update resources set " + strings.Join(setClauses, ", ") + " where id = ?"
 
 	if _, err := r.db.ExecContext(ctx, query, args...); err != nil {
 		var mysqlErr *mysql.MySQLError
@@ -729,6 +694,204 @@ func (r *ResourceRepository) UpdateResource(ctx context.Context, id uint64, inpu
 	}
 
 	return r.GetResource(id)
+}
+
+// UpdateResourceWithAudit locks the current CI, derives a server-owned field
+// diff, and commits the resource update and audit evidence together.
+func (r *ResourceRepository) UpdateResourceWithAudit(ctx context.Context, id uint64, input model.ResourceUpdateInput, actorUserID uint64, eventType string) (*model.Resource, error) {
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, fmt.Errorf("begin inventory update transaction: %w", err)
+	}
+	defer tx.Rollback()
+
+	existing, err := getResourceForUpdate(ctx, tx, id)
+	if err != nil {
+		return nil, err
+	}
+	query, args := resourceUpdateStatement(id, input)
+	if query == "" {
+		return existing, nil
+	}
+	if _, err := tx.ExecContext(ctx, query, args...); err != nil {
+		var mysqlErr *mysql.MySQLError
+		if errors.As(err, &mysqlErr) && mysqlErr.Number == 1062 {
+			return nil, service.ErrResourceConflict
+		}
+		return nil, fmt.Errorf("update resource %d: %w", id, err)
+	}
+
+	if err := insertInventoryAuditTx(ctx, tx, actorUserID, id, eventType, resourceAuditChanges(*existing, input)); err != nil {
+		return nil, err
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, fmt.Errorf("commit inventory update transaction: %w", err)
+	}
+	return r.GetResource(id)
+}
+
+func getResourceForUpdate(ctx context.Context, tx *sql.Tx, id uint64) (*model.Resource, error) {
+	item, err := scanResource(tx.QueryRowContext(ctx, "select "+resourceColumns+" from resources where id = ? for update", id))
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, service.ErrResourceNotFound
+	}
+	if err != nil {
+		return nil, fmt.Errorf("lock resource %d: %w", id, err)
+	}
+	return &item, nil
+}
+
+func resourceUpdateStatement(id uint64, input model.ResourceUpdateInput) (string, []any) {
+	setClauses := make([]string, 0, 11)
+	args := make([]any, 0, 11)
+	add := func(column string, value any) {
+		setClauses = append(setClauses, column+" = ?")
+		args = append(args, value)
+	}
+	if input.Name != nil {
+		add("name", *input.Name)
+	}
+	if input.ResourceSubtype != nil {
+		add("resource_subtype", *input.ResourceSubtype)
+	}
+	if input.DisplayName != nil {
+		add("display_name", *input.DisplayName)
+	}
+	if input.EnvironmentID != nil {
+		add("environment_id", *input.EnvironmentID)
+	}
+	if input.OwnerID != nil {
+		add("owner_id", *input.OwnerID)
+	}
+	if input.LifecycleStatus != nil {
+		add("lifecycle_status", string(*input.LifecycleStatus))
+	}
+	if input.HealthStatus != nil {
+		add("health_status", string(*input.HealthStatus))
+	}
+	if input.Source != nil {
+		add("source", *input.Source)
+	}
+	if input.ExternalID != nil {
+		add("external_id", *input.ExternalID)
+	}
+	if input.Labels != nil {
+		labelsJSON, _ := json.Marshal(*input.Labels)
+		add("labels", string(labelsJSON))
+	}
+	if len(setClauses) == 0 {
+		return "", nil
+	}
+	setClauses = append(setClauses, "updated_at = NOW()")
+	args = append(args, id)
+	return "update resources set " + strings.Join(setClauses, ", ") + " where id = ?", args
+}
+
+func resourceAuditChanges(before model.Resource, input model.ResourceUpdateInput) []model.AuditChange {
+	changes := make([]model.AuditChange, 0, 10)
+	add := func(field string, old, next any) {
+		if old != next {
+			changes = append(changes, model.AuditChange{Field: field, Operation: model.AuditChangeUpdate, Before: old, After: next})
+		}
+	}
+	if input.Name != nil {
+		add("identity.name", before.Name, *input.Name)
+	}
+	if input.ResourceSubtype != nil {
+		add("identity.resourceSubtype", before.ResourceSubtype, *input.ResourceSubtype)
+	}
+	if input.DisplayName != nil {
+		add("identity.displayName", before.DisplayName, *input.DisplayName)
+	}
+	if input.EnvironmentID != nil {
+		add("environmentId", before.EnvironmentID, *input.EnvironmentID)
+	}
+	if input.OwnerID != nil {
+		add("ownerId", before.OwnerID, *input.OwnerID)
+	}
+	if input.LifecycleStatus != nil {
+		add("lifecycleStatus", before.LifecycleStatus, string(*input.LifecycleStatus))
+	}
+	if input.HealthStatus != nil {
+		add("manualHealthOverride", before.HealthStatus, string(*input.HealthStatus))
+	}
+	if input.Source != nil {
+		add("source", before.Source, *input.Source)
+	}
+	if input.ExternalID != nil {
+		add("externalId", before.ExternalID, *input.ExternalID)
+	}
+	if input.Labels != nil {
+		beforeKeys := make([]string, 0, len(before.Labels))
+		for key := range before.Labels {
+			beforeKeys = append(beforeKeys, key)
+		}
+		sort.Strings(beforeKeys)
+		for _, key := range beforeKeys {
+			old := before.Labels[key]
+			next, ok := (*input.Labels)[key]
+			switch {
+			case !ok:
+				changes = append(changes, model.AuditChange{Field: "labels." + key, Operation: model.AuditChangeRemove, Before: old})
+			case next != old:
+				changes = append(changes, model.AuditChange{Field: "labels." + key, Operation: model.AuditChangeUpdate, Before: old, After: next})
+			}
+		}
+		afterKeys := make([]string, 0, len(*input.Labels))
+		for key := range *input.Labels {
+			afterKeys = append(afterKeys, key)
+		}
+		sort.Strings(afterKeys)
+		for _, key := range afterKeys {
+			next := (*input.Labels)[key]
+			if _, ok := before.Labels[key]; !ok {
+				changes = append(changes, model.AuditChange{Field: "labels." + key, Operation: model.AuditChangeAdd, After: next})
+			}
+		}
+	}
+	return changes
+}
+
+func auditMapChanges(prefix string, before, after map[string]any) []model.AuditChange {
+	keys := make([]string, 0, len(before)+len(after))
+	seen := make(map[string]bool, len(before)+len(after))
+	for key := range before {
+		seen[key] = true
+		keys = append(keys, key)
+	}
+	for key := range after {
+		if !seen[key] {
+			keys = append(keys, key)
+		}
+	}
+	sort.Strings(keys)
+	changes := make([]model.AuditChange, 0, len(keys))
+	for _, key := range keys {
+		old, hadOld := before[key]
+		next, hasNext := after[key]
+		switch {
+		case !hadOld:
+			changes = append(changes, model.AuditChange{Field: prefix + key, Operation: model.AuditChangeAdd, After: next})
+		case !hasNext:
+			changes = append(changes, model.AuditChange{Field: prefix + key, Operation: model.AuditChangeRemove, Before: old})
+		case !reflect.DeepEqual(old, next):
+			changes = append(changes, model.AuditChange{Field: prefix + key, Operation: model.AuditChangeUpdate, Before: old, After: next})
+		}
+	}
+	return changes
+}
+
+func insertInventoryAuditTx(ctx context.Context, tx *sql.Tx, actorUserID, targetResourceID uint64, eventType string, changes []model.AuditChange) error {
+	changesJSON, err := json.Marshal(changes)
+	if err != nil {
+		return fmt.Errorf("marshal inventory audit changes: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx, `insert into audit_events
+		(actor_user_id, target_resource_id, event_type, result, changes)
+		values (?, ?, ?, 'success', ?)`, actorUserID, targetResourceID, eventType, changesJSON); err != nil {
+		return fmt.Errorf("insert inventory audit event: %w", err)
+	}
+	return nil
 }
 
 func (r *ResourceRepository) ArchiveResource(ctx context.Context, id uint64, reason string) (*model.Resource, error) {
@@ -981,8 +1144,8 @@ func (r *ResourceRepository) fetchDatabaseOperationalSummaries(ctx context.Conte
 		roleRows = nil
 	}
 	type roleCounts struct {
-		primaryCount    int64
-		replicaCount    int64
+		primaryCount     int64
+		replicaCount     int64
 		unknownRoleCount int64
 	}
 	roleMap := make(map[uint64]*roleCounts)
@@ -1029,9 +1192,9 @@ func (r *ResourceRepository) fetchDatabaseOperationalSummaries(ctx context.Conte
 	defer worstRows.Close()
 
 	type worstInfo struct {
-		id       int64
-		name     string
-		status   string
+		id     int64
+		name   string
+		status string
 	}
 	worstMap := make(map[uint64]*worstInfo)
 	for worstRows.Next() {

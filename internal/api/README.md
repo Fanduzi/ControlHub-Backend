@@ -7,10 +7,10 @@ HTTP handlers, chi routing, CORS middleware, and fake-repo test infrastructure.
 |------|---------------|
 | router.go | Route registration, Operator Access Boundary middleware (authenticated Inventory/dictionary reads; fresh-token query surfaces; admin-gated ops metrics), Dependencies struct, CORS middleware, process-shared bounded untrusted-Bearer audit persistence wiring |
 | health_handler.go | GET /health endpoint |
-| resource_handler.go | Resource list, detail, and profile handlers |
-| profile_handler.go | PUT/PATCH/DELETE /resources/{id}/profile handlers with strict single-JSON-object decoding |
-| relation_handler.go | Resource relation list handler |
-| audit_handler.go | Audit event list handlers (global and per-resource) |
+| resource_handler.go | Resource list/detail handlers; authenticated PATCH routes identity and status changes through atomic inventory audit |
+| profile_handler.go | PUT/PATCH/DELETE /resources/{id}/profile handlers with strict decoding and token-derived atomic inventory audit |
+| relation_handler.go | Resource relation reads and token-derived atomic audited create/delete handlers |
+| audit_handler.go | Audit event list handlers (global and per-resource), including inventory field changes |
 | auth_handler.go | POST /auth/login handler |
 | auth_middleware.go | Bearer, role, Authorization Version, and query-freshness middleware; missing Authorization emits no audit event; supplied untrusted Bearer rejection emits the fixed event within the 60/min per-process budget |
 | dictionary_handler.go | Dictionary list handlers (environments, owners, roles, resource-types, relation-types, lifecycle-statuses, health-statuses) |
@@ -26,6 +26,7 @@ HTTP handlers, chi routing, CORS middleware, and fake-repo test infrastructure.
 | resource_handler_test.go | Resource and profile endpoint tests, including create-with-profile atomicity at the HTTP seam |
 | profile_handler_test.go | PUT full-replacement and PATCH partial-merge tests: strict JSON decoding, field validation, no-op empty PATCH |
 | relation_handler_test.go | Relation endpoint tests |
+| audit_handler_test.go | Audit list contract tests, including field-level before/after changes |
 | auth_handler_test.go | Auth endpoint tests |
 | dictionary_handler_test.go | Dictionary endpoint tests |
 | query_credential_handler_test.go | Credential metadata handler tests |

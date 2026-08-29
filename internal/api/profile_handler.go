@@ -29,7 +29,12 @@ func handlePutResourceProfile(profileService *service.ProfileService) http.Handl
 			return
 		}
 
-		if err := profileService.PutProfile(r.Context(), id, fields); err != nil {
+		actorUserID, ok := actorUserIDFromContext(r.Context())
+		if !ok {
+			writeJSONError(w, http.StatusInternalServerError, "internal_error", "authenticated actor missing")
+			return
+		}
+		if err := profileService.PutProfileInventory(r.Context(), actorUserID, id, fields); err != nil {
 			writeServiceError(w, err)
 			return
 		}
@@ -56,7 +61,12 @@ func handlePatchResourceProfile(profileService *service.ProfileService) http.Han
 			return
 		}
 
-		if err := profileService.PatchProfile(r.Context(), id, fields); err != nil {
+		actorUserID, ok := actorUserIDFromContext(r.Context())
+		if !ok {
+			writeJSONError(w, http.StatusInternalServerError, "internal_error", "authenticated actor missing")
+			return
+		}
+		if err := profileService.PatchProfileInventory(r.Context(), actorUserID, id, fields); err != nil {
 			writeServiceError(w, err)
 			return
 		}
@@ -79,7 +89,12 @@ func handleDeleteResourceProfile(profileService *service.ProfileService) http.Ha
 			return
 		}
 
-		if err := profileService.DeleteProfile(r.Context(), id); err != nil {
+		actorUserID, ok := actorUserIDFromContext(r.Context())
+		if !ok {
+			writeJSONError(w, http.StatusInternalServerError, "internal_error", "authenticated actor missing")
+			return
+		}
+		if err := profileService.DeleteProfileInventory(r.Context(), actorUserID, id); err != nil {
 			writeServiceError(w, err)
 			return
 		}

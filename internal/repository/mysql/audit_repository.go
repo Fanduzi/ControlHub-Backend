@@ -8,6 +8,7 @@ package mysql
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"strconv"
 	"strings"
@@ -58,7 +59,7 @@ func (r *AuditRepository) ListAuditEvents(ctx context.Context, q model.AuditList
 	}
 
 	offset := (q.Page - 1) * q.PageSize
-	dataQuery := `select id, actor_user_id, target_resource_id, event_type, result, created_at
+	dataQuery := `select id, actor_user_id, target_resource_id, event_type, result, changes, created_at
 	from audit_events ` + where + ` order by created_at desc limit ? offset ?`
 
 	dataArgs := append(args, q.PageSize, offset)
@@ -73,7 +74,7 @@ func (r *AuditRepository) ListAuditEvents(ctx context.Context, q model.AuditList
 
 func (r *AuditRepository) ListByResourceID(resourceID uint64) ([]model.AuditEvent, error) {
 	query := `
-	select id, actor_user_id, target_resource_id, event_type, result, created_at
+	select id, actor_user_id, target_resource_id, event_type, result, changes, created_at
 	from audit_events
 	where target_resource_id = ?
 	order by created_at desc`
@@ -134,12 +135,14 @@ func scanAuditEventsRows(rows *sql.Rows, total int) ([]model.AuditEvent, int, er
 		var item model.AuditEvent
 		var targetResourceID nullableUint64
 		var actorUserID nullableUint64
+		var rawChanges sql.NullString
 		if err := rows.Scan(
 			&item.ID,
 			&actorUserID,
 			&targetResourceID,
 			&item.EventType,
 			&item.Result,
+			&rawChanges,
 			&item.CreatedAt,
 		); err != nil {
 			return nil, 0, err
@@ -151,6 +154,11 @@ func scanAuditEventsRows(rows *sql.Rows, total int) ([]model.AuditEvent, int, er
 		if targetResourceID.Valid {
 			targetID := targetResourceID.Uint64
 			item.TargetResourceID = &targetID
+		}
+		if rawChanges.Valid {
+			if err := json.Unmarshal([]byte(rawChanges.String), &item.Changes); err != nil {
+				return nil, 0, fmt.Errorf("decode audit changes: %w", err)
+			}
 		}
 		items = append(items, item)
 	}

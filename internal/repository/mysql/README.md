@@ -5,9 +5,9 @@ Data access layer implementing service-layer repository interfaces with raw SQL 
 ## Files
 | File | Responsibility |
 |------|---------------|
-| resource_repository.go | Resource CRUD, profile queries, type-specific profile scanning, transactional create-with-profile (resource + initial profile roll back together), atomic COALESCE partial profile merge (PatchProfile) |
-| relation_repository.go | Relation queries by resource ID |
-| audit_repository.go | Audit event queries (global and by resource) |
+| resource_repository.go | Resource CRUD and typed profiles; authenticated resource/profile mutations commit server-owned field diffs in the same transaction |
+| relation_repository.go | Relation queries plus atomic create/delete and one audit event per affected CI |
+| audit_repository.go | Audit event queries (global and by resource), including JSON field changes |
 | user_repository.go | User credential lookup by email/id; Authorization Version mutators (role/active/password); UpgradePasswordHash for legacy-to-Argon2id migration; CountLegacyHashUsers for operator visibility |
 | dictionary_repository.go | Dictionary queries — DB-backed (environments, owners, roles) and static (resource types, relation types, lifecycle/health statuses) |
 | query_execution_repository.go | Query credential metadata (get/upsert/delete with audit), atomic `InsertExecutionWithAudit` Execution Evidence Pair (Issues #34/#36) with per-caller fixed audit event type, execution history, audit-only `InsertAuditEvent`, `QueryEvidencePersistenceFailures` counter |
@@ -24,6 +24,11 @@ Data access layer implementing service-layer repository interfaces with raw SQL 
 - `QueryEvidencePersistenceFailures` — dimensionless expvar counter for atomic Execution Evidence Pair persistence failures (Issue #34), readable through the repository's `QueryEvidencePersistenceFailures()` accessor for the service layer
 - `QueryExecutionRepository.InsertExecutionWithAudit` — repository-owned atomic Execution Evidence Pair: one transaction commits the execution-history row and its fixed per-caller audit event (service passes `query.executed` for execution and `related_record_navigation` for navigation, Issue #36); on any failure both roll back, the counter increments once, and one fixed safe log line is emitted
 - Repository structs satisfy service-layer interfaces
+
+Inventory audit writes are fail-closed. Resource, typed-profile, and
+relationship mutations use the shared `AuditChange` representation; audit
+insert or commit failure rolls the inventory mutation back. Relationship
+mutations write separate target-specific evidence for both affected CIs.
 
 ## Dependencies
 - Upstream: `internal/model` (domain types), `database/sql`

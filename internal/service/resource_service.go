@@ -48,6 +48,10 @@ type ResourceService struct {
 	repo ResourceRepository
 }
 
+type inventoryAuditResourceRepository interface {
+	UpdateResourceWithAudit(ctx context.Context, id uint64, input model.ResourceUpdateInput, actorUserID uint64, eventType string) (*model.Resource, error)
+}
+
 func NewResourceService(repo ResourceRepository) *ResourceService {
 	return &ResourceService{repo: repo}
 }
@@ -108,66 +112,91 @@ func (s *ResourceService) Create(ctx context.Context, input model.ResourceCreate
 }
 
 func (s *ResourceService) Update(ctx context.Context, id uint64, patch model.ResourcePatchRequest) (*model.Resource, error) {
-	if id == 0 {
-		return nil, wrapValidation("resource id is required")
-	}
-	existing, err := s.Get(id)
+	input, err := s.validateUpdate(id, patch)
 	if err != nil {
 		return nil, err
 	}
+	return s.repo.UpdateResource(ctx, id, input)
+}
+
+// UpdateInventory validates an authenticated HTTP mutation and requires the
+// repository's fail-closed, same-transaction inventory audit path.
+func (s *ResourceService) UpdateInventory(ctx context.Context, actorUserID, id uint64, patch model.ResourcePatchRequest) (*model.Resource, error) {
+	if actorUserID == 0 {
+		return nil, errors.New("inventory audit actor is required")
+	}
+	input, err := s.validateUpdate(id, patch)
+	if err != nil {
+		return nil, err
+	}
+	repo, ok := s.repo.(inventoryAuditResourceRepository)
+	if !ok {
+		return nil, errors.New("inventory audit repository is required")
+	}
+	return repo.UpdateResourceWithAudit(ctx, id, input, actorUserID, "inventory.resource.updated")
+}
+
+func (s *ResourceService) validateUpdate(id uint64, patch model.ResourcePatchRequest) (model.ResourceUpdateInput, error) {
+	if id == 0 {
+		return model.ResourceUpdateInput{}, wrapValidation("resource id is required")
+	}
+	existing, err := s.Get(id)
+	if err != nil {
+		return model.ResourceUpdateInput{}, err
+	}
 	if existing.IsArchived() {
-		return nil, ErrResourceArchived
+		return model.ResourceUpdateInput{}, ErrResourceArchived
 	}
 	if patch.HasImmutableFields() {
-		return nil, wrapValidation("immutable resource fields cannot be updated")
+		return model.ResourceUpdateInput{}, wrapValidation("immutable resource fields cannot be updated")
 	}
 	if !patch.HasMutableFields() {
-		return nil, wrapValidation("at least one mutable field is required")
+		return model.ResourceUpdateInput{}, wrapValidation("at least one mutable field is required")
 	}
 	if patch.Name != nil {
 		if *patch.Name == "" {
-			return nil, wrapValidation("name is required")
+			return model.ResourceUpdateInput{}, wrapValidation("name is required")
 		}
 		if !resourceNamePattern.MatchString(*patch.Name) {
-			return nil, wrapValidation("name must be operations-friendly")
+			return model.ResourceUpdateInput{}, wrapValidation("name must be operations-friendly")
 		}
 	}
 	if patch.ResourceSubtype != nil {
 		if err := model.ValidateResourceSubtype(string(existing.ResourceType), *patch.ResourceSubtype); err != nil {
-			return nil, wrapValidation(err.Error())
+			return model.ResourceUpdateInput{}, wrapValidation(err.Error())
 		}
 	}
 	if patch.DisplayName != nil && *patch.DisplayName == "" {
-		return nil, wrapValidation("displayName is required")
+		return model.ResourceUpdateInput{}, wrapValidation("displayName is required")
 	}
 	if patch.EnvironmentID != nil && *patch.EnvironmentID == 0 {
-		return nil, wrapValidation("environmentId is required")
+		return model.ResourceUpdateInput{}, wrapValidation("environmentId is required")
 	}
 	if patch.OwnerID != nil && *patch.OwnerID == 0 {
-		return nil, wrapValidation("ownerId is required")
+		return model.ResourceUpdateInput{}, wrapValidation("ownerId is required")
 	}
 	if patch.Source != nil && *patch.Source != "manual" {
-		return nil, wrapValidation("source must be manual")
+		return model.ResourceUpdateInput{}, wrapValidation("source must be manual")
 	}
 	if patch.LifecycleStatus != nil {
 		if err := patch.LifecycleStatus.Validate(); err != nil {
-			return nil, wrapValidation("lifecycleStatus is not supported")
+			return model.ResourceUpdateInput{}, wrapValidation("lifecycleStatus is not supported")
 		}
 	}
 	if patch.HealthStatus != nil {
 		if err := patch.HealthStatus.Validate(); err != nil {
-			return nil, wrapValidation("healthStatus is not supported")
+			return model.ResourceUpdateInput{}, wrapValidation("healthStatus is not supported")
 		}
 	}
 	if patch.Labels != nil {
 		if err := validateResourceLabels(*patch.Labels); err != nil {
-			return nil, wrapValidation(err.Error())
+			return model.ResourceUpdateInput{}, wrapValidation(err.Error())
 		}
 	}
 	if patch.EnvironmentID != nil || patch.OwnerID != nil {
 		existing, err := s.Get(id)
 		if err != nil {
-			return nil, err
+			return model.ResourceUpdateInput{}, err
 		}
 		environmentID := existing.EnvironmentID
 		ownerID := existing.OwnerID
@@ -178,14 +207,10 @@ func (s *ResourceService) Update(ctx context.Context, id uint64, patch model.Res
 			ownerID = *patch.OwnerID
 		}
 		if err := validateReferenceIDs(environmentID, ownerID); err != nil {
-			return nil, err
+			return model.ResourceUpdateInput{}, err
 		}
 	}
-	updated, err := s.repo.UpdateResource(ctx, id, patch.ToUpdateInput())
-	if err != nil {
-		return nil, err
-	}
-	return updated, nil
+	return patch.ToUpdateInput(), nil
 }
 
 func (s *ResourceService) Archive(ctx context.Context, id uint64, req model.ArchiveRequest) (*model.Resource, error) {
@@ -233,46 +258,68 @@ func validateResourceCreateInput(input model.ResourceCreateInput) error {
 	var ve *ValidationError
 
 	if err := input.ResourceType.Validate(); err != nil {
-		if ve == nil { ve = newValidationError("validation failed") }
+		if ve == nil {
+			ve = newValidationError("validation failed")
+		}
 		ve.WithField("resourceType", "Resource type is not supported")
 	}
 	if input.Name == "" {
-		if ve == nil { ve = newValidationError("validation failed") }
+		if ve == nil {
+			ve = newValidationError("validation failed")
+		}
 		ve.WithField("name", "Name is required")
 	} else if !resourceNamePattern.MatchString(input.Name) {
-		if ve == nil { ve = newValidationError("validation failed") }
+		if ve == nil {
+			ve = newValidationError("validation failed")
+		}
 		ve.WithField("name", "Must match pattern: lowercase letters, numbers, dots, hyphens, underscores")
 	}
 	if input.DisplayName == "" {
-		if ve == nil { ve = newValidationError("validation failed") }
+		if ve == nil {
+			ve = newValidationError("validation failed")
+		}
 		ve.WithField("displayName", "Display name is required")
 	}
 	if input.EnvironmentID == 0 {
-		if ve == nil { ve = newValidationError("validation failed") }
+		if ve == nil {
+			ve = newValidationError("validation failed")
+		}
 		ve.WithField("environmentId", "Environment is required")
 	}
 	if input.OwnerID == 0 {
-		if ve == nil { ve = newValidationError("validation failed") }
+		if ve == nil {
+			ve = newValidationError("validation failed")
+		}
 		ve.WithField("ownerId", "Owner is required")
 	}
 	if err := input.LifecycleStatus.Validate(); err != nil {
-		if ve == nil { ve = newValidationError("validation failed") }
+		if ve == nil {
+			ve = newValidationError("validation failed")
+		}
 		ve.WithField("lifecycleStatus", "Lifecycle status is not supported")
 	}
 	if err := input.HealthStatus.Validate(); err != nil {
-		if ve == nil { ve = newValidationError("validation failed") }
+		if ve == nil {
+			ve = newValidationError("validation failed")
+		}
 		ve.WithField("healthStatus", "Health status is not supported")
 	}
 	if input.Source != "manual" {
-		if ve == nil { ve = newValidationError("validation failed") }
+		if ve == nil {
+			ve = newValidationError("validation failed")
+		}
 		ve.WithField("source", "Source must be manual")
 	}
 	if err := model.ValidateResourceSubtype(string(input.ResourceType), input.ResourceSubtype); err != nil {
-		if ve == nil { ve = newValidationError("validation failed") }
+		if ve == nil {
+			ve = newValidationError("validation failed")
+		}
 		ve.WithField("resourceSubtype", err.Error())
 	}
 	if err := validateResourceLabels(input.Labels); err != nil {
-		if ve == nil { ve = newValidationError("validation failed") }
+		if ve == nil {
+			ve = newValidationError("validation failed")
+		}
 		ve.WithField("labels", err.Error())
 	}
 
@@ -280,7 +327,9 @@ func validateResourceCreateInput(input model.ResourceCreateInput) error {
 		if err := validateProfileFields(input.ResourceType, input.Profile); err != nil {
 			var pe *ValidationError
 			if errors.As(err, &pe) {
-				if ve == nil { ve = newValidationError("validation failed") }
+				if ve == nil {
+					ve = newValidationError("validation failed")
+				}
 				for field, message := range pe.Fields {
 					ve.WithField(field, message)
 				}
@@ -349,6 +398,12 @@ func validateResourceLabels(labels map[string]string) error {
 		}
 		if containsControlChars(value) {
 			return fmt.Errorf("label value for key %q contains control characters", key)
+		}
+		lowerKey := strings.ToLower(key)
+		for _, reserved := range []string{"credential", "password", "token", "dsn", "secret"} {
+			if strings.Contains(lowerKey, reserved) {
+				return fmt.Errorf("label key %q is reserved for sensitive data", key)
+			}
 		}
 	}
 	return nil

@@ -78,7 +78,12 @@ func handleCreateResourceRelation(relationService *service.RelationService) http
 			writeJSONError(w, http.StatusBadRequest, "validation_failed", err.Error())
 			return
 		}
-		created, err := relationService.Create(r.Context(), id, input)
+		actorUserID, ok := actorUserIDFromContext(r.Context())
+		if !ok {
+			writeJSONError(w, http.StatusInternalServerError, "internal_error", "authenticated actor missing")
+			return
+		}
+		created, err := relationService.CreateInventory(r.Context(), actorUserID, id, input)
 		if err != nil {
 			writeServiceError(w, err)
 			return
@@ -95,7 +100,12 @@ func handleDeleteResourceRelation(relationService *service.RelationService) http
 			writeJSONError(w, http.StatusBadRequest, "validation_failed", err.Error())
 			return
 		}
-		if err := relationService.Delete(r.Context(), id); err != nil {
+		actorUserID, ok := actorUserIDFromContext(r.Context())
+		if !ok {
+			writeJSONError(w, http.StatusInternalServerError, "internal_error", "authenticated actor missing")
+			return
+		}
+		if err := relationService.DeleteInventory(r.Context(), actorUserID, id); err != nil {
 			writeServiceError(w, err)
 			return
 		}

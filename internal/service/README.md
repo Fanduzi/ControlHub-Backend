@@ -5,11 +5,11 @@ Business logic layer with interface-based repository dependencies. Each service 
 ## Files
 | File | Responsibility |
 |------|---------------|
-| resource_service.go | Resource listing, detail, profile projection, create-with-profile atomicity (profile failure ⇒ create error, no partial resource) and strict profile field validation |
-| resource_write_service_test.go | Resource/relation write-flow tests, including create-with-profile atomicity and profile field validation at the service seam |
-| profile_service.go | Typed profile PUT (full replacement) / PATCH (partial merge) with strict field validation and archived-resource guard |
+| resource_service.go | Resource reads/writes, validation, and fail-closed audited HTTP inventory updates |
+| resource_write_service_test.go | Resource/relation write-flow tests, including sensitive-label rejection and profile validation |
+| profile_service.go | Typed profile PUT/PATCH/DELETE validation plus fail-closed audited HTTP mutations |
 | profile_service_test.go | Profile write tests: validation, PATCH partial-merge semantics, not-found/archived/unsupported guards |
-| relation_service.go | Relation listing by resource |
+| relation_service.go | Relation reads/writes plus fail-closed audited HTTP mutations |
 | audit_service.go | Audit event listing (global and per-resource) |
 | auth_service.go | Login, versioned Backend Bearer issuance, current-state VerifyToken (Authorization Version), role/disable/password invalidation, legacy-to-Argon2id transparent migration |
 | auth_audit_emitter.go | AuthAuditEmitter interface, NoopEmitter, and BoundedAuthAuditEmitter decorator capping untrusted Bearer rejection persistence at 60/min per process (fail-open) |

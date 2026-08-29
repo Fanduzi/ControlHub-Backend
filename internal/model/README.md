@@ -7,7 +7,7 @@ Domain structs, taxonomy constants, validation methods, and dictionary definitio
 |------|---------------|
 | resource.go | Resource struct, ResourceProfileResponse, ResourceType type |
 | relation.go | ResourceRelation struct, RelationType type |
-| audit.go | AuditEvent struct |
+| audit.go | AuditEvent plus server-owned AuditChange field-diff contract |
 | auth.go | UserCredential (incl. IsActive + AuthorizationVersion), LoginRequest, LoginResponse structs |
 | settings.go | Environment, Owner, Role structs |
 | pagination.go | PageInfo, ResourceListQuery, AuditListQuery, pagination helpers/constants |
@@ -27,6 +27,7 @@ Domain structs, taxonomy constants, validation methods, and dictionary definitio
 
 ## Exports
 - All domain structs (Resource, ResourceRelation, AuditEvent, etc.)
+- `AuditChange`, `AuditChangeOperation`, and add/update/remove constants for extensible inventory evidence
 - Type constants and validation methods
 - `ResourceTypeDictionary()`, `RelationTypeDictionary()`, `LifecycleStatusDictionary()`, `HealthStatusDictionary()`
 - `QueryEnvironmentPolicy.Validate()`, `ValidateCredentialRef()` (query sandbox credential policy)

@@ -166,11 +166,11 @@ func (r *RelationRepository) fetchInstanceProfileSummary(ctx context.Context, id
 		return nil
 	}
 	return &model.ProfileSummary{
-		Engine:  engine,
-		Version: version,
+		Engine:   engine,
+		Version:  version,
 		Hostname: host,
-		Port:    port,
-		Role:    role,
+		Port:     port,
+		Role:     role,
 	}
 }
 
@@ -205,10 +205,14 @@ func (r *RelationRepository) GetResource(id uint64) (*model.Resource, error) {
 }
 
 func (r *RelationRepository) CreateRelation(ctx context.Context, input model.RelationCreateInput) (*model.ResourceRelation, error) {
+	return insertRelation(ctx, r.db, input)
+}
+
+func insertRelation(ctx context.Context, execer sqlExecer, input model.RelationCreateInput) (*model.ResourceRelation, error) {
 	query := `insert into resource_relations (from_resource_id, to_resource_id, relation_type, created_at)
 	values (?, ?, ?, NOW())`
 
-	result, err := r.db.ExecContext(ctx, query, input.FromResourceID, input.ToResourceID, input.RelationType)
+	result, err := execer.ExecContext(ctx, query, input.FromResourceID, input.ToResourceID, input.RelationType)
 	if err != nil {
 		var mysqlErr *mysql.MySQLError
 		if errors.As(err, &mysqlErr) && mysqlErr.Number == 1062 {
@@ -231,6 +235,35 @@ func (r *RelationRepository) CreateRelation(ctx context.Context, input model.Rel
 	}, nil
 }
 
+func (r *RelationRepository) CreateRelationWithAudit(ctx context.Context, input model.RelationCreateInput, actorUserID uint64, eventType string) (*model.ResourceRelation, error) {
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, fmt.Errorf("begin inventory relationship transaction: %w", err)
+	}
+	defer tx.Rollback()
+	created, err := insertRelation(ctx, tx, input)
+	if err != nil {
+		return nil, err
+	}
+	field := "relationships." + string(input.RelationType)
+	if err := insertInventoryAuditTx(ctx, tx, actorUserID, input.FromResourceID, eventType, []model.AuditChange{{
+		Field: field, Operation: model.AuditChangeAdd,
+		After: map[string]any{"relatedResourceId": input.ToResourceID, "direction": "outgoing"},
+	}}); err != nil {
+		return nil, err
+	}
+	if err := insertInventoryAuditTx(ctx, tx, actorUserID, input.ToResourceID, eventType, []model.AuditChange{{
+		Field: field, Operation: model.AuditChangeAdd,
+		After: map[string]any{"relatedResourceId": input.FromResourceID, "direction": "incoming"},
+	}}); err != nil {
+		return nil, err
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, fmt.Errorf("commit inventory relationship transaction: %w", err)
+	}
+	return created, nil
+}
+
 func (r *RelationRepository) DeleteRelation(ctx context.Context, relationID uint64) error {
 	result, err := r.db.ExecContext(ctx, `delete from resource_relations where id = ?`, relationID)
 	if err != nil {
@@ -239,6 +272,43 @@ func (r *RelationRepository) DeleteRelation(ctx context.Context, relationID uint
 	affected, _ := result.RowsAffected()
 	if affected == 0 {
 		return service.ErrRelationNotFound
+	}
+	return nil
+}
+
+func (r *RelationRepository) DeleteRelationWithAudit(ctx context.Context, relationID, actorUserID uint64, eventType string) error {
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin inventory relationship transaction: %w", err)
+	}
+	defer tx.Rollback()
+	var relation model.ResourceRelation
+	if err := tx.QueryRowContext(ctx, `select id, from_resource_id, to_resource_id, relation_type, created_at
+		from resource_relations where id = ? for update`, relationID).Scan(
+		&relation.ID, &relation.FromResourceID, &relation.ToResourceID, &relation.RelationType, &relation.CreatedAt,
+	); errors.Is(err, sql.ErrNoRows) {
+		return service.ErrRelationNotFound
+	} else if err != nil {
+		return fmt.Errorf("lock relation: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx, `delete from resource_relations where id = ?`, relationID); err != nil {
+		return fmt.Errorf("delete relation: %w", err)
+	}
+	field := "relationships." + string(relation.RelationType)
+	if err := insertInventoryAuditTx(ctx, tx, actorUserID, relation.FromResourceID, eventType, []model.AuditChange{{
+		Field: field, Operation: model.AuditChangeRemove,
+		Before: map[string]any{"relatedResourceId": relation.ToResourceID, "direction": "outgoing"},
+	}}); err != nil {
+		return err
+	}
+	if err := insertInventoryAuditTx(ctx, tx, actorUserID, relation.ToResourceID, eventType, []model.AuditChange{{
+		Field: field, Operation: model.AuditChangeRemove,
+		Before: map[string]any{"relatedResourceId": relation.FromResourceID, "direction": "incoming"},
+	}}); err != nil {
+		return err
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit inventory relationship transaction: %w", err)
 	}
 	return nil
 }

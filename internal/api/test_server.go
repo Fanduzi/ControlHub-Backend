@@ -113,6 +113,29 @@ func (f *fakeResourceRepo) DeleteProfile(_ context.Context, resourceID uint64, _
 	return nil
 }
 
+func (f *fakeResourceRepo) PutProfileWithAudit(ctx context.Context, resourceID uint64, resourceType model.ResourceType, fields map[string]any, _ uint64, _ string) error {
+	switch resourceType {
+	case model.ResourceTypeHost:
+		return f.UpsertHostProfile(ctx, resourceID, profileString(fields, "hostname"), profileString(fields, "ipAddress"), profileString(fields, "osName"))
+	case model.ResourceTypeDatabaseInstance:
+		return f.UpsertDatabaseInstanceProfile(ctx, resourceID, profileString(fields, "engine"), profileString(fields, "version"), profileString(fields, "host"), profileInt(fields, "port"), profileString(fields, "role"))
+	case model.ResourceTypeDatabaseCluster:
+		return f.UpsertDatabaseClusterProfile(ctx, resourceID, profileString(fields, "engine"), profileString(fields, "topologyMode"), profileString(fields, "primaryEndpoint"))
+	case model.ResourceTypeService:
+		return f.UpsertServiceProfile(ctx, resourceID, profileString(fields, "systemName"), profileString(fields, "repositoryUrl"), profileString(fields, "runtimeEnv"))
+	default:
+		return service.ErrProfileNotSupported
+	}
+}
+
+func (f *fakeResourceRepo) PatchProfileWithAudit(ctx context.Context, resourceID uint64, resourceType model.ResourceType, fields map[string]any, _ uint64, _ string) error {
+	return f.PatchProfile(ctx, resourceID, resourceType, fields)
+}
+
+func (f *fakeResourceRepo) DeleteProfileWithAudit(ctx context.Context, resourceID uint64, resourceType model.ResourceType, _ uint64, _ string) error {
+	return f.DeleteProfile(ctx, resourceID, string(resourceType))
+}
+
 // PatchProfile mirrors the real repository's atomic partial merge: submitted
 // fields are applied on top of the current profile, omitted fields are kept,
 // and the row is created when absent.
@@ -353,6 +376,10 @@ func (f *fakeResourceRepo) UpdateResource(_ context.Context, id uint64, input mo
 	return &cloned, nil
 }
 
+func (f *fakeResourceRepo) UpdateResourceWithAudit(ctx context.Context, id uint64, input model.ResourceUpdateInput, _ uint64, _ string) (*model.Resource, error) {
+	return f.UpdateResource(ctx, id, input)
+}
+
 func (f *fakeResourceRepo) ArchiveResource(_ context.Context, id uint64, reason string) (*model.Resource, error) {
 	res, ok := f.resources[id]
 	if !ok {
@@ -544,6 +571,10 @@ func (f *fakeRelationRepo) CreateRelation(_ context.Context, input model.Relatio
 	return &relation, nil
 }
 
+func (f *fakeRelationRepo) CreateRelationWithAudit(ctx context.Context, input model.RelationCreateInput, _ uint64, _ string) (*model.ResourceRelation, error) {
+	return f.CreateRelation(ctx, input)
+}
+
 func (f *fakeRelationRepo) DeleteRelation(_ context.Context, relationID uint64) error {
 	if _, ok := f.relations[relationID]; !ok {
 		return service.ErrRelationNotFound
@@ -557,6 +588,10 @@ func (f *fakeRelationRepo) DeleteRelation(_ context.Context, relationID uint64) 
 	}
 	f.order = filtered
 	return nil
+}
+
+func (f *fakeRelationRepo) DeleteRelationWithAudit(ctx context.Context, relationID, _ uint64, _ string) error {
+	return f.DeleteRelation(ctx, relationID)
 }
 
 type fakeTopologyRepo struct {
@@ -593,7 +628,7 @@ func (fakeAuditRepo) ListAuditEvents(_ context.Context, q model.AuditListQuery) 
 	actor1 := uint64(1)
 	actor2 := uint64(2)
 	all := []model.AuditEvent{
-		{ID: 1, ActorUserID: &actor1, TargetResourceID: &targetResourceID, EventType: "resource.updated", Result: "success", CreatedAt: time.Date(2026, 4, 11, 21, 0, 0, 0, time.UTC)},
+		{ID: 1, ActorUserID: &actor1, TargetResourceID: &targetResourceID, EventType: "resource.updated", Result: "success", Changes: []model.AuditChange{{Field: "ownerId", Operation: model.AuditChangeUpdate, Before: float64(1), After: float64(2)}}, CreatedAt: time.Date(2026, 4, 11, 21, 0, 0, 0, time.UTC)},
 		{ID: 2, ActorUserID: &actor2, TargetResourceID: nil, EventType: "resource.created", Result: "failure", CreatedAt: time.Date(2026, 4, 11, 22, 0, 0, 0, time.UTC)},
 	}
 
@@ -627,7 +662,7 @@ func (fakeAuditRepo) ListAuditEvents(_ context.Context, q model.AuditListQuery) 
 
 func (fakeAuditRepo) ListByResourceID(resourceID uint64) ([]model.AuditEvent, error) {
 	actor := uint64(1)
-	return []model.AuditEvent{{ID: 1, ActorUserID: &actor, TargetResourceID: &resourceID, EventType: "resource.updated", Result: "success", CreatedAt: time.Date(2026, 4, 11, 21, 0, 0, 0, time.UTC)}}, nil
+	return []model.AuditEvent{{ID: 1, ActorUserID: &actor, TargetResourceID: &resourceID, EventType: "resource.updated", Result: "success", Changes: []model.AuditChange{{Field: "ownerId", Operation: model.AuditChangeUpdate, Before: float64(1), After: float64(2)}}, CreatedAt: time.Date(2026, 4, 11, 21, 0, 0, 0, time.UTC)}}, nil
 }
 
 // fakeQueryTargetRow pairs a raw query target with the environment id used for

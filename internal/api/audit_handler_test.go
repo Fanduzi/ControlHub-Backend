@@ -61,6 +61,29 @@ func TestListAuditEvents_DefaultPagination(t *testing.T) {
 	}
 }
 
+func TestListAuditEvents_ReturnsFieldDiffContract(t *testing.T) {
+	server := NewTestServer()
+	req := httptest.NewRequest(http.MethodGet, "/audit-events?targetResourceId=1", nil)
+	rec := httptest.NewRecorder()
+
+	server.Router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+
+	var resp paginatedAuditResponse
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if len(resp.Items) != 1 || len(resp.Items[0].Changes) != 1 {
+		t.Fatalf("changes = %#v, want one field diff", resp.Items)
+	}
+	change := resp.Items[0].Changes[0]
+	if change.Field != "ownerId" || change.Operation != model.AuditChangeUpdate || change.Before != float64(1) || change.After != float64(2) {
+		t.Fatalf("change = %#v, want ownerId 1 -> 2", change)
+	}
+}
+
 func TestListAuditEvents_CustomPagination(t *testing.T) {
 	server := NewTestServer()
 	req := httptest.NewRequest(http.MethodGet, "/audit-events?page=1&pageSize=1", nil)

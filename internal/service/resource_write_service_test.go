@@ -18,19 +18,19 @@ import (
 const (
 	testResourceCreatedID uint64 = 100
 	testRelationCreatedID uint64 = 200
-	testResource1ID      uint64 = 101
-	testResource2ID      uint64 = 102
-	testMissingID        uint64 = 999999
-	testEnvID            uint64 = 1
-	testOwnerID          uint64 = 2
+	testResource1ID       uint64 = 101
+	testResource2ID       uint64 = 102
+	testMissingID         uint64 = 999999
+	testEnvID             uint64 = 1
+	testOwnerID           uint64 = 2
 )
 
 type fakeResourceWriteRepo struct {
-	resources  map[uint64]model.Resource
-	createErr  error
-	updateErr  error
-	profileErr error          // injected failure for create-with-profile
-	profile    map[string]any // last profile written via CreateResourceWithProfile
+	resources        map[uint64]model.Resource
+	createErr        error
+	updateErr        error
+	profileErr       error          // injected failure for create-with-profile
+	profile          map[string]any // last profile written via CreateResourceWithProfile
 	getProfileResult *model.ResourceProfileResponse
 }
 
@@ -770,6 +770,26 @@ func TestResourceServicePatchRejectsLabelKeyControlCharacters(t *testing.T) {
 	_, err := svc.Update(context.Background(), testResource1ID, model.ResourcePatchRequest{Labels: &labels})
 	if !errors.Is(err, ErrValidationFailed) {
 		t.Fatalf("expected ErrValidationFailed for control char in patch label key, got %v", err)
+	}
+}
+
+func TestResourceServicePatchRejectsSensitiveLabelKeys(t *testing.T) {
+	repo := &fakeResourceWriteRepo{resources: map[uint64]model.Resource{testResource1ID: {
+		ID:            testResource1ID,
+		ResourceType:  model.ResourceTypeDatabaseInstance,
+		Name:          "order-mysql-prod",
+		DisplayName:   "Order MySQL Prod",
+		EnvironmentID: testEnvID,
+		OwnerID:       testOwnerID,
+		Source:        "manual",
+		Labels:        map[string]string{},
+	}}}
+	svc := NewResourceService(repo)
+	labels := map[string]string{"apiToken": "must-not-enter-inventory"}
+
+	_, err := svc.Update(context.Background(), testResource1ID, model.ResourcePatchRequest{Labels: &labels})
+	if !errors.Is(err, ErrValidationFailed) {
+		t.Fatalf("expected ErrValidationFailed for sensitive label key, got %v", err)
 	}
 }
 

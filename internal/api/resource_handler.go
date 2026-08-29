@@ -94,7 +94,13 @@ func handlePatchResource(resourceService *service.ResourceService) http.HandlerF
 			return
 		}
 
-		updated, err := resourceService.Update(r.Context(), id, patch)
+		actorUserID, ok := actorUserIDFromContext(r.Context())
+		if !ok {
+			writeJSONError(w, http.StatusInternalServerError, "internal_error", "authenticated actor missing")
+			return
+		}
+
+		updated, err := resourceService.UpdateInventory(r.Context(), actorUserID, id, patch)
 		if err != nil {
 			writeServiceError(w, err)
 			return

@@ -28,6 +28,12 @@ type ProfileRepository interface {
 	DeleteProfile(ctx context.Context, resourceID uint64, resourceType string) error
 }
 
+type inventoryAuditProfileRepository interface {
+	PutProfileWithAudit(ctx context.Context, resourceID uint64, resourceType model.ResourceType, fields map[string]any, actorUserID uint64, eventType string) error
+	PatchProfileWithAudit(ctx context.Context, resourceID uint64, resourceType model.ResourceType, fields map[string]any, actorUserID uint64, eventType string) error
+	DeleteProfileWithAudit(ctx context.Context, resourceID uint64, resourceType model.ResourceType, actorUserID uint64, eventType string) error
+}
+
 // ProfileService handles profile write operations for resources.
 type ProfileService struct {
 	profileRepo  ProfileRepository
@@ -58,6 +64,18 @@ func (s *ProfileService) PutProfile(ctx context.Context, resourceID uint64, fiel
 	return s.writeProfile(ctx, resourceID, res.ResourceType, fields)
 }
 
+func (s *ProfileService) PutProfileInventory(ctx context.Context, actorUserID, resourceID uint64, fields map[string]interface{}) error {
+	res, err := s.inventoryProfileTarget(resourceID, fields)
+	if err != nil {
+		return err
+	}
+	repo, ok := s.profileRepo.(inventoryAuditProfileRepository)
+	if !ok {
+		return fmt.Errorf("inventory audit profile repository is required")
+	}
+	return repo.PutProfileWithAudit(ctx, resourceID, res.ResourceType, fields, actorUserID, "inventory.profile.updated")
+}
+
 // PatchProfile partially updates the profile for a resource: only the
 // submitted fields are changed; omitted fields are preserved (explicit empty
 // and zero values are honored). An empty body is a no-op. The merge happens
@@ -80,6 +98,21 @@ func (s *ProfileService) PatchProfile(ctx context.Context, resourceID uint64, fi
 	return s.profileRepo.PatchProfile(ctx, resourceID, res.ResourceType, fields)
 }
 
+func (s *ProfileService) PatchProfileInventory(ctx context.Context, actorUserID, resourceID uint64, fields map[string]interface{}) error {
+	res, err := s.inventoryProfileTarget(resourceID, fields)
+	if err != nil {
+		return err
+	}
+	if len(fields) == 0 {
+		return nil
+	}
+	repo, ok := s.profileRepo.(inventoryAuditProfileRepository)
+	if !ok {
+		return fmt.Errorf("inventory audit profile repository is required")
+	}
+	return repo.PatchProfileWithAudit(ctx, resourceID, res.ResourceType, fields, actorUserID, "inventory.profile.updated")
+}
+
 // DeleteProfile removes the profile row for a resource.
 // Returns ErrResourceNotFound if the resource does not exist,
 // or ErrResourceArchived if the resource is archived.
@@ -92,6 +125,35 @@ func (s *ProfileService) DeleteProfile(ctx context.Context, resourceID uint64) e
 		return ErrResourceArchived
 	}
 	return s.profileRepo.DeleteProfile(ctx, resourceID, string(res.ResourceType))
+}
+
+func (s *ProfileService) DeleteProfileInventory(ctx context.Context, actorUserID, resourceID uint64) error {
+	res, err := s.resourceRepo.GetResource(resourceID)
+	if err != nil {
+		return err
+	}
+	if res.ArchivedAt != nil {
+		return ErrResourceArchived
+	}
+	repo, ok := s.profileRepo.(inventoryAuditProfileRepository)
+	if !ok {
+		return fmt.Errorf("inventory audit profile repository is required")
+	}
+	return repo.DeleteProfileWithAudit(ctx, resourceID, res.ResourceType, actorUserID, "inventory.profile.deleted")
+}
+
+func (s *ProfileService) inventoryProfileTarget(resourceID uint64, fields map[string]interface{}) (*model.Resource, error) {
+	res, err := s.resourceRepo.GetResource(resourceID)
+	if err != nil {
+		return nil, err
+	}
+	if res.ArchivedAt != nil {
+		return nil, ErrResourceArchived
+	}
+	if err := validateProfileFields(res.ResourceType, fields); err != nil {
+		return nil, err
+	}
+	return res, nil
 }
 
 func (s *ProfileService) writeProfile(ctx context.Context, resourceID uint64, resourceType model.ResourceType, fields map[string]interface{}) error {
