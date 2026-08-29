@@ -85,7 +85,8 @@ func TestCreateResourceManagesIdentity(t *testing.T) {
 		"origin":"imported",
 		"aliases":[" Identity-API ","identity-api"],
 		"externalIdentifiers":[{"system":"servicenow","value":"CI-76"}],
-		"labels":{}
+		"labels":{},
+		"profile":{"systemName":"identity-api"}
 	}`
 	req := httptest.NewRequest(http.MethodPost, "/resources", strings.NewReader(body))
 	rec := httptest.NewRecorder()
@@ -108,10 +109,12 @@ func TestCreateResourceReturnsExplicitAliasConflict(t *testing.T) {
 	server := NewTestServer()
 	create := func(name, resourceType, alias string) *httptest.ResponseRecorder {
 		subtype := "api"
+		profile := fmt.Sprintf(`{"systemName":%q}`, name)
 		if resourceType == "host" {
 			subtype = "vm"
+			profile = fmt.Sprintf(`{"hostname":%q,"ipAddress":"10.0.0.1"}`, name)
 		}
-		body := fmt.Sprintf(`{"resourceType":%q,"resourceSubtype":%q,"name":%q,"displayName":%q,"environmentId":1,"ownerId":2,"lifecycleStatus":"running","healthStatus":"healthy","origin":"manual","aliases":[%q],"labels":{}}`, resourceType, subtype, name, name, alias)
+		body := fmt.Sprintf(`{"resourceType":%q,"resourceSubtype":%q,"name":%q,"displayName":%q,"environmentId":1,"ownerId":2,"lifecycleStatus":"running","healthStatus":"healthy","origin":"manual","aliases":[%q],"labels":{},"profile":%s}`, resourceType, subtype, name, name, alias, profile)
 		req := httptest.NewRequest(http.MethodPost, "/resources", strings.NewReader(body))
 		rec := httptest.NewRecorder()
 		server.Router.ServeHTTP(rec, req)
@@ -126,7 +129,7 @@ func TestCreateResourceReturnsExplicitAliasConflict(t *testing.T) {
 func TestCreateResourceReturnsExplicitExternalIdentifierConflict(t *testing.T) {
 	server := NewTestServer()
 	create := func(name, value string) *httptest.ResponseRecorder {
-		body := fmt.Sprintf(`{"resourceType":"service","resourceSubtype":"api","name":%q,"displayName":%q,"environmentId":1,"ownerId":2,"lifecycleStatus":"running","healthStatus":"healthy","origin":"manual","externalIdentifiers":[{"system":"servicenow","value":%q}],"labels":{}}`, name, name, value)
+		body := fmt.Sprintf(`{"resourceType":"service","resourceSubtype":"api","name":%q,"displayName":%q,"environmentId":1,"ownerId":2,"lifecycleStatus":"running","healthStatus":"healthy","origin":"manual","externalIdentifiers":[{"system":"servicenow","value":%q}],"labels":{},"profile":{"systemName":%q}}`, name, name, value, name)
 		req := httptest.NewRequest(http.MethodPost, "/resources", strings.NewReader(body))
 		rec := httptest.NewRecorder()
 		server.Router.ServeHTTP(rec, req)
