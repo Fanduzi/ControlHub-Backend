@@ -5,9 +5,10 @@ Domain structs, taxonomy constants, validation methods, and dictionary definitio
 ## Files
 | File | Responsibility |
 |------|---------------|
-| resource.go | Resource governed identity, effective health evidence, profile response, and ResourceType |
+| resource.go | Resource governed identity, immutable origin, aliases, external identifiers, effective health evidence, profile response, and ResourceType |
 | resource_write.go | Resource create/update inputs, including managed identity collections and nullable manual health override |
 | health_observation.go | HealthObservation value and exact fresh/stale/never boundary calculation |
+| resource_effective_value.go | Effective CI value and observed/manual provenance response contracts |
 | relation.go | ResourceRelation struct, RelationType type |
 | audit.go | AuditEvent plus server-owned AuditChange field-diff contract |
 | auth.go | UserCredential (incl. IsActive + AuthorizationVersion), LoginRequest, LoginResponse structs |
@@ -33,6 +34,7 @@ Domain structs, taxonomy constants, validation methods, and dictionary definitio
 - All domain structs (Resource, ResourceRelation, AuditEvent, etc.)
 - `HealthObservation`, `HealthFreshness`, and `HealthObservation.FreshnessAt()`
 - `AuditChange`, `AuditChangeOperation`, and add/update/remove constants for extensible inventory evidence
+- `EffectiveValue` and `ValueProvenance` for effective CI projections
 - Type constants and validation methods, including `ResourceOrigin`
 - `ResourceTypeDictionary()`, `RelationTypeDictionary()`, `LifecycleStatusDictionary()`, `HealthStatusDictionary()`
 - `QueryEnvironmentPolicy.Validate()`, `ValidateCredentialRef()` (query sandbox credential policy)

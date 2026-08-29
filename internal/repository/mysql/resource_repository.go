@@ -1,7 +1,7 @@
 // Package mysql provides MySQL-backed repository implementations.
 // input: database/sql, time, internal/model, internal/service
-// output: resource CRUD, governed identity and typed profiles, rich/structured inventory filtering, latest health observations, effective health, and audited manual overrides
-// pos: MySQL data access for resources, identity, typed profiles, current health evidence, and inventory search
+// output: resource CRUD, governed identity and typed profiles, rich inventory filtering, health observations/effective health, observed/effective values, and audited versioned manual overrides
+// pos: MySQL data access for resources, identity, typed profiles, current health evidence, effective values, and inventory search
 // note: if this file changes, update this header and module README.md.
 package mysql
 
@@ -33,6 +33,161 @@ func NewResourceRepository(db *sql.DB, thresholds ...model.HealthFreshnessThresh
 		repo.healthThresholds = thresholds[0]
 	}
 	return repo
+}
+
+var effectiveValueFields = map[string]bool{
+	"displayName": true, "lifecycleStatus": true, "healthStatus": true,
+}
+
+func validateEffectiveValueField(field string) error {
+	if !effectiveValueFields[field] {
+		return fmt.Errorf("%w: field %q cannot be observed or overridden", service.ErrValidationFailed, field)
+	}
+	return nil
+}
+
+// PutObservedValues refreshes one source without deleting evidence from other sources.
+func (r *ResourceRepository) PutObservedValues(ctx context.Context, resourceID uint64, source string, values map[string]any) error {
+	if strings.TrimSpace(source) == "" {
+		return fmt.Errorf("%w: observation source is required", service.ErrValidationFailed)
+	}
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if _, err := getResourceForUpdate(ctx, tx, resourceID); err != nil {
+		return err
+	}
+	fields := make([]string, 0, len(values))
+	for field := range values {
+		fields = append(fields, field)
+	}
+	sort.Strings(fields)
+	for _, field := range fields {
+		if err := validateEffectiveValueField(field); err != nil {
+			return err
+		}
+		raw, err := json.Marshal(values[field])
+		if err != nil {
+			return fmt.Errorf("marshal observed %s: %w", field, err)
+		}
+		if _, err := tx.ExecContext(ctx, `insert into resource_observed_values
+			(resource_id, source, field_name, field_value, observed_at) values (?, ?, ?, ?, now(6))
+			on duplicate key update field_value = values(field_value), observed_at = values(observed_at)`,
+			resourceID, source, field, raw); err != nil {
+			return fmt.Errorf("write observed %s: %w", field, err)
+		}
+	}
+	return tx.Commit()
+}
+
+func (r *ResourceRepository) GetEffectiveValues(ctx context.Context, resourceID uint64) (map[string]model.EffectiveValue, error) {
+	rows, err := r.db.QueryContext(ctx, `select field_name, field_value, source, kind, version from (
+		select field_name, field_value, source, 'observed' kind, 0 version,
+			row_number() over (partition by field_name order by observed_at desc, source desc) priority
+		from resource_observed_values where resource_id = ?
+		union all
+		select field_name, field_value, '' source, 'manual_override' kind, version, 0 priority
+		from resource_manual_overrides where resource_id = ?
+	) effective where priority in (0, 1) order by priority desc`, resourceID, resourceID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	result := map[string]model.EffectiveValue{}
+	for rows.Next() {
+		var field, raw, source, kind string
+		var version uint64
+		if err := rows.Scan(&field, &raw, &source, &kind, &version); err != nil {
+			return nil, err
+		}
+		var value any
+		if err := json.Unmarshal([]byte(raw), &value); err != nil {
+			return nil, err
+		}
+		result[field] = model.EffectiveValue{Value: value, Provenance: model.ValueProvenance{Kind: kind, Source: source, Version: version}}
+	}
+	return result, rows.Err()
+}
+
+func (r *ResourceRepository) SetManualOverrideWithAudit(ctx context.Context, resourceID uint64, field string, value any, expectedVersion, actorUserID uint64) (uint64, error) {
+	if err := validateEffectiveValueField(field); err != nil {
+		return 0, err
+	}
+	raw, err := json.Marshal(value)
+	if err != nil {
+		return 0, fmt.Errorf("marshal override: %w", err)
+	}
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return 0, err
+	}
+	defer tx.Rollback()
+	if _, err := getResourceForUpdate(ctx, tx, resourceID); err != nil {
+		return 0, err
+	}
+	var beforeRaw string
+	var current uint64
+	err = tx.QueryRowContext(ctx, `select field_value, version from resource_manual_overrides where resource_id = ? and field_name = ? for update`, resourceID, field).Scan(&beforeRaw, &current)
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return 0, err
+	}
+	if current != expectedVersion {
+		return 0, service.ErrResourceConflict
+	}
+	next := current + 1
+	if _, err := tx.ExecContext(ctx, `insert into resource_manual_overrides
+		(resource_id, field_name, field_value, version, updated_by, updated_at) values (?, ?, ?, ?, ?, now(6))
+		on duplicate key update field_value = values(field_value), version = values(version), updated_by = values(updated_by), updated_at = values(updated_at)`,
+		resourceID, field, raw, next, actorUserID); err != nil {
+		return 0, err
+	}
+	change := model.AuditChange{Field: "override." + field, Operation: model.AuditChangeAdd, After: value}
+	if current != 0 {
+		var before any
+		_ = json.Unmarshal([]byte(beforeRaw), &before)
+		change.Operation = model.AuditChangeUpdate
+		change.Before = before
+	}
+	if err := insertInventoryAuditTx(ctx, tx, actorUserID, resourceID, "inventory.override.updated", []model.AuditChange{change}); err != nil {
+		return 0, err
+	}
+	if err := tx.Commit(); err != nil {
+		return 0, err
+	}
+	return next, nil
+}
+
+func (r *ResourceRepository) ClearManualOverrideWithAudit(ctx context.Context, resourceID uint64, field string, expectedVersion, actorUserID uint64) error {
+	if err := validateEffectiveValueField(field); err != nil {
+		return err
+	}
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if _, err := getResourceForUpdate(ctx, tx, resourceID); err != nil {
+		return err
+	}
+	var raw string
+	var current uint64
+	if err := tx.QueryRowContext(ctx, `select field_value, version from resource_manual_overrides where resource_id = ? and field_name = ? for update`, resourceID, field).Scan(&raw, &current); err != nil {
+		return err
+	}
+	if current != expectedVersion {
+		return service.ErrResourceConflict
+	}
+	if _, err := tx.ExecContext(ctx, `delete from resource_manual_overrides where resource_id = ? and field_name = ?`, resourceID, field); err != nil {
+		return err
+	}
+	var before any
+	_ = json.Unmarshal([]byte(raw), &before)
+	if err := insertInventoryAuditTx(ctx, tx, actorUserID, resourceID, "inventory.override.cleared", []model.AuditChange{{Field: "override." + field, Operation: model.AuditChangeRemove, Before: before}}); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 const resourceColumns = `id, resource_type, resource_subtype, name, display_name,

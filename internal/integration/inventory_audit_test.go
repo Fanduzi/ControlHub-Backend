@@ -1,9 +1,9 @@
 //go:build integration
 
-// Package integration provides real-MySQL coverage for inventory mutation audit atomicity.
+// Package integration runs real-MySQL integration tests.
 // input: database/sql, encoding/json, strings, testing, internal/model, internal/repository/mysql
-// output: Inventory resource/profile/relationship audit atomicity tests, including relationship-matrix rejection
-// pos: Proves inventory field changes and relationship rules commit atomically with audit evidence against disposable MySQL
+// output: Inventory resource/profile/relationship audit atomicity and observed/manual/effective value persistence tests
+// pos: Proves inventory changes, relationship rules, observations, overrides, and provenance against disposable MySQL
 // note: if this file changes, update this header and module README.md.
 package integration
 
@@ -70,6 +70,58 @@ func TestInventoryAuditUpdateSuccess(t *testing.T) {
 		if got[i].Field != changes[i].Field || got[i].Operation != changes[i].Operation || got[i].Before != changes[i].Before || got[i].After != changes[i].After {
 			t.Fatalf("audit change %d = %#v, want %#v", i, got[i], changes[i])
 		}
+	}
+}
+
+func TestObservedValuesManualOverrideAndEffectiveProvenance(t *testing.T) {
+	db := setupTestDB(t)
+	repo := mysql.NewResourceRepository(db)
+	ctx := context.Background()
+	resource, err := repo.CreateResource(ctx, inventoryAuditResource("effective-values"))
+	if err != nil {
+		t.Fatalf("create resource: %v", err)
+	}
+
+	if err := repo.PutObservedValues(ctx, resource.ID, "discovery", map[string]any{"displayName": "discovered"}); err != nil {
+		t.Fatalf("write discovery observation: %v", err)
+	}
+	if err := repo.PutObservedValues(ctx, resource.ID, "terraform", map[string]any{"displayName": "terraform"}); err != nil {
+		t.Fatalf("write terraform observation: %v", err)
+	}
+	if _, err := repo.SetManualOverrideWithAudit(ctx, resource.ID, "displayName", "operator", 0, ownerDBA); err != nil {
+		t.Fatalf("set override: %v", err)
+	}
+	if _, err := repo.SetManualOverrideWithAudit(ctx, resource.ID, "displayName", "stale writer", 0, ownerDBA); !errors.Is(err, service.ErrResourceConflict) {
+		t.Fatalf("stale override error = %v, want resource conflict", err)
+	}
+	if err := repo.PutObservedValues(ctx, resource.ID, "discovery", map[string]any{"displayName": "latest discovery"}); err != nil {
+		t.Fatalf("refresh discovery observation: %v", err)
+	}
+
+	got, err := repo.GetEffectiveValues(ctx, resource.ID)
+	if err != nil {
+		t.Fatalf("get overridden effective value: %v", err)
+	}
+	if value := got["displayName"]; value.Value != "operator" || value.Provenance.Kind != "manual_override" {
+		t.Fatalf("overridden effective value = %#v", value)
+	}
+	if err := repo.ClearManualOverrideWithAudit(ctx, resource.ID, "displayName", 1, ownerDBA); err != nil {
+		t.Fatalf("clear override: %v", err)
+	}
+	got, err = repo.GetEffectiveValues(ctx, resource.ID)
+	if err != nil {
+		t.Fatalf("get observed effective value: %v", err)
+	}
+	if value := got["displayName"]; value.Value != "latest discovery" || value.Provenance.Kind != "observed" || value.Provenance.Source != "discovery" {
+		t.Fatalf("cleared effective value = %#v", value)
+	}
+
+	var sources int
+	if err := db.QueryRowContext(ctx, `select count(*) from resource_observed_values where resource_id = ? and field_name = 'displayName'`, resource.ID).Scan(&sources); err != nil {
+		t.Fatalf("count observations: %v", err)
+	}
+	if sources != 2 {
+		t.Fatalf("observation sources = %d, want 2", sources)
 	}
 }
 
