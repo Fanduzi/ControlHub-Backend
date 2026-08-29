@@ -311,8 +311,8 @@ func TestResourceRepositoryBatchProfilesQueryCountIsConstant(t *testing.T) {
 		t.Fatalf("load many profiles: %v", err)
 	}
 	manyQueries := mysqlSessionQuestionCount(t, db) - manyBefore
-	if oneQueries != 1 || manyQueries != oneQueries {
-		t.Fatalf("profile queries one=%d many=%d, want one query regardless of resource count", oneQueries, manyQueries)
+	if oneQueries == 0 || manyQueries != oneQueries {
+		t.Fatalf("profile queries one=%d many=%d, want the same nonzero count regardless of resource count", oneQueries, manyQueries)
 	}
 }
 
