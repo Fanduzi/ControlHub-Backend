@@ -286,7 +286,7 @@ Dependency flow (strict, one-directional): `cmd/server` → `api` → `service` 
 | GET | /health | Health check |
 | GET | /resources | List resources |
 | GET | /resources/{id} | Get resource detail |
-| POST | /resources/{id}/health-observations | Store an observer's latest health evidence without inventory audit |
+| POST | /resources/{id}/health-observations | Admin User or `health:write` Machine Credential route for latest health evidence without inventory audit |
 | GET | /resources/{id}/profile | Get resource typed profile projection |
 | GET | /resources/{id}/relations | List relations for a resource |
 | GET | /resources/{id}/topology | Get a rooted topology graph |
@@ -297,8 +297,8 @@ Dependency flow (strict, one-directional): `cmd/server` → `api` → `service` 
 | POST | /inventory/views | Create a personal or admin-shared Inventory view |
 | PUT | /inventory/views/{viewId} | Update an owned personal or admin-managed shared view |
 | DELETE | /inventory/views/{viewId} | Delete an owned personal or admin-managed shared view |
-| POST | /admin/ingestions/preview | Admin-only bounded CSV/JSON ingestion preview with exact-match conflict explanations and a confirmable fingerprint |
-| POST | /admin/ingestions/confirm | Admin-only atomic ingestion confirmation of the reviewed upload/fingerprint; conflict or drift returns 409 for re-preview |
+| POST | /admin/ingestions/preview | Admin User or `inventory:ingest` Machine Credential route for bounded exact-match CSV/JSON preview |
+| POST | /admin/ingestions/confirm | Admin User or `inventory:ingest` Machine Credential route for reviewed atomic confirmation |
 | GET | /environments | List environments |
 | GET | /owners | List owners |
 | GET | /roles | List roles |
@@ -334,11 +334,14 @@ failure leave no partial batch committed.
 
 Opaque `chmp_` Machine Credentials use a separate, closed scope matrix for
 Inventory, relation/topology, query-target discovery, audit, shared Named View
-reads, and ordinary governed query execution. Only
+reads, ordinary governed query execution, and the reserved collector-only
+`inventory:ingest` and `health:write` routes. Collector actor/observer binding
+and complete-scan persistence land with migration 00027 in the next #87 slice;
+this checkpoint adds only the closed capabilities and route gates. Only
 `POST /query-targets/{id}/execute` accepts the `governed-select` machine scope;
 all sibling query routes remain user-only. Machine execution evidence records
 the machine principal identity, never a synthetic User or credential material.
-All other mutations and unlisted routes fail with controlled machine
+All ordinary mutations and unlisted routes fail with controlled machine
 authorization errors.
 
 Resource list and detail responses include effective `healthStatus`,

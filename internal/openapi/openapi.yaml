@@ -1,6 +1,6 @@
 # input: public HTTP routes, model JSON shapes, and operator access policy
-# output: served OpenAPI 3.1 contract including machine credentials, scoped reads, resource-list filters, ingestion, and bulk mutation review/confirmation
-# pos: canonical machine-readable API boundary, including independent user/machine authentication and inventory audit diffs
+# output: served OpenAPI 3.1 contract including machine credentials, scoped reads/collector routes, resource-list filters, ingestion, and bulk mutation review/confirmation
+# pos: canonical machine-readable API boundary, including independent user/machine authentication, reserved collector route scopes, and inventory audit diffs
 # note: if this file changes, update header and internal/openapi/README.md
 
 openapi: 3.1.0
@@ -2524,7 +2524,8 @@ paths:
     post:
       summary: Preview controlled CI ingestion
       description: >-
-        Admin-only, side-effect-free preview. Submit exactly one multipart file
+        Admin User or inventory:ingest Machine Credential side-effect-free
+        preview. Submit exactly one multipart file
         with format csv or json. JSON is an array of ingestion rows; CSV has
         environmentId, ciType, and name columns, with optional displayName,
         aliases, externalIdentifiers, profile, observedValues, and relations
@@ -2534,6 +2535,8 @@ paths:
       operationId: previewIngestion
       security:
         - bearerAuth: []
+        - machineCredential: []
+      x-machine-scope: inventory:ingest
       requestBody:
         required: true
         content:
@@ -2569,7 +2572,7 @@ paths:
               schema:
                 $ref: "#/components/schemas/ErrorResponse"
         "403":
-          description: Authenticated actor is not an admin
+          description: User is not an admin or Machine Credential lacks inventory:ingest
           content:
             application/json:
               schema:
@@ -2578,7 +2581,8 @@ paths:
     post:
       summary: Confirm a reviewed CI ingestion preview
       description: >-
-        Admin-only atomic confirmation. Resubmit the reviewed file, format,
+        Admin User or inventory:ingest Machine Credential atomic confirmation
+        route. Resubmit the reviewed file, format,
         and preview fingerprint. The server reparses the upload, rechecks exact
         identities inside its transaction, and returns 409 with a fresh preview
         if the input, inventory, or conflict state has drifted. No partial
@@ -2586,6 +2590,8 @@ paths:
       operationId: confirmIngestion
       security:
         - bearerAuth: []
+        - machineCredential: []
+      x-machine-scope: inventory:ingest
       requestBody:
         required: true
         content:
@@ -2624,7 +2630,7 @@ paths:
               schema:
                 $ref: "#/components/schemas/ErrorResponse"
         "403":
-          description: Authenticated actor is not an admin
+          description: User is not an admin or Machine Credential lacks inventory:ingest
           content:
             application/json:
               schema:
@@ -3043,7 +3049,13 @@ paths:
       description: >-
         Stores the latest observation for the resource and observer. Older
         observations never replace newer evidence. This operational write does
-        not create an inventory audit event.
+        not create an inventory audit event. The route accepts an admin User or
+        a health:write Machine Credential; verified collector observer binding
+        is completed by the next Issue #87 state slice.
+      security:
+        - bearerAuth: []
+        - machineCredential: []
+      x-machine-scope: health:write
       parameters:
         - in: path
           name: id
@@ -3074,7 +3086,7 @@ paths:
               schema:
                 $ref: "#/components/schemas/ErrorResponse"
         "403":
-          description: Authenticated actor is not an admin
+          description: User is not an admin or Machine Credential lacks health:write
           content:
             application/json:
               schema:
@@ -6248,7 +6260,7 @@ components:
           description: Optional human-readable reason for archiving. If provided, must be non-blank.
     MachineScope:
       type: string
-      enum: [inventory:read, relations:read, governed-select, audit:read, named-views:read]
+      enum: [inventory:read, relations:read, governed-select, audit:read, named-views:read, inventory:ingest, health:write]
     MachinePrincipal:
       type: object
       additionalProperties: false

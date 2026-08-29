@@ -16,8 +16,8 @@ Domain structs, taxonomy constants, validation methods, and dictionary definitio
 | pagination.go | PageInfo, ResourceListQuery with search, owner, and label filters; ResourceLabelFilter; AuditListQuery including actor/resource search; pagination helpers/constants |
 | named_inventory_view.go | Minimal validated named-view contract containing inventory filters, sort, and columns without result/page snapshots |
 | named_inventory_view_test.go | Positive-ID and reusable-state validation regression tests |
-| machine_principal.go | Independent machine-principal metadata, safe admin credential-lifecycle list records, closed scopes, and 30/90-day expiry rules |
-| machine_principal_test.go | Closed-scope and bounded-expiry pure domain regression tests |
+| machine_principal.go | Independent machine-principal metadata, safe admin credential-lifecycle list records, five read/query scopes plus reserved collector-only `inventory:ingest` and `health:write` scopes, and 30/90-day expiry rules |
+| machine_principal_test.go | Closed read/query/collector-scope and bounded-expiry pure domain regression tests |
 | dictionary.go | DictionaryItem struct (shared by all dictionaries) |
 | taxonomy.go | All enum constants (8 resource types, 7 relation types, 5 lifecycle statuses, 4 health statuses), dictionary slices including service worker subtype, Validate() methods; Domain Name `dns` and Virtual IP `floating` subtypes |
 | taxonomy.go | All enum constants (8 resource types, 7 relation types, 5 lifecycle statuses, 4 health statuses), dictionary slices, Validate() methods. Database Proxy technology subtypes and Control Plane ha_monitor; ambiguous ha is rejected. |
@@ -46,7 +46,7 @@ Domain structs, taxonomy constants, validation methods, and dictionary definitio
 - `ResultDisclosureMode.Validate()`, `ResultDisclosurePolicyUpsertRequest.Validate()` (Phase 38Q governed result-disclosure policy)
 - `QuerySavedStatementScope.Validate()`, typed parameter definitions, `QuerySavedStatementCreateRequest.Validate()`, `QuerySavedStatementUpdateRequest.Validate()`, `QuerySavedStatementExecuteRequest.Validate()` + `MaxQuerySavedStatementExecuteValuesSize` (Phase 38W governed saved statements)
 - `NamedInventoryView`, personal/shared scopes, state/request types, and validation for reusable inventory presentation state
-- `MachinePrincipal`, `MachineCredential`, safe `MachinePrincipalListItem`/`MachineCredentialLifecycle` projections, the five closed `MachineScope` values, and bounded expiry normalization
+- `MachinePrincipal`, `MachineCredential`, safe `MachinePrincipalListItem`/`MachineCredentialLifecycle` projections, the seven closed `MachineScope` values, and bounded expiry normalization
 - `ValidatePagination()`, `QueryExecutePaginationRequest`, `QueryExecutePaginationResponse`, `AllowedPageSizes` (Phase 38S governed query-result paging)
 
 ## Phase 38S governed query-result paging

@@ -1,6 +1,6 @@
 // Package model provides domain entities for the resource management system.
 // input: fmt and time
-// output: machine-principal records, safe credential lifecycle list metadata, closed scopes, requests, and bounded credential expiry
+// output: machine-principal records, safe credential lifecycle list metadata, closed read/collector scopes, requests, and bounded credential expiry
 // pos: Domain contract and pure rules for machine-principal credentials
 // note: if this file changes, update this header and module README.md.
 package model
@@ -13,11 +13,13 @@ import (
 type MachineScope string
 
 const (
-	MachineScopeInventoryRead  MachineScope = "inventory:read"
-	MachineScopeRelationsRead  MachineScope = "relations:read"
-	MachineScopeGovernedSelect MachineScope = "governed-select"
-	MachineScopeAuditRead      MachineScope = "audit:read"
-	MachineScopeNamedViewsRead MachineScope = "named-views:read"
+	MachineScopeInventoryRead   MachineScope = "inventory:read"
+	MachineScopeRelationsRead   MachineScope = "relations:read"
+	MachineScopeGovernedSelect  MachineScope = "governed-select"
+	MachineScopeAuditRead       MachineScope = "audit:read"
+	MachineScopeNamedViewsRead  MachineScope = "named-views:read"
+	MachineScopeInventoryIngest MachineScope = "inventory:ingest"
+	MachineScopeHealthWrite     MachineScope = "health:write"
 
 	DefaultMachineCredentialLifetime = 30 * 24 * time.Hour
 	MaxMachineCredentialLifetime     = 90 * 24 * time.Hour
@@ -29,6 +31,8 @@ var machineScopes = []MachineScope{
 	MachineScopeGovernedSelect,
 	MachineScopeAuditRead,
 	MachineScopeNamedViewsRead,
+	MachineScopeInventoryIngest,
+	MachineScopeHealthWrite,
 }
 
 type MachinePrincipal struct {

@@ -5,11 +5,11 @@ Embeds and validates the OpenAPI contract served by the API documentation route.
 ## Files
 | File | Responsibility |
 |------|---------------|
-| openapi.yaml | Source OpenAPI contract for user and opaque machine security, scoped machine reads and ordinary governed execution, truthful evidence actors, admin lifecycle, resource-list search filters, named inventory views, bulk mutation and strict ingestion preview/confirmation, governed typed-profile identity, health observations, topology workspace reads, relationship-rule discovery, audit pagination/search/environment filtering and field diffs, metrics, and controlled errors |
+| openapi.yaml | Source OpenAPI contract for user and opaque machine security, scoped machine reads/reserved collector ingestion and health routes/ordinary governed execution, truthful evidence actors, admin lifecycle, resource-list search filters, named inventory views, bulk mutation and strict ingestion preview/confirmation, governed typed-profile identity, health observations, topology workspace reads, relationship-rule discovery, audit pagination/search/environment filtering and field diffs, metrics, and controlled errors |
 | audit_environment_contract_test.go | Audit environment-filter parameter contract regression test |
 | embed.go | Embeds the YAML for serving and tests |
 | openapi_test.go | Validates schema, strict ingestion multipart, bulk mutation, topology, pagination, executions, and the closed controlled-error enum |
-| machine_principal_contract_test.go | Validates machine security, the ordinary governed-execute scope, truthful execution/audit actors, closed sibling-route mapping, admin routes, codes, and one-time-secret schemas |
+| machine_principal_contract_test.go | Validates machine security, closed read/query/collector scopes, truthful execution/audit actors, sibling-route mapping, admin routes, codes, and one-time-secret schemas |
 | operator_access_boundary_test.go | Proves every protected operation documents the status codes its operatoraccess class requires |
 | openapi_schema_helpers_test.go | Shared schema/parameter shape assertion helpers |
 
@@ -20,7 +20,7 @@ Embeds and validates the OpenAPI contract served by the API documentation route.
 - `GET /resources`: free-text `q` across CI identity fields (excluding owner and labels), exact `ownerId`, and repeatable exact `label=key:value` filters combined with AND.
 - `/inventory/views`: authenticated personal/shared named inventory view CRUD; shared mutations are admin-only and personal mutations are owner-only.
 - `/resources/bulk-mutations/preview` and `/resources/bulk-mutations/confirm`: admin-only reviewed bulk mutation contract with per-CI diffs/errors and fingerprint conflict protection.
-- `machineCredential`: independent opaque Bearer scheme; the closed route matrix grants inventory, relation/topology, query-target discovery, audit, shared-only Named View reads, and only ordinary `POST /query-targets/{id}/execute` for `governed-select`; sibling query routes remain user-only.
+- `machineCredential`: independent opaque Bearer scheme; the closed route matrix grants inventory, relation/topology, query-target discovery, audit, shared-only Named View reads, reserved `inventory:ingest`/`health:write` collector routes, and only ordinary `POST /query-targets/{id}/execute` for `governed-select`; sibling query routes and ordinary mutations remain user-only.
 - Machine credential plaintext appears only in `MachineCredentialIssue` create/rotate responses; admin list lifecycle metadata includes only credential ID and created/expires/revoked/last-used timestamps, never lookup IDs or other auth material.
 - Query execution history and audit schemas expose the machine principal identity independently from user identity; they never expose the authenticating credential ID or secret.
 - `GET /ops/auth-audit-metrics` response schema: fixed admin-only shape with exactly `authAuditPersistenceFailures` and `authAuditSuppressedRejections` counters; carries no identity, request, or credential material

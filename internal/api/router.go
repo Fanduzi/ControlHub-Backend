@@ -1,7 +1,7 @@
 // Package api provides HTTP handlers and routing for the ControlHub REST API.
 // input: chi/v5, time, internal/model, internal/service (all services)
-// output: Dependencies, NewRouter, CORS, user-or-machine scoped reads/ordinary governed execute, and user-only sibling query, health observation, bulk mutation, ingestion, and admin routes
-// pos: HTTP routing entry point for the closed machine route/scope matrix and authenticated inventory, named-view, topology, query, and admin operations
+// output: Dependencies, NewRouter, CORS, user-or-machine scoped reads/collector writes/ordinary governed execute, and user-only sibling query, bulk mutation, and admin routes
+// pos: HTTP routing entry point for the closed machine route/scope matrix and authenticated inventory, collector, named-view, topology, query, and admin operations
 // note: if this file changes, update this header and module README.md.
 package api
 
@@ -146,15 +146,18 @@ func NewRouter(deps Dependencies) *chi.Mux {
 		r.Get("/resources/{id}/audit-events", handleListResourceAuditEvents(deps.AuditService))
 		r.Get("/audit-events", handleListAuditEvents(deps.AuditService))
 	})
+	router.With(requireUserOrMachineCredential(deps.MachineCredentialService, model.MachineScopeInventoryIngest, requireAdmin)).
+		Post("/admin/ingestions/preview", handlePreviewIngestion(deps.ResourceService))
+	router.With(requireUserOrMachineCredential(deps.MachineCredentialService, model.MachineScopeInventoryIngest, requireAdmin)).
+		Post("/admin/ingestions/confirm", handleConfirmIngestion(deps.ResourceService))
+	router.With(requireUserOrMachineCredential(deps.MachineCredentialService, model.MachineScopeHealthWrite, requireAdmin)).
+		Post("/resources/{id}/health-observations", handleRecordHealthObservation(deps.ResourceService))
 	router.Group(func(r chi.Router) {
 		r.Use(requireUser)
 		r.Group(func(r chi.Router) {
 			r.Use(requireAdminActor(emitter))
-			r.Post("/admin/ingestions/preview", handlePreviewIngestion(deps.ResourceService))
-			r.Post("/admin/ingestions/confirm", handleConfirmIngestion(deps.ResourceService))
 			r.Post("/resources", handleCreateResource(deps.ResourceService))
 			r.Patch("/resources/{id}", handlePatchResource(deps.ResourceService))
-			r.Post("/resources/{id}/health-observations", handleRecordHealthObservation(deps.ResourceService))
 			r.Put("/resources/{id}/overrides/{field}", handleSetResourceOverride(deps.ResourceService))
 			r.Delete("/resources/{id}/overrides/{field}", handleClearResourceOverride(deps.ResourceService))
 			r.Post("/resources/bulk-mutations/preview", handlePreviewBulkResourceMutation(deps.ResourceService))

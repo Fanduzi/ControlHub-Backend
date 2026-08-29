@@ -1,7 +1,7 @@
 // Package openapi_test verifies the embedded OpenAPI contract.
 // input: context, fmt, testing, kin-openapi parser, internal/openapi
-// output: machine credential scheme, scoped-route, governed execution evidence, controlled-code, and secret-boundary tests
-// pos: Prevents machine HTTP authorization, evidence identity, and one-time secret documentation drift
+// output: machine credential scheme, scoped read/collector routes, governed execution evidence, controlled-code, and secret-boundary tests
+// pos: Prevents machine HTTP authorization, collector capability, evidence identity, and one-time secret documentation drift
 // note: if this file changes, update this header and module README.md.
 package openapi_test
 
@@ -51,6 +51,9 @@ func TestOpenAPIMachineCredentialContract(t *testing.T) {
 		{"/audit-events", "GET", "audit:read"},
 		{"/resources/{id}/audit-events", "GET", "audit:read"},
 		{"/inventory/views", "GET", "named-views:read"},
+		{"/admin/ingestions/preview", "POST", "inventory:ingest"},
+		{"/admin/ingestions/confirm", "POST", "inventory:ingest"},
+		{"/resources/{id}/health-observations", "POST", "health:write"},
 	}
 	for _, route := range routes {
 		op := operationAt(t, doc, route.path, route.method)

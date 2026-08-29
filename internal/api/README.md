@@ -5,7 +5,7 @@ HTTP handlers, chi routing, CORS middleware, and fake-repo test infrastructure.
 ## Files
 | File | Responsibility |
 |------|---------------|
-| router.go | Route registration, including user-or-machine scoped inventory/dictionary/named-view/topology reads, user-only mutations/admin health observation and ingestion, Operator Access Boundary middleware, Dependencies, CORS, and bounded auth-audit wiring |
+| router.go | Route registration, including user-or-machine scoped inventory/dictionary/named-view/topology reads, reserved collector-scoped ingestion/health routes with an admin User alternative, user-only ordinary mutations, Operator Access Boundary middleware, Dependencies, CORS, and bounded auth-audit wiring; `chmp_` credentials never fall back to User auth |
 | ingestion_handler.go | Bounded strict multipart CSV/JSON ingestion preview and atomic confirmation handlers |
 | health_handler.go | GET /health endpoint |
 | resource_handler.go | Resource list/detail identity, health, and server-derived completeness fields; explicit identity conflicts, non-audited observation ingestion, and PATCH changes through atomic inventory audit |
@@ -43,7 +43,7 @@ HTTP handlers, chi routing, CORS middleware, and fake-repo test infrastructure.
 | query_saved_statement_execution_handler_test.go | Template-execution handler tests (strict request decoding, controlled field errors, `query_result_disclosure_blocked`) |
 | named_inventory_view_handler_test.go | Named inventory view router tests, including authentication for every CRUD route, shared-management metadata, strict JSON, and controlled errors |
 | ingestion_handler_test.go | Admin multipart ingestion preview/confirm, validation, stale-fingerprint, and conflict response tests |
-| machine_route_scope_test.go | Closed table-driven machine route/scope matrix, truthful machine execute identity, user-only sibling query routes, and secret-safe controlled error tests |
+| machine_route_scope_test.go | Closed table-driven machine read/collector route-scope matrix, collector denial of ordinary patch/archive, truthful machine execute identity, user-only sibling query routes, and secret-safe controlled error tests |
 | operator_access_boundary_test.go | Anonymous, editor, and admin router authorization matrix driven by the shared operatoraccess policy, including 38R conditional saved statements (personal by owner — editor or admin — and shared templates admin-only) |
 | ops_handler.go | Admin-only operational metrics handlers: `handleAuthAuditMetrics` (auth audit persistence failures + untrusted-Bearer suppression) and `handleQueryEvidenceMetrics` (Issue #34 — exactly `queryEvidencePersistenceFailures`, read through the service layer) |
 | query_evidence_metrics_test.go | Query-evidence metrics endpoint tests: anonymous/editor/admin 401/403/200 matrix, exactly-one-field response, published counter |
@@ -59,9 +59,9 @@ HTTP handlers, chi routing, CORS middleware, and fake-repo test infrastructure.
 | GET | /inventory/views | `named-views:read` returns shared views only for machines; users retain personal/shared behavior |
 | GET/POST | /admin/machine-principals | Admin machine-principal administration; GET includes only credential IDs and lifecycle timestamps for reload-safe rotate/revoke |
 | POST | /admin/machine-credentials/{credentialId}/rotate or /revoke | Admin user credential lifecycle administration |
-| POST | /resources/{id}/health-observations | Store an observer's latest operational health evidence without inventory audit |
-| POST | /admin/ingestions/preview | Admin-only bounded CSV/JSON upload preview; no writes; returns exact-match create/update/conflict rows and fingerprint |
-| POST | /admin/ingestions/confirm | Admin-only atomic confirmation of resubmitted reviewed upload and fingerprint; conflicts or drift return 409 with a fresh preview |
+| POST | /resources/{id}/health-observations | `health:write` machine scope or admin User; store latest operational health evidence without inventory audit (verified collector observer binding follows in the #87 state slice) |
+| POST | /admin/ingestions/preview | `inventory:ingest` machine scope or admin User; bounded CSV/JSON upload preview with no writes and exact-match create/update/conflict fingerprint |
+| POST | /admin/ingestions/confirm | `inventory:ingest` machine scope or admin User; atomic reviewed confirmation route (verified collector actor/scan binding follows in the #87 state slice) |
 
 `GET /resources` supports inventory `q` search, exact `ownerId`, and repeatable exact `label=key:value` filters; repeated labels combine with AND.
 | GET | /resources/{id}/relation-rules | Discover server-owned outgoing relation and target constraints |

@@ -1,7 +1,7 @@
 // Package api provides HTTP handlers and routing for the ControlHub REST API.
 // input: context, errors, net/http, net/http/httptest, strings, testing, internal/model, internal/service
-// output: table-driven machine route/scope, truthful execute identity, user-only sibling-route, and controlled-error contract tests
-// pos: Router-level regression boundary for independent machine authentication and ordinary governed execution
+// output: table-driven machine read/collector route scopes, truthful execute identity, user-only sibling-route, and controlled-error contract tests
+// pos: Router-level regression boundary for independent machine authentication, collector writes, and ordinary governed execution
 // note: if this file changes, update this header and module README.md.
 package api
 
@@ -90,6 +90,11 @@ func TestMachineRouteScopeMatrix(t *testing.T) {
 		{"audit read", http.MethodGet, "/resources/not-an-id/audit-events", model.MachineScopeAuditRead, http.StatusBadRequest, "validation_failed", false},
 		{"shared named views", http.MethodGet, "/inventory/views", model.MachineScopeNamedViewsRead, http.StatusOK, "", true},
 		{"governed select execute", http.MethodPost, "/query-targets/22/execute", model.MachineScopeGovernedSelect, http.StatusBadRequest, "validation_failed", false},
+		{"collector ingestion preview", http.MethodPost, "/admin/ingestions/preview", model.MachineScopeInventoryIngest, http.StatusBadRequest, "validation_failed", false},
+		{"collector ingestion confirm", http.MethodPost, "/admin/ingestions/confirm", model.MachineScopeInventoryIngest, http.StatusBadRequest, "validation_failed", false},
+		{"collector health observation", http.MethodPost, "/resources/not-an-id/health-observations", model.MachineScopeHealthWrite, http.StatusBadRequest, "validation_failed", false},
+		{"ingestion scope cannot write health", http.MethodPost, "/resources/not-an-id/health-observations", model.MachineScopeInventoryIngest, http.StatusForbidden, "machine_scope_denied", false},
+		{"health scope cannot ingest", http.MethodPost, "/admin/ingestions/preview", model.MachineScopeHealthWrite, http.StatusForbidden, "machine_scope_denied", false},
 		{"execution history stays user only", http.MethodGet, "/query-targets/22/executions", model.MachineScopeGovernedSelect, http.StatusForbidden, "machine_scope_denied", false},
 		{"related records stay user only", http.MethodPost, "/query-targets/22/related-records", model.MachineScopeGovernedSelect, http.StatusForbidden, "machine_scope_denied", false},
 		{"explain stays user only", http.MethodPost, "/query-targets/22/explain", model.MachineScopeGovernedSelect, http.StatusForbidden, "machine_scope_denied", false},
@@ -99,6 +104,8 @@ func TestMachineRouteScopeMatrix(t *testing.T) {
 		{"saved execution stays user only", http.MethodPost, "/query-targets/22/saved-statements/7/execute", model.MachineScopeGovernedSelect, http.StatusForbidden, "machine_scope_denied", false},
 		{"missing route scope", http.MethodGet, "/resources/not-an-id", model.MachineScopeAuditRead, http.StatusForbidden, "machine_scope_denied", false},
 		{"inventory mutation denied", http.MethodPatch, "/resources/1", model.MachineScopeInventoryRead, http.StatusForbidden, "machine_scope_denied", false},
+		{"collector patch denied", http.MethodPatch, "/resources/1", model.MachineScopeInventoryIngest, http.StatusForbidden, "machine_scope_denied", false},
+		{"collector archive denied", http.MethodPost, "/resources/1/archive", model.MachineScopeInventoryIngest, http.StatusForbidden, "machine_scope_denied", false},
 		{"unlisted admin route denied", http.MethodGet, "/admin/machine-principals", model.MachineScopeInventoryRead, http.StatusForbidden, "machine_scope_denied", false},
 	}
 

@@ -1,7 +1,7 @@
 // Package model provides domain entities for the resource management system.
 // input: testing and time
-// output: machine-principal scope and credential-expiry contract tests
-// pos: Pure security-boundary regression coverage for machine credentials
+// output: machine-principal read/collector scope and credential-expiry contract tests
+// pos: Pure security-boundary regression coverage for machine and collector credentials
 // note: if this file changes, update this header and module README.md.
 package model
 
@@ -13,7 +13,9 @@ import (
 
 func TestNormalizeMachineScopesAcceptsOnlyClosedSet(t *testing.T) {
 	got, err := NormalizeMachineScopes([]MachineScope{
+		MachineScopeHealthWrite,
 		MachineScopeNamedViewsRead,
+		MachineScopeInventoryIngest,
 		MachineScopeInventoryRead,
 		MachineScopeRelationsRead,
 		MachineScopeGovernedSelect,
@@ -28,6 +30,8 @@ func TestNormalizeMachineScopesAcceptsOnlyClosedSet(t *testing.T) {
 		MachineScopeGovernedSelect,
 		MachineScopeAuditRead,
 		MachineScopeNamedViewsRead,
+		MachineScopeInventoryIngest,
+		MachineScopeHealthWrite,
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("scopes = %v, want %v", got, want)
