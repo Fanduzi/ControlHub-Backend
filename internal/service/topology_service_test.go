@@ -8,6 +8,7 @@ package service
 import (
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/fan/controlhub/internal/model"
 )
@@ -24,11 +25,16 @@ const (
 
 // fakeTopologyRepo implements TopologyRepository for testing.
 type fakeTopologyRepo struct {
-	resources map[uint64]model.Resource
-	relations []model.ResourceRelation
+	resources    map[uint64]model.Resource
+	hidden       map[uint64]bool
+	relations    []model.ResourceRelation
+	candidateIDs []uint64
 }
 
 func (f *fakeTopologyRepo) GetResource(id uint64) (*model.Resource, error) {
+	if f.hidden[id] {
+		return nil, ErrResourceNotFound
+	}
 	r, ok := f.resources[id]
 	if !ok {
 		return nil, ErrResourceNotFound
@@ -47,6 +53,18 @@ func (f *fakeTopologyRepo) ListRelationsByResourceIDs(ids []uint64) ([]model.Res
 		if idSet[rel.FromResourceID] || idSet[rel.ToResourceID] {
 			result = append(result, rel)
 		}
+	}
+	return result, nil
+}
+
+func (f *fakeTopologyRepo) ListTopologyCandidates(environmentID uint64) ([]model.Resource, error) {
+	var result []model.Resource
+	for _, id := range f.candidateIDs {
+		r, ok := f.resources[id]
+		if !ok || f.hidden[id] || r.EnvironmentID != environmentID {
+			continue
+		}
+		result = append(result, r)
 	}
 	return result, nil
 }
@@ -354,6 +372,54 @@ func TestBuildTopology_MissingRoot(t *testing.T) {
 	}
 }
 
+func TestBuildTopology_ContextMissingOrHiddenRoot(t *testing.T) {
+	repo := buildTestRepo()
+	repo.hidden = map[uint64]bool{topoClusterID: true}
+	svc := NewTopologyService(repo)
+
+	_, err := svc.BuildTopology(model.TopologyQuery{EnvironmentID: testEnvID, RootID: topoClusterID, Depth: 1, Direction: model.TopologyDirectionBoth})
+	if !errors.Is(err, ErrResourceNotFound) {
+		t.Fatalf("err = %v, want ErrResourceNotFound", err)
+	}
+}
+
+func TestBuildTopology_ContextWrongEnvironmentIsNotFound(t *testing.T) {
+	repo := buildTestRepo()
+	svc := NewTopologyService(repo)
+
+	_, err := svc.BuildTopology(model.TopologyQuery{EnvironmentID: 2, RootID: topoClusterID, Depth: 1, Direction: model.TopologyDirectionBoth})
+	if !errors.Is(err, ErrResourceNotFound) {
+		t.Fatalf("err = %v, want ErrResourceNotFound", err)
+	}
+}
+
+func TestBuildTopology_ContextSkipsCrossEnvironmentNeighbor(t *testing.T) {
+	repo := &fakeTopologyRepo{
+		resources: map[uint64]model.Resource{
+			1: {ID: 1, ResourceType: model.ResourceTypeService, Name: "api", DisplayName: "API", EnvironmentID: 10, HealthStatus: "healthy", LifecycleStatus: "running"},
+			2: {ID: 2, ResourceType: model.ResourceTypeDatabaseCluster, Name: "same-db", DisplayName: "Same DB", EnvironmentID: 10, HealthStatus: "healthy", LifecycleStatus: "running"},
+			3: {ID: 3, ResourceType: model.ResourceTypeDatabaseCluster, Name: "other-db", DisplayName: "Other DB", EnvironmentID: 20, HealthStatus: "healthy", LifecycleStatus: "running"},
+		},
+		relations: []model.ResourceRelation{
+			{ID: 1, FromResourceID: 1, ToResourceID: 2, RelationType: model.RelationTypeDependsOn},
+			{ID: 2, FromResourceID: 1, ToResourceID: 3, RelationType: model.RelationTypeDependsOn},
+		},
+	}
+	svc := NewTopologyService(repo)
+
+	resp, err := svc.BuildTopology(model.TopologyQuery{EnvironmentID: 10, RootID: 1, Depth: 1, Direction: model.TopologyDirectionBoth})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	ids := nodeIDs(resp)
+	if len(ids) != 2 || !ids[1] || !ids[2] || ids[3] {
+		t.Fatalf("nodes = %v, want only env 10 nodes 1 and 2", ids)
+	}
+	if len(resp.Edges) != 1 || resp.Edges[0].ID != 1 {
+		t.Fatalf("edges = %+v, want only same-env edge 1", resp.Edges)
+	}
+}
+
 func TestBuildTopology_InvalidDepth(t *testing.T) {
 	repo := buildTestRepo()
 	svc := NewTopologyService(repo)
@@ -371,6 +437,76 @@ func TestBuildTopology_InvalidDirection(t *testing.T) {
 	_, err := svc.BuildTopology(model.TopologyQuery{RootID: topoClusterID, Depth: 1, Direction: "invalid"})
 	if !errors.Is(err, ErrInvalidDirection) {
 		t.Errorf("err = %v, want ErrInvalidDirection", err)
+	}
+}
+
+func TestBuildTopology_NoRootCandidatePredicate(t *testing.T) {
+	archivedAt := topoTime()
+	repo := &fakeTopologyRepo{
+		resources: map[uint64]model.Resource{
+			1:  {ID: 1, ResourceType: model.ResourceTypeService, Name: "svc", DisplayName: "Service", EnvironmentID: 10, HealthStatus: "healthy", LifecycleStatus: "running"},
+			2:  {ID: 2, ResourceType: model.ResourceTypeDatabaseCluster, Name: "cluster", DisplayName: "Cluster", EnvironmentID: 10, HealthStatus: "healthy", LifecycleStatus: "running"},
+			3:  {ID: 3, ResourceType: model.ResourceTypeDatabaseProxy, Name: "proxy", DisplayName: "Proxy", EnvironmentID: 10, HealthStatus: "healthy", LifecycleStatus: "running"},
+			4:  {ID: 4, ResourceType: model.ResourceTypeHost, Name: "warn-host", DisplayName: "Warn Host", EnvironmentID: 10, HealthStatus: "warning", LifecycleStatus: "running"},
+			5:  {ID: 5, ResourceType: model.ResourceTypeDomainName, Name: "crit-domain", DisplayName: "Crit Domain", EnvironmentID: 10, HealthStatus: "critical", LifecycleStatus: "running"},
+			6:  {ID: 6, ResourceType: model.ResourceTypeHost, Name: "host", DisplayName: "Host", EnvironmentID: 10, HealthStatus: "healthy", LifecycleStatus: "running"},
+			7:  {ID: 7, ResourceType: model.ResourceTypeDomainName, Name: "domain", DisplayName: "Domain", EnvironmentID: 10, HealthStatus: "healthy", LifecycleStatus: "running"},
+			8:  {ID: 8, ResourceType: model.ResourceTypeVirtualIP, Name: "vip", DisplayName: "VIP", EnvironmentID: 10, HealthStatus: "healthy", LifecycleStatus: "running"},
+			9:  {ID: 9, ResourceType: model.ResourceTypeControlPlaneComponent, Name: "cp", DisplayName: "CP", EnvironmentID: 10, HealthStatus: "healthy", LifecycleStatus: "running"},
+			10: {ID: 10, ResourceType: model.ResourceTypeService, Name: "other", DisplayName: "Other", EnvironmentID: 20, HealthStatus: "healthy", LifecycleStatus: "running"},
+			11: {ID: 11, ResourceType: model.ResourceTypeService, Name: "archived", DisplayName: "Archived", EnvironmentID: 10, HealthStatus: "critical", LifecycleStatus: "running", ArchivedAt: &archivedAt},
+		},
+		candidateIDs: []uint64{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11},
+	}
+	svc := NewTopologyService(repo)
+
+	resp, err := svc.BuildTopology(model.TopologyQuery{EnvironmentID: 10, Direction: model.TopologyDirectionBoth})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	got := nodeIDs(resp)
+	want := map[uint64]bool{1: true, 2: true, 3: true, 4: true, 5: true}
+	if len(got) != len(want) {
+		t.Fatalf("nodes = %v, want %v", got, want)
+	}
+	for id := range want {
+		if !got[id] {
+			t.Fatalf("missing node %d in %v", id, got)
+		}
+	}
+	if len(resp.Edges) != 0 {
+		t.Fatalf("edges = %+v, want none", resp.Edges)
+	}
+	if resp.Truncated {
+		t.Fatal("truncated = true, want false")
+	}
+}
+
+func TestBuildTopology_NoRootDedupesAndCapsCandidates(t *testing.T) {
+	resources := make(map[uint64]model.Resource, TopologyNodeCap+2)
+	candidateIDs := []uint64{1, 1}
+	for i := 1; i <= TopologyNodeCap+1; i++ {
+		id := uint64(i)
+		resources[id] = model.Resource{ID: id, ResourceType: model.ResourceTypeService, Name: "svc", DisplayName: "Service", EnvironmentID: 10, HealthStatus: "healthy", LifecycleStatus: "running"}
+		if i > 1 {
+			candidateIDs = append(candidateIDs, id)
+		}
+	}
+	repo := &fakeTopologyRepo{resources: resources, candidateIDs: candidateIDs}
+	svc := NewTopologyService(repo)
+
+	resp, err := svc.BuildTopology(model.TopologyQuery{EnvironmentID: 10, Direction: model.TopologyDirectionBoth})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(resp.Nodes) != TopologyNodeCap {
+		t.Fatalf("nodes = %d, want cap %d", len(resp.Nodes), TopologyNodeCap)
+	}
+	if !resp.Truncated {
+		t.Fatal("truncated = false, want true")
+	}
+	if ids := nodeIDs(resp); ids[uint64(TopologyNodeCap+1)] {
+		t.Fatalf("node beyond cap included: %v", ids)
 	}
 }
 
@@ -459,6 +595,10 @@ func buildParallelEdgeRepo(edges int) *fakeTopologyRepo {
 		})
 	}
 	return &fakeTopologyRepo{resources: resources, relations: relations}
+}
+
+func topoTime() time.Time {
+	return time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
 }
 
 func TestDetectNodeProblems_HealthyRunning(t *testing.T) {

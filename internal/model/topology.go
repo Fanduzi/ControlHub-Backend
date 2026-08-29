@@ -62,10 +62,11 @@ const (
 )
 
 type TopologyQuery struct {
-	RootID       uint64
-	Depth        int
-	Direction    TopologyDirection
-	RelationType RelationType
+	EnvironmentID uint64
+	RootID        uint64
+	Depth         int
+	Direction     TopologyDirection
+	RelationType  RelationType
 }
 
 type TopologyNode struct {

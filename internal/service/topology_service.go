@@ -26,6 +26,7 @@ const (
 type TopologyRepository interface {
 	GetResource(id uint64) (*model.Resource, error)
 	ListRelationsByResourceIDs(ids []uint64) ([]model.ResourceRelation, error)
+	ListTopologyCandidates(environmentID uint64) ([]model.Resource, error)
 }
 
 type TopologyService struct {
@@ -40,13 +41,22 @@ func (s *TopologyService) BuildTopology(query model.TopologyQuery) (*model.Topol
 	if query.Depth == 0 {
 		query.Depth = 2
 	}
+	if query.Direction == "" {
+		query.Direction = model.TopologyDirectionBoth
+	}
 	if err := validateTopologyQuery(query); err != nil {
 		return nil, err
+	}
+	if query.RootID == 0 {
+		return s.buildTopologyCandidates(query)
 	}
 
 	root, err := s.repo.GetResource(query.RootID)
 	if err != nil {
 		return nil, err
+	}
+	if query.EnvironmentID != 0 && root.EnvironmentID != query.EnvironmentID {
+		return nil, ErrResourceNotFound
 	}
 
 	nodeSet := map[uint64]*model.Resource{root.ID: root}
@@ -114,6 +124,9 @@ func (s *TopologyService) BuildTopology(query model.TopologyQuery) (*model.Topol
 					if err != nil {
 						continue
 					}
+					if query.EnvironmentID != 0 && res.EnvironmentID != query.EnvironmentID {
+						continue
+					}
 					nodeSet[neighborID] = res
 					distance[neighborID] = hop + 1
 					nextFrontier = append(nextFrontier, neighborID)
@@ -147,6 +160,57 @@ func (s *TopologyService) BuildTopology(query model.TopologyQuery) (*model.Topol
 		Truncated:          truncated,
 		Problems:           problems,
 	}, nil
+}
+
+func (s *TopologyService) buildTopologyCandidates(query model.TopologyQuery) (*model.TopologyResponse, error) {
+	candidates, err := s.repo.ListTopologyCandidates(query.EnvironmentID)
+	if err != nil {
+		return nil, err
+	}
+
+	nodeSet := map[uint64]*model.Resource{}
+	distance := map[uint64]int{}
+	truncated := false
+	for i := range candidates {
+		res := candidates[i]
+		if res.IsArchived() || !isTopologyCandidate(&res) {
+			continue
+		}
+		if _, ok := nodeSet[res.ID]; ok {
+			continue
+		}
+		if len(nodeSet) >= TopologyNodeCap {
+			truncated = true
+			continue
+		}
+		nodeSet[res.ID] = &res
+		distance[res.ID] = 0
+	}
+
+	nodes := buildTopologyNodes(nodeSet, distance, nil, 0, detectDatabaseTopology(nodeSet), nil, nil)
+	return &model.TopologyResponse{
+		Depth:              query.Depth,
+		Direction:          query.Direction,
+		Nodes:              nodes,
+		Edges:              []model.TopologyEdge{},
+		Groups:             buildTopologyGroups(nodeSet),
+		IsDatabaseTopology: detectDatabaseTopology(nodeSet),
+		Truncated:          truncated,
+		Problems:           buildProblemSummaries(nodes),
+	}, nil
+}
+
+func isTopologyCandidate(res *model.Resource) bool {
+	switch model.HealthStatus(res.HealthStatus) {
+	case model.HealthStatusWarning, model.HealthStatusCritical:
+		return true
+	}
+	switch res.ResourceType {
+	case model.ResourceTypeService, model.ResourceTypeDatabaseCluster, model.ResourceTypeDatabaseProxy:
+		return true
+	default:
+		return false
+	}
 }
 
 func validateTopologyQuery(q model.TopologyQuery) error {
