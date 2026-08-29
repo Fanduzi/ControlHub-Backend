@@ -6,8 +6,10 @@
 package api
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
+	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -181,8 +183,15 @@ func TestOperatorAccessBoundary(t *testing.T) {
 // the recorded status and body. Token is empty for anonymous requests.
 func doBoundaryRequest(t *testing.T, router http.Handler, method, path, body, token string) (int, string) {
 	t.Helper()
-	req := httptest.NewRequest(method, path, strings.NewReader(body))
-	if body != "" {
+	var req *http.Request
+	if strings.HasPrefix(path, "/admin/ingestions/") {
+		multipartBody, contentType := boundaryIngestionBody(t, path)
+		req = httptest.NewRequest(method, path, multipartBody)
+		req.Header.Set("Content-Type", contentType)
+	} else {
+		req = httptest.NewRequest(method, path, strings.NewReader(body))
+	}
+	if body != "" && !strings.HasPrefix(path, "/admin/ingestions/") {
 		req.Header.Set("Content-Type", "application/json")
 	}
 	if token != "" {
@@ -191,6 +200,36 @@ func doBoundaryRequest(t *testing.T, router http.Handler, method, path, body, to
 	rec := httptest.NewRecorder()
 	router.ServeHTTP(rec, req)
 	return rec.Code, rec.Body.String()
+}
+
+func boundaryIngestionBody(t *testing.T, path string) (*bytes.Buffer, string) {
+	t.Helper()
+	const payload = `[{"environmentId":1,"ciType":"host","name":"boundary-ingestion"}]`
+	var body bytes.Buffer
+	form := multipart.NewWriter(&body)
+	if err := form.WriteField("format", "json"); err != nil {
+		t.Fatal(err)
+	}
+	if strings.HasSuffix(path, "/confirm") {
+		rows, err := service.ParseIngestion("json", []byte(payload))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := form.WriteField("fingerprint", service.PreviewIngestion(rows, nil).Fingerprint); err != nil {
+			t.Fatal(err)
+		}
+	}
+	file, err := form.CreateFormFile("file", "boundary.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := file.Write([]byte(payload)); err != nil {
+		t.Fatal(err)
+	}
+	if err := form.Close(); err != nil {
+		t.Fatal(err)
+	}
+	return &body, form.FormDataContentType()
 }
 
 // assertBoundary2xx asserts the operation succeeded as an authenticated actor.

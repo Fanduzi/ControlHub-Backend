@@ -1,7 +1,7 @@
 // Package api provides HTTP handlers and routing for the ControlHub REST API.
 // input: internal/api, internal/model, internal/service, net/http
-// output: TestServer struct, NewTestServer with fake batch-profile, relation, health, effective-value, bulk preview/confirm, and topology data
-// pos: Test infrastructure — fake repositories for typed profiles, completeness relations, health observations, effective values, bulk mutation review, topology candidates, and a pre-wired handler router
+// output: TestServer struct, NewTestServer with fake batch-profile, relation, health, effective-value, bulk preview/confirm, topology, and ingestion data
+// pos: Test infrastructure — fake repositories for typed profiles, completeness relations, health observations, effective values, bulk mutation review, topology candidates, ingestion confirmation, and a pre-wired handler router
 // note: if this file changes, update this header and module README.md.
 package api
 
@@ -67,6 +67,25 @@ func (f *fakeResourceRepo) ClearManualOverrideWithAudit(_ context.Context, resou
 	}
 	delete(f.effectiveValues[resourceID], field)
 	return nil
+}
+
+func (f *fakeResourceRepo) PreviewIngestion(_ context.Context, rows []service.IngestionRow) (*service.IngestionPreview, error) {
+	preview := service.PreviewIngestion(rows, nil)
+	return &preview, nil
+}
+
+func (f *fakeResourceRepo) ConfirmIngestion(_ context.Context, rows []service.IngestionRow, fingerprint string, _ uint64) (*service.IngestionPreview, error) {
+	preview := service.PreviewIngestion(rows, nil)
+	if len(rows) == 1 && rows[0].Name == "forced-conflict" {
+		preview.Confirmable = false
+		preview.Rows[0].Action = service.PreviewConflict
+		preview.Rows[0].Conflict = "identity methods disagree"
+		return &preview, service.ErrIngestionConflict
+	}
+	if preview.Fingerprint != fingerprint {
+		return &preview, service.ErrIngestionFingerprintMismatch
+	}
+	return &preview, nil
 }
 
 func (f *fakeResourceRepo) GetResourceProfile(id uint64) (*model.ResourceProfileResponse, error) {
@@ -1277,6 +1296,9 @@ func authenticatedTestRouter(next http.Handler, token string) http.Handler {
 }
 
 func testRouteNeedsDefaultActor(path string) bool {
+	if strings.HasPrefix(path, "/admin/ingestions/") {
+		return true
+	}
 	if path == "/resources" || strings.HasPrefix(path, "/resources/") || path == "/resource-relations" || strings.HasPrefix(path, "/resource-relations/") || strings.HasPrefix(path, "/environments/") {
 		return true
 	}

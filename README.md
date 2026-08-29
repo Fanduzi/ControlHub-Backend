@@ -297,6 +297,8 @@ Dependency flow (strict, one-directional): `cmd/server` → `api` → `service` 
 | POST | /inventory/views | Create a personal or admin-shared Inventory view |
 | PUT | /inventory/views/{viewId} | Update an owned personal or admin-managed shared view |
 | DELETE | /inventory/views/{viewId} | Delete an owned personal or admin-managed shared view |
+| POST | /admin/ingestions/preview | Admin-only bounded CSV/JSON ingestion preview with exact-match conflict explanations and a confirmable fingerprint |
+| POST | /admin/ingestions/confirm | Admin-only atomic ingestion confirmation of the reviewed upload/fingerprint; conflict or drift returns 409 for re-preview |
 | GET | /environments | List environments |
 | GET | /owners | List owners |
 | GET | /roles | List roles |
@@ -323,6 +325,12 @@ all disclosure-policy operations, including GET. Saved-statement mutations are
 not a router-wide admin gate: Phase 38R authorizes personal statements by owner
 and shared templates by admin role. Named Inventory views follow the same
 owner/admin split while remaining readable as shared views by every user.
+
+Admin CI ingestion uses one strict multipart upload shape: `format=csv|json` and
+one `file`; confirmation resubmits the same reviewed data with its fingerprint.
+Preview is read-only. Confirmation rechecks the exact parsed input and inventory
+inside the existing single MySQL transaction, so conflicts, drift, or any write
+failure leave no partial batch committed.
 
 Resource list and detail responses include effective `healthStatus`,
 `healthFreshness` (`fresh`, `stale`, or `never`), `healthObservedAt`,

@@ -5,7 +5,8 @@ HTTP handlers, chi routing, CORS middleware, and fake-repo test infrastructure.
 ## Files
 | File | Responsibility |
 |------|---------------|
-| router.go | Route registration, including authenticated inventory/dictionary/named-view/topology reads, admin health observation ingestion, Operator Access Boundary middleware, Dependencies, CORS, and bounded auth-audit wiring |
+| router.go | Route registration, including authenticated inventory/dictionary/named-view/topology reads, admin health observation and ingestion, Operator Access Boundary middleware, Dependencies, CORS, and bounded auth-audit wiring |
+| ingestion_handler.go | Bounded strict multipart CSV/JSON ingestion preview and atomic confirmation handlers |
 | health_handler.go | GET /health endpoint |
 | resource_handler.go | Resource list/detail identity, health, and server-derived completeness fields; explicit identity conflicts, non-audited observation ingestion, and PATCH changes through atomic inventory audit |
 | profile_handler.go | PUT/PATCH/DELETE /resources/{id}/profile handlers with strict decoding and token-derived atomic inventory audit |
@@ -39,6 +40,7 @@ HTTP handlers, chi routing, CORS middleware, and fake-repo test infrastructure.
 | query_saved_statement_handler_test.go | Saved statement handler tests |
 | query_saved_statement_execution_handler_test.go | Template-execution handler tests (strict request decoding, controlled field errors, `query_result_disclosure_blocked`) |
 | named_inventory_view_handler_test.go | Named inventory view router tests, including authentication for every CRUD route, shared-management metadata, strict JSON, and controlled errors |
+| ingestion_handler_test.go | Admin multipart ingestion preview/confirm, validation, stale-fingerprint, and conflict response tests |
 | operator_access_boundary_test.go | Anonymous, editor, and admin router authorization matrix driven by the shared operatoraccess policy, including 38R conditional saved statements (personal by owner — editor or admin — and shared templates admin-only) |
 | ops_handler.go | Admin-only operational metrics handlers: `handleAuthAuditMetrics` (auth audit persistence failures + untrusted-Bearer suppression) and `handleQueryEvidenceMetrics` (Issue #34 — exactly `queryEvidencePersistenceFailures`, read through the service layer) |
 | query_evidence_metrics_test.go | Query-evidence metrics endpoint tests: anonymous/editor/admin 401/403/200 matrix, exactly-one-field response, published counter |
@@ -47,6 +49,8 @@ HTTP handlers, chi routing, CORS middleware, and fake-repo test infrastructure.
 | Method | Path | Description |
 |--------|------|-------------|
 | POST | /resources/{id}/health-observations | Store an observer's latest operational health evidence without inventory audit |
+| POST | /admin/ingestions/preview | Admin-only bounded CSV/JSON upload preview; no writes; returns exact-match create/update/conflict rows and fingerprint |
+| POST | /admin/ingestions/confirm | Admin-only atomic confirmation of resubmitted reviewed upload and fingerprint; conflicts or drift return 409 with a fresh preview |
 
 `GET /resources` supports inventory `q` search, exact `ownerId`, and repeatable exact `label=key:value` filters; repeated labels combine with AND.
 | GET | /resources/{id}/relation-rules | Discover server-owned outgoing relation and target constraints |

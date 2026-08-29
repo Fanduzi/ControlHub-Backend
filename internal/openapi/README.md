@@ -5,9 +5,9 @@ Embeds and validates the OpenAPI contract served by the API documentation route.
 ## Files
 | File | Responsibility |
 |------|---------------|
-| openapi.yaml | Source OpenAPI contract for resource-list search filters, named inventory views, admin bulk mutation preview/confirmation, governed typed-profile identity, health observations, topology workspace reads, relationship-rule discovery, access security, audit pagination/search and field diffs, metrics, and controlled errors |
+| openapi.yaml | Source OpenAPI contract for resource-list search filters, named inventory views, admin bulk mutation preview/confirmation, governed typed-profile identity, strict multipart ingestion preview/confirm, health observations, topology workspace reads, relationship-rule discovery, access security, audit pagination/search and field diffs, metrics, and controlled errors |
 | embed.go | Embeds the YAML for serving and tests |
-| openapi_test.go | Validates schema, topology, pagination, and executions contract tests |
+| openapi_test.go | Validates schema, strict ingestion multipart, topology, pagination, and executions contract tests |
 | operator_access_boundary_test.go | Proves every protected operation documents the status codes its operatoraccess class requires |
 | openapi_schema_helpers_test.go | Shared schema/parameter shape assertion helpers |
 
@@ -20,6 +20,7 @@ Embeds and validates the OpenAPI contract served by the API documentation route.
 - `/resources/bulk-mutations/preview` and `/resources/bulk-mutations/confirm`: admin-only reviewed bulk mutation contract with per-CI diffs/errors and fingerprint conflict protection.
 - `GET /ops/auth-audit-metrics` response schema: fixed admin-only shape with exactly `authAuditPersistenceFailures` and `authAuditSuppressedRejections` counters; carries no identity, request, or credential material
 - `GET /ops/query-evidence-metrics` response schema (Issue #34): fixed admin-only shape with exactly `queryEvidencePersistenceFailures`; carries no identity, target, statement, value, credential, DSN, request, or raw error material
+- `POST /admin/ingestions/preview` and `/confirm` use a strict multipart `format` (`csv` or `json`) plus one bounded `file`; confirm additionally requires the reviewed 64-hex fingerprint and returns a fresh preview in controlled 409 conflict/drift responses.
 - `ErrorResponse.error`: closed Controlled Error Code enum (Issue #53). Adding a code is a contract change. The published set is backend `writeJSONError` literals plus Console BFF snake_case codes.
 - `AuditEvent.changes`: optional server-owned add/update/remove field evidence with before/after values; absent on legacy and non-inventory events.
 - `Resource` always exposes read-only completeness, effective status, freshness, observed time, observer, and nullable manual override; POST observations are operational and PATCH null clears the audited override.

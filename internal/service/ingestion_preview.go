@@ -1,6 +1,6 @@
 // Package service provides controlled CI ingestion parsing, preview reconciliation, and confirm service delegation.
 // input: stdlib CSV/JSON/SHA-256 utilities, context, and internal/model identity/relation types
-// output: ParseIngestion, PreviewIngestion, ResourceService.ConfirmIngestion, immutable-type conflicts, additive observed diffs, and validation contracts
+// output: ParseIngestion, PreviewIngestion, ResourceService preview/confirm delegation, immutable-type conflicts, additive observed diffs, and validation contracts
 // pos: Issue #83 ingestion checkpoint and service-owned validation before repository persistence
 // note: if this file changes, update this header and module README.md.
 package service
@@ -109,12 +109,30 @@ type ingestionConfirmRepository interface {
 	ConfirmIngestion(ctx context.Context, rows []IngestionRow, reviewedFingerprint string, actorUserID uint64) (*IngestionPreview, error)
 }
 
+type ingestionPreviewRepository interface {
+	PreviewIngestion(ctx context.Context, rows []IngestionRow) (*IngestionPreview, error)
+}
+
+func (s *ResourceService) PreviewIngestion(ctx context.Context, rows []IngestionRow) (*IngestionPreview, error) {
+	if err := ValidateIngestionRows(rows); err != nil {
+		return nil, fmt.Errorf("%w: %v", ErrValidationFailed, err)
+	}
+	repo, ok := s.repo.(ingestionPreviewRepository)
+	if !ok {
+		return nil, errors.New("ingestion preview repository is required")
+	}
+	return repo.PreviewIngestion(ctx, rows)
+}
+
 func (s *ResourceService) ConfirmIngestion(ctx context.Context, actorUserID uint64, rows []IngestionRow, reviewedFingerprint string) (*IngestionPreview, error) {
 	if actorUserID == 0 {
 		return nil, errors.New("inventory audit actor is required")
 	}
 	if strings.TrimSpace(reviewedFingerprint) == "" {
 		return nil, fmt.Errorf("%w: reviewed fingerprint is required", ErrValidationFailed)
+	}
+	if err := ValidateIngestionRows(rows); err != nil {
+		return nil, fmt.Errorf("%w: %v", ErrValidationFailed, err)
 	}
 	repo, ok := s.repo.(ingestionConfirmRepository)
 	if !ok {

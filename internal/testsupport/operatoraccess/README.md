@@ -6,10 +6,10 @@ authorization class.
 ## Files
 | File | Responsibility |
 |------|---------------|
-| policy.go | Protected-operation table, including admin health-observation ingestion and authenticated relationship-rule discovery, with authorization classes and canonical/concrete paths |
+| policy.go | Protected-operation table, including admin ingestion preview/confirmation, health-observation ingestion, and authenticated relationship-rule discovery, with authorization classes and canonical/concrete paths |
 
 ## Exports
-- `operatoraccess.All()` — returns a fresh protected-operation slice
+- `operatoraccess.All()` — returns a fresh protected-operation slice, including admin-only ingestion preview and confirmation
 - `operatoraccess.Operation`, `operatoraccess.Class` — operation and authorization-class types
 - `operatoraccess.Class.RequiredOpenAPIResponses()` — derives mandatory OpenAPI response statuses from the class
 

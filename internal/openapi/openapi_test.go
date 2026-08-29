@@ -1,6 +1,6 @@
 // Package openapi_test verifies the embedded OpenAPI contract.
 // input: embedded OpenAPI YAML, kin-openapi parser, internal/model
-// output: OpenAPI schema, resource completeness, health observation, effective-value override, bulk mutation, topology, pagination, execution, and closed error-enum tests
+// output: OpenAPI schema, resource completeness, health observation, effective-value override, ingestion multipart, bulk mutation, topology, pagination, execution, and closed error-enum tests
 // pos: Prevents documented API contracts from drifting from router behavior
 // note: if this file changes, update this header and module README.md.
 package openapi_test
@@ -28,6 +28,38 @@ func TestOpenAPIYAMLIsValid(t *testing.T) {
 
 	if err := doc.Validate(context.Background()); err != nil {
 		t.Fatalf("openapi.yaml validation failed: %v", err)
+	}
+}
+
+func TestOpenAPIIngestionContract(t *testing.T) {
+	loader := openapi3.NewLoader()
+	doc, err := loader.LoadFromData(openapi.YAML)
+	if err != nil {
+		t.Fatalf("failed to parse openapi.yaml: %v", err)
+	}
+	for path, required := range map[string][]string{
+		"/admin/ingestions/preview": {"format", "file"},
+		"/admin/ingestions/confirm": {"format", "file", "fingerprint"},
+	} {
+		op := doc.Paths.Value(path).Post
+		if op == nil || op.RequestBody == nil {
+			t.Fatalf("POST %s must document a request body", path)
+		}
+		schema := op.RequestBody.Value.Content["multipart/form-data"].Schema.Value
+		for _, field := range required {
+			if schema.Properties[field] == nil || !slices.Contains(schema.Required, field) {
+				t.Fatalf("POST %s must require multipart %s", path, field)
+			}
+		}
+		for _, status := range []string{"400", "401", "403"} {
+			if op.Responses.Value(status) == nil {
+				t.Fatalf("POST %s must document %s", path, status)
+			}
+		}
+	}
+	confirm := doc.Paths.Value("/admin/ingestions/confirm").Post
+	if confirm.Responses.Value("409") == nil {
+		t.Fatal("POST /admin/ingestions/confirm must document stale/conflict 409")
 	}
 }
 
@@ -532,6 +564,8 @@ func TestOpenAPIErrorResponseErrorIsClosedControlledErrorCodeEnum(t *testing.T) 
 		"environment_not_found",
 		"forbidden",
 		"forbidden_header",
+		"ingestion_conflict",
+		"ingestion_preview_stale",
 		"internal_error",
 		"invalid_credentials",
 		"invalid_payload",

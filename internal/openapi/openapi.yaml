@@ -2365,6 +2365,121 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/ErrorResponse"
+  /admin/ingestions/preview:
+    post:
+      summary: Preview controlled CI ingestion
+      description: >-
+        Admin-only, side-effect-free preview. Submit exactly one multipart file
+        with format csv or json. JSON is an array of ingestion rows; CSV has
+        environmentId, ciType, and name columns, with optional displayName,
+        aliases, externalIdentifiers, profile, observedValues, and relations
+        JSON-valued columns. The raw file is limited to 500 rows, 64 KiB per
+        row, and 32,768,000 bytes. Matching is exact External CI Identifier,
+        Alias, then Environment+CI Type+Name; fuzzy matching is never used.
+      operationId: previewIngestion
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [format, file]
+              properties:
+                format:
+                  type: string
+                  enum: [csv, json]
+                file:
+                  type: string
+                  format: binary
+      responses:
+        "200":
+          description: Exact-match create, update, and conflict preview with confirmable fingerprint
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/IngestionPreview"
+        "400":
+          description: Invalid, oversized, or unsafe ingestion upload
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "401":
+          description: Missing or invalid Bearer token
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "403":
+          description: Authenticated actor is not an admin
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+  /admin/ingestions/confirm:
+    post:
+      summary: Confirm a reviewed CI ingestion preview
+      description: >-
+        Admin-only atomic confirmation. Resubmit the reviewed file, format,
+        and preview fingerprint. The server reparses the upload, rechecks exact
+        identities inside its transaction, and returns 409 with a fresh preview
+        if the input, inventory, or conflict state has drifted. No partial
+        batch commit is possible.
+      operationId: confirmIngestion
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [format, file, fingerprint]
+              properties:
+                format:
+                  type: string
+                  enum: [csv, json]
+                file:
+                  type: string
+                  format: binary
+                fingerprint:
+                  type: string
+                  pattern: "^[a-f0-9]{64}$"
+      responses:
+        "200":
+          description: Atomically confirmed ingestion result
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/IngestionPreview"
+        "400":
+          description: Invalid, oversized, unsafe, or unconfirmable request shape
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "401":
+          description: Missing or invalid Bearer token
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "403":
+          description: Authenticated actor is not an admin
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "409":
+          description: Conflicts exist or the reviewed fingerprint is stale; preview again
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/IngestionConfirmError"
   /resources:
     get:
       summary: List resources
@@ -4006,6 +4121,92 @@ components:
         ControlHub HMAC-SHA256 bearer token from POST /auth/login. Query execution
         routes require a token within a bounded TTL (QueryExecutionTokenMaxAge).
   schemas:
+    IngestionPreview:
+      type: object
+      required: [confirmable, fingerprint, rows]
+      properties:
+        confirmable:
+          type: boolean
+          description: False when any row has an unresolved exact-identity conflict.
+        fingerprint:
+          type: string
+          pattern: "^[a-f0-9]{64}$"
+          description: SHA-256 token binding reviewed canonical input and matched inventory state.
+        rows:
+          type: array
+          items:
+            $ref: "#/components/schemas/IngestionPreviewRow"
+    IngestionPreviewRow:
+      type: object
+      required: [row, action, diff]
+      properties:
+        row:
+          type: integer
+          minimum: 1
+        action:
+          type: string
+          enum: [create, update, conflict]
+        matchedId:
+          type: integer
+          format: int64
+        conflict:
+          type: string
+          description: Exact-identity ambiguity or disagreement explanation; present for conflict rows.
+        diff:
+          $ref: "#/components/schemas/IngestionDiff"
+    IngestionDiff:
+      type: object
+      required: [fields, profile, observed, relations]
+      properties:
+        fields:
+          type: object
+          additionalProperties:
+            $ref: "#/components/schemas/IngestionValueDiff"
+        profile:
+          type: object
+          additionalProperties:
+            $ref: "#/components/schemas/IngestionValueDiff"
+        observed:
+          type: object
+          description: Only submitted observed fields; omitted observations are preserved.
+          additionalProperties:
+            $ref: "#/components/schemas/IngestionValueDiff"
+        relations:
+          type: object
+          required: [added, removed]
+          properties:
+            added:
+              type: array
+              items:
+                $ref: "#/components/schemas/IngestionRelation"
+            removed:
+              type: array
+              items:
+                $ref: "#/components/schemas/IngestionRelation"
+    IngestionValueDiff:
+      type: object
+      required: [before, after]
+      properties:
+        before: {}
+        after: {}
+    IngestionRelation:
+      type: object
+      required: [type, targetId]
+      properties:
+        type:
+          $ref: "#/components/schemas/RelationType"
+        targetId:
+          type: integer
+          format: int64
+          minimum: 1
+    IngestionConfirmError:
+      allOf:
+        - $ref: "#/components/schemas/ErrorResponse"
+        - type: object
+          required: [preview]
+          properties:
+            preview:
+              $ref: "#/components/schemas/IngestionPreview"
     QueryTargetListResponse:
       type: object
       required: [items, pageInfo]
@@ -5816,6 +6017,8 @@ components:
             - invalid_credentials
             - invalid_payload
             - invalid_request
+            - ingestion_conflict
+            - ingestion_preview_stale
             - malformed_json
             - not_found
             - owner_not_found
