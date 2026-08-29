@@ -7,6 +7,8 @@ Business logic layer with interface-based repository dependencies. Each service 
 |------|---------------|
 | resource_service.go | Resource reads/writes, list/detail server-derived completeness from governed identity, one typed-profile batch, and one required relation batch; governed-identity validation, minimum manual typed-profile identity, health observation ingestion, explicit conflicts, and fail-closed audited inventory updates |
 | resource_write_service_test.go | Resource/relation write-flow tests, including identity normalization/immutability, sensitive-label rejection, profile validation, and the manual-identity rule matrix |
+| bulk_resource_preview.go | Pure bulk resource mutation preview contract: ordered per-target version checks, field/label diffs, validation, and SHA-256 drift fingerprinting |
+| bulk_resource_preview_test.go | Bulk resource mutation preview contract tests: label semantics, invalid targets/operations, input purity, ordering, composite fields, and fingerprint drift |
 | profile_service.go | Typed profile PUT/PATCH/DELETE validation plus fail-closed audited mutations for all typed-profile identities |
 | profile_service_test.go | Profile write tests: validation, PATCH partial-merge semantics, not-found/archived/unsupported guards, and all typed-profile identity rules |
 | relation_service.go | Shared relation read/write entry point; validates server-owned rules before fail-closed audited persistence |
@@ -54,6 +56,8 @@ Business logic layer with interface-based repository dependencies. Each service 
 - `ResourceService.ObserveHealth` — validated operational evidence ingestion that never emits inventory audit events
 - `RelationService.Rules` returns source-specific relation types, target resource types, and environment constraints derived from the write validator's matrix
 - `DeriveCompleteness` — pure read-only score/status/missing-requirements projection; labels never satisfy a requirement
+- `PreviewBulkResourceMutation` — pure preview of ordered targets against current snapshots; no persistence dependency
+- `BulkResourceMutationRequest`, `BulkResourceMutationTarget`, `ResourceMutationSnapshot`, `LabelOperations`, `BulkResourcePreview` — bulk mutation preview contract values
 - `NewMemoryUserStore`, `AuthService.WithClock`, `AuthService.ChangeUserRole`/`SetUserActive`/`ResetUserPassword` — Authorization Version seams
 - `AuthAuditEmitter`, `NoopEmitter` — fail-open authentication/authorization audit emission interface and discard implementation
 - `BoundedAuthAuditEmitter`, `NewBoundedAuthAuditEmitter`, `BearerRejectBudget`, `NewBearerRejectBudget`, `ProcessBearerRejectBudget`, `BoundedBearerRejectedLimit`, `AuthAuditSuppressedRejections` — process-shared budget capping untrusted Bearer rejection persistence at 60 events/min per server process (all routers draw from one budget); suppression counter exposed only via the admin auth-audit metrics surface
