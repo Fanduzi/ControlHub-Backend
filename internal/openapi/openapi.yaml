@@ -1,5 +1,5 @@
 # input: public HTTP routes, model JSON shapes, and operator access policy
-# output: served OpenAPI 3.1 contract for ControlHub clients, including resource-list search filters
+# output: served OpenAPI 3.1 contract for ControlHub clients, including resource-list filters and bulk mutation review/confirmation
 # pos: canonical machine-readable API boundary, including inventory audit diffs
 # note: if this file changes, update header and internal/openapi/README.md
 
@@ -2588,6 +2588,90 @@ paths:
                 $ref: "#/components/schemas/ErrorResponse"
         "403":
           description: Authenticated actor is not an admin
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+  /resources/bulk-mutations/preview:
+    post:
+      summary: Preview a bulk resource mutation
+      description: >
+        Admin-only and side-effect-free. Evaluates the requested resources in
+        target order and returns the field and explicit label differences,
+        per-resource conflicts, and a fingerprint for confirmation.
+      operationId: previewBulkResourceMutation
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/BulkResourceMutationRequest"
+      responses:
+        "200":
+          description: Bulk mutation preview
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BulkResourcePreview"
+        "400":
+          description: Malformed JSON or invalid bulk mutation request
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "401":
+          description: Missing or invalid Bearer token
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "403":
+          description: Authenticated actor is not an admin
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+  /resources/bulk-mutations/confirm:
+    post:
+      summary: Confirm a reviewed bulk resource mutation
+      description: >
+        Admin-only atomic confirmation. Rechecks the current target versions
+        and the reviewed fingerprint; drift or a non-confirmable preview is a
+        conflict and no partial mutation is committed.
+      operationId: confirmBulkResourceMutation
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/BulkResourceMutationConfirmRequest"
+      responses:
+        "200":
+          description: Confirmed bulk mutation preview
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BulkResourcePreview"
+        "400":
+          description: Malformed JSON or invalid bulk mutation request
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "401":
+          description: Missing or invalid Bearer token
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "403":
+          description: Authenticated actor is not an admin
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "409":
+          description: Current target state or reviewed fingerprint conflicts
           content:
             application/json:
               schema:
@@ -5486,6 +5570,141 @@ components:
           type: string
           minLength: 1
           maxLength: 191
+    BulkResourceMutationRequest:
+      type: object
+      additionalProperties: false
+      required: [targets]
+      properties:
+        targets:
+          type: array
+          minItems: 1
+          items:
+            $ref: "#/components/schemas/BulkResourceMutationTarget"
+        fieldPatch:
+          $ref: "#/components/schemas/BulkResourceFieldPatch"
+        labels:
+          $ref: "#/components/schemas/LabelOperations"
+    BulkResourceMutationTarget:
+      type: object
+      additionalProperties: false
+      required: [resourceId, expectedVersion]
+      properties:
+        resourceId:
+          type: integer
+          format: int64
+          minimum: 1
+        expectedVersion:
+          type: string
+          minLength: 1
+          description: Current resource version observed during review.
+    BulkResourceFieldPatch:
+      type: object
+      additionalProperties: false
+      properties:
+        name:
+          type: string
+          minLength: 1
+          pattern: "^[a-z0-9][a-z0-9._-]*$"
+        resourceSubtype:
+          type: string
+        displayName:
+          type: string
+          minLength: 1
+        environmentId:
+          type: integer
+          format: int64
+          minimum: 1
+        ownerId:
+          type: integer
+          format: int64
+          minimum: 1
+        lifecycleStatus:
+          $ref: "#/components/schemas/LifecycleStatus"
+        healthStatus:
+          $ref: "#/components/schemas/HealthStatus"
+        externalId:
+          type: string
+    LabelOperations:
+      type: object
+      additionalProperties: false
+      properties:
+        add:
+          type: object
+          additionalProperties:
+            type: string
+          description: Labels that must not already exist.
+        update:
+          type: object
+          additionalProperties:
+            type: string
+          description: Labels that must already exist.
+        remove:
+          type: array
+          items:
+            type: string
+          description: Label keys that must already exist.
+    BulkResourceMutationConfirmRequest:
+      type: object
+      additionalProperties: false
+      required: [request, reviewedFingerprint]
+      properties:
+        request:
+          $ref: "#/components/schemas/BulkResourceMutationRequest"
+        reviewedFingerprint:
+          type: string
+          minLength: 1
+          description: Fingerprint returned by the reviewed preview.
+    BulkResourcePreview:
+      type: object
+      required: [items, fingerprint, confirmable]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/BulkResourcePreviewItem"
+        fingerprint:
+          type: string
+        confirmable:
+          type: boolean
+    BulkResourcePreviewItem:
+      type: object
+      required: [resourceId, conflict]
+      properties:
+        resourceId:
+          type: integer
+          format: int64
+        conflict:
+          type: boolean
+        fieldDiffs:
+          type: array
+          items:
+            $ref: "#/components/schemas/FieldDiff"
+        labelDiffs:
+          type: array
+          items:
+            $ref: "#/components/schemas/LabelDiff"
+        errors:
+          type: array
+          items:
+            type: string
+    FieldDiff:
+      type: object
+      required: [field, before, after]
+      properties:
+        field:
+          type: string
+        before: {}
+        after: {}
+    LabelDiff:
+      type: object
+      required: [key]
+      properties:
+        key:
+          type: string
+        before:
+          type: string
+        after:
+          type: string
     RelationCreateInput:
       type: object
       required:
@@ -5516,6 +5735,7 @@ components:
             union of backend writeJSONError codes and Console BFF synthesized
             snake_case codes.
           enum:
+            - bulk_resource_mutation_conflict
             - disclosure_policy_conflict
             - disclosure_policy_not_found
             - environment_not_found

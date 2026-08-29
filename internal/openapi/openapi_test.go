@@ -1,6 +1,6 @@
 // Package openapi_test verifies the embedded OpenAPI contract.
 // input: embedded OpenAPI YAML, kin-openapi parser, internal/model
-// output: OpenAPI schema, resource completeness, health observation, effective-value override, topology, pagination, execution, and closed error-enum tests
+// output: OpenAPI schema, resource completeness, health observation, effective-value override, bulk mutation, topology, pagination, execution, and closed error-enum tests
 // pos: Prevents documented API contracts from drifting from router behavior
 // note: if this file changes, update this header and module README.md.
 package openapi_test
@@ -54,6 +54,70 @@ func TestOpenAPIResourceHealthObservationContract(t *testing.T) {
 	patch := doc.Components.Schemas["ResourcePatchRequest"].Value.Properties["healthStatus"]
 	if patch == nil || patch.Value == nil || !patch.Value.Nullable {
 		t.Fatal("ResourcePatchRequest.healthStatus must allow null to clear the manual override")
+	}
+}
+
+func TestOpenAPIBulkResourceMutationContract(t *testing.T) {
+	loader := openapi3.NewLoader()
+	doc, err := loader.LoadFromData(openapi.YAML)
+	if err != nil {
+		t.Fatalf("failed to parse openapi.yaml: %v", err)
+	}
+
+	preview := doc.Paths.Value("/resources/bulk-mutations/preview")
+	confirm := doc.Paths.Value("/resources/bulk-mutations/confirm")
+	if preview == nil || preview.Post == nil || confirm == nil || confirm.Post == nil {
+		t.Fatal("bulk preview and confirm POST operations must be documented")
+	}
+	if preview.Post.RequestBody == nil || preview.Post.RequestBody.Value == nil || preview.Post.RequestBody.Value.Content.Get("application/json").Schema.Ref != "#/components/schemas/BulkResourceMutationRequest" {
+		t.Fatal("bulk preview must use BulkResourceMutationRequest")
+	}
+	if confirm.Post.RequestBody == nil || confirm.Post.RequestBody.Value == nil || confirm.Post.RequestBody.Value.Content.Get("application/json").Schema.Ref != "#/components/schemas/BulkResourceMutationConfirmRequest" {
+		t.Fatal("bulk confirm must use BulkResourceMutationConfirmRequest")
+	}
+	for name, operation := range map[string]*openapi3.Operation{"preview": preview.Post, "confirm": confirm.Post} {
+		for _, status := range []string{"200", "400", "401", "403"} {
+			if operation.Responses.Value(status) == nil {
+				t.Fatalf("bulk %s must document response %s", name, status)
+			}
+		}
+		if operation.Responses.Value("200").Value.Content.Get("application/json").Schema.Ref != "#/components/schemas/BulkResourcePreview" {
+			t.Fatalf("bulk %s must return BulkResourcePreview", name)
+		}
+	}
+	if confirm.Post.Responses.Value("409") == nil {
+		t.Fatal("bulk confirm must document reviewed-state conflicts as 409")
+	}
+
+	request := doc.Components.Schemas["BulkResourceMutationRequest"].Value
+	if request == nil || !slices.Contains(request.Required, "targets") {
+		t.Fatal("bulk request must require targets")
+	}
+	targets := request.Properties["targets"].Value
+	if targets == nil || targets.Items == nil || targets.Items.Value == nil || targets.Items.Ref != "#/components/schemas/BulkResourceMutationTarget" {
+		t.Fatal("bulk request targets must use BulkResourceMutationTarget items")
+	}
+	labels := request.Properties["labels"].Value
+	if labels == nil || request.Properties["labels"].Ref != "#/components/schemas/LabelOperations" {
+		t.Fatal("bulk request labels must use the explicit label operations schema")
+	}
+	for _, operation := range []string{"add", "update", "remove"} {
+		if labels.Properties[operation] == nil {
+			t.Fatalf("bulk labels missing %s operation", operation)
+		}
+	}
+
+	confirmRequest := doc.Components.Schemas["BulkResourceMutationConfirmRequest"].Value
+	if confirmRequest == nil || !slices.Contains(confirmRequest.Required, "request") || !slices.Contains(confirmRequest.Required, "reviewedFingerprint") {
+		t.Fatal("bulk confirm must require request and reviewedFingerprint")
+	}
+	if doc.Components.Schemas["BulkResourcePreview"].Value.Properties["items"] == nil || doc.Components.Schemas["BulkResourcePreviewItem"].Value.Properties["fieldDiffs"] == nil || doc.Components.Schemas["BulkResourcePreviewItem"].Value.Properties["labelDiffs"] == nil {
+		t.Fatal("bulk preview must expose per-resource items and field/label diffs")
+	}
+
+	errorSchema := doc.Components.Schemas["ErrorResponse"].Value.Properties["error"].Value
+	if errorSchema == nil || !slices.Contains(errorSchema.Enum, "bulk_resource_mutation_conflict") {
+		t.Fatal("ErrorResponse.error must include bulk_resource_mutation_conflict")
 	}
 }
 
@@ -457,6 +521,7 @@ func TestOpenAPIErrorResponseErrorIsClosedControlledErrorCodeEnum(t *testing.T) 
 	slices.Sort(got)
 
 	want := []string{
+		"bulk_resource_mutation_conflict",
 		"disclosure_policy_conflict",
 		"disclosure_policy_not_found",
 		"environment_not_found",
