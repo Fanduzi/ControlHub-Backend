@@ -1,8 +1,8 @@
 // Package api provides HTTP handlers and routing for the ControlHub REST API.
 // input: net/http, internal/service
-// output: handleListResourceRelations, handleCreateResourceRelation, handleDeleteResourceRelation
-// pos: HTTP handlers for relation listing and maintenance
-// note: if this file changes, update header and README.md
+// output: relation list/rule-discovery/create/delete handlers
+// pos: HTTP handlers for relation discovery, listing, and maintenance
+// note: if this file changes, update this header and module README.md.
 package api
 
 import (
@@ -62,6 +62,22 @@ func handleGetResourceMembers(relationService *service.RelationService) http.Han
 		writeJSON(w, http.StatusOK, struct {
 			Members []model.ClusterMemberView `json:"members"`
 		}{Members: members})
+	}
+}
+
+func handleGetResourceRelationRules(relationService *service.RelationService) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		id, err := parseUint64IDParam(chi.URLParam(r, "id"), "resource id")
+		if err != nil {
+			writeJSONError(w, http.StatusBadRequest, "validation_failed", err.Error())
+			return
+		}
+		rules, err := relationService.Rules(id)
+		if err != nil {
+			writeServiceError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, rules)
 	}
 }
 

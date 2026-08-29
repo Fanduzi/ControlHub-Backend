@@ -3,9 +3,9 @@
 // Package integration provides real-MySQL coverage for repository, API, and
 // migration behavior against disposable Testcontainers databases.
 // input: database/sql, testing, time, internal/model, internal/repository/mysql, internal/service
-// output: TestResource* and TestResourceService* integration cases, including observation-derived cluster rollups
-// pos: Proves resource CRUD, filtering, effective-health rollups, and create-with-profile atomicity against real MySQL
-// note: if this file changes, update header and README.md
+// output: TestResource* and TestResourceService* integration cases, including relationship rules and observation-derived cluster rollups
+// pos: Proves resource CRUD, filtering, relationship rules, effective-health rollups, and create-with-profile atomicity against real MySQL
+// note: if this file changes, update this header and module README.md.
 package integration
 
 import (

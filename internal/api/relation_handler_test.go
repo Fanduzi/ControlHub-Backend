@@ -1,7 +1,7 @@
 // Package api provides HTTP handlers and routing for the ControlHub REST API.
 // input: internal/api, internal/model, net/http, net/http/httptest, encoding/json
-// output: TestListResourceRelations, TestCreateResourceRelation*, TestDeleteResourceRelation*, TestCreateResourceRelationRejects*
-// pos: Validates relation listing per resource
+// output: Relation list/create/delete tests and the server-owned rule-discovery contract
+// pos: Validates relation listing, maintenance, rejection, and source-specific rule discovery
 // note: if this file changes, update header and README.md
 package api
 
@@ -43,6 +43,83 @@ func TestCreateResourceRelation(t *testing.T) {
 	}
 }
 
+func TestGetResourceRelationRules(t *testing.T) {
+	server := NewTestServer()
+	req := httptest.NewRequest(http.MethodGet, "/resources/1/relation-rules", nil)
+	rec := httptest.NewRecorder()
+
+	server.Router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+	var response struct {
+		SourceResourceID    uint64 `json:"sourceResourceId"`
+		SourceEnvironmentID uint64 `json:"sourceEnvironmentId"`
+		Rules               []struct {
+			RelationType        model.RelationType   `json:"relationType"`
+			TargetResourceTypes []model.ResourceType `json:"targetResourceTypes"`
+			SameEnvironment     bool                 `json:"sameEnvironment"`
+		} `json:"rules"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&response); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if response.SourceResourceID != 1 {
+		t.Fatalf("sourceResourceId = %d, want 1", response.SourceResourceID)
+	}
+	if response.SourceEnvironmentID != 1 {
+		t.Fatalf("sourceEnvironmentId = %d, want 1", response.SourceEnvironmentID)
+	}
+	want := map[model.RelationType]struct {
+		targets         []model.ResourceType
+		sameEnvironment bool
+	}{
+		model.RelationTypeMemberOf: {
+			targets:         []model.ResourceType{model.ResourceTypeDatabaseCluster},
+			sameEnvironment: true,
+		},
+		model.RelationTypeRunsOn: {
+			targets:         []model.ResourceType{model.ResourceTypeHost},
+			sameEnvironment: true,
+		},
+		model.RelationTypeReplicatesTo: {
+			targets:         []model.ResourceType{model.ResourceTypeDatabaseInstance},
+			sameEnvironment: true,
+		},
+		model.RelationTypeDependsOn: {targets: []model.ResourceType{
+			model.ResourceTypeHost,
+			model.ResourceTypeDatabaseInstance,
+			model.ResourceTypeDatabaseCluster,
+			model.ResourceTypeService,
+			model.ResourceTypeDomainName,
+			model.ResourceTypeVirtualIP,
+			model.ResourceTypeDatabaseProxy,
+			model.ResourceTypeControlPlaneComponent,
+		}},
+	}
+	if len(response.Rules) != len(want) {
+		t.Fatalf("rules = %#v, want %d source rules", response.Rules, len(want))
+	}
+	for _, rule := range response.Rules {
+		expected, ok := want[rule.RelationType]
+		if !ok {
+			t.Fatalf("unexpected relation type %q", rule.RelationType)
+		}
+		if rule.SameEnvironment != expected.sameEnvironment || strings.Join(resourceTypeStrings(rule.TargetResourceTypes), ",") != strings.Join(resourceTypeStrings(expected.targets), ",") {
+			t.Fatalf("rule %q = %#v, want targets %#v sameEnvironment %t", rule.RelationType, rule, expected.targets, expected.sameEnvironment)
+		}
+	}
+}
+
+func resourceTypeStrings(items []model.ResourceType) []string {
+	result := make([]string, len(items))
+	for i, item := range items {
+		result[i] = string(item)
+	}
+	return result
+}
+
 func TestCreateResourceRelationRejectsMissingTarget(t *testing.T) {
 	server := NewTestServer()
 	body := `{"toResourceId":999,"relationType":"depends_on"}`
@@ -57,6 +134,17 @@ func TestCreateResourceRelationRejectsMissingTarget(t *testing.T) {
 func TestCreateResourceRelationRejectsUnsupportedRelationType(t *testing.T) {
 	server := NewTestServer()
 	body := `{"toResourceId":2,"relationType":"unsupported"}`
+	req := httptest.NewRequest(http.MethodPost, "/resources/1/relations", strings.NewReader(body))
+	rec := httptest.NewRecorder()
+
+	server.Router.ServeHTTP(rec, req)
+
+	assertAPIError(t, rec, http.StatusBadRequest, "validation_failed")
+}
+
+func TestCreateResourceRelationRejectsDisallowedMatrixPair(t *testing.T) {
+	server := NewTestServer()
+	body := `{"toResourceId":2,"relationType":"member_of"}`
 	req := httptest.NewRequest(http.MethodPost, "/resources/1/relations", strings.NewReader(body))
 	rec := httptest.NewRecorder()
 

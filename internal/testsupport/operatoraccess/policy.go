@@ -1,7 +1,7 @@
-// Package operatoraccess describes protected API operation classes for tests.
+// Package operatoraccess describes every protected API operation and authorization class for tests.
 // input: standard library only
-// output: Class, Operation, All (including admin health-observation ingestion)
-// pos: Shared source of truth for router, OpenAPI, and integration authorization tests
+// output: Class, Operation, All (including health-observation ingestion, relationship-rule discovery, and admin-only ops metrics)
+// pos: Single source of truth shared by router, OpenAPI, and integration boundary tests
 // note: if this file changes, update this header and module README.md.
 package operatoraccess
 
@@ -58,6 +58,7 @@ func All() []Operation {
 		{AuthenticatedRead, "GET", "/resources/{id}", "/resources/1"},
 		{AuthenticatedRead, "GET", "/resources/{id}/profile", "/resources/1/profile"},
 		{AuthenticatedRead, "GET", "/resources/{id}/relations", "/resources/1/relations"},
+		{AuthenticatedRead, "GET", "/resources/{id}/relation-rules", "/resources/1/relation-rules"},
 		{AuthenticatedRead, "GET", "/resources/{id}/members", "/resources/1/members"},
 		{AuthenticatedRead, "GET", "/resources/{id}/topology", "/resources/1/topology"},
 		// Dictionary reads.

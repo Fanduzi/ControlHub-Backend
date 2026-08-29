@@ -1,14 +1,14 @@
 // Package service provides tests for resource and relation write flows.
 // input: internal/service write APIs, internal/model, testing
-// output: TestResourceService* and TestRelationService* functions
-// pos: Validates write-side business rules before repository persistence, including core CI manual identity
-// pos: Validates write-side business rules before repository persistence, including Database Proxy/Control Plane typed identity
+// output: TestResourceService* and TestRelationService* functions, including the complete relationship matrix
+// pos: Validates resource identity and complete relationship rules before repository persistence
 // note: if this file changes, update header and README.md
 package service
 
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -402,8 +402,8 @@ func TestNormalizeResourceIdentity(t *testing.T) {
 func TestRelationServiceCreate(t *testing.T) {
 	repo := &fakeRelationWriteRepo{
 		resources: map[uint64]model.Resource{
-			testResource1ID: {ID: testResource1ID, Name: "order-api-prod"},
-			testResource2ID: {ID: testResource2ID, Name: "order-mysql-prod"},
+			testResource1ID: {ID: testResource1ID, ResourceType: model.ResourceTypeService, Name: "order-api-prod"},
+			testResource2ID: {ID: testResource2ID, ResourceType: model.ResourceTypeDatabaseInstance, Name: "order-mysql-prod"},
 		},
 	}
 	svc := NewRelationService(repo)
@@ -418,6 +418,132 @@ func TestRelationServiceCreate(t *testing.T) {
 	if created.FromResourceID != testResource1ID {
 		t.Fatalf("expected fromResourceID %d, got %d", testResource1ID, created.FromResourceID)
 	}
+}
+
+func TestRelationServiceCreateEnforcesRelationshipMatrix(t *testing.T) {
+	resourceTypes := []model.ResourceType{
+		model.ResourceTypeHost,
+		model.ResourceTypeDatabaseInstance,
+		model.ResourceTypeDatabaseCluster,
+		model.ResourceTypeService,
+		model.ResourceTypeDomainName,
+		model.ResourceTypeVirtualIP,
+		model.ResourceTypeDatabaseProxy,
+		model.ResourceTypeControlPlaneComponent,
+	}
+	relationTypes := []model.RelationType{
+		model.RelationTypeMemberOf,
+		model.RelationTypeRunsOn,
+		model.RelationTypePointsTo,
+		model.RelationTypeFronts,
+		model.RelationTypeManages,
+		model.RelationTypeReplicatesTo,
+		model.RelationTypeDependsOn,
+	}
+	allowed := map[model.RelationType]map[model.ResourceType][]model.ResourceType{
+		model.RelationTypeMemberOf: {
+			model.ResourceTypeDatabaseInstance: {model.ResourceTypeDatabaseCluster},
+		},
+		model.RelationTypeRunsOn: {
+			model.ResourceTypeService:               {model.ResourceTypeHost},
+			model.ResourceTypeDatabaseInstance:      {model.ResourceTypeHost},
+			model.ResourceTypeDatabaseProxy:         {model.ResourceTypeHost},
+			model.ResourceTypeControlPlaneComponent: {model.ResourceTypeHost},
+		},
+		model.RelationTypePointsTo: {
+			model.ResourceTypeDomainName: {
+				model.ResourceTypeVirtualIP,
+				model.ResourceTypeService,
+				model.ResourceTypeDatabaseProxy,
+				model.ResourceTypeDatabaseCluster,
+				model.ResourceTypeDatabaseInstance,
+			},
+		},
+		model.RelationTypeFronts: {
+			model.ResourceTypeVirtualIP: {
+				model.ResourceTypeDatabaseProxy,
+				model.ResourceTypeDatabaseCluster,
+				model.ResourceTypeDatabaseInstance,
+			},
+			model.ResourceTypeDatabaseProxy: {
+				model.ResourceTypeDatabaseProxy,
+				model.ResourceTypeDatabaseCluster,
+				model.ResourceTypeDatabaseInstance,
+			},
+		},
+		model.RelationTypeManages: {
+			model.ResourceTypeControlPlaneComponent: {
+				model.ResourceTypeDatabaseCluster,
+				model.ResourceTypeDatabaseInstance,
+			},
+		},
+		model.RelationTypeReplicatesTo: {
+			model.ResourceTypeDatabaseInstance: {model.ResourceTypeDatabaseInstance},
+		},
+	}
+	sameEnvironment := map[model.RelationType]bool{
+		model.RelationTypeMemberOf:     true,
+		model.RelationTypeRunsOn:       true,
+		model.RelationTypeFronts:       true,
+		model.RelationTypeReplicatesTo: true,
+	}
+
+	for _, relationType := range relationTypes {
+		for _, fromType := range resourceTypes {
+			for _, toType := range resourceTypes {
+				pairAllowed := relationType == model.RelationTypeDependsOn || containsResourceType(allowed[relationType][fromType], toType)
+				for _, crossEnvironment := range []bool{false, true} {
+					wantAllowed := pairAllowed && (!crossEnvironment || !sameEnvironment[relationType])
+					t.Run(fmt.Sprintf("%s/%s/%s/cross_environment=%t", relationType, fromType, toType, crossEnvironment), func(t *testing.T) {
+						repo := &fakeRelationWriteRepo{resources: map[uint64]model.Resource{
+							testResource1ID: {ID: testResource1ID, ResourceType: fromType, EnvironmentID: testEnvID},
+							testResource2ID: {ID: testResource2ID, ResourceType: toType, EnvironmentID: testEnvID},
+						}}
+						if crossEnvironment {
+							target := repo.resources[testResource2ID]
+							target.EnvironmentID++
+							repo.resources[testResource2ID] = target
+						}
+
+						_, err := NewRelationService(repo).Create(context.Background(), testResource1ID, model.RelationCreateInput{
+							ToResourceID: testResource2ID,
+							RelationType: relationType,
+						})
+						if wantAllowed && err != nil {
+							t.Fatalf("expected relation to be allowed, got %v", err)
+						}
+						if !wantAllowed && !errors.Is(err, ErrValidationFailed) {
+							t.Fatalf("expected ErrValidationFailed, got %v", err)
+						}
+					})
+				}
+			}
+		}
+	}
+
+	for _, relationType := range relationTypes {
+		t.Run(string(relationType)+"/self", func(t *testing.T) {
+			repo := &fakeRelationWriteRepo{resources: map[uint64]model.Resource{
+				testResource1ID: {ID: testResource1ID, ResourceType: model.ResourceTypeDatabaseInstance, EnvironmentID: testEnvID},
+			}}
+			_, err := NewRelationService(repo).Create(context.Background(), testResource1ID, model.RelationCreateInput{
+				ToResourceID: testResource1ID,
+				RelationType: relationType,
+			})
+			if !errors.Is(err, ErrValidationFailed) {
+				t.Fatalf("expected ErrValidationFailed, got %v", err)
+			}
+		})
+	}
+}
+
+func containsResourceType(items []model.ResourceType, want model.ResourceType) bool {
+	for _, item := range items {
+		if item == want {
+			return true
+		}
+	}
+	return false
 }
 
 func TestRelationServiceCreateRejectsMissingTarget(t *testing.T) {
@@ -454,8 +580,8 @@ func TestRelationServiceCreateRejectsUnsupportedRelationType(t *testing.T) {
 func TestRelationServiceCreateRejectsDuplicate(t *testing.T) {
 	repo := &fakeRelationWriteRepo{
 		resources: map[uint64]model.Resource{
-			testResource1ID: {ID: testResource1ID, Name: "order-api-prod"},
-			testResource2ID: {ID: testResource2ID, Name: "order-mysql-prod"},
+			testResource1ID: {ID: testResource1ID, ResourceType: model.ResourceTypeService, Name: "order-api-prod"},
+			testResource2ID: {ID: testResource2ID, ResourceType: model.ResourceTypeDatabaseInstance, Name: "order-mysql-prod"},
 		},
 		createErr: ErrRelationConflict,
 	}

@@ -2,20 +2,22 @@
 
 // Package integration provides real-MySQL coverage for inventory mutation audit atomicity.
 // input: database/sql, encoding/json, strings, testing, internal/model, internal/repository/mysql
-// output: TestInventoryAuditUpdateSuccess, TestInventoryAuditUpdateRollsBackOnAuditFailure, TestInventoryAuditDomainNameAndVirtualIPProfiles
-// pos: Proves resource and typed-profile field changes commit with audit evidence against disposable MySQL
-// note: if this file changes, update header and README.md
+// output: Inventory resource/profile/relationship audit atomicity tests, including relationship-matrix rejection
+// pos: Proves inventory field changes and relationship rules commit atomically with audit evidence against disposable MySQL
+// note: if this file changes, update this header and module README.md.
 package integration
 
 import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"strings"
 	"testing"
 
 	"github.com/fan/controlhub/internal/model"
 	"github.com/fan/controlhub/internal/repository/mysql"
+	"github.com/fan/controlhub/internal/service"
 )
 
 func TestInventoryAuditUpdateSuccess(t *testing.T) {
@@ -135,6 +137,92 @@ func TestInventoryAuditProfileAndRelationshipUseFieldDiffContract(t *testing.T) 
 	}
 	assertLatestAuditChange(t, db, from.ID, "relationships.depends_on", model.AuditChangeAdd)
 	assertLatestAuditChange(t, db, to.ID, "relationships.depends_on", model.AuditChangeAdd)
+}
+
+func TestInventoryRelationshipMatrixAndAuditAtomicity(t *testing.T) {
+	db := setupTestDB(t)
+	ctx := context.Background()
+	resources := mysql.NewResourceRepository(db)
+	createResource := func(name string, resourceType model.ResourceType, environmentID uint64) *model.Resource {
+		t.Helper()
+		input := inventoryAuditResource(name)
+		input.ResourceType = resourceType
+		input.EnvironmentID = environmentID
+		created, err := resources.CreateResource(ctx, input)
+		if err != nil {
+			t.Fatalf("create %s: %v", name, err)
+		}
+		return created
+	}
+
+	instance := createResource("matrix-instance", model.ResourceTypeDatabaseInstance, envProd)
+	cluster := createResource("matrix-cluster", model.ResourceTypeDatabaseCluster, envProd)
+	stagingCluster := createResource("matrix-staging-cluster", model.ResourceTypeDatabaseCluster, envStaging)
+	rollbackCluster := createResource("matrix-rollback-cluster", model.ResourceTypeDatabaseCluster, envProd)
+	relations := service.NewRelationService(mysql.NewRelationRepository(db))
+
+	created, err := relations.CreateInventory(ctx, ownerDBA, instance.ID, model.RelationCreateInput{
+		ToResourceID: cluster.ID,
+		RelationType: model.RelationTypeMemberOf,
+	})
+	if err != nil {
+		t.Fatalf("create allowed member_of: %v", err)
+	}
+	assertLatestAuditChange(t, db, instance.ID, "relationships.member_of", model.AuditChangeAdd)
+	assertLatestAuditChange(t, db, cluster.ID, "relationships.member_of", model.AuditChangeAdd)
+
+	_, err = relations.CreateInventory(ctx, ownerDBA, instance.ID, model.RelationCreateInput{
+		ToResourceID: stagingCluster.ID,
+		RelationType: model.RelationTypeMemberOf,
+	})
+	if !errors.Is(err, service.ErrValidationFailed) {
+		t.Fatalf("cross-environment member_of error = %v, want ErrValidationFailed", err)
+	}
+	assertRelationAndAuditCounts(t, db, instance.ID, stagingCluster.ID, 0, 0)
+
+	if _, err := db.Exec(`create trigger ch77_force_inventory_relation_audit_fail
+		before insert on audit_events for each row
+		signal sqlstate '45000' set message_text = 'forced audit failure'`); err != nil {
+		t.Fatalf("create audit failure trigger: %v", err)
+	}
+	t.Cleanup(func() { _, _ = db.Exec(`drop trigger if exists ch77_force_inventory_relation_audit_fail`) })
+
+	_, err = relations.CreateInventory(ctx, ownerDBA, instance.ID, model.RelationCreateInput{
+		ToResourceID: rollbackCluster.ID,
+		RelationType: model.RelationTypeMemberOf,
+	})
+	if err == nil {
+		t.Fatal("expected relationship create to roll back when audit insert fails")
+	}
+	assertRelationAndAuditCounts(t, db, instance.ID, rollbackCluster.ID, 0, 0)
+
+	if err := relations.DeleteInventory(ctx, ownerDBA, created.ID); err == nil {
+		t.Fatal("expected relationship delete to roll back when audit insert fails")
+	}
+	assertRelationAndAuditCounts(t, db, instance.ID, cluster.ID, 1, 1)
+
+	if _, err := db.Exec(`drop trigger ch77_force_inventory_relation_audit_fail`); err != nil {
+		t.Fatalf("drop audit failure trigger: %v", err)
+	}
+	if err := relations.DeleteInventory(ctx, ownerDBA, created.ID); err != nil {
+		t.Fatalf("delete allowed member_of: %v", err)
+	}
+	assertLatestAuditChange(t, db, instance.ID, "relationships.member_of", model.AuditChangeRemove)
+	assertLatestAuditChange(t, db, cluster.ID, "relationships.member_of", model.AuditChangeRemove)
+}
+
+func assertRelationAndAuditCounts(t *testing.T, db *sql.DB, fromID, toID uint64, wantRelations, wantAudits int) {
+	t.Helper()
+	var relationCount, auditCount int
+	if err := db.QueryRow(`select count(*) from resource_relations where from_resource_id = ? and to_resource_id = ?`, fromID, toID).Scan(&relationCount); err != nil {
+		t.Fatalf("count relationships: %v", err)
+	}
+	if err := db.QueryRow(`select count(*) from audit_events where target_resource_id = ?`, toID).Scan(&auditCount); err != nil {
+		t.Fatalf("count relationship audits: %v", err)
+	}
+	if relationCount != wantRelations || auditCount != wantAudits {
+		t.Fatalf("relationship/audit counts = %d/%d, want %d/%d", relationCount, auditCount, wantRelations, wantAudits)
+	}
 }
 
 func assertLatestAuditChange(t *testing.T, db interface {

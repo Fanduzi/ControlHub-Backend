@@ -8,7 +8,7 @@ MySQL-backed integration tests run against disposable Testcontainers databases.
 | health_observation_test.go | Real-MySQL latest observation, freshness, effective filtering, no-audit, and atomic manual override contracts |
 | testenv_test.go | Starts MySQL, applies migrations, and provides database helpers |
 | resource_test.go | Resource repository CRUD/filtering, observation-derived cluster rollups, create-with-profile atomicity, profile validation, and PATCH partial-merge semantics against real MySQL |
-| inventory_audit_test.go | Real-MySQL inventory field-diff success, audit-failure rollback, all typed-profile representations, and per-CI relationship evidence |
+| inventory_audit_test.go | Real-MySQL inventory field-diff success, all typed-profile representations, relationship-matrix behavior, per-CI evidence, and create/delete audit rollback |
 | typed_profile_identity_test.go | Real-MySQL create/read/edit for the four core typed profiles, minimum manual identity rejection, worker subtype, labels-as-classification, and T01 profile audit |
 | resource_identity_test.go | MySQL identity normalization/uniqueness, immutable ID/origin, and atomic identity-plus-field-audit rollback coverage |
 | resource_identity_migration_test.go | Fail-loud v21 migration preflight for duplicate legacy external IDs before schema mutation |
