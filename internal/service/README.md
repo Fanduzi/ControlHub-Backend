@@ -17,6 +17,10 @@ Business logic layer with interface-based repository dependencies. Each service 
 | topology_service.go | Environment-scoped topology workspace and rooted graph traversal with default depth 2, deterministic node/edge caps, and candidate starts |
 | topology_service_test.go | Topology traversal tests for depth, direction, cycles, caps, environment scope, and candidate starts |
 | topology_semantics_test.go | Topology semantic classification tests for roles, layers, replication metadata, and problem summaries |
+| ingestion_preview.go | Strict bounded CSV/JSON parsing plus side-effect-free exact-identity ingestion classification, diffs, and drift fingerprinting |
+| ingestion_preview_test.go | Parser equivalence/guard and pure preview precedence, conflict, diff, fingerprint, and manual-override exclusion tests |
+| ingestion_preview.go | Strict bounded CSV/JSON parsing plus side-effect-free exact-identity ingestion classification, diffs, drift fingerprinting, and parser guards |
+| ingestion_preview_test.go | Parser equivalence/guard and pure preview precedence, conflict, diff, fingerprint, and manual-override exclusion tests |
 | audit_service.go | Audit event listing (global and per-resource) |
 | auth_service.go | Login, versioned Backend Bearer issuance, current-state VerifyToken (Authorization Version), role/disable/password invalidation, legacy-to-Argon2id transparent migration |
 | auth_audit_emitter.go | AuthAuditEmitter interface, NoopEmitter, and BoundedAuthAuditEmitter decorator capping untrusted Bearer rejection persistence at 60/min per process (fail-open) |
@@ -63,6 +67,7 @@ Business logic layer with interface-based repository dependencies. Each service 
 - `PreviewBulkResourceMutation` — pure preview of ordered targets against current snapshots; `ResourceService` delegates persisted preview/confirm reads to its resource repository
 - `BulkResourceMutationRequest`, `BulkResourceMutationTarget`, `ResourceMutationSnapshot`, `LabelOperations`, `BulkResourcePreview` — bulk mutation preview contract values
 - `TopologyService.BuildTopology` — builds rooted or environment-start topology responses with node/edge caps and `truncated`
+- `ParseIngestion` and `PreviewIngestion` provide the controlled, repository-free issue #83 parsing and preview seam
 - `NewMemoryUserStore`, `AuthService.WithClock`, `AuthService.ChangeUserRole`/`SetUserActive`/`ResetUserPassword` — Authorization Version seams
 - `AuthAuditEmitter`, `NoopEmitter` — fail-open authentication/authorization audit emission interface and discard implementation
 - `BoundedAuthAuditEmitter`, `NewBoundedAuthAuditEmitter`, `BearerRejectBudget`, `NewBearerRejectBudget`, `ProcessBearerRejectBudget`, `BoundedBearerRejectedLimit`, `AuthAuditSuppressedRejections` — process-shared budget capping untrusted Bearer rejection persistence at 60 events/min per server process (all routers draw from one budget); suppression counter exposed only via the admin auth-audit metrics surface
