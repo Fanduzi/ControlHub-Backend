@@ -1,7 +1,7 @@
 // Package service provides controlled CI ingestion parsing, preview reconciliation, and confirm service delegation.
 // input: stdlib CSV/JSON/SHA-256 utilities, context, and internal/model identity/relation types
-// output: ParseIngestion, PreviewIngestion, ResourceService preview/confirm delegation, immutable-type conflicts, additive observed diffs, and validation contracts
-// pos: Issue #83 ingestion checkpoint and service-owned validation before repository persistence
+// output: ParseIngestion, PreviewIngestion, User/collector confirmation delegation, immutable-type conflicts, additive observed diffs, and validation contracts
+// pos: Issue #83 ingestion checkpoint plus issue #87 collector-confirmation seam before repository persistence
 // note: if this file changes, update this header and module README.md.
 package service
 
@@ -24,14 +24,16 @@ import (
 )
 
 const (
-	MaxIngestionRows     = 500
-	MaxIngestionRowBytes = 64 << 10
-	MaxIngestionBytes    = MaxIngestionRows * MaxIngestionRowBytes
+	MaxIngestionRows        = 500
+	MaxIngestionRowBytes    = 64 << 10
+	MaxIngestionBytes       = MaxIngestionRows * MaxIngestionRowBytes
+	MaxCollectorScanIDBytes = 255
 )
 
 var (
-	ErrIngestionConflict            = errors.New("ingestion conflict")
-	ErrIngestionFingerprintMismatch = errors.New("ingestion fingerprint mismatch")
+	ErrIngestionConflict                 = errors.New("ingestion conflict")
+	ErrIngestionFingerprintMismatch      = errors.New("ingestion fingerprint mismatch")
+	ErrCollectorIngestionMetadataInvalid = errors.New("collector ingestion metadata is invalid")
 )
 
 type ObservedValueInput struct {
@@ -105,8 +107,17 @@ type IngestionPreview struct {
 	Rows        []IngestionPreviewRow `json:"rows"`
 }
 
+type CollectorIngestionMetadata struct {
+	ScanID     string
+	ScanResult model.CollectorScanResult
+}
+
 type ingestionConfirmRepository interface {
 	ConfirmIngestion(ctx context.Context, rows []IngestionRow, reviewedFingerprint string, actorUserID uint64) (*IngestionPreview, error)
+}
+
+type collectorIngestionConfirmRepository interface {
+	ConfirmCollectorIngestion(ctx context.Context, principalID uint64, rows []IngestionRow, reviewedFingerprint string, metadata CollectorIngestionMetadata) (*IngestionPreview, error)
 }
 
 type ingestionPreviewRepository interface {
@@ -139,6 +150,40 @@ func (s *ResourceService) ConfirmIngestion(ctx context.Context, actorUserID uint
 		return nil, errors.New("ingestion confirmation repository is required")
 	}
 	return repo.ConfirmIngestion(ctx, rows, reviewedFingerprint, actorUserID)
+}
+
+func (s *ResourceService) ConfirmCollectorIngestion(ctx context.Context, principalID uint64, rows []IngestionRow, reviewedFingerprint string, metadata CollectorIngestionMetadata) (*IngestionPreview, error) {
+	if principalID == 0 {
+		return nil, errors.New("collector principal is required")
+	}
+	metadata.ScanID = strings.TrimSpace(metadata.ScanID)
+	metadata.ScanResult = model.CollectorScanResult(strings.TrimSpace(string(metadata.ScanResult)))
+	if err := ValidateCollectorIngestionMetadata(metadata); err != nil {
+		return nil, fmt.Errorf("%w: %w", ErrValidationFailed, err)
+	}
+	if strings.TrimSpace(reviewedFingerprint) == "" {
+		return nil, fmt.Errorf("%w: reviewed fingerprint is required", ErrValidationFailed)
+	}
+	if err := ValidateIngestionRows(rows); err != nil {
+		return nil, fmt.Errorf("%w: %v", ErrValidationFailed, err)
+	}
+	repo, ok := s.repo.(collectorIngestionConfirmRepository)
+	if !ok {
+		return nil, errors.New("collector ingestion confirmation repository is required")
+	}
+	return repo.ConfirmCollectorIngestion(ctx, principalID, rows, reviewedFingerprint, metadata)
+}
+
+func ValidateCollectorIngestionMetadata(metadata CollectorIngestionMetadata) error {
+	if strings.TrimSpace(metadata.ScanID) == "" || len(metadata.ScanID) > MaxCollectorScanIDBytes {
+		return fmt.Errorf("%w: collector scan ID is required and must not exceed %d bytes", ErrCollectorIngestionMetadataInvalid, MaxCollectorScanIDBytes)
+	}
+	switch metadata.ScanResult {
+	case model.CollectorScanResultComplete, model.CollectorScanResultIncomplete, model.CollectorScanResultFailed:
+		return nil
+	default:
+		return fmt.Errorf("%w: collector scan result must be complete, incomplete, or failed", ErrCollectorIngestionMetadataInvalid)
+	}
 }
 
 func ValidateIngestionRows(rows []IngestionRow) error {

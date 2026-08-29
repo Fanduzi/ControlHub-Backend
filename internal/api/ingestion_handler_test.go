@@ -11,7 +11,11 @@ import (
 	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
+
+	"github.com/fan/controlhub/internal/model"
+	"github.com/fan/controlhub/internal/service"
 )
 
 func TestIngestionPreviewAndConfirmHTTP(t *testing.T) {
@@ -67,19 +71,109 @@ func TestIngestionHTTPControlledErrors(t *testing.T) {
 	}
 }
 
+func TestCollectorConfirmRequiresScanMetadata(t *testing.T) {
+	server := NewTestServer()
+	machine := &scopeMatrixMachineService{granted: model.MachineScopeInventoryIngest}
+	server.deps.MachineCredentialService = machine
+	rows, err := service.ParseIngestion("json", []byte(`[{"environmentId":1,"ciType":"host","name":"ingested-host"}]`))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	response := ingestRequestWithAuthorization(t, NewRouter(server.deps), "/admin/ingestions/confirm", "json", `[{"environmentId":1,"ciType":"host","name":"ingested-host"}]`, service.PreviewIngestion(rows, nil).Fingerprint, "Bearer chmp_route-test.secret")
+	if response.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400: %s", response.Code, response.Body.String())
+	}
+}
+
+func TestCollectorConfirmPropagatesNormalizedScanMetadata(t *testing.T) {
+	server := NewTestServer()
+	server.deps.MachineCredentialService = &scopeMatrixMachineService{granted: model.MachineScopeInventoryIngest}
+	payload := `[{"environmentId":1,"ciType":"host","name":"ingested-host"}]`
+	rows, err := service.ParseIngestion("json", []byte(payload))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	response := ingestRequestWithFields(t, NewRouter(server.deps), "/admin/ingestions/confirm", payload, []ingestionFormField{
+		{"format", "json"},
+		{"fingerprint", service.PreviewIngestion(rows, nil).Fingerprint},
+		{"collectorScanId", " scan-123 "},
+		{"collectorScanResult", " complete "},
+	}, "Bearer chmp_route-test.secret")
+	if response.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200: %s", response.Code, response.Body.String())
+	}
+	if server.resourceRepo.collectorConfirmCalls != 1 || server.resourceRepo.collectorPrincipalID != 91 {
+		t.Fatalf("collector calls/principal = %d/%d, want 1/91", server.resourceRepo.collectorConfirmCalls, server.resourceRepo.collectorPrincipalID)
+	}
+	if got, want := server.resourceRepo.collectorMetadata, (service.CollectorIngestionMetadata{ScanID: "scan-123", ScanResult: model.CollectorScanResultComplete}); got != want {
+		t.Fatalf("collector metadata = %+v, want %+v", got, want)
+	}
+}
+
+func TestIngestionScanFieldsStayMachineConfirmOnly(t *testing.T) {
+	payload := `[{"environmentId":1,"ciType":"host","name":"ingested-host"}]`
+	rows, err := service.ParseIngestion("json", []byte(payload))
+	if err != nil {
+		t.Fatal(err)
+	}
+	fingerprint := service.PreviewIngestion(rows, nil).Fingerprint
+
+	for name, tc := range map[string]struct {
+		path, authorization string
+		fields              []ingestionFormField
+	}{
+		"machine duplicate scan ID":     {"/admin/ingestions/confirm", "Bearer chmp_route-test.secret", []ingestionFormField{{"format", "json"}, {"fingerprint", fingerprint}, {"collectorScanId", "a"}, {"collectorScanId", "b"}, {"collectorScanResult", "complete"}}},
+		"machine duplicate scan result": {"/admin/ingestions/confirm", "Bearer chmp_route-test.secret", []ingestionFormField{{"format", "json"}, {"fingerprint", fingerprint}, {"collectorScanId", "scan-1"}, {"collectorScanResult", "complete"}, {"collectorScanResult", "failed"}}},
+		"machine missing scan result":   {"/admin/ingestions/confirm", "Bearer chmp_route-test.secret", []ingestionFormField{{"format", "json"}, {"fingerprint", fingerprint}, {"collectorScanId", "scan-1"}}},
+		"machine blank scan ID":         {"/admin/ingestions/confirm", "Bearer chmp_route-test.secret", []ingestionFormField{{"format", "json"}, {"fingerprint", fingerprint}, {"collectorScanId", " "}, {"collectorScanResult", "complete"}}},
+		"machine oversized scan ID":     {"/admin/ingestions/confirm", "Bearer chmp_route-test.secret", []ingestionFormField{{"format", "json"}, {"fingerprint", fingerprint}, {"collectorScanId", strings.Repeat("x", service.MaxCollectorScanIDBytes+1)}, {"collectorScanResult", "complete"}}},
+		"machine invalid result":        {"/admin/ingestions/confirm", "Bearer chmp_route-test.secret", []ingestionFormField{{"format", "json"}, {"fingerprint", fingerprint}, {"collectorScanId", "scan-1"}, {"collectorScanResult", "unknown"}}},
+		"User confirm scan fields":      {"/admin/ingestions/confirm", "", []ingestionFormField{{"format", "json"}, {"fingerprint", fingerprint}, {"collectorScanId", "scan-1"}, {"collectorScanResult", "complete"}}},
+		"preview scan fields":           {"/admin/ingestions/preview", "", []ingestionFormField{{"format", "json"}, {"collectorScanId", "scan-1"}, {"collectorScanResult", "complete"}}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			server := NewTestServer()
+			if tc.authorization != "" {
+				server.deps.MachineCredentialService = &scopeMatrixMachineService{granted: model.MachineScopeInventoryIngest}
+			}
+			router := http.Handler(server.Router)
+			if tc.authorization != "" {
+				router = NewRouter(server.deps)
+			}
+			response := ingestRequestWithFields(t, router, tc.path, payload, tc.fields, tc.authorization)
+			if response.Code != http.StatusBadRequest {
+				t.Fatalf("status = %d, want 400: %s", response.Code, response.Body.String())
+			}
+		})
+	}
+}
+
 func ingestRequest(t *testing.T, router http.Handler, path, format, payload, fingerprint string) *httptest.ResponseRecorder {
+	return ingestRequestWithAuthorization(t, router, path, format, payload, fingerprint, "")
+}
+
+func ingestRequestWithAuthorization(t *testing.T, router http.Handler, path, format, payload, fingerprint, authorization string) *httptest.ResponseRecorder {
+	fields := []ingestionFormField{{"format", format}}
+	if fingerprint != "" {
+		fields = append(fields, ingestionFormField{"fingerprint", fingerprint})
+	}
+	return ingestRequestWithFields(t, router, path, payload, fields, authorization)
+}
+
+type ingestionFormField struct{ name, value string }
+
+func ingestRequestWithFields(t *testing.T, router http.Handler, path, payload string, fields []ingestionFormField, authorization string) *httptest.ResponseRecorder {
 	t.Helper()
 	var body bytes.Buffer
 	form := multipart.NewWriter(&body)
-	if err := form.WriteField("format", format); err != nil {
-		t.Fatal(err)
-	}
-	if fingerprint != "" {
-		if err := form.WriteField("fingerprint", fingerprint); err != nil {
+	for _, field := range fields {
+		if err := form.WriteField(field.name, field.value); err != nil {
 			t.Fatal(err)
 		}
 	}
-	file, err := form.CreateFormFile("file", "ingestion."+format)
+	file, err := form.CreateFormFile("file", "ingestion.json")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -91,6 +185,9 @@ func ingestRequest(t *testing.T, router http.Handler, path, format, payload, fin
 	}
 	req := httptest.NewRequest(http.MethodPost, path, &body)
 	req.Header.Set("Content-Type", form.FormDataContentType())
+	if authorization != "" {
+		req.Header.Set("Authorization", authorization)
+	}
 	response := httptest.NewRecorder()
 	router.ServeHTTP(response, req)
 	return response

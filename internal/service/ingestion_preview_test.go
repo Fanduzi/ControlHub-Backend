@@ -1,18 +1,36 @@
 // Package service provides tests for controlled CI ingestion parsing and preview reconciliation.
 // input: internal/service ingestion APIs, internal/model, testing
-// output: TestParseIngestion* and TestPreviewIngestion* parser, conflict, additive-diff, and fingerprint cases
-// pos: Validates strict parsing and pure exact-identity preview behavior, including immutable types and observation omissions
+// output: TestParseIngestion*, TestPreviewIngestion*, and TestConfirmCollectorIngestion* parser, preview, and collector-confirmation cases
+// pos: Validates strict parsing, pure exact-identity preview behavior, and normalized collector metadata delegation
 // note: if this file changes, update header and README.md
 package service
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
+	"errors"
 	"strings"
 	"testing"
 
 	"github.com/fan/controlhub/internal/model"
 )
+
+type collectorIngestionTestRepo struct {
+	*fakeResourceWriteRepo
+	principalID uint64
+	metadata    CollectorIngestionMetadata
+}
+
+func (r *collectorIngestionTestRepo) ConfirmCollectorIngestion(_ context.Context, principalID uint64, rows []IngestionRow, fingerprint string, metadata CollectorIngestionMetadata) (*IngestionPreview, error) {
+	r.principalID = principalID
+	r.metadata = metadata
+	preview := PreviewIngestion(rows, nil)
+	if preview.Fingerprint != fingerprint {
+		return &preview, ErrIngestionFingerprintMismatch
+	}
+	return &preview, nil
+}
 
 func TestParseIngestionCSVJSONEquivalent(t *testing.T) {
 	j := `[{
@@ -53,6 +71,23 @@ func TestParseIngestionRejectsUnsafeInput(t *testing.T) {
 				t.Fatal("expected rejection")
 			}
 		})
+	}
+}
+
+func TestConfirmCollectorIngestionNormalizesAndValidatesMetadata(t *testing.T) {
+	repo := &collectorIngestionTestRepo{fakeResourceWriteRepo: &fakeResourceWriteRepo{resources: map[uint64]model.Resource{}}}
+	service := newResourceServiceForTest(repo)
+	rows := []IngestionRow{{EnvironmentID: 1, CIType: model.ResourceTypeHost, Name: "collector-host"}}
+	fingerprint := PreviewIngestion(rows, nil).Fingerprint
+
+	if _, err := service.ConfirmCollectorIngestion(context.Background(), 9, rows, fingerprint, CollectorIngestionMetadata{ScanID: " scan-9 ", ScanResult: " complete "}); err != nil {
+		t.Fatal(err)
+	}
+	if repo.principalID != 9 || repo.metadata != (CollectorIngestionMetadata{ScanID: "scan-9", ScanResult: model.CollectorScanResultComplete}) {
+		t.Fatalf("collector propagation = principal %d metadata %+v", repo.principalID, repo.metadata)
+	}
+	if err := ValidateCollectorIngestionMetadata(CollectorIngestionMetadata{ScanID: strings.Repeat("x", MaxCollectorScanIDBytes+1), ScanResult: model.CollectorScanResultComplete}); !errors.Is(err, ErrCollectorIngestionMetadataInvalid) {
+		t.Fatalf("oversized scan metadata error = %v", err)
 	}
 }
 

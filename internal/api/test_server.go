@@ -1,7 +1,7 @@
 // Package api provides HTTP handlers and routing for the ControlHub REST API.
 // input: internal/api, internal/model, internal/service, net/http
-// output: TestServer struct, NewTestServer with fake audit environment, batch-profile, relation, health, effective-value, bulk preview/confirm, topology, and ingestion data
-// pos: Test infrastructure — fake repositories for typed profiles, completeness relations, health observations, effective values, bulk mutation review, topology candidates, ingestion confirmation, and a pre-wired handler router
+// output: TestServer struct, NewTestServer with fake audit environment, batch-profile, relation, health, effective-value, bulk preview/confirm, topology, and User/collector ingestion data
+// pos: Test infrastructure — fake repositories for typed profiles, completeness relations, health observations, effective values, bulk mutation review, topology candidates, User/collector ingestion confirmation, and a pre-wired handler router
 // note: if this file changes, update this header and module README.md.
 package api
 
@@ -18,19 +18,23 @@ import (
 )
 
 type TestServer struct {
-	Router http.Handler
-	deps   Dependencies
+	Router       http.Handler
+	deps         Dependencies
+	resourceRepo *fakeResourceRepo
 }
 
 type fakeResourceRepo struct {
-	resources       map[uint64]model.Resource
-	listOrder       []uint64
-	profiles        map[uint64]*model.ResourceProfileResponse
-	effectiveValues map[uint64]map[string]model.EffectiveValue
-	nextID          uint64
-	now             time.Time
-	previewCalls    int
-	confirmCalls    int
+	resources             map[uint64]model.Resource
+	listOrder             []uint64
+	profiles              map[uint64]*model.ResourceProfileResponse
+	effectiveValues       map[uint64]map[string]model.EffectiveValue
+	nextID                uint64
+	now                   time.Time
+	previewCalls          int
+	confirmCalls          int
+	collectorConfirmCalls int
+	collectorPrincipalID  uint64
+	collectorMetadata     service.CollectorIngestionMetadata
 }
 
 func (f *fakeResourceRepo) GetEffectiveValues(_ context.Context, resourceID uint64) (map[string]model.EffectiveValue, error) {
@@ -86,6 +90,13 @@ func (f *fakeResourceRepo) ConfirmIngestion(_ context.Context, rows []service.In
 		return &preview, service.ErrIngestionFingerprintMismatch
 	}
 	return &preview, nil
+}
+
+func (f *fakeResourceRepo) ConfirmCollectorIngestion(ctx context.Context, principalID uint64, rows []service.IngestionRow, fingerprint string, metadata service.CollectorIngestionMetadata) (*service.IngestionPreview, error) {
+	f.collectorConfirmCalls++
+	f.collectorPrincipalID = principalID
+	f.collectorMetadata = metadata
+	return f.ConfirmIngestion(ctx, rows, fingerprint, 0)
 }
 
 func (f *fakeResourceRepo) GetResourceProfile(id uint64) (*model.ResourceProfileResponse, error) {
@@ -1287,7 +1298,7 @@ func NewTestServer() *TestServer {
 	if err != nil {
 		panic(fmt.Sprintf("test server admin login: %v", err))
 	}
-	return &TestServer{Router: authenticatedTestRouter(NewRouter(deps), login.Token), deps: deps}
+	return &TestServer{Router: authenticatedTestRouter(NewRouter(deps), login.Token), deps: deps, resourceRepo: resourceRepo}
 }
 
 func authenticatedTestRouter(next http.Handler, token string) http.Handler {

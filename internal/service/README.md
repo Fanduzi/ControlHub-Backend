@@ -17,8 +17,8 @@ Business logic layer with interface-based repository dependencies. Each service 
 | topology_service.go | Environment-scoped topology workspace and rooted graph traversal with default depth 2, deterministic node/edge caps, and candidate starts |
 | topology_service_test.go | Topology traversal tests for depth, direction, cycles, caps, environment scope, and candidate starts |
 | topology_semantics_test.go | Topology semantic classification tests for roles, layers, replication metadata, and problem summaries |
-| ingestion_preview.go | Strict bounded CSV/JSON parsing, exact-identity ingestion classification with immutable-type conflicts, additive observed-field diffs, drift fingerprinting, validation helpers, and repository-backed preview/confirmation delegation |
-| ingestion_preview_test.go | Parser equivalence/guard and pure preview precedence, immutable-type conflict, additive observed diff, fingerprint, and manual-override exclusion tests |
+| ingestion_preview.go | Strict bounded CSV/JSON parsing, exact-identity ingestion classification with immutable-type conflicts, additive observed-field diffs, drift fingerprinting, validation helpers, and repository-backed preview/User-or-collector confirmation delegation |
+| ingestion_preview_test.go | Parser equivalence/guard, pure preview precedence, immutable-type conflict, additive observed diff, fingerprint, manual-override exclusion, and collector metadata delegation tests |
 | audit_service.go | Audit event listing (global and per-resource), preserving optional target-resource environment filtering |
 | audit_service_test.go | Audit list query forwarding regression coverage |
 | auth_service.go | Login, versioned Backend Bearer issuance, current-state VerifyToken (Authorization Version), role/disable/password invalidation, legacy-to-Argon2id transparent migration |
@@ -70,7 +70,8 @@ Business logic layer with interface-based repository dependencies. Each service 
 - `PreviewBulkResourceMutation` — pure preview of ordered targets against current snapshots; `ResourceService` delegates persisted preview/confirm reads to its resource repository
 - `BulkResourceMutationRequest`, `BulkResourceMutationTarget`, `ResourceMutationSnapshot`, `LabelOperations`, `BulkResourcePreview` — bulk mutation preview contract values
 - `TopologyService.BuildTopology` — builds rooted or environment-start topology responses with node/edge caps and `truncated`
-- `ParseIngestion` and `PreviewIngestion` provide the controlled issue #83 parsing and preview seam; immutable CI-type mismatches are conflicts and observed diffs contain only submitted fields; `ResourceService.PreviewIngestion` and `ConfirmIngestion` delegate parsed rows, reviewed fingerprint, and actor ID to repository-owned preview and atomic confirmation paths
+- `ParseIngestion` and `PreviewIngestion` provide the controlled issue #83 parsing and preview seam; immutable CI-type mismatches are conflicts and observed diffs contain only submitted fields; `ResourceService.PreviewIngestion`, `ConfirmIngestion`, and `ConfirmCollectorIngestion` delegate parsed rows and reviewed fingerprints to repository-owned paths, with collector principal and normalized scan metadata only on the collector seam
+- `CollectorIngestionMetadata`, `model.CollectorScanResult`, `ValidateCollectorIngestionMetadata`, and `ErrCollectorIngestionMetadataInvalid` define the bounded collector-confirmation contract without coupling service/API to a concrete repository
 - `ValidateIngestionRows`, `ValidateIngestionRelationship`, `ErrIngestionConflict`, and `ErrIngestionFingerprintMismatch` support repository confirmation without duplicating service-owned validation rules
 - `NewMemoryUserStore`, `AuthService.WithClock`, `AuthService.ChangeUserRole`/`SetUserActive`/`ResetUserPassword` — Authorization Version seams
 - `AuthAuditEmitter`, `NoopEmitter` — fail-open authentication/authorization audit emission interface and discard implementation
