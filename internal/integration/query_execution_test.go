@@ -2,6 +2,10 @@
 
 // Package integration provides Testcontainers-backed tests for the Phase 37
 // read-only query sandbox (repository, service end-to-end, audit/history).
+// input: shared MySQL fixture, query repositories/services, credential environment, governed requests
+// output: truthful user-attributed query execution, history, audit, paging, disclosure, and failure tests
+// pos: Real-MySQL end-to-end boundary for governed query execution
+// note: if this file changes, update this header and module README.md.
 package integration
 
 import (
@@ -413,7 +417,7 @@ func fixtureRowCount(t *testing.T, db *sql.DB) int {
 func TestQueryExecution_SelectOneReturnsRows(t *testing.T) {
 	svc, targetID, _ := setupQuerySandboxTarget(t)
 
-	resp, err := svc.Execute(context.Background(), ownerDBA, targetID, model.QueryExecuteRequest{
+	resp, err := svc.Execute(context.Background(), queryUserIdentity(ownerDBA), targetID, model.QueryExecuteRequest{
 		Statement: "select id, name from qe_sandbox_fixtures where id = 1",
 		MaxRows:   10,
 	})
@@ -447,7 +451,7 @@ func TestQueryExecution_BlockedWriteDoesNotMutate(t *testing.T) {
 		"insert into qe_sandbox_fixtures (id, name) values (999, 'x')",
 		"truncate table qe_sandbox_fixtures",
 	} {
-		_, err := svc.Execute(context.Background(), ownerDBA, targetID, model.QueryExecuteRequest{Statement: stmt, MaxRows: 10})
+		_, err := svc.Execute(context.Background(), queryUserIdentity(ownerDBA), targetID, model.QueryExecuteRequest{Statement: stmt, MaxRows: 10})
 		if !errors.Is(err, service.ErrQueryValidationFailed) {
 			t.Fatalf("Execute(%q) error = %v, want ErrQueryValidationFailed", stmt, err)
 		}
@@ -463,7 +467,7 @@ func TestQueryExecution_MultiStatementRejected(t *testing.T) {
 	svc, targetID, db := setupQuerySandboxTarget(t)
 	before := fixtureRowCount(t, db)
 
-	_, err := svc.Execute(context.Background(), ownerDBA, targetID, model.QueryExecuteRequest{
+	_, err := svc.Execute(context.Background(), queryUserIdentity(ownerDBA), targetID, model.QueryExecuteRequest{
 		Statement: "select 1; delete from qe_sandbox_fixtures",
 		MaxRows:   10,
 	})
@@ -478,7 +482,7 @@ func TestQueryExecution_MultiStatementRejected(t *testing.T) {
 func TestQueryExecution_LimitCapsRows(t *testing.T) {
 	svc, targetID, _ := setupQuerySandboxTarget(t)
 
-	resp, err := svc.Execute(context.Background(), ownerDBA, targetID, model.QueryExecuteRequest{
+	resp, err := svc.Execute(context.Background(), queryUserIdentity(ownerDBA), targetID, model.QueryExecuteRequest{
 		Statement: "select id from qe_sandbox_fixtures order by id",
 		MaxRows:   2,
 	})
@@ -502,10 +506,10 @@ func TestQueryExecution_HistoryWrittenForSuccessAndRejection(t *testing.T) {
 	svc, targetID, db := setupQuerySandboxTarget(t)
 	repo := mysql.NewQueryExecutionRepository(db)
 
-	if _, err := svc.Execute(context.Background(), ownerDBA, targetID, model.QueryExecuteRequest{Statement: "select id from qe_sandbox_fixtures limit 1", MaxRows: 10}); err != nil {
+	if _, err := svc.Execute(context.Background(), queryUserIdentity(ownerDBA), targetID, model.QueryExecuteRequest{Statement: "select id from qe_sandbox_fixtures limit 1", MaxRows: 10}); err != nil {
 		t.Fatalf("success Execute: %v", err)
 	}
-	if _, err := svc.Execute(context.Background(), ownerDBA, targetID, model.QueryExecuteRequest{Statement: "delete from qe_sandbox_fixtures", MaxRows: 10}); err == nil {
+	if _, err := svc.Execute(context.Background(), queryUserIdentity(ownerDBA), targetID, model.QueryExecuteRequest{Statement: "delete from qe_sandbox_fixtures", MaxRows: 10}); err == nil {
 		t.Fatal("expected rejection for write statement")
 	}
 
@@ -530,10 +534,10 @@ func TestQueryExecution_HistoryWrittenForSuccessAndRejection(t *testing.T) {
 func TestQueryExecution_AuditEventWrittenForSuccessAndRejection(t *testing.T) {
 	svc, targetID, db := setupQuerySandboxTarget(t)
 
-	if _, err := svc.Execute(context.Background(), ownerDBA, targetID, model.QueryExecuteRequest{Statement: "select id from qe_sandbox_fixtures limit 1", MaxRows: 10}); err != nil {
+	if _, err := svc.Execute(context.Background(), queryUserIdentity(ownerDBA), targetID, model.QueryExecuteRequest{Statement: "select id from qe_sandbox_fixtures limit 1", MaxRows: 10}); err != nil {
 		t.Fatalf("success Execute: %v", err)
 	}
-	if _, err := svc.Execute(context.Background(), ownerDBA, targetID, model.QueryExecuteRequest{Statement: "delete from qe_sandbox_fixtures", MaxRows: 10}); err == nil {
+	if _, err := svc.Execute(context.Background(), queryUserIdentity(ownerDBA), targetID, model.QueryExecuteRequest{Statement: "delete from qe_sandbox_fixtures", MaxRows: 10}); err == nil {
 		t.Fatal("expected rejection for write statement")
 	}
 
@@ -567,7 +571,7 @@ func TestQueryExecution_NullPreservedAsJSONNull(t *testing.T) {
 	mustExec(t, db, `insert into qe_null_fixtures (id, n, label) values (1, NULL, NULL), (2, 42, 'real')`)
 	seedDisclosurePolicies(t, db, targetID, testDBName(t), "qe_null_fixtures", "id", "n", "label")
 
-	resp, err := svc.Execute(context.Background(), ownerDBA, targetID, model.QueryExecuteRequest{
+	resp, err := svc.Execute(context.Background(), queryUserIdentity(ownerDBA), targetID, model.QueryExecuteRequest{
 		Statement: "select n, label from qe_null_fixtures order by id",
 		MaxRows:   10,
 	})
@@ -606,7 +610,7 @@ func TestQueryExecution_CastNullAsSignedIsNil(t *testing.T) {
 	mustExec(t, db, `insert into qe_null_fixtures (id, n, label) values (1, NULL, NULL)`)
 	seedDisclosurePolicies(t, db, targetID, testDBName(t), "qe_null_fixtures", "id", "n", "label")
 
-	resp, err := svc.Execute(context.Background(), ownerDBA, targetID, model.QueryExecuteRequest{
+	resp, err := svc.Execute(context.Background(), queryUserIdentity(ownerDBA), targetID, model.QueryExecuteRequest{
 		Statement: "select n from qe_null_fixtures where id = 1",
 		MaxRows:   10,
 	})
@@ -629,7 +633,7 @@ func TestQueryExecution_ZeroRowsReturnsEmptyArray(t *testing.T) {
 	// WHY: a valid SELECT that matches zero rows must return rows:[] (empty
 	// JSON array), not rows:null. The frontend contract depends on this to
 	// safely call .length on the rows array without null checks.
-	resp, err := svc.Execute(context.Background(), ownerDBA, targetID, model.QueryExecuteRequest{
+	resp, err := svc.Execute(context.Background(), queryUserIdentity(ownerDBA), targetID, model.QueryExecuteRequest{
 		Statement: "select id, name from qe_sandbox_fixtures where 1 = 0",
 		MaxRows:   10,
 	})
@@ -659,7 +663,7 @@ func TestQueryExecution_ShowTablesBlockedByDisclosure(t *testing.T) {
 	// WHY: SHOW TABLES is a metadata command that produces no resolvable
 	// columns for disclosure governance. Phase 38Q's fail-closed disclosure
 	// check blocks it before execution.
-	_, err := svc.Execute(context.Background(), ownerDBA, targetID, model.QueryExecuteRequest{
+	_, err := svc.Execute(context.Background(), queryUserIdentity(ownerDBA), targetID, model.QueryExecuteRequest{
 		Statement: "show tables",
 		MaxRows:   100,
 	})
@@ -673,7 +677,7 @@ func TestQueryExecution_DescribeTableBlockedByDisclosure(t *testing.T) {
 
 	// WHY: DESCRIBE is a metadata command blocked by Phase 38Q's fail-closed
 	// disclosure check (no resolvable columns).
-	_, err := svc.Execute(context.Background(), ownerDBA, targetID, model.QueryExecuteRequest{
+	_, err := svc.Execute(context.Background(), queryUserIdentity(ownerDBA), targetID, model.QueryExecuteRequest{
 		Statement: "describe qe_sandbox_fixtures",
 		MaxRows:   100,
 	})
@@ -688,7 +692,7 @@ func TestQueryExecution_ExplainSelectBlockedByDisclosure(t *testing.T) {
 	// WHY: EXPLAIN SELECT is blocked by Phase 38Q's fail-closed disclosure
 	// check. EXPLAIN output columns (id, select_type, table) are not
 	// resolvable against disclosure policies.
-	_, err := svc.Execute(context.Background(), ownerDBA, targetID, model.QueryExecuteRequest{
+	_, err := svc.Execute(context.Background(), queryUserIdentity(ownerDBA), targetID, model.QueryExecuteRequest{
 		Statement: "explain select * from qe_sandbox_fixtures",
 		MaxRows:   100,
 	})
@@ -701,7 +705,7 @@ func TestQueryExecution_UpdateRemainsRejected(t *testing.T) {
 	svc, targetID, _ := setupQuerySandboxTarget(t)
 
 	// WHY: writes must remain rejected even after the guard widening.
-	_, err := svc.Execute(context.Background(), ownerDBA, targetID, model.QueryExecuteRequest{
+	_, err := svc.Execute(context.Background(), queryUserIdentity(ownerDBA), targetID, model.QueryExecuteRequest{
 		Statement: "update qe_sandbox_fixtures set name = 'x'",
 		MaxRows:   10,
 	})
@@ -733,7 +737,7 @@ func TestQueryExecution_ShowDatabasesBlockedByDisclosure(t *testing.T) {
 
 	// WHY: SHOW DATABASES is a metadata command blocked by Phase 38Q's
 	// fail-closed disclosure check.
-	_, err := svc.Execute(context.Background(), ownerDBA, targetID, model.QueryExecuteRequest{
+	_, err := svc.Execute(context.Background(), queryUserIdentity(ownerDBA), targetID, model.QueryExecuteRequest{
 		Statement: "show databases",
 		MaxRows:   100,
 	})
@@ -747,7 +751,7 @@ func TestQueryExecution_ShowTablesFromDatabaseBlockedByDisclosure(t *testing.T) 
 	setupQueryE2EDatabase(t)
 
 	// WHY: SHOW TABLES FROM is a metadata command blocked by Phase 38Q.
-	_, err := svc.Execute(context.Background(), ownerDBA, targetID, model.QueryExecuteRequest{
+	_, err := svc.Execute(context.Background(), queryUserIdentity(ownerDBA), targetID, model.QueryExecuteRequest{
 		Statement: "show tables from query_e2e",
 		MaxRows:   100,
 	})
@@ -761,7 +765,7 @@ func TestQueryExecution_ShowColumnsBlockedByDisclosure(t *testing.T) {
 	setupQueryE2EDatabase(t)
 
 	// WHY: SHOW COLUMNS FROM is a metadata command blocked by Phase 38Q.
-	_, err := svc.Execute(context.Background(), ownerDBA, targetID, model.QueryExecuteRequest{
+	_, err := svc.Execute(context.Background(), queryUserIdentity(ownerDBA), targetID, model.QueryExecuteRequest{
 		Statement: "show columns from query_e2e.query_e2e_items",
 		MaxRows:   100,
 	})
@@ -775,7 +779,7 @@ func TestQueryExecution_DescribeQualifiedTableBlockedByDisclosure(t *testing.T) 
 	setupQueryE2EDatabase(t)
 
 	// WHY: DESCRIBE <db>.<table> is a metadata command blocked by Phase 38Q.
-	_, err := svc.Execute(context.Background(), ownerDBA, targetID, model.QueryExecuteRequest{
+	_, err := svc.Execute(context.Background(), queryUserIdentity(ownerDBA), targetID, model.QueryExecuteRequest{
 		Statement: "describe query_e2e.query_e2e_items",
 		MaxRows:   100,
 	})
@@ -789,7 +793,7 @@ func TestQueryExecution_ShowProcesslistRemainsRejected(t *testing.T) {
 
 	// WHY: SHOW PROCESSLIST exposes all connected sessions — not appropriate
 	// for a read-only sandbox.
-	_, err := svc.Execute(context.Background(), ownerDBA, targetID, model.QueryExecuteRequest{
+	_, err := svc.Execute(context.Background(), queryUserIdentity(ownerDBA), targetID, model.QueryExecuteRequest{
 		Statement: "show processlist",
 		MaxRows:   10,
 	})
@@ -803,7 +807,7 @@ func TestQueryExecution_ShowGrantsRemainsRejected(t *testing.T) {
 
 	// WHY: SHOW GRANTS exposes privilege information — not appropriate for a
 	// read-only sandbox.
-	_, err := svc.Execute(context.Background(), ownerDBA, targetID, model.QueryExecuteRequest{
+	_, err := svc.Execute(context.Background(), queryUserIdentity(ownerDBA), targetID, model.QueryExecuteRequest{
 		Statement: "show grants",
 		MaxRows:   10,
 	})
@@ -817,7 +821,7 @@ func TestQueryExecution_UseDatabaseRemainsRejected(t *testing.T) {
 
 	// WHY: USE changes the session database context — a session mutation that
 	// must be rejected in a read-only sandbox.
-	_, err := svc.Execute(context.Background(), ownerDBA, targetID, model.QueryExecuteRequest{
+	_, err := svc.Execute(context.Background(), queryUserIdentity(ownerDBA), targetID, model.QueryExecuteRequest{
 		Statement: "use query_e2e",
 		MaxRows:   10,
 	})
@@ -1367,7 +1371,7 @@ func TestQueryExecution_PaginatedSelectReturnsOrderedPagesAndSeparateCaps(t *tes
 	ctx := context.Background()
 	statement := "SELECT id, name FROM qe_sandbox_fixtures ORDER BY id"
 
-	page1, err := svc.Execute(ctx, ownerDBA, targetID, model.QueryExecuteRequest{
+	page1, err := svc.Execute(ctx, queryUserIdentity(ownerDBA), targetID, model.QueryExecuteRequest{
 		Statement: statement,
 		MaxRows:   25,
 		Pagination: &model.QueryExecutePaginationRequest{
@@ -1385,7 +1389,7 @@ func TestQueryExecution_PaginatedSelectReturnsOrderedPagesAndSeparateCaps(t *tes
 	}
 	assertQueryPageIDs(t, page1, []int64{1, 2, 3, 4, 5, 6, 7, 8, 9, 10})
 
-	page2, err := svc.Execute(ctx, ownerDBA, targetID, model.QueryExecuteRequest{
+	page2, err := svc.Execute(ctx, queryUserIdentity(ownerDBA), targetID, model.QueryExecuteRequest{
 		Statement: statement,
 		MaxRows:   25,
 		Pagination: &model.QueryExecutePaginationRequest{
@@ -1403,7 +1407,7 @@ func TestQueryExecution_PaginatedSelectReturnsOrderedPagesAndSeparateCaps(t *tes
 	}
 	assertQueryPageIDs(t, page2, []int64{11, 12, 13, 14, 15, 16, 17, 18, 19, 20})
 
-	page3, err := svc.Execute(ctx, ownerDBA, targetID, model.QueryExecuteRequest{
+	page3, err := svc.Execute(ctx, queryUserIdentity(ownerDBA), targetID, model.QueryExecuteRequest{
 		Statement: statement,
 		MaxRows:   25,
 		Pagination: &model.QueryExecutePaginationRequest{
@@ -1423,7 +1427,7 @@ func TestQueryExecution_PaginatedSelectIgnoresUserLimitAndOffset(t *testing.T) {
 	svc, targetID, _ := setupQuerySandboxTarget(t)
 	ctx := context.Background()
 
-	resp, err := svc.Execute(ctx, ownerDBA, targetID, model.QueryExecuteRequest{
+	resp, err := svc.Execute(ctx, queryUserIdentity(ownerDBA), targetID, model.QueryExecuteRequest{
 		Statement: "SELECT id, name FROM qe_sandbox_fixtures ORDER BY id LIMIT 1 OFFSET 24",
 		MaxRows:   25,
 		Pagination: &model.QueryExecutePaginationRequest{
@@ -1438,7 +1442,7 @@ func TestQueryExecution_PaginatedSelectIgnoresUserLimitAndOffset(t *testing.T) {
 	}
 	assertQueryPageIDs(t, resp, []int64{1, 2, 3, 4, 5, 6, 7, 8, 9, 10})
 
-	resp, err = svc.Execute(ctx, ownerDBA, targetID, model.QueryExecuteRequest{
+	resp, err = svc.Execute(ctx, queryUserIdentity(ownerDBA), targetID, model.QueryExecuteRequest{
 		Statement: "SELECT id, name FROM qe_sandbox_fixtures ORDER BY id LIMIT 1 OFFSET 0",
 		MaxRows:   25,
 		Pagination: &model.QueryExecutePaginationRequest{
@@ -1456,7 +1460,7 @@ func TestQueryExecution_PaginatedSelectRejectsPageAtMaxRowsBoundaryBeforeTargetE
 	ctx := context.Background()
 	statement := "SELECT id, name FROM qe_sandbox_fixtures WHERE name = 'page-secret' ORDER BY id"
 
-	_, err := svc.Execute(ctx, ownerDBA, targetID, model.QueryExecuteRequest{
+	_, err := svc.Execute(ctx, queryUserIdentity(ownerDBA), targetID, model.QueryExecuteRequest{
 		Statement: statement,
 		MaxRows:   20,
 		Pagination: &model.QueryExecutePaginationRequest{
@@ -1500,7 +1504,7 @@ func TestQueryExecution_PaginatedSelectCannotBypassHardMaxRows(t *testing.T) {
 
 	// Given an absurd requested cap, the guard clamps the release cap to
 	// HardMaxRows (500) instead of trusting the caller.
-	page1, err := svc.Execute(ctx, ownerDBA, targetID, model.QueryExecuteRequest{
+	page1, err := svc.Execute(ctx, queryUserIdentity(ownerDBA), targetID, model.QueryExecuteRequest{
 		Statement: statement,
 		MaxRows:   2_000_000_000,
 		Pagination: &model.QueryExecutePaginationRequest{
@@ -1517,7 +1521,7 @@ func TestQueryExecution_PaginatedSelectCannotBypassHardMaxRows(t *testing.T) {
 
 	// And a page whose offset reaches the clamped cap is rejected before any
 	// target execution, without leaking the statement or window internals.
-	_, err = svc.Execute(ctx, ownerDBA, targetID, model.QueryExecuteRequest{
+	_, err = svc.Execute(ctx, queryUserIdentity(ownerDBA), targetID, model.QueryExecuteRequest{
 		Statement: statement,
 		MaxRows:   2_000_000_000,
 		Pagination: &model.QueryExecutePaginationRequest{
@@ -1549,11 +1553,11 @@ func TestQueryExecution_PaginatedSelectRecordsEachPageInHistoryAndAudit(t *testi
 		}
 	}
 
-	page1, err := svc.Execute(ctx, ownerDBA, targetID, request(1))
+	page1, err := svc.Execute(ctx, queryUserIdentity(ownerDBA), targetID, request(1))
 	if err != nil {
 		t.Fatalf("page 1 Execute error: %v", err)
 	}
-	page2, err := svc.Execute(ctx, ownerDBA, targetID, request(2))
+	page2, err := svc.Execute(ctx, queryUserIdentity(ownerDBA), targetID, request(2))
 	if err != nil {
 		t.Fatalf("page 2 Execute error: %v", err)
 	}
@@ -1600,7 +1604,7 @@ func TestQueryExecution_PaginatedDisclosurePolicyChangeBetweenPagesMasksPageTwo(
 	ctx := context.Background()
 	statement := "SELECT id, name FROM qe_sandbox_fixtures ORDER BY id"
 
-	page1, err := svc.Execute(ctx, ownerDBA, targetID, model.QueryExecuteRequest{
+	page1, err := svc.Execute(ctx, queryUserIdentity(ownerDBA), targetID, model.QueryExecuteRequest{
 		Statement: statement,
 		MaxRows:   25,
 		Pagination: &model.QueryExecutePaginationRequest{
@@ -1619,7 +1623,7 @@ func TestQueryExecution_PaginatedDisclosurePolicyChangeBetweenPagesMasksPageTwo(
 		where target_resource_id = ? and database_name = ? and object_name = ? and column_name = ?`,
 		string(model.ResultDisclosureMaskedNoCopy), targetID, testDBName(t), "qe_sandbox_fixtures", "name")
 
-	page2, err := svc.Execute(ctx, ownerDBA, targetID, model.QueryExecuteRequest{
+	page2, err := svc.Execute(ctx, queryUserIdentity(ownerDBA), targetID, model.QueryExecuteRequest{
 		Statement: statement,
 		MaxRows:   25,
 		Pagination: &model.QueryExecutePaginationRequest{
@@ -1648,7 +1652,7 @@ func TestQueryExecution_PaginatedControlledErrorsAndRecordsDoNotLeakSecrets(t *t
 	ctx := context.Background()
 	statement := "SELECT id, name FROM qe_sandbox_fixtures WHERE name = 'page-secret' ORDER BY id"
 
-	_, executionErr := svc.Execute(ctx, ownerDBA, targetID, model.QueryExecuteRequest{
+	_, executionErr := svc.Execute(ctx, queryUserIdentity(ownerDBA), targetID, model.QueryExecuteRequest{
 		Statement: statement,
 		MaxRows:   20,
 		Pagination: &model.QueryExecutePaginationRequest{
@@ -1725,7 +1729,7 @@ func TestQueryExecution_PaginatedOversizedPagePayloadIsControlledRejection(t *te
 	statement := setupOversizedPagePayloadFixture(t, db, targetID)
 
 	// When page one of the oversized window executes.
-	resp, executionErr := svc.Execute(ctx, ownerDBA, targetID, model.QueryExecuteRequest{
+	resp, executionErr := svc.Execute(ctx, queryUserIdentity(ownerDBA), targetID, model.QueryExecuteRequest{
 		Statement: statement,
 		MaxRows:   20,
 		Pagination: &model.QueryExecutePaginationRequest{
@@ -1777,7 +1781,7 @@ func TestQueryExecution_PaginatedOversizedPagePayloadIsControlledRejection(t *te
 
 	// And the same statement without pagination keeps the existing bounded
 	// truncated-success contract.
-	nonPaged, err := svc.Execute(ctx, ownerDBA, targetID, model.QueryExecuteRequest{
+	nonPaged, err := svc.Execute(ctx, queryUserIdentity(ownerDBA), targetID, model.QueryExecuteRequest{
 		Statement: statement,
 		MaxRows:   20,
 	})

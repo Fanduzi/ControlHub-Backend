@@ -3,7 +3,7 @@
 // Package integration provides shared authorization test support consumed by
 // the Authorization Version and operator access boundary integration tests.
 // input: bytes, context, database/sql, encoding/json, net/http, net/http/httptest, testing, internal/model, internal/service
-// output: shared authz constants, login/bearer/user helpers, and query handler stubs
+// output: shared authz constants, login/bearer/user and execution-identity helpers, and query handler stubs
 // pos: Lets same-package integration tests reuse login, bearer, user-seeding, and query-stub support without duplication
 // note: if this file changes, update header and README.md
 package integration
@@ -22,6 +22,10 @@ import (
 )
 
 const authzIntegrationSecret = "authz-integration-secret"
+
+func queryUserIdentity(id uint64) model.QueryExecutionIdentity {
+	return model.QueryExecutionIdentity{Kind: model.QueryExecutionActorUser, ID: id}
+}
 
 // Same password hash as migration 0002 seed users.
 const seedPasswordHash = "fcf730b6d95236ecd3c9fc2d92d7b6b2bb061514961aec041d6c7a7192f592e4"
@@ -132,7 +136,7 @@ func (authzCredStub) Delete(_ context.Context, _ service.AuthenticatedUser, _ ui
 // return 2xx whenever the actor passes the freshness/role gates.
 type boundaryExecStub struct{}
 
-func (boundaryExecStub) Execute(_ context.Context, _, _ uint64, _ model.QueryExecuteRequest) (model.QueryExecuteResponse, error) {
+func (boundaryExecStub) Execute(_ context.Context, _ model.QueryExecutionIdentity, _ uint64, _ model.QueryExecuteRequest) (model.QueryExecuteResponse, error) {
 	return model.QueryExecuteResponse{Status: model.QueryExecutionSuccess}, nil
 }
 

@@ -21,7 +21,7 @@ MySQL-backed integration tests run against disposable Testcontainers databases.
 | named_inventory_view_test.go | Proves personal/shared authorization and lossless filters/sort/columns JSON round-trip without result or page snapshots against real MySQL |
 | machine_principal_test.go | Proves one-time/hash-only credentials, last use, closed scopes, expiry, revoke, overlapping rotation, admin audit safety, database/log/history absence, and audit-failure rollback |
 | auth_audit_emitter_test.go | Proves auth.login/auth.bearer/auth.authorization audit events persist against MySQL, stay fail-open on inject errors (login success, Bearer rejection, and role-denied 403 all unchanged), and never contain prohibited values; bounded untrusted-Bearer budget proved against real MySQL (missing header emits no row, 60 of 61 supplied rejections persist, suppression counter safe, role denial unbudgeted, process-shared across routers) |
-| authz_test_support_test.go | Shared authorization constants, login/bearer/user helpers, and query handler stubs (incl. the QueryEvidencePersistenceFailures stub) |
+| authz_test_support_test.go | Shared authorization constants, login/bearer/user and truthful execution-identity helpers, and query handler stubs (incl. the QueryEvidencePersistenceFailures stub) |
 | seed_credential_remediation_test.go | Regression guard for the forward-only seed-disable migration: proves the published seed users are inactive and their credentials rejected |
 | query_disclosure_repository_test.go | Proves MySQL disclosure policy repository behavior: CRUD lifecycle, duplicate-scope insert mapped to the conflict sentinel, not-found cases (`sql.ErrNoRows`), idempotent delete, empty list, and deterministic list ordering |
 | bootstrap_admin_command_test.go | Runs the operator bootstrap-admin CLI against MySQL and verifies authentication-compatible creation, reactivation, version rotation, and cleanup |
@@ -31,6 +31,8 @@ MySQL-backed integration tests run against disposable Testcontainers databases.
 | legacy_import_test.go | Proves UUID-to-bigint cutover import against MySQL: full migration, origin/external-identity mapping, non-empty target rejection, parseTime validation, NULL audit actor preserved as NULL, and unknown non-NULL actors/sources failing loud with no partial import |
 | *_test.go | Exercises repository, API, and migration behavior against MySQL |
 | query_evidence_pair_test.go | Proves atomic history+audit commit/rollback and persistence telemetry plus migration-26 user/machine actor constraints against real MySQL |
+| query_execution_test.go | Proves governed query execution, history, audit, paging, disclosure, and failure behavior with explicit user evidence identity against real MySQL |
+| query_dev_seed_test.go / query_dev_target_fixture_test.go | Proves dev seed/fixture readiness and governed execution with explicit user evidence identity against real MySQL |
 | navigate_related_records_integration_test.go | Proves governed FK related-record navigation over real MySQL, including the Issue #36 atomic-pair rollback proof: a forced `related_record_navigation` audit insert failure rolls the navigation history row back with it (no partial evidence), the controlled backend-error envelope is preserved, and the failure counter increments exactly once |
 
 ## Operator access coverage

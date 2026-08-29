@@ -4,6 +4,10 @@
 // query credential seed path (Task B2): the seed service against real MySQL,
 // end-to-end readiness derivation, select 1 execution, the no-DSN-stored
 // invariant, and a host/port mismatch regression.
+// input: shared MySQL fixture, query-dev seeder, credential environment, query execution service
+// output: readiness, truthful user-attributed execution, secret-free persistence, and binding regression tests
+// pos: Real-MySQL boundary for the local/dev query credential seed path
+// note: if this file changes, update this header and module README.md.
 package integration
 
 import (
@@ -169,7 +173,7 @@ func TestQueryDevSeed_MakesTargetReadyAndExecutesSelectOne(t *testing.T) {
 	}
 
 	// 2. Execute a real SELECT through the real execution service.
-	resp, err := newExecutionService(db).Execute(ctx, ownerDBA, targetID, model.QueryExecuteRequest{Statement: "select id from qe_sandbox_fixtures limit 1", MaxRows: 10})
+	resp, err := newExecutionService(db).Execute(ctx, queryUserIdentity(ownerDBA), targetID, model.QueryExecuteRequest{Statement: "select id from qe_sandbox_fixtures limit 1", MaxRows: 10})
 	if err != nil {
 		t.Fatalf("Execute select 1: %v", err)
 	}
@@ -217,7 +221,7 @@ func TestQueryDevSeed_RejectsMismatchedCredentialAndStaysLocked(t *testing.T) {
 	}
 
 	// Execution is rejected for the non-runnable target.
-	if _, err := newExecutionService(db).Execute(ctx, ownerDBA, targetID, model.QueryExecuteRequest{Statement: "select id from qe_sandbox_fixtures limit 1", MaxRows: 10}); err == nil {
+	if _, err := newExecutionService(db).Execute(ctx, queryUserIdentity(ownerDBA), targetID, model.QueryExecuteRequest{Statement: "select id from qe_sandbox_fixtures limit 1", MaxRows: 10}); err == nil {
 		t.Fatal("Execute expected to be rejected for a non-runnable target, got nil")
 	}
 }

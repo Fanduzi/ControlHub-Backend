@@ -140,7 +140,7 @@ func TestQueryDevTargetFixture_SelectOneExecutes(t *testing.T) {
 	mustExec(t, db, `insert into qe_sandbox_fixtures (id, name) values (1,'alpha')`)
 	seedDisclosurePolicies(t, db, targetID, testDBName(t), "qe_sandbox_fixtures", "id", "name")
 
-	resp, err := newExecutionService(db).Execute(ctx, ownerDBA, targetID, model.QueryExecuteRequest{Statement: "select id from qe_sandbox_fixtures limit 1", MaxRows: 10})
+	resp, err := newExecutionService(db).Execute(ctx, queryUserIdentity(ownerDBA), targetID, model.QueryExecuteRequest{Statement: "select id from qe_sandbox_fixtures limit 1", MaxRows: 10})
 	if err != nil {
 		t.Fatalf("execute select: %v", err)
 	}
@@ -159,7 +159,7 @@ func TestQueryDevTargetFixture_UnsafeSQLRejectedAndRecorded(t *testing.T) {
 	if err := seedFixtureCredential(t, db, targetID, globalEnv.dsn); err != nil {
 		t.Fatalf("seed: %v", err)
 	}
-	if _, err := newExecutionService(db).Execute(ctx, ownerDBA, targetID, model.QueryExecuteRequest{Statement: "delete from qe_sandbox_fixtures", MaxRows: 10}); err == nil {
+	if _, err := newExecutionService(db).Execute(ctx, queryUserIdentity(ownerDBA), targetID, model.QueryExecuteRequest{Statement: "delete from qe_sandbox_fixtures", MaxRows: 10}); err == nil {
 		t.Fatal("unsafe statement must be rejected, got nil error")
 	}
 	items, _, err := mysql.NewQueryExecutionRepository(db).ListExecutions(ctx, model.QueryExecutionListQuery{TargetResourceID: targetID, Page: 1, PageSize: 20, Mode: model.PaginationModeOffset})
@@ -190,10 +190,10 @@ func TestQueryDevTargetFixture_HistoryRecordsSuccessAndRejection(t *testing.T) {
 	mustExec(t, db, `insert into qe_sandbox_fixtures (id, name) values (1,'alpha')`)
 	seedDisclosurePolicies(t, db, targetID, testDBName(t), "qe_sandbox_fixtures", "id", "name")
 
-	if _, err := newExecutionService(db).Execute(ctx, ownerDBA, targetID, model.QueryExecuteRequest{Statement: "select id from qe_sandbox_fixtures limit 1", MaxRows: 10}); err != nil {
+	if _, err := newExecutionService(db).Execute(ctx, queryUserIdentity(ownerDBA), targetID, model.QueryExecuteRequest{Statement: "select id from qe_sandbox_fixtures limit 1", MaxRows: 10}); err != nil {
 		t.Fatalf("select: %v", err)
 	}
-	if _, err := newExecutionService(db).Execute(ctx, ownerDBA, targetID, model.QueryExecuteRequest{Statement: "delete from qe_sandbox_fixtures", MaxRows: 10}); err == nil {
+	if _, err := newExecutionService(db).Execute(ctx, queryUserIdentity(ownerDBA), targetID, model.QueryExecuteRequest{Statement: "delete from qe_sandbox_fixtures", MaxRows: 10}); err == nil {
 		t.Fatal("unsafe statement must be rejected")
 	}
 	items, _, err := mysql.NewQueryExecutionRepository(db).ListExecutions(ctx, model.QueryExecutionListQuery{TargetResourceID: targetID, Page: 1, PageSize: 20, Mode: model.PaginationModeOffset})
@@ -265,7 +265,7 @@ func TestQueryDevTargetFixture_FailClosed_OnBadBindingStaysLocked(t *testing.T) 
 	if target.AvailableActions.Run {
 		t.Fatal("target must not expose run=true after a failed seed")
 	}
-	if _, err := newExecutionService(db).Execute(ctx, ownerDBA, targetID, model.QueryExecuteRequest{Statement: "select id from qe_sandbox_fixtures limit 1", MaxRows: 10}); err == nil {
+	if _, err := newExecutionService(db).Execute(ctx, queryUserIdentity(ownerDBA), targetID, model.QueryExecuteRequest{Statement: "select id from qe_sandbox_fixtures limit 1", MaxRows: 10}); err == nil {
 		t.Fatal("execute must be rejected for a locked target")
 	}
 }
