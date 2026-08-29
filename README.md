@@ -251,7 +251,7 @@ If Schemathesis finds contract violations, the test fails with a summary. Report
 
 ## Architecture
 
-ControlHub is a read-heavy resource management backend exposing dictionary-driven APIs for a frontend console. Resources are typed entities (8 types) linked by directed relations (7 types), with per-type profile projections and a taxonomy system of static dictionaries. Domain Name uses subtype `dns` and a required normalized FQDN; Virtual IP uses subtype `floating` and a required single IP address.
+ControlHub is a read-heavy resource management backend exposing dictionary-driven APIs for a frontend console. Resources are typed entities (8 types) linked by directed relations (7 types), with per-type profile projections and a taxonomy system of static dictionaries. Manual registration of host, database instance, database cluster, and service requires that type's typed-profile minimum identity; service taxonomy includes worker. Domain Name uses subtype `dns` and a required normalized FQDN; Virtual IP uses subtype `floating` and a required single IP address.
 
 ### Modules
 

@@ -1,7 +1,7 @@
 // Package api provides HTTP handlers and routing for the ControlHub REST API.
 // input: internal/api, internal/model, net/http, net/http/httptest, encoding/json
-// output: TestListResources*, TestGetResourceProfile_*, TestCreateDomainName*, TestCreateVirtualIP*
-// pos: Validates resource listing/filtering and Domain Name/Virtual IP create-with-profile identity at the HTTP seam
+// output: TestListResources*, TestGetResourceProfile_*, TestCreateResource*, TestCreateDomainName*, TestCreateVirtualIP*
+// pos: Validates resource listing with pagination/filtering, per-type profile responses, core CI typed-profile create contracts, and Domain Name/Virtual IP identity at the HTTP seam
 // note: if this file changes, update header and README.md
 package api
 
@@ -45,7 +45,8 @@ func TestCreateResource(t *testing.T) {
 		"healthStatus":"healthy",
 		"source":"manual",
 		"externalId":"order-mysql-02-prod",
-		"labels":{"team":"order","tier":"data"}
+		"labels":{"team":"order","tier":"data"},
+		"profile":{"engine":"mysql","host":"db-01.internal","port":3306}
 	}`
 	req := httptest.NewRequest(http.MethodPost, "/resources", strings.NewReader(body))
 	rec := httptest.NewRecorder()
@@ -146,7 +147,8 @@ func TestCreateResourceRejectsMissingEnvironment(t *testing.T) {
 		"lifecycleStatus":"running",
 		"healthStatus":"healthy",
 		"source":"manual",
-		"labels":{}
+		"labels":{},
+		"profile":{"engine":"mysql","host":"db-01.internal","port":3306}
 	}`
 	req := httptest.NewRequest(http.MethodPost, "/resources", strings.NewReader(body))
 	rec := httptest.NewRecorder()
@@ -168,7 +170,8 @@ func TestCreateResourceRejectsMissingOwner(t *testing.T) {
 		"lifecycleStatus":"running",
 		"healthStatus":"healthy",
 		"source":"manual",
-		"labels":{}
+		"labels":{},
+		"profile":{"engine":"mysql","host":"db-01.internal","port":3306}
 	}`
 	req := httptest.NewRequest(http.MethodPost, "/resources", strings.NewReader(body))
 	rec := httptest.NewRecorder()
@@ -190,7 +193,8 @@ func TestCreateResourceRejectsDuplicateNameWithinEnvironment(t *testing.T) {
 		"lifecycleStatus":"running",
 		"healthStatus":"healthy",
 		"source":"manual",
-		"labels":{}
+		"labels":{},
+		"profile":{"engine":"mysql","host":"db-01.internal","port":3306}
 	}`
 	req := httptest.NewRequest(http.MethodPost, "/resources", strings.NewReader(body))
 	rec := httptest.NewRecorder()
@@ -1956,74 +1960,74 @@ func TestAuditHandlerJSONErrors(t *testing.T) {
 	})
 }
 
-	// --- Dictionary handler JSON error tests (Task 2) ---
+// --- Dictionary handler JSON error tests (Task 2) ---
 
-	type failingEnvRepo struct{}
+type failingEnvRepo struct{}
 
-	func (failingEnvRepo) ListEnvironments() ([]model.Environment, error) {
-		return nil, fmt.Errorf("db connection lost")
-	}
+func (failingEnvRepo) ListEnvironments() ([]model.Environment, error) {
+	return nil, fmt.Errorf("db connection lost")
+}
 
-	func TestDictionaryHandlerJSONErrors(t *testing.T) {
-		t.Run("environments returns JSON on service failure", func(t *testing.T) {
-			svc := service.NewEnvironmentService(failingEnvRepo{})
-			handler := handleListEnvironments(svc)
+func TestDictionaryHandlerJSONErrors(t *testing.T) {
+	t.Run("environments returns JSON on service failure", func(t *testing.T) {
+		svc := service.NewEnvironmentService(failingEnvRepo{})
+		handler := handleListEnvironments(svc)
 
-			w := httptest.NewRecorder()
-			r := httptest.NewRequest("GET", "/environments", nil)
-			handler.ServeHTTP(w, r)
+		w := httptest.NewRecorder()
+		r := httptest.NewRequest("GET", "/environments", nil)
+		handler.ServeHTTP(w, r)
 
-			if w.Code != http.StatusInternalServerError {
-				t.Fatalf("expected 500, got %d; body: %s", w.Code, w.Body.String())
-			}
-			ct := w.Header().Get("Content-Type")
-			if ct != "application/json" {
-				t.Fatalf("expected Content-Type application/json, got %q", ct)
-			}
+		if w.Code != http.StatusInternalServerError {
+			t.Fatalf("expected 500, got %d; body: %s", w.Code, w.Body.String())
+		}
+		ct := w.Header().Get("Content-Type")
+		if ct != "application/json" {
+			t.Fatalf("expected Content-Type application/json, got %q", ct)
+		}
 
-			var body apiErrorResponse
-			if err := json.NewDecoder(w.Body).Decode(&body); err != nil {
-				t.Fatalf("decode response: %v", err)
-			}
-			if body.Error != "internal_error" {
-				t.Fatalf("expected error code internal_error, got %q", body.Error)
-			}
-			if body.Message == "" {
-				t.Fatal("expected non-empty error message")
-			}
-		})
+		var body apiErrorResponse
+		if err := json.NewDecoder(w.Body).Decode(&body); err != nil {
+			t.Fatalf("decode response: %v", err)
+		}
+		if body.Error != "internal_error" {
+			t.Fatalf("expected error code internal_error, got %q", body.Error)
+		}
+		if body.Message == "" {
+			t.Fatal("expected non-empty error message")
+		}
+	})
 
-		t.Run("resource-subtypes returns JSON 400 when missing resourceType", func(t *testing.T) {
-			svc := service.NewResourceSubtypeService()
-			handler := handleListResourceSubtypes(svc)
+	t.Run("resource-subtypes returns JSON 400 when missing resourceType", func(t *testing.T) {
+		svc := service.NewResourceSubtypeService()
+		handler := handleListResourceSubtypes(svc)
 
-			w := httptest.NewRecorder()
-			r := httptest.NewRequest("GET", "/resource-subtypes", nil)
-			handler.ServeHTTP(w, r)
+		w := httptest.NewRecorder()
+		r := httptest.NewRequest("GET", "/resource-subtypes", nil)
+		handler.ServeHTTP(w, r)
 
-			if w.Code != http.StatusBadRequest {
-				t.Fatalf("expected 400, got %d; body: %s", w.Code, w.Body.String())
-			}
-			ct := w.Header().Get("Content-Type")
-			if ct != "application/json" {
-				t.Fatalf("expected Content-Type application/json, got %q", ct)
-			}
+		if w.Code != http.StatusBadRequest {
+			t.Fatalf("expected 400, got %d; body: %s", w.Code, w.Body.String())
+		}
+		ct := w.Header().Get("Content-Type")
+		if ct != "application/json" {
+			t.Fatalf("expected Content-Type application/json, got %q", ct)
+		}
 
-			var body apiErrorResponse
-			if err := json.NewDecoder(w.Body).Decode(&body); err != nil {
-				t.Fatalf("decode response: %v", err)
-			}
-			if body.Error != "validation_failed" {
-				t.Fatalf("expected error code validation_failed, got %q", body.Error)
-			}
-			if body.Message == "" {
-				t.Fatal("expected non-empty error message")
-			}
-			if !strings.Contains(body.Message, "resourceType") {
-				t.Fatalf("expected message to mention resourceType, got %q", body.Message)
-			}
-		})
-	}
+		var body apiErrorResponse
+		if err := json.NewDecoder(w.Body).Decode(&body); err != nil {
+			t.Fatalf("decode response: %v", err)
+		}
+		if body.Error != "validation_failed" {
+			t.Fatalf("expected error code validation_failed, got %q", body.Error)
+		}
+		if body.Message == "" {
+			t.Fatal("expected non-empty error message")
+		}
+		if !strings.Contains(body.Message, "resourceType") {
+			t.Fatalf("expected message to mention resourceType, got %q", body.Message)
+		}
+	})
+}
 
 // --- Phase 17A: Readable relation views ---
 
@@ -2280,135 +2284,135 @@ func TestGetResource_NoProfileSummaryWithoutProfileData(t *testing.T) {
 	}
 }
 
-	// --- Phase 26A: DatabaseOperationalSummary tests ---
+// --- Phase 26A: DatabaseOperationalSummary tests ---
 
-	func TestListResources_DatabaseClusterIncludesOperationalSummary(t *testing.T) {
-		server := NewTestServer()
-		req := httptest.NewRequest(http.MethodGet, "/resources?resourceType=database_cluster", nil)
-		rec := httptest.NewRecorder()
+func TestListResources_DatabaseClusterIncludesOperationalSummary(t *testing.T) {
+	server := NewTestServer()
+	req := httptest.NewRequest(http.MethodGet, "/resources?resourceType=database_cluster", nil)
+	rec := httptest.NewRecorder()
 
-		server.Router.ServeHTTP(rec, req)
+	server.Router.ServeHTTP(rec, req)
 
-		if rec.Code != http.StatusOK {
-			t.Fatalf("expected 200, got %d; body: %s", rec.Code, rec.Body.String())
-		}
-
-		var resp paginatedResourceResponse
-		if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
-			t.Fatalf("decode: %v", err)
-		}
-
-		if len(resp.Items) == 0 {
-			t.Fatal("expected at least one database_cluster")
-		}
-
-		var chCluster *model.Resource
-		for i := range resp.Items {
-			if resp.Items[i].ResourceSubtype == "clickhouse" {
-				chCluster = &resp.Items[i]
-				break
-			}
-		}
-		if chCluster == nil {
-			t.Fatal("expected clickhouse cluster in results")
-		}
-
-		if chCluster.DatabaseOperationalSummary == nil {
-			t.Fatal("expected databaseOperationalSummary for clickhouse cluster, got nil")
-		}
-		s := chCluster.DatabaseOperationalSummary
-		if s.MemberCount != 2 {
-			t.Fatalf("expected memberCount 2, got %d", s.MemberCount)
-		}
-		if s.CriticalMemberCount != 1 {
-			t.Fatalf("expected criticalMemberCount 1, got %d", s.CriticalMemberCount)
-		}
-		if s.WorstMemberName != "Analytics ClickHouse Node 02" {
-			t.Fatalf("expected worstMemberName 'Analytics ClickHouse Node 02', got %q", s.WorstMemberName)
-		}
-		if s.WorstMemberStatus != "critical" {
-			t.Fatalf("expected worstMemberStatus 'critical', got %q", s.WorstMemberStatus)
-		}
-		if s.ReplicaMemberCount != 2 {
-			t.Fatalf("expected replicaMemberCount 2, got %d", s.ReplicaMemberCount)
-		}
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d; body: %s", rec.Code, rec.Body.String())
 	}
 
-	func TestGetResource_DatabaseClusterIncludesOperationalSummary(t *testing.T) {
-		server := NewTestServer()
-		req := httptest.NewRequest(http.MethodGet, "/resources/9", nil)
-		rec := httptest.NewRecorder()
-
-		server.Router.ServeHTTP(rec, req)
-
-		if rec.Code != http.StatusOK {
-			t.Fatalf("expected 200, got %d; body: %s", rec.Code, rec.Body.String())
-		}
-
-		var wrapper struct {
-			Resource model.Resource `json:"resource"`
-		}
-		if err := json.NewDecoder(rec.Body).Decode(&wrapper); err != nil {
-			t.Fatalf("decode: %v", err)
-		}
-
-		if wrapper.Resource.DatabaseOperationalSummary == nil {
-			t.Fatal("expected databaseOperationalSummary for database cluster resource 9")
-		}
-		s := wrapper.Resource.DatabaseOperationalSummary
-		if s.MemberCount != 2 {
-			t.Fatalf("expected memberCount 2, got %d", s.MemberCount)
-		}
-		if s.CriticalMemberCount != 1 {
-			t.Fatalf("expected criticalMemberCount 1, got %d", s.CriticalMemberCount)
-		}
+	var resp paginatedResourceResponse
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode: %v", err)
 	}
 
-	func TestGetResource_NonDatabaseClusterNoOperationalSummary(t *testing.T) {
-		server := NewTestServer()
-		req := httptest.NewRequest(http.MethodGet, "/resources/2", nil)
-		rec := httptest.NewRecorder()
-
-		server.Router.ServeHTTP(rec, req)
-
-		if rec.Code != http.StatusOK {
-			t.Fatalf("expected 200, got %d; body: %s", rec.Code, rec.Body.String())
-		}
-
-		var wrapper struct {
-			Resource model.Resource `json:"resource"`
-		}
-		if err := json.NewDecoder(rec.Body).Decode(&wrapper); err != nil {
-			t.Fatalf("decode: %v", err)
-		}
-
-		if wrapper.Resource.DatabaseOperationalSummary != nil {
-			t.Fatalf("expected no databaseOperationalSummary for host resource, got %+v", wrapper.Resource.DatabaseOperationalSummary)
-		}
+	if len(resp.Items) == 0 {
+		t.Fatal("expected at least one database_cluster")
 	}
 
-	func TestListResources_NonDatabaseResourcesNoOperationalSummary(t *testing.T) {
-		server := NewTestServer()
-		req := httptest.NewRequest(http.MethodGet, "/resources?resourceType=host", nil)
-		rec := httptest.NewRecorder()
-
-		server.Router.ServeHTTP(rec, req)
-
-		if rec.Code != http.StatusOK {
-			t.Fatalf("expected 200, got %d", rec.Code)
-		}
-
-		var resp paginatedResourceResponse
-		if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
-			t.Fatalf("decode: %v", err)
-		}
-
-		for _, item := range resp.Items {
-			if item.DatabaseOperationalSummary != nil {
-				t.Fatalf("host resource %d should not have databaseOperationalSummary", item.ID)
-			}
+	var chCluster *model.Resource
+	for i := range resp.Items {
+		if resp.Items[i].ResourceSubtype == "clickhouse" {
+			chCluster = &resp.Items[i]
+			break
 		}
 	}
+	if chCluster == nil {
+		t.Fatal("expected clickhouse cluster in results")
+	}
+
+	if chCluster.DatabaseOperationalSummary == nil {
+		t.Fatal("expected databaseOperationalSummary for clickhouse cluster, got nil")
+	}
+	s := chCluster.DatabaseOperationalSummary
+	if s.MemberCount != 2 {
+		t.Fatalf("expected memberCount 2, got %d", s.MemberCount)
+	}
+	if s.CriticalMemberCount != 1 {
+		t.Fatalf("expected criticalMemberCount 1, got %d", s.CriticalMemberCount)
+	}
+	if s.WorstMemberName != "Analytics ClickHouse Node 02" {
+		t.Fatalf("expected worstMemberName 'Analytics ClickHouse Node 02', got %q", s.WorstMemberName)
+	}
+	if s.WorstMemberStatus != "critical" {
+		t.Fatalf("expected worstMemberStatus 'critical', got %q", s.WorstMemberStatus)
+	}
+	if s.ReplicaMemberCount != 2 {
+		t.Fatalf("expected replicaMemberCount 2, got %d", s.ReplicaMemberCount)
+	}
+}
+
+func TestGetResource_DatabaseClusterIncludesOperationalSummary(t *testing.T) {
+	server := NewTestServer()
+	req := httptest.NewRequest(http.MethodGet, "/resources/9", nil)
+	rec := httptest.NewRecorder()
+
+	server.Router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+
+	var wrapper struct {
+		Resource model.Resource `json:"resource"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&wrapper); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+
+	if wrapper.Resource.DatabaseOperationalSummary == nil {
+		t.Fatal("expected databaseOperationalSummary for database cluster resource 9")
+	}
+	s := wrapper.Resource.DatabaseOperationalSummary
+	if s.MemberCount != 2 {
+		t.Fatalf("expected memberCount 2, got %d", s.MemberCount)
+	}
+	if s.CriticalMemberCount != 1 {
+		t.Fatalf("expected criticalMemberCount 1, got %d", s.CriticalMemberCount)
+	}
+}
+
+func TestGetResource_NonDatabaseClusterNoOperationalSummary(t *testing.T) {
+	server := NewTestServer()
+	req := httptest.NewRequest(http.MethodGet, "/resources/2", nil)
+	rec := httptest.NewRecorder()
+
+	server.Router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+
+	var wrapper struct {
+		Resource model.Resource `json:"resource"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&wrapper); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+
+	if wrapper.Resource.DatabaseOperationalSummary != nil {
+		t.Fatalf("expected no databaseOperationalSummary for host resource, got %+v", wrapper.Resource.DatabaseOperationalSummary)
+	}
+}
+
+func TestListResources_NonDatabaseResourcesNoOperationalSummary(t *testing.T) {
+	server := NewTestServer()
+	req := httptest.NewRequest(http.MethodGet, "/resources?resourceType=host", nil)
+	rec := httptest.NewRecorder()
+
+	server.Router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rec.Code)
+	}
+
+	var resp paginatedResourceResponse
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+
+	for _, item := range resp.Items {
+		if item.DatabaseOperationalSummary != nil {
+			t.Fatalf("host resource %d should not have databaseOperationalSummary", item.ID)
+		}
+	}
+}
 
 func TestCreateResourceWithProfile_Success(t *testing.T) {
 	server := NewTestServer()
@@ -2623,5 +2627,110 @@ func TestCreateResourceWithProfile_ProfileWriteFailureIsNotSuccess(t *testing.T)
 				t.Fatalf("must not return success when the initial profile write fails; got %d body=%s", rec.Code, rec.Body.String())
 			}
 		})
+	}
+}
+
+func TestCreateResourceRejectsMissingManualIdentity(t *testing.T) {
+	server := NewTestServer()
+	body := `{
+		"resourceType":"host",
+		"resourceSubtype":"vm",
+		"name":"host-no-identity",
+		"displayName":"Host No Identity",
+		"environmentId":1,
+		"ownerId":2,
+		"lifecycleStatus":"running",
+		"healthStatus":"healthy",
+		"source":"manual",
+		"labels":{"hostname":"not-a-profile","ipAddress":"10.0.0.1"}
+	}`
+	req := httptest.NewRequest(http.MethodPost, "/resources", strings.NewReader(body))
+	rec := httptest.NewRecorder()
+	server.Router.ServeHTTP(rec, req)
+
+	assertAPIError(t, rec, http.StatusBadRequest, "validation_failed")
+	var payload struct {
+		Details map[string]string `json:"details"`
+	}
+	if err := json.NewDecoder(bytes.NewReader(rec.Body.Bytes())).Decode(&payload); err != nil {
+		t.Fatalf("decode details: %v", err)
+	}
+	if payload.Details["hostname"] == "" || payload.Details["ipAddress"] == "" {
+		t.Fatalf("expected controlled identity field errors, got %#v", payload.Details)
+	}
+}
+
+func TestCreateResourceAcceptsServiceWorker(t *testing.T) {
+	server := NewTestServer()
+	body := `{
+		"resourceType":"service",
+		"resourceSubtype":"worker",
+		"name":"order-worker-prod",
+		"displayName":"Order Worker Prod",
+		"environmentId":1,
+		"ownerId":2,
+		"lifecycleStatus":"running",
+		"healthStatus":"healthy",
+		"source":"manual",
+		"labels":{"team":"order"},
+		"profile":{"systemName":"order-worker"}
+	}`
+	req := httptest.NewRequest(http.MethodPost, "/resources", strings.NewReader(body))
+	rec := httptest.NewRecorder()
+	server.Router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("expected 201 for worker service, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+	var created model.Resource
+	if err := json.NewDecoder(rec.Body).Decode(&created); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if created.ResourceSubtype != "worker" {
+		t.Fatalf("subtype = %q, want worker", created.ResourceSubtype)
+	}
+
+	profileReq := httptest.NewRequest(http.MethodGet, "/resources/"+strconv.FormatUint(created.ID, 10)+"/profile", nil)
+	profileRec := httptest.NewRecorder()
+	server.Router.ServeHTTP(profileRec, profileReq)
+	if profileRec.Code != http.StatusOK {
+		t.Fatalf("expected 200 for profile, got %d; body: %s", profileRec.Code, profileRec.Body.String())
+	}
+	var profile model.ResourceProfileResponse
+	if err := json.NewDecoder(profileRec.Body).Decode(&profile); err != nil {
+		t.Fatalf("decode profile: %v", err)
+	}
+	if profile.Profile["systemName"] != "order-worker" {
+		t.Fatalf("expected typed profile systemName, got %#v", profile.Profile)
+	}
+}
+
+func TestCreateResourceRejectsUnknownServiceSubtype(t *testing.T) {
+	server := NewTestServer()
+	body := `{
+		"resourceType":"service",
+		"resourceSubtype":"ha",
+		"name":"bad-service-subtype",
+		"displayName":"Bad Service Subtype",
+		"environmentId":1,
+		"ownerId":2,
+		"lifecycleStatus":"running",
+		"healthStatus":"healthy",
+		"source":"manual",
+		"profile":{"systemName":"orders"}
+	}`
+	req := httptest.NewRequest(http.MethodPost, "/resources", strings.NewReader(body))
+	rec := httptest.NewRecorder()
+	server.Router.ServeHTTP(rec, req)
+
+	assertAPIError(t, rec, http.StatusBadRequest, "validation_failed")
+	var payload struct {
+		Details map[string]string `json:"details"`
+	}
+	if err := json.NewDecoder(bytes.NewReader(rec.Body.Bytes())).Decode(&payload); err != nil {
+		t.Fatalf("decode details: %v", err)
+	}
+	if payload.Details["resourceSubtype"] == "" {
+		t.Fatalf("expected resourceSubtype field error, got %#v", payload.Details)
 	}
 }

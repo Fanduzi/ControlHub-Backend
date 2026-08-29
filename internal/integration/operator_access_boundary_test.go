@@ -1,10 +1,8 @@
 //go:build integration
-
-// Package integration provides real-MySQL coverage for the operator access
-// boundary matrix.
-// input: context, encoding/json, fmt, net/http, net/http/httptest, strings, testing, time, internal/api, internal/model, internal/repository/mysql, internal/service, internal/testsupport/operatoraccess
-// output: TestOperatorAccessBoundary integration case
-// pos: Proves the operator access matrix (including 38R conditional saved statements) on real MySQL state with concrete resource/query-target paths bound to a self-contained database_instance fixture
+// Package integration provides real-MySQL coverage for the operator access matrix.
+// input: context, encoding/json, fmt, net/http, testing, time, internal/api, internal/model, internal/repository/mysql, internal/service, internal/testsupport/operatoraccess
+// output: TestOperatorAccessBoundary
+// pos: Proves the operator access matrix on real MySQL with a self-contained fixture
 // note: if this file changes, update header and README.md
 package integration
 
@@ -262,7 +260,7 @@ func boundaryRequestPath(op operatoraccess.Operation, targetID uint64) string {
 func boundaryBody(op operatoraccess.Operation) string {
 	switch op.Method + " " + op.Path {
 	case "POST /resources":
-		return fmt.Sprintf(`{"resourceType":"host","resourceSubtype":"vm","name":"operator-boundary-%d","displayName":"Operator Boundary","environmentId":1,"ownerId":1,"lifecycleStatus":"running","healthStatus":"healthy","source":"manual","labels":{}}`, time.Now().UnixNano())
+		return fmt.Sprintf(`{"resourceType":"host","resourceSubtype":"vm","name":"operator-boundary-%d","displayName":"Operator Boundary","environmentId":1,"ownerId":1,"lifecycleStatus":"running","healthStatus":"healthy","source":"manual","labels":{},"profile":{"hostname":"boundary.internal","ipAddress":"10.0.0.8"}}`, time.Now().UnixNano())
 	case "PATCH /resources/{id}":
 		return `{"displayName":"Operator Boundary Updated"}`
 	case "POST /resources/{id}/archive":

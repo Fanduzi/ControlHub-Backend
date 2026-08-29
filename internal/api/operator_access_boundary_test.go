@@ -209,7 +209,7 @@ func assertBoundary2xx(t *testing.T, op operatoraccess.Operation, got int, body 
 func boundaryBody(op operatoraccess.Operation) string {
 	switch op.Method + " " + op.Path {
 	case "POST /resources":
-		return `{"resourceType":"database_instance","resourceSubtype":"mysql","name":"operator-boundary-resource","displayName":"Operator Boundary Resource","environmentId":1,"ownerId":2,"lifecycleStatus":"running","healthStatus":"healthy","source":"manual","labels":{}}`
+		return `{"resourceType":"database_instance","resourceSubtype":"mysql","name":"operator-boundary-resource","displayName":"Operator Boundary Resource","environmentId":1,"ownerId":2,"lifecycleStatus":"running","healthStatus":"healthy","source":"manual","labels":{},"profile":{"engine":"mysql","host":"boundary.internal","port":3306}}`
 	case "PATCH /resources/{id}":
 		return `{"displayName":"Operator Boundary Updated"}`
 	case "POST /resources/{id}/archive":

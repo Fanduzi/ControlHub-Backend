@@ -1,7 +1,7 @@
 // Package service provides tests for resource and relation write flows.
 // input: internal/service write APIs, internal/model, testing
 // output: TestResourceService* and TestRelationService* functions
-// pos: Validates write-side business rules before repository persistence
+// pos: Validates write-side business rules before repository persistence, including core CI manual identity
 // note: if this file changes, update header and README.md
 package service
 
@@ -248,6 +248,7 @@ func TestResourceServiceCreate(t *testing.T) {
 		Source:          "manual",
 		ExternalID:      "order-mysql-02-prod",
 		Labels:          map[string]string{"team": "order"},
+		Profile:         instanceIdentityProfile(),
 	})
 	if err != nil {
 		t.Fatalf("expected no error, got %v", err)
@@ -290,6 +291,7 @@ func TestResourceServiceCreateRejectsMissingEnvironment(t *testing.T) {
 		HealthStatus:    model.HealthStatusHealthy,
 		Source:          "manual",
 		Labels:          map[string]string{},
+		Profile:         instanceIdentityProfile(),
 	})
 	if !errors.Is(err, ErrEnvironmentNotFound) {
 		t.Fatalf("expected ErrEnvironmentNotFound, got %v", err)
@@ -310,6 +312,7 @@ func TestResourceServiceCreateRejectsMissingOwner(t *testing.T) {
 		HealthStatus:    model.HealthStatusHealthy,
 		Source:          "manual",
 		Labels:          map[string]string{},
+		Profile:         instanceIdentityProfile(),
 	})
 	if !errors.Is(err, ErrOwnerNotFound) {
 		t.Fatalf("expected ErrOwnerNotFound, got %v", err)
@@ -331,6 +334,7 @@ func TestResourceServiceCreateRejectsDuplicateNameWithinEnvironment(t *testing.T
 		HealthStatus:    model.HealthStatusHealthy,
 		Source:          "manual",
 		Labels:          map[string]string{},
+		Profile:         instanceIdentityProfile(),
 	})
 	if !errors.Is(err, ErrResourceConflict) {
 		t.Fatalf("expected ErrResourceConflict, got %v", err)
@@ -724,6 +728,7 @@ func TestResourceServiceCreateAcceptsValidLabels(t *testing.T) {
 		HealthStatus:    model.HealthStatusHealthy,
 		Source:          "manual",
 		Labels:          map[string]string{"team": "order", "tier": "data", "env": "prod"},
+		Profile:         instanceIdentityProfile(),
 	})
 	if err != nil {
 		t.Fatalf("expected no error for valid labels, got %v", err)
@@ -927,15 +932,11 @@ func TestResourceServiceCreate_WithProfilePersistsProfile(t *testing.T) {
 	}
 }
 
-// TestResourceServiceCreate_EmptyProfileObjectGoesThroughAtomicPath pins the
-// nil-versus-empty distinction: a submitted empty profile object is still a
-// profile write request and must reach the transactional repository seam
-// (where unsupported types are rejected) instead of being silently dropped.
-func TestResourceServiceCreate_EmptyProfileObjectGoesThroughAtomicPath(t *testing.T) {
+func TestResourceServiceCreate_EmptyHostProfileRejectedForIdentity(t *testing.T) {
 	repo := &fakeResourceWriteRepo{resources: map[uint64]model.Resource{}}
 	svc := NewResourceService(repo)
 
-	created, err := svc.Create(context.Background(), model.ResourceCreateInput{
+	_, err := svc.Create(context.Background(), model.ResourceCreateInput{
 		ResourceType:    model.ResourceTypeHost,
 		ResourceSubtype: "vm",
 		Name:            "atomicity-empty-profile-01",
@@ -947,17 +948,205 @@ func TestResourceServiceCreate_EmptyProfileObjectGoesThroughAtomicPath(t *testin
 		Source:          "manual",
 		Profile:         map[string]any{},
 	})
+	var ve *ValidationError
+	if !errors.As(err, &ve) {
+		t.Fatalf("expected ValidationError for missing host identity, got %v", err)
+	}
+	if ve.Fields["hostname"] == "" || ve.Fields["ipAddress"] == "" {
+		t.Fatalf("expected hostname and ipAddress identity errors, got %#v", ve.Fields)
+	}
+	if len(repo.resources) != 0 {
+		t.Fatalf("expected no resource left behind after identity rejection, found %d", len(repo.resources))
+	}
+}
+
+func instanceIdentityProfile() map[string]any {
+	return map[string]any{
+		"engine": "mysql",
+		"host":   "db-01.internal",
+		"port":   3306,
+	}
+}
+
+func TestResourceServiceCreate_MinimumManualIdentityMatrix(t *testing.T) {
+	tests := []struct {
+		name       string
+		input      model.ResourceCreateInput
+		wantOK     bool
+		wantFields []string
+	}{
+		{
+			name: "host complete identity",
+			input: model.ResourceCreateInput{
+				ResourceType: model.ResourceTypeHost, ResourceSubtype: "vm",
+				Name: "host-ok", DisplayName: "Host OK", EnvironmentID: testEnvID, OwnerID: testOwnerID,
+				LifecycleStatus: model.LifecycleStatusRunning, HealthStatus: model.HealthStatusHealthy, Source: "manual",
+				Profile: map[string]any{"hostname": "host-01.internal", "ipAddress": "10.0.0.10"},
+			},
+			wantOK: true,
+		},
+		{
+			name: "host missing hostname",
+			input: model.ResourceCreateInput{
+				ResourceType: model.ResourceTypeHost, ResourceSubtype: "vm",
+				Name: "host-no-name", DisplayName: "Host", EnvironmentID: testEnvID, OwnerID: testOwnerID,
+				LifecycleStatus: model.LifecycleStatusRunning, HealthStatus: model.HealthStatusHealthy, Source: "manual",
+				Profile: map[string]any{"ipAddress": "10.0.0.10"},
+			},
+			wantFields: []string{"hostname"},
+		},
+		{
+			name: "host whitespace hostname",
+			input: model.ResourceCreateInput{
+				ResourceType: model.ResourceTypeHost, ResourceSubtype: "vm",
+				Name: "host-blank", DisplayName: "Host", EnvironmentID: testEnvID, OwnerID: testOwnerID,
+				LifecycleStatus: model.LifecycleStatusRunning, HealthStatus: model.HealthStatusHealthy, Source: "manual",
+				Profile: map[string]any{"hostname": "   ", "ipAddress": "10.0.0.10"},
+			},
+			wantFields: []string{"hostname"},
+		},
+		{
+			name: "host identity only in labels",
+			input: model.ResourceCreateInput{
+				ResourceType: model.ResourceTypeHost, ResourceSubtype: "vm",
+				Name: "host-labels", DisplayName: "Host", EnvironmentID: testEnvID, OwnerID: testOwnerID,
+				LifecycleStatus: model.LifecycleStatusRunning, HealthStatus: model.HealthStatusHealthy, Source: "manual",
+				Labels: map[string]string{"hostname": "host-01.internal", "ipAddress": "10.0.0.10"},
+			},
+			wantFields: []string{"hostname", "ipAddress"},
+		},
+		{
+			name: "database instance complete identity",
+			input: model.ResourceCreateInput{
+				ResourceType: model.ResourceTypeDatabaseInstance, ResourceSubtype: "mysql",
+				Name: "db-ok", DisplayName: "DB OK", EnvironmentID: testEnvID, OwnerID: testOwnerID,
+				LifecycleStatus: model.LifecycleStatusRunning, HealthStatus: model.HealthStatusHealthy, Source: "manual",
+				Profile: instanceIdentityProfile(),
+			},
+			wantOK: true,
+		},
+		{
+			name: "database instance missing port",
+			input: model.ResourceCreateInput{
+				ResourceType: model.ResourceTypeDatabaseInstance, ResourceSubtype: "mysql",
+				Name: "db-no-port", DisplayName: "DB", EnvironmentID: testEnvID, OwnerID: testOwnerID,
+				LifecycleStatus: model.LifecycleStatusRunning, HealthStatus: model.HealthStatusHealthy, Source: "manual",
+				Profile: map[string]any{"engine": "mysql", "host": "db-01.internal"},
+			},
+			wantFields: []string{"port"},
+		},
+		{
+			name: "database cluster complete identity",
+			input: model.ResourceCreateInput{
+				ResourceType: model.ResourceTypeDatabaseCluster, ResourceSubtype: "mysql",
+				Name: "cluster-ok", DisplayName: "Cluster OK", EnvironmentID: testEnvID, OwnerID: testOwnerID,
+				LifecycleStatus: model.LifecycleStatusRunning, HealthStatus: model.HealthStatusHealthy, Source: "manual",
+				Profile: map[string]any{"engine": "mysql", "primaryEndpoint": "cluster.internal:3306"},
+			},
+			wantOK: true,
+		},
+		{
+			name: "database cluster missing primaryEndpoint",
+			input: model.ResourceCreateInput{
+				ResourceType: model.ResourceTypeDatabaseCluster, ResourceSubtype: "mysql",
+				Name: "cluster-no-ep", DisplayName: "Cluster", EnvironmentID: testEnvID, OwnerID: testOwnerID,
+				LifecycleStatus: model.LifecycleStatusRunning, HealthStatus: model.HealthStatusHealthy, Source: "manual",
+				Profile: map[string]any{"engine": "mysql"},
+			},
+			wantFields: []string{"primaryEndpoint"},
+		},
+		{
+			name: "service worker complete identity",
+			input: model.ResourceCreateInput{
+				ResourceType: model.ResourceTypeService, ResourceSubtype: "worker",
+				Name: "worker-ok", DisplayName: "Worker OK", EnvironmentID: testEnvID, OwnerID: testOwnerID,
+				LifecycleStatus: model.LifecycleStatusRunning, HealthStatus: model.HealthStatusHealthy, Source: "manual",
+				Profile: map[string]any{"systemName": "order-worker"},
+			},
+			wantOK: true,
+		},
+		{
+			name: "service missing systemName",
+			input: model.ResourceCreateInput{
+				ResourceType: model.ResourceTypeService, ResourceSubtype: "api",
+				Name: "svc-no-system", DisplayName: "Service", EnvironmentID: testEnvID, OwnerID: testOwnerID,
+				LifecycleStatus: model.LifecycleStatusRunning, HealthStatus: model.HealthStatusHealthy, Source: "manual",
+			},
+			wantFields: []string{"systemName"},
+		},
+		{
+			name: "service unknown subtype rejected",
+			input: model.ResourceCreateInput{
+				ResourceType: model.ResourceTypeService, ResourceSubtype: "ha",
+				Name: "svc-bad-sub", DisplayName: "Service", EnvironmentID: testEnvID, OwnerID: testOwnerID,
+				LifecycleStatus: model.LifecycleStatusRunning, HealthStatus: model.HealthStatusHealthy, Source: "manual",
+				Profile: map[string]any{"systemName": "orders"},
+			},
+			wantFields: []string{"resourceSubtype"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			repo := &fakeResourceWriteRepo{resources: map[uint64]model.Resource{}}
+			svc := NewResourceService(repo)
+			created, err := svc.Create(context.Background(), tt.input)
+			if tt.wantOK {
+				if err != nil {
+					t.Fatalf("expected success, got %v", err)
+				}
+				if created == nil {
+					t.Fatal("expected created resource")
+				}
+				if tt.input.Profile != nil && repo.profile == nil {
+					t.Fatal("expected typed profile to be written, not labels")
+				}
+				return
+			}
+			var ve *ValidationError
+			if !errors.As(err, &ve) {
+				t.Fatalf("expected ValidationError, got %v", err)
+			}
+			for _, field := range tt.wantFields {
+				if ve.Fields[field] == "" {
+					t.Fatalf("expected field error for %s, got %#v", field, ve.Fields)
+				}
+			}
+			if len(repo.resources) != 0 {
+				t.Fatalf("expected no resource after rejection, found %d", len(repo.resources))
+			}
+		})
+	}
+}
+
+func TestResourceServiceCreate_KeepsLabelsAsFreeClassification(t *testing.T) {
+	repo := &fakeResourceWriteRepo{resources: map[uint64]model.Resource{}}
+	svc := NewResourceService(repo)
+
+	created, err := svc.Create(context.Background(), model.ResourceCreateInput{
+		ResourceType:    model.ResourceTypeHost,
+		ResourceSubtype: "vm",
+		Name:            "host-labeled",
+		DisplayName:     "Host Labeled",
+		EnvironmentID:   testEnvID,
+		OwnerID:         testOwnerID,
+		LifecycleStatus: model.LifecycleStatusRunning,
+		HealthStatus:    model.HealthStatusHealthy,
+		Source:          "manual",
+		Labels:          map[string]string{"team": "platform", "tier": "core"},
+		Profile:         map[string]any{"hostname": "host-labeled.internal", "ipAddress": "10.0.0.11"},
+	})
 	if err != nil {
 		t.Fatalf("expected success, got %v", err)
 	}
-	if created == nil || created.ID == 0 {
-		t.Fatal("expected created resource")
+	if created.Labels["hostname"] != "" || created.Labels["ipAddress"] != "" {
+		t.Fatalf("known profile attributes must not be copied into labels, got %#v", created.Labels)
 	}
-	if repo.profile == nil {
-		t.Fatal("expected the empty profile object to reach the atomic repository seam, got nil")
+	if created.Labels["team"] != "platform" {
+		t.Fatalf("expected free-classification label team=platform, got %#v", created.Labels)
 	}
-	if len(repo.resources) != 1 {
-		t.Fatalf("expected exactly one resource, found %d", len(repo.resources))
+	if repo.profile["hostname"] != "host-labeled.internal" {
+		t.Fatalf("expected identity in typed profile, got %#v", repo.profile)
 	}
 }
 

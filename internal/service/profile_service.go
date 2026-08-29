@@ -1,7 +1,7 @@
 // Package service provides business logic for typed profile writes.
 // input: internal/model (ResourceType, Resource), ProfileRepository interface
-// output: NewProfileService, ProfileService.PutProfile/PatchProfile/DeleteProfile, ProfileRepository interface
-// pos: Business logic for resource profile upserts with archived-resource guard, strict field validation, Domain Name/Virtual IP identity, and PATCH partial-merge semantics
+// output: NewProfileService, ProfileService.PutProfile/PatchProfile/DeleteProfile, ProfileRepository interface, minimum manual identity validation
+// pos: Business logic for resource profile upserts with archived-resource guard, strict field validation, Domain Name/Virtual IP identity, PATCH partial-merge semantics, and manual-registration identity
 // note: if this file changes, update header and README.md
 package service
 
@@ -15,6 +15,8 @@ import (
 
 	"github.com/fan/controlhub/internal/model"
 )
+
+const manualIdentityRequired = "is required for manual registration"
 
 // ProfileRepository defines the data access interface for typed profile upserts and deletes.
 // The concrete MySQL implementation lives in internal/repository/mysql/resource_repository.go.
@@ -248,7 +250,8 @@ const (
 
 // profileFieldSpec describes one accepted profile field: its JSON kind and
 // its constraints. maxLen mirrors the MySQL varchar column width in
-// characters (utf8mb4); intMin/intMax bound integer fields.
+// characters (utf8mb4); intMin/intMax bound integer fields. identity marks
+// the minimum manual-registration fields for the four core CI types.
 type profileFieldSpec struct {
 	key      string
 	kind     profileFieldKind
@@ -257,6 +260,7 @@ type profileFieldSpec struct {
 	intMax   int64
 	required bool
 	format   profileFieldFormat
+	identity bool
 }
 
 // profileFieldSchemas is the authoritative per-type profile field contract
@@ -264,24 +268,24 @@ type profileFieldSpec struct {
 // with the resource_profiles_* tables in migrations/0001_initial_schema.sql.
 var profileFieldSchemas = map[model.ResourceType][]profileFieldSpec{
 	model.ResourceTypeHost: {
-		{key: "hostname", kind: profileStringField, maxLen: 255},
-		{key: "ipAddress", kind: profileStringField, maxLen: 64},
+		{key: "hostname", kind: profileStringField, maxLen: 255, identity: true},
+		{key: "ipAddress", kind: profileStringField, maxLen: 64, identity: true},
 		{key: "osName", kind: profileStringField, maxLen: 255},
 	},
 	model.ResourceTypeDatabaseInstance: {
-		{key: "engine", kind: profileStringField, maxLen: 64},
+		{key: "engine", kind: profileStringField, maxLen: 64, identity: true},
 		{key: "version", kind: profileStringField, maxLen: 64},
-		{key: "host", kind: profileStringField, maxLen: 255},
-		{key: "port", kind: profileIntField, intMin: 1, intMax: 65535},
+		{key: "host", kind: profileStringField, maxLen: 255, identity: true},
+		{key: "port", kind: profileIntField, intMin: 1, intMax: 65535, identity: true},
 		{key: "role", kind: profileStringField, maxLen: 64},
 	},
 	model.ResourceTypeDatabaseCluster: {
-		{key: "engine", kind: profileStringField, maxLen: 64},
+		{key: "engine", kind: profileStringField, maxLen: 64, identity: true},
 		{key: "topologyMode", kind: profileStringField, maxLen: 64},
-		{key: "primaryEndpoint", kind: profileStringField, maxLen: 255},
+		{key: "primaryEndpoint", kind: profileStringField, maxLen: 255, identity: true},
 	},
 	model.ResourceTypeService: {
-		{key: "systemName", kind: profileStringField, maxLen: 255},
+		{key: "systemName", kind: profileStringField, maxLen: 255, identity: true},
 		{key: "repositoryUrl", kind: profileStringField, maxLen: 512},
 		{key: "runtimeEnv", kind: profileStringField, maxLen: 64},
 	},
@@ -406,6 +410,53 @@ func validateProfileFields(resourceType model.ResourceType, fields map[string]in
 
 func normalizeFQDN(value string) string {
 	return strings.TrimRight(strings.ToLower(strings.TrimSpace(value)), ".")
+}
+
+// validateMinimumManualIdentity requires each identity field for host,
+// database_instance, database_cluster, and service on manual registration.
+// Types without a profile table have no T02 identity rule. Labels never
+// satisfy identity.
+func validateMinimumManualIdentity(resourceType model.ResourceType, fields map[string]interface{}) error {
+	specs, ok := profileFieldSchemas[resourceType]
+	if !ok {
+		return nil
+	}
+	var ve *ValidationError
+	for _, spec := range specs {
+		if !spec.identity {
+			continue
+		}
+		if !identityValuePresent(spec, fields) {
+			if ve == nil {
+				ve = newValidationError("validation failed")
+			}
+			ve.WithField(spec.key, manualIdentityRequired)
+		}
+	}
+	if ve != nil {
+		return ve
+	}
+	return nil
+}
+
+func identityValuePresent(spec profileFieldSpec, fields map[string]interface{}) bool {
+	if fields == nil {
+		return false
+	}
+	value, ok := fields[spec.key]
+	if !ok || value == nil {
+		return false
+	}
+	switch spec.kind {
+	case profileStringField:
+		s, ok := value.(string)
+		return ok && strings.TrimSpace(s) != ""
+	case profileIntField:
+		n, ok := profileIntValue(value)
+		return ok && n >= spec.intMin && n <= spec.intMax
+	default:
+		return false
+	}
 }
 
 // profileIntValue accepts int, int64, and integral float64 (the shape JSON

@@ -1,5 +1,9 @@
 //go:build integration
-
+// Package integration provides real-MySQL coverage for archive service writes.
+// input: context, testing, time, internal/model, internal/repository/mysql, internal/service
+// output: TestServiceArchive_RejectsUpdateAfterArchive, TestServiceUnarchive_AllowsUpdateAfterUnarchive
+// pos: Proves archive/unarchive service writes against real MySQL
+// note: if this file changes, update header and README.md
 package integration
 
 import (
@@ -152,8 +156,8 @@ func TestListResources_ExcludesArchived(t *testing.T) {
 	// Default list should not include r1.
 	items, _, err := repo.ListResources(ctx, model.ResourceListQuery{
 		ResourceTypes: []string{string(model.ResourceTypeHost)},
-		Page:         1,
-		PageSize:     100,
+		Page:          1,
+		PageSize:      100,
 	})
 	if err != nil {
 		t.Fatalf("list: %v", err)
@@ -229,6 +233,7 @@ func TestServiceArchive_RejectsUpdateAfterArchive(t *testing.T) {
 		HealthStatus:    model.HealthStatusHealthy,
 		Source:          "manual",
 		Labels:          map[string]string{},
+		Profile:         map[string]any{"hostname": "svc-archive-target.internal", "ipAddress": "10.0.0.21"},
 	})
 	if err != nil {
 		t.Fatalf("create: %v", err)
@@ -374,8 +379,8 @@ func TestUnarchivedResource_ReappearsInDefaultList(t *testing.T) {
 	// Should NOT appear in default list.
 	items, _, _ := repo.ListResources(ctx, model.ResourceListQuery{
 		ResourceTypes: []string{string(model.ResourceTypeHost)},
-		Page:         1,
-		PageSize:     100,
+		Page:          1,
+		PageSize:      100,
 	})
 	for _, item := range items {
 		if item.ID == created.ID {
@@ -388,8 +393,8 @@ func TestUnarchivedResource_ReappearsInDefaultList(t *testing.T) {
 	// Should reappear after unarchive.
 	items2, _, err := repo.ListResources(ctx, model.ResourceListQuery{
 		ResourceTypes: []string{string(model.ResourceTypeHost)},
-		Page:         1,
-		PageSize:     100,
+		Page:          1,
+		PageSize:      100,
 	})
 	if err != nil {
 		t.Fatalf("list after unarchive: %v", err)
@@ -446,9 +451,9 @@ func TestListResources_ArchivedOnly(t *testing.T) {
 
 	items, _, err := repo.ListResources(ctx, model.ResourceListQuery{
 		ResourceTypes: []string{string(model.ResourceTypeHost)},
-		ArchivedOnly: true,
-		Page:         1,
-		PageSize:     100,
+		ArchivedOnly:  true,
+		Page:          1,
+		PageSize:      100,
 	})
 	if err != nil {
 		t.Fatalf("list archivedOnly: %v", err)
@@ -551,6 +556,7 @@ func TestServiceUnarchive_AllowsUpdateAfterUnarchive(t *testing.T) {
 		HealthStatus:    model.HealthStatusHealthy,
 		Source:          "manual",
 		Labels:          map[string]string{},
+		Profile:         map[string]any{"hostname": "svc-unarchive-target.internal", "ipAddress": "10.0.0.22"},
 	})
 	if err != nil {
 		t.Fatalf("create: %v", err)

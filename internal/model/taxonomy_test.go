@@ -1,7 +1,7 @@
 // Package model provides tests for taxonomy subtype dictionaries and validation.
 // input: testing, ResourceSubtypeDictionary, ValidateResourceSubtype
-// output: TestResourceSubtype* functions
-// pos: Pins Domain Name dns and Virtual IP floating as required taxonomy, and rejects unknown subtypes
+// output: TestResourceSubtypeValidate*, TestResourceSubtypeDictionary*
+// pos: Pins Domain Name dns, Virtual IP floating, and service worker taxonomy; rejects unknown subtypes
 // note: if this file changes, update header and README.md
 package model
 
@@ -23,6 +23,7 @@ func TestResourceSubtypeValidate_Valid(t *testing.T) {
 		{"host", "physical"},
 		{"host", "container"},
 		{"service", "api"},
+		{"service", "worker"},
 		{"database_proxy", "proxysql"},
 		{"control_plane_component", "orchestrator"},
 		{"domain_name", "dns"},
@@ -60,6 +61,12 @@ func TestResourceSubtypeValidate_DomainNameAndVirtualIPRejectUnknown(t *testing.
 	}
 }
 
+func TestResourceSubtypeValidate_ServiceUnknownRejected(t *testing.T) {
+	if err := ValidateResourceSubtype("service", "ha"); err == nil {
+		t.Fatal("unknown service subtype must be rejected")
+	}
+}
+
 func TestResourceSubtypeDictionary(t *testing.T) {
 	items := ResourceSubtypeDictionary("database_instance")
 	if len(items) != 6 {
@@ -82,5 +89,16 @@ func TestResourceSubtypeDictionary_DomainNameAndVirtualIP(t *testing.T) {
 	vip := ResourceSubtypeDictionary("virtual_ip")
 	if len(vip) != 1 || vip[0].Key != "floating" {
 		t.Errorf("ResourceSubtypeDictionary(virtual_ip) = %#v, want [floating]", vip)
+	}
+}
+
+func TestResourceSubtypeDictionary_ServiceIncludesWorker(t *testing.T) {
+	items := ResourceSubtypeDictionary("service")
+	keys := make(map[string]bool, len(items))
+	for _, item := range items {
+		keys[item.Key] = true
+	}
+	if !keys["worker"] {
+		t.Fatalf("service dictionary missing worker subtype, got %#v", keys)
 	}
 }

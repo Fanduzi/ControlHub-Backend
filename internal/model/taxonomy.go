@@ -110,6 +110,7 @@ var resourceSubtypeMap = map[string][]DictionaryItem{
 		{Key: "web", Label: "Web Application"},
 		{Key: "job", Label: "Batch Job"},
 		{Key: "cron", Label: "Cron Job"},
+		{Key: "worker", Label: "Worker"},
 	},
 	string(ResourceTypeControlPlaneComponent): {
 		{Key: "orchestrator", Label: "Orchestrator"},

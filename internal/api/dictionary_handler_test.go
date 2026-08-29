@@ -1,7 +1,7 @@
 // Package api provides HTTP handlers and routing for the ControlHub REST API.
 // input: internal/api, internal/model, net/http, net/http/httptest, encoding/json
-// output: TestListEnvironments/Owners/Roles/ResourceTypes/RelationTypes/LifecycleStatuses/HealthStatuses/ResourceSubtypes
-// pos: Validates all dictionary endpoints return correct items, including Domain Name dns and Virtual IP floating
+// output: TestListEnvironments/Owners/Roles/ResourceTypes/RelationTypes/LifecycleStatuses/HealthStatuses/ResourceSubtypes including service worker
+// pos: Validates all dictionary endpoints return correct items, including Domain Name dns, Virtual IP floating, and service worker
 // note: if this file changes, update header and README.md
 package api
 
@@ -309,6 +309,37 @@ func TestListResourceSubtypes(t *testing.T) {
 	}
 	if body.Subtypes[0].Label != "MySQL" {
 		t.Fatalf("expected first subtype label MySQL, got %s", body.Subtypes[0].Label)
+	}
+}
+
+func TestListResourceSubtypes_ServiceIncludesWorker(t *testing.T) {
+	server := NewTestServer()
+	req := httptest.NewRequest(http.MethodGet, "/resource-subtypes?resourceType=service", nil)
+	rec := httptest.NewRecorder()
+	server.Router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rec.Code)
+	}
+	var body struct {
+		ResourceType string                 `json:"resourceType"`
+		Subtypes     []model.DictionaryItem `json:"subtypes"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&body); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if body.ResourceType != "service" {
+		t.Fatalf("resourceType = %q, want service", body.ResourceType)
+	}
+	found := false
+	for _, item := range body.Subtypes {
+		if item.Key == "worker" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("service subtypes missing worker, got %#v", body.Subtypes)
 	}
 }
 

@@ -4734,8 +4734,12 @@ components:
           type: object
           additionalProperties: true
           description: >-
-            Optional typed profile fields to persist during resource creation.
-            Supported keys depend on resourceType/resourceSubtype.
+            Typed profile fields persisted during resource creation. Known
+            attributes belong here, not in labels. Manual registration of
+            host, database_instance, database_cluster, and service requires
+            that type's minimum identity: host hostname+ipAddress;
+            database_instance engine+host+port; database_cluster
+            engine+primaryEndpoint; service systemName.
     ResourcePatchRequest:
       type: object
       minProperties: 1
