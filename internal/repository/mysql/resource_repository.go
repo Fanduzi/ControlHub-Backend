@@ -193,6 +193,145 @@ func (r *ResourceRepository) ClearManualOverrideWithAudit(ctx context.Context, r
 	return tx.Commit()
 }
 
+// ConfirmBulkResourceMutation locks, re-previews, writes, and audits every
+// requested resource in one transaction.
+func (r *ResourceRepository) ConfirmBulkResourceMutation(ctx context.Context, request service.BulkResourceMutationRequest, reviewedFingerprint string, actorUserID uint64) (service.BulkResourcePreview, error) {
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return service.BulkResourcePreview{}, err
+	}
+	defer tx.Rollback()
+
+	input, err := bulkResourceUpdateInput(request.FieldPatch)
+	if err != nil {
+		return service.BulkResourcePreview{}, err
+	}
+	ids := make([]uint64, len(request.Targets))
+	for i, target := range request.Targets {
+		ids[i] = target.ResourceID
+	}
+	sort.Slice(ids, func(i, j int) bool { return ids[i] < ids[j] })
+
+	resources := make(map[uint64]model.Resource, len(ids))
+	snapshots := make([]service.ResourceMutationSnapshot, 0, len(ids))
+	for _, id := range ids {
+		resource, err := lockBulkResource(ctx, tx, id)
+		if err != nil {
+			return service.BulkResourcePreview{}, err
+		}
+		resources[id] = resource
+		snapshots = append(snapshots, bulkResourceSnapshot(resource))
+	}
+	preview, err := service.PreviewBulkResourceMutation(request, snapshots)
+	if err != nil {
+		return service.BulkResourcePreview{}, err
+	}
+	for _, item := range preview.Items {
+		if item.Conflict || len(item.Errors) != 0 {
+			return preview, fmt.Errorf("bulk resource mutation preview rejected for resource %d", item.ResourceID)
+		}
+	}
+	if preview.Fingerprint != reviewedFingerprint {
+		return preview, errors.New("bulk resource mutation fingerprint mismatch")
+	}
+
+	for _, id := range ids {
+		before := resources[id]
+		labels := make(map[string]string, len(before.Labels))
+		for key, value := range before.Labels {
+			labels[key] = value
+		}
+		for key, value := range request.Labels.Add {
+			labels[key] = value
+		}
+		for key, value := range request.Labels.Update {
+			labels[key] = value
+		}
+		for _, key := range request.Labels.Remove {
+			delete(labels, key)
+		}
+		itemInput := input
+		if len(request.Labels.Add)+len(request.Labels.Update)+len(request.Labels.Remove) != 0 {
+			itemInput.Labels = &labels
+		}
+		updated, err := updateResourceTx(ctx, tx, id, itemInput)
+		if err != nil {
+			return preview, err
+		}
+		changes := resourceAuditChanges(before, itemInput)
+		if err := insertInventoryAuditTx(ctx, tx, actorUserID, id, "inventory.resource.bulk_updated", changes); err != nil {
+			return preview, err
+		}
+		resources[id] = *updated
+	}
+	if err := tx.Commit(); err != nil {
+		return preview, err
+	}
+	return preview, nil
+}
+
+func lockBulkResource(ctx context.Context, tx *sql.Tx, id uint64) (model.Resource, error) {
+	var resource model.Resource
+	var rawLabels string
+	err := tx.QueryRowContext(ctx, `select id, resource_subtype, name, display_name, environment_id, owner_id,
+		lifecycle_status, health_status, source, external_id, labels, updated_at
+		from resources where id = ? for update`, id).Scan(
+		&resource.ID, &resource.ResourceSubtype, &resource.Name, &resource.DisplayName,
+		&resource.EnvironmentID, &resource.OwnerID, &resource.LifecycleStatus,
+		&resource.HealthStatus, &resource.Source, &resource.ExternalID,
+		&rawLabels, &resource.UpdatedAt,
+	)
+	if err != nil {
+		return model.Resource{}, err
+	}
+	if err := json.Unmarshal([]byte(rawLabels), &resource.Labels); err != nil {
+		return model.Resource{}, err
+	}
+	return resource, nil
+}
+
+func bulkResourceSnapshot(resource model.Resource) service.ResourceMutationSnapshot {
+	return service.ResourceMutationSnapshot{
+		ID:      resource.ID,
+		Version: resource.UpdatedAt.UTC().Format(time.RFC3339Nano),
+		Fields: map[string]any{
+			"name": resource.Name, "resourceSubtype": resource.ResourceSubtype,
+			"displayName": resource.DisplayName, "environmentId": resource.EnvironmentID,
+			"ownerId": resource.OwnerID, "lifecycleStatus": resource.LifecycleStatus,
+			"healthStatus": resource.HealthStatus, "externalId": resource.ExternalID,
+		},
+		Labels: resource.Labels,
+	}
+}
+
+func bulkResourceUpdateInput(fields map[string]any) (model.ResourceUpdateInput, error) {
+	encoded, err := json.Marshal(fields)
+	if err != nil {
+		return model.ResourceUpdateInput{}, err
+	}
+	var patch struct {
+		Name            *string                `json:"name"`
+		ResourceSubtype *string                `json:"resourceSubtype"`
+		DisplayName     *string                `json:"displayName"`
+		EnvironmentID   *uint64                `json:"environmentId"`
+		OwnerID         *uint64                `json:"ownerId"`
+		LifecycleStatus *model.LifecycleStatus `json:"lifecycleStatus"`
+		HealthStatus    *model.HealthStatus    `json:"healthStatus"`
+		ExternalID      *string                `json:"externalId"`
+	}
+	decoder := json.NewDecoder(strings.NewReader(string(encoded)))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&patch); err != nil {
+		return model.ResourceUpdateInput{}, err
+	}
+	return model.ResourceUpdateInput{
+		Name: patch.Name, ResourceSubtype: patch.ResourceSubtype, DisplayName: patch.DisplayName,
+		EnvironmentID: patch.EnvironmentID, OwnerID: patch.OwnerID,
+		LifecycleStatus: patch.LifecycleStatus, HealthStatus: patch.HealthStatus,
+		ExternalID: patch.ExternalID,
+	}, nil
+}
+
 const resourceColumns = `id, resource_type, resource_subtype, name, display_name,
        environment_id, owner_id, lifecycle_status, health_status,
        origin, labels, created_at, updated_at,
