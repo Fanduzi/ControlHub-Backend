@@ -459,7 +459,7 @@ func TestIngestionConfirmationServiceDelegatesToRepository(t *testing.T) {
 	if err != nil {
 		t.Fatalf("preview: %v", err)
 	}
-	svc := service.NewResourceService(repo)
+	svc := service.NewResourceService(repo, mysql.NewRelationRepository(db))
 	if _, err := svc.ConfirmIngestion(ctx, ingestionActor, rows, preview.Fingerprint); err != nil {
 		t.Fatalf("service confirm: %v", err)
 	}
