@@ -1,5 +1,5 @@
 # input: public HTTP routes, model JSON shapes, and operator access policy
-# output: served OpenAPI 3.1 contract for ControlHub clients
+# output: served OpenAPI 3.1 contract for ControlHub clients, including resource-list search filters
 # pos: canonical machine-readable API boundary, including inventory audit diffs
 # note: if this file changes, update header and internal/openapi/README.md
 
@@ -2247,7 +2247,28 @@ paths:
           name: q
           schema:
             type: string
-          description: Free-text search over name, displayName, externalId
+          description: >-
+            Free-text search over name, displayName, aliases, externalId, FQDN,
+            IP address, hostname, and endpoint. Does not search owner or labels.
+        - in: query
+          name: ownerId
+          schema:
+            type: integer
+            format: int64
+            minimum: 1
+          description: Exact owner ID filter.
+        - in: query
+          name: label
+          schema:
+            type: array
+            items:
+              type: string
+              pattern: "^[^:]+:.+$"
+          style: form
+          explode: true
+          description: >-
+            Exact label filter in key:value form. Repeat for logical AND
+            (for example, ?label=team:platform&label=tier:critical).
         - in: query
           name: page
           schema:

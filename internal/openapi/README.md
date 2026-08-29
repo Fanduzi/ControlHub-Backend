@@ -22,6 +22,7 @@ Embeds and validates the OpenAPI contract served by the API documentation route.
 - `Resource` always exposes effective status, freshness, observed time, observer, and nullable manual override; POST observations are operational and PATCH null clears the audited override.
 - `GET /resources/{id}/relation-rules`: source-specific relation types, target resource types, and same-environment constraints consumed by the console; writes revalidate the same server matrix.
 - `GET /audit-events?q=...`: optional search over operator identity and target resource name, combined with the existing filters.
+- `GET /resources?q=...&ownerId=...&label=key:value`: inventory identifier search, exact owner filtering, and repeatable exact labels combined with AND.
 
 ## Dependencies
 - Upstream: `github.com/getkin/kin-openapi` for validation tests

@@ -43,6 +43,8 @@ HTTP handlers, chi routing, CORS middleware, and fake-repo test infrastructure.
 | Method | Path | Description |
 |--------|------|-------------|
 | POST | /resources/{id}/health-observations | Store an observer's latest operational health evidence without inventory audit |
+
+`GET /resources` supports inventory `q` search, exact `ownerId`, and repeatable exact `label=key:value` filters; repeated labels combine with AND.
 | GET | /resources/{id}/relation-rules | Discover server-owned outgoing relation and target constraints |
 | GET | /query-targets/{id}/schema/table-definition | Get MySQL table definition (base tables only) |
 | POST | /query-targets/{id}/execute | Execute a governed read-only statement, with optional page-number result paging for SELECT |

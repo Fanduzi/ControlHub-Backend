@@ -1,7 +1,7 @@
 // Package api provides HTTP handlers and routing for the ControlHub REST API.
 // input: net/http, encoding/json, internal/service, internal/model
-// output: resource list/detail, audited inventory writes, and non-audited health observation ingestion
-// pos: HTTP boundary for resource inventory and operational health evidence
+// output: resource list/detail, rich/structured inventory filtering, audited inventory writes, and non-audited health observation ingestion
+// pos: HTTP boundary for resource inventory and operational health evidence, including inventory search
 // note: if this file changes, update this header and module README.md.
 package api
 
@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"net/http"
 	"strconv"
+	"strings"
 
 	"github.com/go-chi/chi/v5"
 
@@ -197,6 +198,25 @@ func parseResourceListQuery(r *http.Request) (model.ResourceListQuery, error) {
 	if err != nil {
 		return model.ResourceListQuery{}, err
 	}
+	ownerIDs, err := parseUint64QueryValues(q["ownerId"], "ownerId")
+	if err != nil {
+		return model.ResourceListQuery{}, err
+	}
+	if len(ownerIDs) > 1 {
+		return model.ResourceListQuery{}, errors.New("ownerId must be specified once")
+	}
+	var ownerID *uint64
+	if len(ownerIDs) == 1 {
+		ownerID = &ownerIDs[0]
+	}
+	labels := make([]model.ResourceLabelFilter, 0, len(q["label"]))
+	for _, raw := range q["label"] {
+		key, value, ok := strings.Cut(raw, ":")
+		if !ok || key == "" || value == "" {
+			return model.ResourceListQuery{}, errors.New("label must use key:value format")
+		}
+		labels = append(labels, model.ResourceLabelFilter{Key: key, Value: value})
+	}
 	return model.ResourceListQuery{
 		ResourceTypes:    model.DedupStrings(q["resourceType"]),
 		ResourceSubtypes: model.DedupStrings(q["resourceSubtype"]),
@@ -204,6 +224,8 @@ func parseResourceListQuery(r *http.Request) (model.ResourceListQuery, error) {
 		LifecycleStatus:  model.DedupStrings(q["lifecycleStatus"]),
 		HealthStatuses:   model.DedupStrings(q["healthStatus"]),
 		Query:            q.Get("q"),
+		OwnerID:          ownerID,
+		LabelFilters:     labels,
 		IncludeArchived:  q.Get("includeArchived") == "true",
 		ArchivedOnly:     q.Get("archivedOnly") == "true",
 		Page:             page,

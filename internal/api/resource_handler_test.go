@@ -1,7 +1,7 @@
 // Package api provides HTTP handlers and routing for the ControlHub REST API.
 // input: internal/api, internal/model, net/http, net/http/httptest, encoding/json
-// output: Governed identity/profile tests plus resource health reads, observation ingestion, and override clearing
-// pos: Validates governed identity, typed profiles, and Issue 81 health evidence at the HTTP seam
+// output: Governed identity/profile tests plus rich inventory filtering, resource health reads, observation ingestion, and override clearing
+// pos: Validates governed identity, typed profiles, search filters, and Issue 81 health evidence at the HTTP seam
 // note: if this file changes, update this header and module README.md.
 package api
 
@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strconv"
 	"strings"
 	"testing"
@@ -617,6 +618,30 @@ func TestListResources(t *testing.T) {
 
 	if body := rec.Body.String(); body == "" {
 		t.Fatal("expected response body")
+	}
+}
+
+func TestParseResourceListQuerySearchContract(t *testing.T) {
+	req := httptest.NewRequest(http.MethodGet, "/resources?q=mysql&ownerId=42&label=team:platform&label=tier:critical", nil)
+	query, err := parseResourceListQuery(req)
+	if err != nil {
+		t.Fatalf("parse valid query: %v", err)
+	}
+	if query.Query != "mysql" || query.OwnerID == nil || *query.OwnerID != 42 {
+		t.Fatalf("query = %#v, want q mysql and ownerId 42", query)
+	}
+	wantLabels := []model.ResourceLabelFilter{{Key: "team", Value: "platform"}, {Key: "tier", Value: "critical"}}
+	if !reflect.DeepEqual(query.LabelFilters, wantLabels) {
+		t.Fatalf("labels = %#v, want %#v", query.LabelFilters, wantLabels)
+	}
+
+	for _, raw := range []string{"ownerId=0", "ownerId=nope", "label=team", "label=:platform", "label=team:"} {
+		t.Run(raw, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodGet, "/resources?"+raw, nil)
+			if _, err := parseResourceListQuery(req); err == nil {
+				t.Fatalf("parseResourceListQuery(%q) succeeded, want error", raw)
+			}
+		})
 	}
 }
 
