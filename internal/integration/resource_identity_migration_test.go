@@ -3,7 +3,7 @@
 // Package integration provides fail-loud migration coverage for CMDB identity.
 // input: testing, strings, pressly/goose
 // output: TestResourceIdentityMigration_DuplicateLegacyExternalIDFailsBeforeSchemaChange
-// pos: Proves unsafe legacy externalId data aborts migration 19 without dropping source data
+// pos: Proves unsafe legacy externalId data aborts migration 21 without dropping source data
 // note: if this file changes, update header and README.md
 package integration
 
@@ -23,8 +23,8 @@ func TestResourceIdentityMigration_DuplicateLegacyExternalIDFailsBeforeSchemaCha
 	db := openNamedTestDB(t, databaseName)
 
 	goose.SetDialect("mysql")
-	if err := goose.UpTo(db, resolveMigrationsDir(), 18); err != nil {
-		t.Fatalf("migrate fixture to 18: %v", err)
+	if err := goose.UpTo(db, resolveMigrationsDir(), 20); err != nil {
+		t.Fatalf("migrate fixture to 20: %v", err)
 	}
 	if _, err := db.Exec(`insert into resources
 		(resource_type, resource_subtype, name, display_name, environment_id, owner_id, lifecycle_status, health_status, labels, source, external_id)
@@ -34,7 +34,7 @@ func TestResourceIdentityMigration_DuplicateLegacyExternalIDFailsBeforeSchemaCha
 		t.Fatalf("seed duplicate legacy IDs: %v", err)
 	}
 
-	err := goose.UpTo(db, resolveMigrationsDir(), 19)
+	err := goose.UpTo(db, resolveMigrationsDir(), 21)
 	if err == nil || !strings.Contains(err.Error(), "cannot migrate duplicate resources.external_id values") {
 		t.Fatalf("migration error = %v, want duplicate externalId failure", err)
 	}
