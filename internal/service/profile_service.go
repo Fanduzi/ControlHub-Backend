@@ -1,12 +1,13 @@
 // Package service provides business logic for typed profile writes.
-// input: internal/model (ResourceType, Resource), ProfileRepository interface
+// input: encoding/json, internal/model (ResourceType, Resource), ProfileRepository interface
 // output: NewProfileService, ProfileService.PutProfile/PatchProfile/DeleteProfile, ProfileRepository interface, minimum manual identity validation
 // pos: Business logic for resource profile upserts with archived-resource guard, strict field validation, Domain Name/Virtual IP identity, Database Proxy/Control Plane identity, PATCH partial-merge semantics, and manual-registration identity
-// note: if this file changes, update header and README.md
+// note: if this file changes, update this header and module README.md.
 package service
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"math"
 	"net"
@@ -514,6 +515,9 @@ func profileIntValue(v interface{}) (int64, bool) {
 		return int64(n), true
 	case int64:
 		return n, true
+	case json.Number:
+		parsed, err := n.Int64()
+		return parsed, err == nil
 	case float64:
 		if n != math.Trunc(n) {
 			return 0, false

@@ -68,6 +68,8 @@ Business logic layer with interface-based repository dependencies. Each service 
 - `BulkResourceMutationRequest`, `BulkResourceMutationTarget`, `ResourceMutationSnapshot`, `LabelOperations`, `BulkResourcePreview` — bulk mutation preview contract values
 - `TopologyService.BuildTopology` — builds rooted or environment-start topology responses with node/edge caps and `truncated`
 - `ParseIngestion` and `PreviewIngestion` provide the controlled, repository-free issue #83 parsing and preview seam
+- `ParseIngestion` and `PreviewIngestion` provide the controlled issue #83 parsing and preview seam; `ResourceService.ConfirmIngestion` delegates parsed rows, reviewed fingerprint, and actor ID to the repository-owned atomic confirmation path
+- `ValidateIngestionRows`, `ValidateIngestionRelationship`, `ErrIngestionConflict`, and `ErrIngestionFingerprintMismatch` support repository confirmation without duplicating service-owned validation rules
 - `NewMemoryUserStore`, `AuthService.WithClock`, `AuthService.ChangeUserRole`/`SetUserActive`/`ResetUserPassword` — Authorization Version seams
 - `AuthAuditEmitter`, `NoopEmitter` — fail-open authentication/authorization audit emission interface and discard implementation
 - `BoundedAuthAuditEmitter`, `NewBoundedAuthAuditEmitter`, `BearerRejectBudget`, `NewBearerRejectBudget`, `ProcessBearerRejectBudget`, `BoundedBearerRejectedLimit`, `AuthAuditSuppressedRejections` — process-shared budget capping untrusted Bearer rejection persistence at 60 events/min per server process (all routers draw from one budget); suppression counter exposed only via the admin auth-audit metrics surface

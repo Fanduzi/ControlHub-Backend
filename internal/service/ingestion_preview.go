@@ -1,12 +1,13 @@
-// Package service provides controlled CI ingestion parsing and pure preview reconciliation.
-// input: stdlib CSV/JSON/SHA-256 utilities and internal/model identity/relation types
-// output: ParseIngestion, PreviewIngestion, bounded input and explicit preview diff contracts
-// pos: Side-effect-free issue #83 ingestion checkpoint before persistence or API wiring
+// Package service provides controlled CI ingestion parsing, preview reconciliation, and confirm service delegation.
+// input: stdlib CSV/JSON/SHA-256 utilities, context, and internal/model identity/relation types
+// output: ParseIngestion, PreviewIngestion, ResourceService.ConfirmIngestion, bounded input, validation, and explicit preview diff contracts
+// pos: Issue #83 ingestion checkpoint and service-owned validation before repository persistence
 // note: if this file changes, update this header and module README.md.
 package service
 
 import (
 	"bytes"
+	"context"
 	"crypto/sha256"
 	"encoding/csv"
 	"encoding/hex"
@@ -26,6 +27,11 @@ const (
 	MaxIngestionRows     = 500
 	MaxIngestionRowBytes = 64 << 10
 	MaxIngestionBytes    = MaxIngestionRows * MaxIngestionRowBytes
+)
+
+var (
+	ErrIngestionConflict            = errors.New("ingestion conflict")
+	ErrIngestionFingerprintMismatch = errors.New("ingestion fingerprint mismatch")
 )
 
 type ObservedValueInput struct {
@@ -97,6 +103,54 @@ type IngestionPreview struct {
 	Confirmable bool                  `json:"confirmable"`
 	Fingerprint string                `json:"fingerprint"`
 	Rows        []IngestionPreviewRow `json:"rows"`
+}
+
+type ingestionConfirmRepository interface {
+	ConfirmIngestion(ctx context.Context, rows []IngestionRow, reviewedFingerprint string, actorUserID uint64) (*IngestionPreview, error)
+}
+
+func (s *ResourceService) ConfirmIngestion(ctx context.Context, actorUserID uint64, rows []IngestionRow, reviewedFingerprint string) (*IngestionPreview, error) {
+	if actorUserID == 0 {
+		return nil, errors.New("inventory audit actor is required")
+	}
+	if strings.TrimSpace(reviewedFingerprint) == "" {
+		return nil, fmt.Errorf("%w: reviewed fingerprint is required", ErrValidationFailed)
+	}
+	repo, ok := s.repo.(ingestionConfirmRepository)
+	if !ok {
+		return nil, errors.New("ingestion confirmation repository is required")
+	}
+	return repo.ConfirmIngestion(ctx, rows, reviewedFingerprint, actorUserID)
+}
+
+func ValidateIngestionRows(rows []IngestionRow) error {
+	if len(rows) == 0 || len(rows) > MaxIngestionRows {
+		return fmt.Errorf("ingestion row count must be between 1 and %d", MaxIngestionRows)
+	}
+	for i, row := range rows {
+		if err := validateIngestionRow(row); err != nil {
+			return fmt.Errorf("row %d: %w", i+1, err)
+		}
+		if row.Profile != nil {
+			fields := cloneAnyMap(row.Profile)
+			if err := validateProfileFields(row.CIType, fields, true); err != nil {
+				return fmt.Errorf("row %d profile: %w", i+1, err)
+			}
+		}
+	}
+	return nil
+}
+
+func ValidateIngestionRelationship(from, to model.Resource, relationType model.RelationType) error {
+	return validateRelationshipRule(from, to, relationType)
+}
+
+func cloneAnyMap(in map[string]any) map[string]any {
+	out := make(map[string]any, len(in))
+	for k, v := range in {
+		out[k] = v
+	}
+	return out
 }
 
 func ParseIngestion(format string, payload []byte) ([]IngestionRow, error) {
@@ -253,9 +307,38 @@ func canonicalizeRow(row *IngestionRow) {
 	row.Aliases = canonicalAliases(row.Aliases)
 	row.ExternalIdentifiers = canonicalExternalIdentifiers(row.ExternalIdentifiers)
 	row.Relations = canonicalRelations(row.Relations)
+	if row.Profile != nil {
+		row.Profile = normalizeJSONNumbers(row.Profile).(map[string]any)
+	}
 	for k, v := range row.ObservedValues {
 		v.Source = strings.TrimSpace(v.Source)
+		v.Value = normalizeJSONNumbers(v.Value)
 		row.ObservedValues[k] = v
+	}
+}
+
+func normalizeJSONNumbers(v any) any {
+	switch x := v.(type) {
+	case map[string]any:
+		out := make(map[string]any, len(x))
+		for k, child := range x {
+			out[k] = normalizeJSONNumbers(child)
+		}
+		return out
+	case []any:
+		out := make([]any, len(x))
+		for i, child := range x {
+			out[i] = normalizeJSONNumbers(child)
+		}
+		return out
+	case json.Number:
+		if n, err := x.Int64(); err == nil && int64(int(n)) == n {
+			return int(n)
+		}
+		f, _ := x.Float64()
+		return f
+	default:
+		return v
 	}
 }
 

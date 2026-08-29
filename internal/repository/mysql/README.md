@@ -5,7 +5,7 @@ Data access layer implementing service-layer repository interfaces with raw SQL 
 ## Files
 | File | Responsibility |
 |------|---------------|
-| resource_repository.go | Resource CRUD, governed identity and one-query batched typed-profile reads, latest-per-observer health evidence, effective-health derivation, per-source observed/effective values, read-only validated bulk previews, and atomic audited identity/manual-override/bulk mutations |
+| resource_repository.go | Resource CRUD, governed identity and one-query batched typed-profile reads, latest-per-observer health evidence, effective-health derivation, per-source observed/effective values, read-only validated bulk previews, atomic audited identity/manual-override/bulk mutations, and issue #83 atomic ingestion confirmation |
 | bulk_resource_mutation_test.go | SQL-level bulk coverage for transaction commit/rollback, externalId persistence, locked archived-CI rejection, current resource/governed-identity lock queries, normal update validation parity, and audit-failure rollback |
 | relation_repository.go | Relation queries plus atomic create/delete, effective-health relation/member projections, topology resource lookup, and environment candidate starts |
 | audit_repository.go | Audit event queries (global and by resource), including pagination, actor/resource search, and JSON field changes |
@@ -30,6 +30,7 @@ Data access layer implementing service-layer repository interfaces with raw SQL 
 - `ResourceRepository.ConfirmBulkResourceMutation` — stable-order resource locking, normal update revalidation, in-transaction re-preview/fingerprint verification, typed field and explicit label mutation, and per-CI field audit in one commit
 - Repository structs satisfy service-layer interfaces
 - `ResourceRepository.PutObservedValues`, `GetEffectiveValues`, `SetManualOverrideWithAudit`, and `ClearManualOverrideWithAudit`
+- `ResourceRepository.PutObservedValues`, `GetEffectiveValues`, `SetManualOverrideWithAudit`, `ClearManualOverrideWithAudit`, `PreviewIngestion`, and `ConfirmIngestion`
 - `RelationRepository.ListTopologyCandidates` reuses resource reads to return environment-scoped Service, Database Cluster, Database Proxy, and abnormal CI starts for the topology workspace
 
 Inventory audit writes are fail-closed. Resource identity, typed-profile, and
@@ -39,6 +40,12 @@ mutations write separate target-specific evidence for both affected CIs.
 Observed refreshes preserve sibling sources. Manual overrides use optimistic
 versions and win only in the effective read projection; clearing one exposes
 the latest observation immediately.
+
+`ConfirmIngestion` receives already-parsed rows plus the reviewed preview
+fingerprint and actor ID, locks matched identity rows in ID order, re-runs the
+service preview inside one transaction, rejects conflicts or fingerprint drift,
+and commits resource, identity, typed-profile, observed-value, relation, and
+field-level audit writes together. No-op reconfirmation emits no audit row.
 
 `resource_health_observations` stores one current row per resource/observer.
 Older evidence cannot replace a newer timestamp. Effective-health filters use

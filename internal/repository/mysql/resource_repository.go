@@ -1,7 +1,7 @@
 // Package mysql provides MySQL-backed repository implementations.
 // input: database/sql, time, internal/model, internal/service
-// output: resource CRUD, governed identity and batched typed-profile reads, rich inventory filtering, health observations/effective health, observed/effective values, validated previews, audited versioned manual overrides, and atomic ConfirmBulkResourceMutation
-// pos: MySQL data access for resources, identity, typed-profile projections, current health evidence, effective values, inventory search, and bulk transactions reusing normal update validation under row locks
+// output: resource CRUD, governed identity and batched typed-profile reads, rich inventory filtering, health observations/effective health, observed/effective values, validated previews, audited versioned manual overrides, atomic bulk mutation, and atomic ingestion confirmation
+// pos: MySQL data access for resources, identity, typed-profile projections, current health evidence, effective values, inventory search, and bulk/ingestion transactions reusing normal update validation under row locks
 // note: if this file changes, update this header and module README.md.
 package mysql
 
@@ -963,6 +963,12 @@ func profileFieldInt(fields map[string]any, key string) int {
 		return n
 	case int64:
 		return int(n)
+	case json.Number:
+		v, err := n.Int64()
+		if err == nil {
+			return int(v)
+		}
+		return 0
 	default:
 		return 0
 	}
@@ -1194,6 +1200,24 @@ func (r *ResourceRepository) CreateResourceWithProfile(ctx context.Context, inpu
 }
 
 func (r *ResourceRepository) createResource(ctx context.Context, input model.ResourceCreateInput, profile map[string]any) (*model.Resource, error) {
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, fmt.Errorf("begin create resource transaction: %w", err)
+	}
+	defer tx.Rollback() // safe no-op after commit
+
+	resourceID, err := createResourceTx(ctx, tx, input, profile)
+	if err != nil {
+		return nil, err
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, fmt.Errorf("commit create resource transaction: %w", err)
+	}
+
+	return r.GetResource(resourceID)
+}
+
+func createResourceTx(ctx context.Context, tx *sql.Tx, input model.ResourceCreateInput, profile map[string]any) (uint64, error) {
 	if input.Origin == "" {
 		switch input.Source {
 		case "", "manual":
@@ -1209,16 +1233,13 @@ func (r *ResourceRepository) createResource(ctx context.Context, input model.Res
 	if len(input.ExternalIdentifiers) == 0 && strings.TrimSpace(input.ExternalID) != "" {
 		input.ExternalIdentifiers = []model.ResourceExternalIdentifier{{System: "legacy", Value: input.ExternalID}}
 	}
+	if input.Labels == nil {
+		input.Labels = map[string]string{}
+	}
 	labelsJSON, err := json.Marshal(input.Labels)
 	if err != nil {
-		return nil, fmt.Errorf("marshal labels: %w", err)
+		return 0, fmt.Errorf("marshal labels: %w", err)
 	}
-
-	tx, err := r.db.BeginTx(ctx, nil)
-	if err != nil {
-		return nil, fmt.Errorf("begin create resource transaction: %w", err)
-	}
-	defer tx.Rollback() // safe no-op after commit
 
 	result, err := tx.ExecContext(ctx, insertResourceSQL,
 		input.ResourceType, input.ResourceSubtype,
@@ -1230,31 +1251,503 @@ func (r *ResourceRepository) createResource(ctx context.Context, input model.Res
 	)
 	if err != nil {
 		if conflict := classifyResourceConflict(err); conflict != nil {
-			return nil, conflict
+			return 0, conflict
 		}
-		return nil, fmt.Errorf("insert resource: %w", err)
+		return 0, fmt.Errorf("insert resource: %w", err)
 	}
 
 	insertID, err := result.LastInsertId()
 	if err != nil {
-		return nil, fmt.Errorf("resource last insert id: %w", err)
+		return 0, fmt.Errorf("resource last insert id: %w", err)
 	}
 
 	resourceID := uint64(insertID)
 	if err := insertResourceIdentityTx(ctx, tx, resourceID, input.EnvironmentID, input.Aliases, input.ExternalIdentifiers); err != nil {
-		return nil, err
+		return 0, err
 	}
 	if profile != nil {
 		if err := upsertProfileTx(ctx, tx, resourceID, input.ResourceType, profile); err != nil {
-			return nil, fmt.Errorf("upsert profile for resource %d: %w", insertID, err)
+			return 0, fmt.Errorf("upsert profile for resource %d: %w", insertID, err)
 		}
 	}
 
-	if err := tx.Commit(); err != nil {
-		return nil, fmt.Errorf("commit create resource transaction: %w", err)
+	return resourceID, nil
+}
+
+func (r *ResourceRepository) PreviewIngestion(ctx context.Context, rows []service.IngestionRow) (*service.IngestionPreview, error) {
+	if err := service.ValidateIngestionRows(rows); err != nil {
+		return nil, err
+	}
+	ids, err := findIngestionCandidateIDs(ctx, r.db, rows)
+	if err != nil {
+		return nil, err
+	}
+	snapshots, err := loadIngestionSnapshots(ctx, r.db, sortedIDSet(ids), false)
+	if err != nil {
+		return nil, err
+	}
+	preview := service.PreviewIngestion(rows, snapshots)
+	return &preview, nil
+}
+
+func (r *ResourceRepository) ConfirmIngestion(ctx context.Context, rows []service.IngestionRow, reviewedFingerprint string, actorUserID uint64) (*service.IngestionPreview, error) {
+	if actorUserID == 0 {
+		return nil, errors.New("inventory audit actor is required")
+	}
+	if strings.TrimSpace(reviewedFingerprint) == "" {
+		return nil, fmt.Errorf("%w: reviewed fingerprint is required", service.ErrValidationFailed)
+	}
+	if err := service.ValidateIngestionRows(rows); err != nil {
+		return nil, err
+	}
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, fmt.Errorf("begin ingestion confirmation transaction: %w", err)
+	}
+	defer tx.Rollback()
+
+	ids, err := findIngestionCandidateIDs(ctx, tx, rows)
+	if err != nil {
+		return nil, err
+	}
+	snapshots, err := loadIngestionSnapshots(ctx, tx, sortedIDSet(ids), true)
+	if err != nil {
+		return nil, err
+	}
+	preview := service.PreviewIngestion(rows, snapshots)
+	if !preview.Confirmable {
+		return &preview, service.ErrIngestionConflict
+	}
+	if preview.Fingerprint != reviewedFingerprint {
+		return &preview, service.ErrIngestionFingerprintMismatch
 	}
 
-	return r.GetResource(resourceID)
+	auditChanges := map[uint64][]model.AuditChange{}
+	for i, row := range rows {
+		previewRow := preview.Rows[i]
+		resourceID := previewRow.MatchedID
+		if previewRow.Action == service.PreviewCreate {
+			resourceID, err = createResourceTx(ctx, tx, ingestionCreateInput(row, actorUserID), row.Profile)
+			if err != nil {
+				return &preview, err
+			}
+			preview.Rows[i].MatchedID = resourceID
+		} else if hasResourceFieldChanges(previewRow.Diff) {
+			if err := applyIngestionResourceUpdate(ctx, tx, resourceID, row, previewRow.Diff); err != nil {
+				return &preview, err
+			}
+		}
+		if err := applyIngestionProfile(ctx, tx, resourceID, row, previewRow.Diff); err != nil {
+			return &preview, err
+		}
+		if err := applyIngestionObserved(ctx, tx, resourceID, row, previewRow.Diff); err != nil {
+			return &preview, err
+		}
+		auditChanges[resourceID] = append(auditChanges[resourceID], sourceIngestionAuditChanges(previewRow.Action, previewRow.Diff)...)
+		if err := applyIngestionRelations(ctx, tx, actorUserID, resourceID, row, previewRow.Diff, auditChanges); err != nil {
+			return &preview, err
+		}
+	}
+	if err := insertIngestionAudits(ctx, tx, actorUserID, auditChanges); err != nil {
+		return &preview, err
+	}
+	if err := tx.Commit(); err != nil {
+		return &preview, fmt.Errorf("commit ingestion confirmation transaction: %w", err)
+	}
+	return &preview, nil
+}
+
+func ingestionCreateInput(row service.IngestionRow, actorUserID uint64) model.ResourceCreateInput {
+	return model.ResourceCreateInput{
+		ResourceType:        row.CIType,
+		Name:                row.Name,
+		DisplayName:         row.DisplayName,
+		EnvironmentID:       row.EnvironmentID,
+		OwnerID:             actorUserID,
+		LifecycleStatus:     model.LifecycleStatusRunning,
+		HealthStatus:        model.HealthStatusUnknown,
+		Origin:              model.ResourceOriginImported,
+		Source:              string(model.ResourceOriginImported),
+		Aliases:             row.Aliases,
+		ExternalIdentifiers: row.ExternalIdentifiers,
+		Labels:              map[string]string{},
+	}
+}
+
+func hasResourceFieldChanges(diff service.IngestionDiff) bool {
+	for field := range diff.Fields {
+		if field == "ciType" {
+			return true
+		}
+		if field == "environmentId" || field == "name" || field == "displayName" || field == "aliases" || field == "externalIdentifiers" {
+			return true
+		}
+	}
+	return false
+}
+
+func applyIngestionResourceUpdate(ctx context.Context, tx *sql.Tx, resourceID uint64, row service.IngestionRow, diff service.IngestionDiff) error {
+	if _, ok := diff.Fields["ciType"]; ok {
+		return fmt.Errorf("%w: ciType cannot be changed by ingestion", service.ErrValidationFailed)
+	}
+	input := model.ResourceUpdateInput{}
+	if _, ok := diff.Fields["environmentId"]; ok {
+		input.EnvironmentID = &row.EnvironmentID
+	}
+	if _, ok := diff.Fields["name"]; ok {
+		input.Name = &row.Name
+	}
+	if _, ok := diff.Fields["displayName"]; ok {
+		input.DisplayName = &row.DisplayName
+	}
+	if _, ok := diff.Fields["aliases"]; ok {
+		aliases := append([]string(nil), row.Aliases...)
+		input.Aliases = &aliases
+	}
+	if _, ok := diff.Fields["externalIdentifiers"]; ok {
+		identifiers := append([]model.ResourceExternalIdentifier(nil), row.ExternalIdentifiers...)
+		input.ExternalIdentifiers = &identifiers
+	}
+	_, err := updateResourceTx(ctx, tx, resourceID, input)
+	return err
+}
+
+func applyIngestionProfile(ctx context.Context, tx *sql.Tx, resourceID uint64, row service.IngestionRow, diff service.IngestionDiff) error {
+	if len(diff.Profile) == 0 {
+		return nil
+	}
+	if row.Profile == nil {
+		return deleteProfile(ctx, tx, resourceID, string(row.CIType))
+	}
+	return upsertProfileTx(ctx, tx, resourceID, row.CIType, row.Profile)
+}
+
+func applyIngestionObserved(ctx context.Context, tx *sql.Tx, resourceID uint64, row service.IngestionRow, diff service.IngestionDiff) error {
+	fields := make([]string, 0, len(diff.Observed))
+	for field := range diff.Observed {
+		fields = append(fields, field)
+	}
+	sort.Strings(fields)
+	for _, field := range fields {
+		observed := row.ObservedValues[field]
+		if err := putObservedValueTx(ctx, tx, resourceID, field, observed); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func putObservedValueTx(ctx context.Context, tx *sql.Tx, resourceID uint64, field string, observed service.ObservedValueInput) error {
+	if err := validateEffectiveValueField(field); err != nil {
+		return err
+	}
+	source := strings.TrimSpace(observed.Source)
+	if source == "" {
+		return fmt.Errorf("%w: observation source is required", service.ErrValidationFailed)
+	}
+	raw, err := json.Marshal(observed.Value)
+	if err != nil {
+		return fmt.Errorf("marshal observed %s: %w", field, err)
+	}
+	_, err = tx.ExecContext(ctx, `insert into resource_observed_values
+		(resource_id, source, field_name, field_value, observed_at) values (?, ?, ?, ?, now(6))
+		on duplicate key update field_value = values(field_value), observed_at = values(observed_at)`,
+		resourceID, source, field, raw)
+	if err != nil {
+		return fmt.Errorf("write observed %s: %w", field, err)
+	}
+	return nil
+}
+
+func applyIngestionRelations(ctx context.Context, tx *sql.Tx, actorUserID, resourceID uint64, row service.IngestionRow, diff service.IngestionDiff, auditChanges map[uint64][]model.AuditChange) error {
+	from, err := getResourceForUpdate(ctx, tx, resourceID)
+	if err != nil {
+		return err
+	}
+	for _, relation := range diff.Relations.Removed {
+		if err := deleteRelationByTripleTx(ctx, tx, resourceID, relation.TargetID, relation.Type); err != nil {
+			return err
+		}
+		addRelationAuditChanges(auditChanges, resourceID, relation.TargetID, relation.Type, model.AuditChangeRemove)
+	}
+	for _, relation := range diff.Relations.Added {
+		to, err := getResourceForUpdate(ctx, tx, relation.TargetID)
+		if err != nil {
+			return err
+		}
+		if from.IsArchived() || to.IsArchived() {
+			return service.ErrResourceArchived
+		}
+		if err := service.ValidateIngestionRelationship(*from, *to, relation.Type); err != nil {
+			return err
+		}
+		if _, err := insertRelation(ctx, tx, model.RelationCreateInput{FromResourceID: resourceID, ToResourceID: relation.TargetID, RelationType: relation.Type}); err != nil {
+			return err
+		}
+		addRelationAuditChanges(auditChanges, resourceID, relation.TargetID, relation.Type, model.AuditChangeAdd)
+	}
+	_ = actorUserID
+	return nil
+}
+
+func deleteRelationByTripleTx(ctx context.Context, tx *sql.Tx, fromID, toID uint64, relationType model.RelationType) error {
+	result, err := tx.ExecContext(ctx, `delete from resource_relations where from_resource_id = ? and to_resource_id = ? and relation_type = ?`, fromID, toID, relationType)
+	if err != nil {
+		return fmt.Errorf("delete relation: %w", err)
+	}
+	affected, _ := result.RowsAffected()
+	if affected == 0 {
+		return service.ErrRelationNotFound
+	}
+	return nil
+}
+
+func sourceIngestionAuditChanges(action service.PreviewAction, diff service.IngestionDiff) []model.AuditChange {
+	changes := make([]model.AuditChange, 0, len(diff.Fields)+len(diff.Profile)+len(diff.Observed))
+	addMapChanges := func(prefix string, values map[string]service.ValueDiff) {
+		keys := make([]string, 0, len(values))
+		for key := range values {
+			keys = append(keys, key)
+		}
+		sort.Strings(keys)
+		for _, key := range keys {
+			changes = append(changes, ingestionAuditChange(prefix+ingestionAuditField(key), action, values[key]))
+		}
+	}
+	addMapChanges("", diff.Fields)
+	addMapChanges("profile.", diff.Profile)
+	addMapChanges("observed.", diff.Observed)
+	return changes
+}
+
+func ingestionAuditField(field string) string {
+	switch field {
+	case "ciType":
+		return "identity.resourceType"
+	case "name":
+		return "identity.name"
+	case "displayName":
+		return "identity.displayName"
+	case "aliases":
+		return "identity.aliases"
+	case "externalIdentifiers":
+		return "identity.externalIdentifiers"
+	default:
+		return field
+	}
+}
+
+func ingestionAuditChange(field string, action service.PreviewAction, diff service.ValueDiff) model.AuditChange {
+	change := model.AuditChange{Field: field, Operation: model.AuditChangeUpdate, Before: diff.Before, After: diff.After}
+	if action == service.PreviewCreate {
+		change.Operation = model.AuditChangeAdd
+		change.Before = nil
+		return change
+	}
+	if diff.Before == nil {
+		change.Operation = model.AuditChangeAdd
+	} else if diff.After == nil {
+		change.Operation = model.AuditChangeRemove
+	}
+	return change
+}
+
+func addRelationAuditChanges(changes map[uint64][]model.AuditChange, fromID, toID uint64, relationType model.RelationType, op model.AuditChangeOperation) {
+	changes[fromID] = append(changes[fromID], relationAuditChange(relationType, op, toID, "outgoing"))
+	changes[toID] = append(changes[toID], relationAuditChange(relationType, op, fromID, "incoming"))
+}
+
+func relationAuditChange(relationType model.RelationType, op model.AuditChangeOperation, relatedID uint64, direction string) model.AuditChange {
+	change := model.AuditChange{
+		Field:     "relationships." + string(relationType),
+		Operation: op,
+	}
+	value := map[string]any{"relatedResourceId": relatedID, "direction": direction}
+	if op == model.AuditChangeRemove {
+		change.Before = value
+	} else {
+		change.After = value
+	}
+	return change
+}
+
+func insertIngestionAudits(ctx context.Context, tx *sql.Tx, actorUserID uint64, changesByResource map[uint64][]model.AuditChange) error {
+	ids := sortedAuditIDs(changesByResource)
+	for _, id := range ids {
+		changes := changesByResource[id]
+		if len(changes) == 0 {
+			continue
+		}
+		if err := insertInventoryAuditTx(ctx, tx, actorUserID, id, "inventory.ingestion.confirmed", changes); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func sortedAuditIDs(changesByResource map[uint64][]model.AuditChange) []uint64 {
+	ids := make([]uint64, 0, len(changesByResource))
+	for id, changes := range changesByResource {
+		if len(changes) > 0 {
+			ids = append(ids, id)
+		}
+	}
+	sort.Slice(ids, func(i, j int) bool { return ids[i] < ids[j] })
+	return ids
+}
+
+type ingestionSnapshotQueryer interface {
+	QueryContext(context.Context, string, ...any) (*sql.Rows, error)
+	QueryRowContext(context.Context, string, ...any) *sql.Row
+}
+
+func findIngestionCandidateIDs(ctx context.Context, q ingestionSnapshotQueryer, rows []service.IngestionRow) (map[uint64]bool, error) {
+	ids := map[uint64]bool{}
+	for _, row := range rows {
+		if err := addIngestionCandidateIDs(ctx, q, ids, `select id from resources where environment_id = ? and resource_type = ? and name = ?`, row.EnvironmentID, row.CIType, row.Name); err != nil {
+			return nil, err
+		}
+		for _, alias := range row.Aliases {
+			alias = strings.ToLower(strings.TrimSpace(alias))
+			if alias == "" {
+				continue
+			}
+			if err := addIngestionCandidateIDs(ctx, q, ids, `select resource_id from resource_aliases where environment_id = ? and alias = ?`, row.EnvironmentID, alias); err != nil {
+				return nil, err
+			}
+		}
+		for _, identifier := range row.ExternalIdentifiers {
+			system := strings.ToLower(strings.TrimSpace(identifier.System))
+			value := strings.TrimSpace(identifier.Value)
+			if system == "" || value == "" {
+				continue
+			}
+			if err := addIngestionCandidateIDs(ctx, q, ids, `select resource_id from resource_external_identifiers where external_system = ? and external_value = ?`, system, value); err != nil {
+				return nil, err
+			}
+		}
+	}
+	return ids, nil
+}
+
+func addIngestionCandidateIDs(ctx context.Context, q ingestionSnapshotQueryer, ids map[uint64]bool, query string, args ...any) error {
+	rows, err := q.QueryContext(ctx, query, args...)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var id uint64
+		if err := rows.Scan(&id); err != nil {
+			return err
+		}
+		ids[id] = true
+	}
+	return rows.Err()
+}
+
+func sortedIDSet(ids map[uint64]bool) []uint64 {
+	out := make([]uint64, 0, len(ids))
+	for id := range ids {
+		out = append(out, id)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i] < out[j] })
+	return out
+}
+
+func loadIngestionSnapshots(ctx context.Context, q ingestionSnapshotQueryer, ids []uint64, forUpdate bool) ([]service.IngestionSnapshot, error) {
+	snapshots := make([]service.IngestionSnapshot, 0, len(ids))
+	for _, id := range ids {
+		snapshot, err := loadIngestionSnapshot(ctx, q, id, forUpdate)
+		if err != nil {
+			return nil, err
+		}
+		snapshots = append(snapshots, snapshot)
+	}
+	return snapshots, nil
+}
+
+func loadIngestionSnapshot(ctx context.Context, q ingestionSnapshotQueryer, id uint64, forUpdate bool) (service.IngestionSnapshot, error) {
+	query := "select " + resourceColumns + " from resources where id = ?"
+	if forUpdate {
+		query += " for update"
+	}
+	resource, err := scanResource(q.QueryRowContext(ctx, query, id))
+	if errors.Is(err, sql.ErrNoRows) {
+		return service.IngestionSnapshot{}, service.ErrResourceNotFound
+	}
+	if err != nil {
+		return service.IngestionSnapshot{}, err
+	}
+	if err := loadResourceIdentity(ctx, q, &resource); err != nil {
+		return service.IngestionSnapshot{}, err
+	}
+	profile, err := fetchProfile(ctx, q, resource.ID, resource.ResourceType)
+	if err != nil {
+		return service.IngestionSnapshot{}, err
+	}
+	observed, err := loadLatestObservedValues(ctx, q, resource.ID)
+	if err != nil {
+		return service.IngestionSnapshot{}, err
+	}
+	relations, err := loadOutgoingIngestionRelations(ctx, q, resource.ID)
+	if err != nil {
+		return service.IngestionSnapshot{}, err
+	}
+	return service.IngestionSnapshot{
+		ID:                  resource.ID,
+		EnvironmentID:       resource.EnvironmentID,
+		CIType:              resource.ResourceType,
+		Name:                resource.Name,
+		DisplayName:         resource.DisplayName,
+		Aliases:             resource.Aliases,
+		ExternalIdentifiers: resource.ExternalIdentifiers,
+		Profile:             profile,
+		ObservedValues:      observed,
+		Relations:           relations,
+	}, nil
+}
+
+func loadLatestObservedValues(ctx context.Context, q ingestionSnapshotQueryer, resourceID uint64) (map[string]service.ObservedValueInput, error) {
+	rows, err := q.QueryContext(ctx, `select field_name, source, field_value from (
+		select field_name, source, field_value,
+			row_number() over (partition by field_name order by observed_at desc, source desc) priority
+		from resource_observed_values where resource_id = ?
+	) observed where priority = 1 order by field_name`, resourceID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	values := map[string]service.ObservedValueInput{}
+	for rows.Next() {
+		var field, source, raw string
+		if err := rows.Scan(&field, &source, &raw); err != nil {
+			return nil, err
+		}
+		var value any
+		if err := json.Unmarshal([]byte(raw), &value); err != nil {
+			return nil, err
+		}
+		values[field] = service.ObservedValueInput{Source: source, Value: value}
+	}
+	return values, rows.Err()
+}
+
+func loadOutgoingIngestionRelations(ctx context.Context, q ingestionSnapshotQueryer, resourceID uint64) ([]service.IngestionRelation, error) {
+	rows, err := q.QueryContext(ctx, `select relation_type, to_resource_id from resource_relations where from_resource_id = ? order by relation_type, to_resource_id`, resourceID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var relations []service.IngestionRelation
+	for rows.Next() {
+		var relation service.IngestionRelation
+		if err := rows.Scan(&relation.Type, &relation.TargetID); err != nil {
+			return nil, err
+		}
+		relations = append(relations, relation)
+	}
+	return relations, rows.Err()
 }
 
 func (r *ResourceRepository) UpdateResource(ctx context.Context, id uint64, input model.ResourceUpdateInput) (*model.Resource, error) {
