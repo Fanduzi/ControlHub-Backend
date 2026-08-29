@@ -1,6 +1,6 @@
 // Package openapi_test verifies the embedded OpenAPI contract.
 // input: embedded OpenAPI YAML, kin-openapi parser, internal/model
-// output: OpenAPI schema, resource health observation, topology, pagination, execution, and error-enum tests
+// output: OpenAPI schema, health observation, effective-value override, topology, pagination, execution, and closed error-enum tests
 // pos: Prevents documented API contracts from drifting from router behavior
 // note: if this file changes, update this header and module README.md.
 package openapi_test
@@ -104,6 +104,9 @@ func TestOpenAPINumericIDsUseInt64(t *testing.T) {
 	assertPathParamInt64(t, doc, "/resources/{id}/archive", "post", "id")
 	assertPathParamInt64(t, doc, "/resources/{id}/unarchive", "post", "id")
 	assertPathParamInt64(t, doc, "/resources/{id}/profile", "get", "id")
+	assertPathParamInt64(t, doc, "/resources/{id}/effective-values", "get", "id")
+	assertPathParamInt64(t, doc, "/resources/{id}/overrides/{field}", "put", "id")
+	assertPathParamInt64(t, doc, "/resources/{id}/overrides/{field}", "delete", "id")
 	assertPathParamInt64(t, doc, "/resources/{id}/relations", "get", "id")
 	assertPathParamInt64(t, doc, "/resources/{id}/relations", "post", "id")
 	assertPathParamInt64(t, doc, "/resource-relations/{id}", "delete", "id")
@@ -129,6 +132,9 @@ func TestOpenAPINumericIDsUseInt64(t *testing.T) {
 	assertSchemaPropertyInt64(t, doc, "ResourceCreateInput", "ownerId")
 	assertSchemaPropertyInt64(t, doc, "ResourcePatchRequest", "environmentId")
 	assertSchemaPropertyInt64(t, doc, "ResourcePatchRequest", "ownerId")
+	assertSchemaPropertyInt64(t, doc, "ManualOverrideRequest", "expectedVersion")
+	assertSchemaPropertyInt64(t, doc, "ClearManualOverrideRequest", "expectedVersion")
+	assertSchemaPropertyInt64(t, doc, "OverrideVersionResponse", "version")
 	assertSchemaPropertyInt64(t, doc, "RelationCreateInput", "toResourceId")
 	assertSchemaPropertyInt64(t, doc, "TopologyResponse", "rootResourceId")
 	assertSchemaPropertyInt64(t, doc, "TopologyNode", "id")

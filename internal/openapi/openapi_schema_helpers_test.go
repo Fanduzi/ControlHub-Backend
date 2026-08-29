@@ -132,6 +132,8 @@ func findOperationParamSchema(t *testing.T, doc *openapi3.T, path string, method
 		operation = pathItem.Patch
 	case "post":
 		operation = pathItem.Post
+	case "put":
+		operation = pathItem.Put
 	case "delete":
 		operation = pathItem.Delete
 	default:

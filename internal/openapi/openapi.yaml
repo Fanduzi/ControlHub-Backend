@@ -2630,6 +2630,81 @@ paths:
                 $ref: "#/components/schemas/ErrorResponse"
         "401": {description: Missing or invalid Bearer token, content: {application/json: {schema: {$ref: "#/components/schemas/ErrorResponse"}}}}
         "403": {description: Authenticated actor is not an admin, content: {application/json: {schema: {$ref: "#/components/schemas/ErrorResponse"}}}}
+  /resources/{id}/effective-values:
+    get:
+      summary: Get effective resource values with provenance
+      operationId: getResourceEffectiveValues
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: {type: integer, format: int64}
+      responses:
+        "200":
+          description: Effective values keyed by supported resource field
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/EffectiveValuesResponse"}
+        "400": {description: Invalid resource ID, content: {application/json: {schema: {$ref: "#/components/schemas/ErrorResponse"}}}}
+        "401": {description: Missing or invalid Bearer token, content: {application/json: {schema: {$ref: "#/components/schemas/ErrorResponse"}}}}
+        "404": {description: Resource not found, content: {application/json: {schema: {$ref: "#/components/schemas/ErrorResponse"}}}}
+  /resources/{id}/overrides/{field}:
+    put:
+      summary: Set a versioned manual override
+      operationId: setResourceOverride
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: {type: integer, format: int64}
+        - in: path
+          name: field
+          required: true
+          schema:
+            type: string
+            enum: [displayName, lifecycleStatus, healthStatus]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/ManualOverrideRequest"}
+      responses:
+        "200":
+          description: Override stored
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/OverrideVersionResponse"}
+        "400": {description: "Invalid ID, field, or JSON body", content: {application/json: {schema: {$ref: "#/components/schemas/ErrorResponse"}}}}
+        "401": {description: Missing or invalid Bearer token, content: {application/json: {schema: {$ref: "#/components/schemas/ErrorResponse"}}}}
+        "403": {description: Authenticated actor is not an admin, content: {application/json: {schema: {$ref: "#/components/schemas/ErrorResponse"}}}}
+        "404": {description: Resource not found, content: {application/json: {schema: {$ref: "#/components/schemas/ErrorResponse"}}}}
+        "409": {description: Expected version is stale, content: {application/json: {schema: {$ref: "#/components/schemas/ErrorResponse"}}}}
+    delete:
+      summary: Clear a versioned manual override
+      operationId: clearResourceOverride
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: {type: integer, format: int64}
+        - in: path
+          name: field
+          required: true
+          schema:
+            type: string
+            enum: [displayName, lifecycleStatus, healthStatus]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/ClearManualOverrideRequest"}
+      responses:
+        "204": {description: Override cleared}
+        "400": {description: "Invalid ID, field, or JSON body", content: {application/json: {schema: {$ref: "#/components/schemas/ErrorResponse"}}}}
+        "401": {description: Missing or invalid Bearer token, content: {application/json: {schema: {$ref: "#/components/schemas/ErrorResponse"}}}}
+        "403": {description: Authenticated actor is not an admin, content: {application/json: {schema: {$ref: "#/components/schemas/ErrorResponse"}}}}
+        "404": {description: Resource or override not found, content: {application/json: {schema: {$ref: "#/components/schemas/ErrorResponse"}}}}
+        "409": {description: Expected version is stale, content: {application/json: {schema: {$ref: "#/components/schemas/ErrorResponse"}}}}
   /resources/{id}/profile:
     get:
       summary: Get resource typed profile projection
@@ -4878,6 +4953,65 @@ components:
             - virtual_ip: ipAddress (required; a single IPv4 or IPv6 address, not CIDR, port, or an address set)
             - database_proxy: technologySubtype, host, port, role (active or standby), optional version
             - control_plane_component: componentSubtype, endpoint, optional version, role (active or standby)
+    EffectiveValuesResponse:
+      type: object
+      additionalProperties: false
+      required: [values]
+      properties:
+        values:
+          type: object
+          additionalProperties:
+            $ref: "#/components/schemas/EffectiveValue"
+    EffectiveValue:
+      type: object
+      additionalProperties: false
+      required: [value, provenance]
+      properties:
+        value: {}
+        provenance:
+          $ref: "#/components/schemas/ValueProvenance"
+    ValueProvenance:
+      type: object
+      additionalProperties: false
+      required: [kind]
+      properties:
+        kind:
+          type: string
+          enum: [observed, manual_override]
+        source:
+          type: string
+        version:
+          type: integer
+          format: int64
+          minimum: 0
+    ManualOverrideRequest:
+      type: object
+      additionalProperties: false
+      required: [value, expectedVersion]
+      properties:
+        value: {}
+        expectedVersion:
+          type: integer
+          format: int64
+          minimum: 0
+    ClearManualOverrideRequest:
+      type: object
+      additionalProperties: false
+      required: [expectedVersion]
+      properties:
+        expectedVersion:
+          type: integer
+          format: int64
+          minimum: 0
+    OverrideVersionResponse:
+      type: object
+      additionalProperties: false
+      required: [version]
+      properties:
+        version:
+          type: integer
+          format: int64
+          minimum: 1
     ResourceOrigin:
       type: string
       enum: [manual, imported, discovered]
