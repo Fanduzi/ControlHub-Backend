@@ -7,7 +7,7 @@ HTTP handlers, chi routing, CORS middleware, and fake-repo test infrastructure.
 |------|---------------|
 | router.go | Route registration, Operator Access Boundary middleware (authenticated Inventory/dictionary reads; fresh-token query surfaces; admin-gated ops metrics), Dependencies struct, CORS middleware, process-shared bounded untrusted-Bearer audit persistence wiring |
 | health_handler.go | GET /health endpoint |
-| resource_handler.go | Resource list/detail handlers; authenticated PATCH routes identity and status changes through atomic inventory audit |
+| resource_handler.go | Resource list/detail handlers; create/PATCH expose origin, aliases, and external identifiers, return explicit identity conflict codes, and route changes through atomic inventory audit |
 | profile_handler.go | PUT/PATCH/DELETE /resources/{id}/profile handlers with strict decoding and token-derived atomic inventory audit |
 | relation_handler.go | Resource relation reads and token-derived atomic audited create/delete handlers |
 | audit_handler.go | Audit event list handlers (global and per-resource), including inventory field changes |
@@ -23,10 +23,8 @@ HTTP handlers, chi routing, CORS middleware, and fake-repo test infrastructure.
 | json_body.go | Shared strict JSON body decoding with unknown-field and multiple-value rejection |
 | test_server.go | Fake repositories and NewTestServer() with a default admin actor for handler tests |
 | health_handler_test.go | Health endpoint tests |
-| resource_handler_test.go | Resource and profile endpoint tests, including create-with-profile atomicity, minimum manual identity, service worker subtype, and Domain Name/Virtual IP identity at the HTTP seam |
-| profile_handler_test.go | PUT full-replacement and PATCH partial-merge tests: strict JSON decoding, field validation, no-op empty PATCH, Domain Name FQDN normalize |
-| resource_handler_test.go | Resource and profile endpoint tests, including create-with-profile atomicity at the HTTP seam and Database Proxy/Control Plane identity |
-| profile_handler_test.go | PUT full-replacement and PATCH partial-merge tests: strict JSON decoding, field validation, no-op empty PATCH, Database Proxy role contract |
+| resource_handler_test.go | Resource and profile endpoint tests, including governed identity, explicit conflicts, immutable origin, create-with-profile atomicity, minimum manual identity, and all typed-profile identities at the HTTP seam |
+| profile_handler_test.go | PUT full-replacement and PATCH partial-merge tests: strict JSON decoding, field validation, no-op empty PATCH, Domain Name normalization, and Database Proxy role contract |
 | relation_handler_test.go | Relation endpoint tests |
 | audit_handler_test.go | Audit list contract tests, including field-level before/after changes |
 | auth_handler_test.go | Auth endpoint tests |

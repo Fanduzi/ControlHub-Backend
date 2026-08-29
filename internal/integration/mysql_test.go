@@ -1,9 +1,9 @@
 //go:build integration
 
 // Package integration provides real-MySQL schema proofs for goose migrations.
-// input: database/sql, testing
-// output: TestGooseCleanMigration, TestSchemaUsesBigintPrimaryKeysWithoutForeignKeys, TestProfileTablesUseUniqueResourceIDInsteadOfPrimaryKeyResourceID
-// pos: Asserts migrated tables including domain_name and virtual_ip profile tables
+// input: database/sql, Testcontainers database, and schema migrations
+// output: migration version, tables, columns, constraints, typed-profile identity, and seed regression tests
+// pos: real-MySQL schema contract coverage, including governed identity and all typed-profile tables
 // note: if this file changes, update header and README.md
 package integration
 
@@ -42,6 +42,8 @@ func TestSchemaUsesBigintPrimaryKeysWithoutForeignKeys(t *testing.T) {
 		"environments":                     {"id"},
 		"owners":                           {"id"},
 		"resources":                        {"id", "environment_id", "owner_id", "archived_by"},
+		"resource_aliases":                 {"id", "resource_id", "environment_id"},
+		"resource_external_identifiers":    {"id", "resource_id"},
 		"resource_relations":               {"id", "from_resource_id", "to_resource_id"},
 		"query_saved_statements":           {"id", "target_resource_id", "owner_user_id"},
 		"query_saved_statement_parameters": {"id", "statement_id"},
@@ -60,6 +62,8 @@ func TestSchemaUsesBigintPrimaryKeysWithoutForeignKeys(t *testing.T) {
 		"environments",
 		"owners",
 		"resources",
+		"resource_aliases",
+		"resource_external_identifiers",
 		"resource_relations",
 		"resource_profiles_host",
 		"resource_profiles_database_instance",
@@ -118,12 +122,13 @@ func assertSchemaChainBaseline(t *testing.T, db *sql.DB) {
 	if err != nil {
 		t.Fatalf("query max version: %v", err)
 	}
-	if maxVersion < 8 {
-		t.Fatalf("expected at least 8 migrations applied, got version %d", maxVersion)
+	if maxVersion < 19 {
+		t.Fatalf("expected at least 19 migrations applied, got version %d", maxVersion)
 	}
 
 	expectedTables := []string{
 		"roles", "users", "environments", "owners", "resources",
+		"resource_aliases", "resource_external_identifiers",
 		"resource_relations",
 		"resource_profiles_host",
 		"resource_profiles_database_instance",
@@ -144,8 +149,8 @@ func assertSchemaChainBaseline(t *testing.T, db *sql.DB) {
 	if !indexExists(t, db, "resources", "idx_resources_lifecycle") {
 		t.Error("expected index idx_resources_lifecycle on resources")
 	}
-	if !indexExists(t, db, "resources", "uq_resource_name_env") {
-		t.Error("expected unique index uq_resource_name_env on resources")
+	if !indexExists(t, db, "resources", "uq_resource_name_env_type") {
+		t.Error("expected unique index uq_resource_name_env_type on resources")
 	}
 	for _, col := range []string{"archived_at", "archived_by", "archive_reason"} {
 		if !columnExists(t, db, "resources", col) {
@@ -157,6 +162,15 @@ func assertSchemaChainBaseline(t *testing.T, db *sql.DB) {
 	}
 	if uniqueIndexOnColumnOnly(t, db, "resources", "name") {
 		t.Error("resources should not have a global unique index on name alone")
+	}
+	if !columnExists(t, db, "resources", "origin") || columnExists(t, db, "resources", "source") || columnExists(t, db, "resources", "external_id") {
+		t.Error("resources must use origin and normalized external identifiers")
+	}
+	if !indexExists(t, db, "resource_aliases", "uq_resource_alias_env") {
+		t.Error("expected per-environment alias uniqueness")
+	}
+	if !indexExists(t, db, "resource_external_identifiers", "uq_resource_external_identifier") {
+		t.Error("expected global external identifier uniqueness")
 	}
 	if !indexExists(t, db, "resource_relations", "uq_relation") {
 		t.Error("expected unique index uq_relation on resource_relations")

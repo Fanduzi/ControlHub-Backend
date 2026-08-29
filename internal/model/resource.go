@@ -1,13 +1,38 @@
 // Package model provides domain entities for the resource management system.
-// input: time package
-// output: Resource struct, ResourceProfileResponse struct, ResourceType type
+// input: errors, time packages
+// output: Resource struct, ResourceProfileResponse struct, ResourceType and identity types
 // pos: Core domain entity for the resource management system
 // note: if this file changes, update header and README.md
 package model
 
-import "time"
+import (
+	"errors"
+	"time"
+)
 
 type ResourceType string
+
+type ResourceOrigin string
+
+const (
+	ResourceOriginManual     ResourceOrigin = "manual"
+	ResourceOriginImported   ResourceOrigin = "imported"
+	ResourceOriginDiscovered ResourceOrigin = "discovered"
+)
+
+func (o ResourceOrigin) Validate() error {
+	switch o {
+	case ResourceOriginManual, ResourceOriginImported, ResourceOriginDiscovered:
+		return nil
+	default:
+		return errors.New("origin is not supported")
+	}
+}
+
+type ResourceExternalIdentifier struct {
+	System string `json:"system"`
+	Value  string `json:"value"`
+}
 
 // ResourceProfileResponse is the read-only projection returned by
 // GET /resources/{id}/profile. Profile keys vary by resource type.
@@ -19,26 +44,31 @@ type ResourceProfileResponse struct {
 }
 
 type Resource struct {
-	ID              uint64            `json:"id"`
-	ResourceType    ResourceType      `json:"resourceType"`
-	ResourceSubtype string            `json:"resourceSubtype"`
-	Name            string            `json:"name"`
-	DisplayName     string            `json:"displayName"`
-	EnvironmentID   uint64            `json:"environmentId"`
-	OwnerID         uint64            `json:"ownerId"`
-	LifecycleStatus string            `json:"lifecycleStatus"`
-	HealthStatus    string            `json:"healthStatus"`
-	Source          string            `json:"source"`
-	ExternalID      string            `json:"externalId"`
-	Labels          map[string]string `json:"labels"`
-	ProfileSummary              *ProfileSummary              `json:"profileSummary,omitempty"`
-	DatabaseOperationalSummary  *DatabaseOperationalSummary  `json:"databaseOperationalSummary,omitempty"`
-	ClusterId                   *uint64                      `json:"clusterId,omitempty"`
-	CreatedAt       time.Time         `json:"createdAt"`
-	UpdatedAt       time.Time         `json:"updatedAt"`
-	ArchivedAt      *time.Time        `json:"archivedAt,omitempty"`
-	ArchivedBy      *uint64           `json:"archivedBy,omitempty"`
-	ArchiveReason   *string           `json:"archiveReason,omitempty"`
+	ID                  uint64                       `json:"id"`
+	ResourceType        ResourceType                 `json:"resourceType"`
+	ResourceSubtype     string                       `json:"resourceSubtype"`
+	Name                string                       `json:"name"`
+	DisplayName         string                       `json:"displayName"`
+	EnvironmentID       uint64                       `json:"environmentId"`
+	OwnerID             uint64                       `json:"ownerId"`
+	LifecycleStatus     string                       `json:"lifecycleStatus"`
+	HealthStatus        string                       `json:"healthStatus"`
+	Origin              ResourceOrigin               `json:"origin"`
+	Aliases             []string                     `json:"aliases"`
+	ExternalIdentifiers []ResourceExternalIdentifier `json:"externalIdentifiers"`
+	// Source and ExternalID keep internal callers compiling during the API
+	// transition; new clients use Origin and ExternalIdentifiers.
+	Source                     string                      `json:"source,omitempty"`
+	ExternalID                 string                      `json:"externalId,omitempty"`
+	Labels                     map[string]string           `json:"labels"`
+	ProfileSummary             *ProfileSummary             `json:"profileSummary,omitempty"`
+	DatabaseOperationalSummary *DatabaseOperationalSummary `json:"databaseOperationalSummary,omitempty"`
+	ClusterId                  *uint64                     `json:"clusterId,omitempty"`
+	CreatedAt                  time.Time                   `json:"createdAt"`
+	UpdatedAt                  time.Time                   `json:"updatedAt"`
+	ArchivedAt                 *time.Time                  `json:"archivedAt,omitempty"`
+	ArchivedBy                 *uint64                     `json:"archivedBy,omitempty"`
+	ArchiveReason              *string                     `json:"archiveReason,omitempty"`
 }
 
 type ProfileSummary struct {

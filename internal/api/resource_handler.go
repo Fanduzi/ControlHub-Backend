@@ -269,6 +269,12 @@ func writeServiceError(w http.ResponseWriter, err error) {
 		writeJSONError(w, http.StatusNotFound, "resource_not_found", err.Error())
 	case errors.Is(err, service.ErrRelationNotFound):
 		writeJSONError(w, http.StatusNotFound, "relation_not_found", err.Error())
+	case errors.Is(err, service.ErrResourceNameConflict):
+		writeJSONError(w, http.StatusConflict, "resource_name_conflict", err.Error())
+	case errors.Is(err, service.ErrResourceAliasConflict):
+		writeJSONError(w, http.StatusConflict, "resource_alias_conflict", err.Error())
+	case errors.Is(err, service.ErrResourceExternalIdentifierConflict):
+		writeJSONError(w, http.StatusConflict, "resource_external_identifier_conflict", err.Error())
 	case errors.Is(err, service.ErrResourceConflict):
 		writeJSONError(w, http.StatusConflict, "resource_conflict", err.Error())
 	case errors.Is(err, service.ErrRelationConflict):

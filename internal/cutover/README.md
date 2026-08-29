@@ -9,7 +9,7 @@ target transaction.
 |------|---------------|
 | local.go | Preserve-then-import orchestration: detect legacy schema, preserve tables as `controlhub_v1`, rebuild target, optional resume |
 | local_test.go | Unit coverage of preserve/rebuild/import orchestration decisions via a fake admin store |
-| import.go | Imports roles, users, environments, owners, resources, profiles, relations, and audit events; maps every legacy UUID identity to its new bigint id; NULL audit actors import as NULL, unknown non-NULL actors fail loud with no partial import |
+| import.go | Imports roles, users, environments, owners, resources, profiles, relations, and audit events; maps legacy source to immutable origin and non-empty externalId to the globally unique `legacy` identity; unknown sources/actors fail loud with no partial import |
 
 ## Interfaces
 - `ImportLegacyData(ctx, ImportConfig)` — full transactional import from a

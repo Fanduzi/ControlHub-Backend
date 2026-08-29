@@ -64,20 +64,23 @@ func (f *fakeResourceWriteRepo) CreateResource(_ context.Context, input model.Re
 		return nil, f.createErr
 	}
 	created := model.Resource{
-		ID:              testResourceCreatedID,
-		ResourceType:    input.ResourceType,
-		ResourceSubtype: input.ResourceSubtype,
-		Name:            input.Name,
-		DisplayName:     input.DisplayName,
-		EnvironmentID:   input.EnvironmentID,
-		OwnerID:         input.OwnerID,
-		LifecycleStatus: string(input.LifecycleStatus),
-		HealthStatus:    string(input.HealthStatus),
-		Source:          input.Source,
-		ExternalID:      input.ExternalID,
-		Labels:          cloneLabels(input.Labels),
-		CreatedAt:       time.Now().UTC(),
-		UpdatedAt:       time.Now().UTC(),
+		ID:                  testResourceCreatedID,
+		ResourceType:        input.ResourceType,
+		ResourceSubtype:     input.ResourceSubtype,
+		Name:                input.Name,
+		DisplayName:         input.DisplayName,
+		EnvironmentID:       input.EnvironmentID,
+		OwnerID:             input.OwnerID,
+		LifecycleStatus:     string(input.LifecycleStatus),
+		HealthStatus:        string(input.HealthStatus),
+		Origin:              input.Origin,
+		Aliases:             append([]string(nil), input.Aliases...),
+		ExternalIdentifiers: append([]model.ResourceExternalIdentifier(nil), input.ExternalIdentifiers...),
+		Source:              input.Source,
+		ExternalID:          input.ExternalID,
+		Labels:              cloneLabels(input.Labels),
+		CreatedAt:           time.Now().UTC(),
+		UpdatedAt:           time.Now().UTC(),
 	}
 	if f.resources == nil {
 		f.resources = map[uint64]model.Resource{}
@@ -129,8 +132,11 @@ func (f *fakeResourceWriteRepo) UpdateResource(_ context.Context, id uint64, inp
 	if input.HealthStatus != nil {
 		item.HealthStatus = string(*input.HealthStatus)
 	}
-	if input.Source != nil {
-		item.Source = *input.Source
+	if input.Aliases != nil {
+		item.Aliases = append([]string(nil), (*input.Aliases)...)
+	}
+	if input.ExternalIdentifiers != nil {
+		item.ExternalIdentifiers = append([]model.ResourceExternalIdentifier(nil), (*input.ExternalIdentifiers)...)
 	}
 	if input.ExternalID != nil {
 		item.ExternalID = *input.ExternalID
@@ -359,6 +365,37 @@ func TestResourceServiceUpdateRejectsImmutableFields(t *testing.T) {
 	_, err := svc.Update(context.Background(), testResource1ID, model.ResourcePatchRequest{ResourceType: &rt})
 	if !errors.Is(err, ErrValidationFailed) {
 		t.Fatalf("expected ErrValidationFailed, got %v", err)
+	}
+}
+
+func TestResourceServiceUpdateRejectsImmutableOrigin(t *testing.T) {
+	repo := &fakeResourceWriteRepo{resources: map[uint64]model.Resource{testResource1ID: {
+		ID: testResource1ID, ResourceType: model.ResourceTypeService, Name: "orders-api", Origin: model.ResourceOriginManual,
+	}}}
+	svc := NewResourceService(repo)
+	origin := model.ResourceOriginImported
+
+	_, err := svc.Update(context.Background(), testResource1ID, model.ResourcePatchRequest{Origin: &origin})
+	if !errors.Is(err, ErrValidationFailed) {
+		t.Fatalf("immutable origin error = %v, want validation failure", err)
+	}
+}
+
+func TestNormalizeResourceIdentity(t *testing.T) {
+	input := model.ResourceCreateInput{
+		ResourceType: model.ResourceTypeService, Name: "orders-api", DisplayName: "Orders API",
+		EnvironmentID: 1, OwnerID: 1, LifecycleStatus: model.LifecycleStatusRunning,
+		HealthStatus: model.HealthStatusHealthy, Origin: model.ResourceOriginImported,
+		Aliases:             []string{" Orders-API ", "orders-api", "Public-Orders"},
+		ExternalIdentifiers: []model.ResourceExternalIdentifier{{System: " ServiceNow ", Value: " CI-76 "}},
+	}
+
+	normalized := normalizeResourceCreateInput(input)
+	if len(normalized.Aliases) != 2 || normalized.Aliases[0] != "orders-api" || normalized.Aliases[1] != "public-orders" {
+		t.Fatalf("normalized aliases = %#v", normalized.Aliases)
+	}
+	if normalized.ExternalIdentifiers[0].System != "servicenow" || normalized.ExternalIdentifiers[0].Value != "CI-76" {
+		t.Fatalf("normalized external identifiers = %#v", normalized.ExternalIdentifiers)
 	}
 }
 

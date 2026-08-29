@@ -35,10 +35,8 @@ var (
 	errFixtureDSNAddressMalformed = errors.New("credential dsn address is malformed")
 )
 
-// devFixtureSource is the Source value the fixture stamps on every resource it
-// creates, and the only Source it will reuse. It keeps the fixture from touching
-// real (e.g. manual) same-name resources and matches the rollback filter.
-const devFixtureSource = "dev-fixture"
+// devFixtureExternalSystem marks resources owned by this disposable fixture.
+const devFixtureExternalSystem = "controlhub-dev-fixture"
 
 // errFixtureExistingResourceNotFixture is returned when a same-name resource
 // exists in the target environment but is NOT a dev fixture. The fixture must
@@ -183,8 +181,12 @@ func (f *QueryDevTargetFixture) findOrCreate(ctx context.Context, cfg QueryDevTa
 		OwnerID:         ownerID,
 		LifecycleStatus: model.LifecycleStatusRunning,
 		HealthStatus:    model.HealthStatusHealthy,
-		Source:          devFixtureSource,
-		Labels:          map[string]string{},
+		Origin:          model.ResourceOriginImported,
+		ExternalIdentifiers: []model.ResourceExternalIdentifier{{
+			System: devFixtureExternalSystem,
+			Value:  cfg.ResourceName,
+		}},
+		Labels: map[string]string{},
 	})
 	if err != nil {
 		// A concurrent ensure may have won the (name, env) unique race; re-list. A
@@ -229,13 +231,22 @@ func (f *QueryDevTargetFixture) findExisting(ctx context.Context, cfg QueryDevTa
 	}
 	for _, r := range items {
 		if r.Name == cfg.ResourceName && r.ResourceType == model.ResourceTypeDatabaseInstance && r.EnvironmentID == envID {
-			if r.Source != devFixtureSource {
+			if !isDevFixture(r, cfg.ResourceName) {
 				return 0, false, errFixtureExistingResourceNotFixture
 			}
 			return r.ID, true, nil
 		}
 	}
 	return 0, false, nil
+}
+
+func isDevFixture(resource model.Resource, name string) bool {
+	for _, identifier := range resource.ExternalIdentifiers {
+		if identifier.System == devFixtureExternalSystem && identifier.Value == name {
+			return true
+		}
+	}
+	return false
 }
 
 // ParseMySQLDSNHostPort parses a go-sql-driver MySQL DSN and returns only

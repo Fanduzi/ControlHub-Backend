@@ -318,6 +318,8 @@ func truncateBusinessTables(t *testing.T, db *sql.DB) {
 	tables := []string{
 		"audit_events",
 		"resource_relations",
+		"resource_external_identifiers",
+		"resource_aliases",
 		"resource_profiles_service",
 		"resource_profiles_database_cluster",
 		"resource_profiles_database_instance",

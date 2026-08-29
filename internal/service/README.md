@@ -5,14 +5,10 @@ Business logic layer with interface-based repository dependencies. Each service 
 ## Files
 | File | Responsibility |
 |------|---------------|
-| resource_service.go | Resource reads/writes, validation, minimum manual identity for the four core CI types, and fail-closed audited HTTP inventory updates |
-| resource_write_service_test.go | Resource/relation write-flow tests, including sensitive-label rejection, profile validation, and the manual-identity rule matrix |
-| profile_service.go | Typed profile PUT/PATCH/DELETE validation, minimum manual identity fields, plus fail-closed audited HTTP mutations; Domain Name FQDN normalize/require and Virtual IP single-address identity |
-| profile_service_test.go | Profile write tests: validation, PATCH partial-merge semantics, not-found/archived/unsupported guards, Domain Name/Virtual IP identity |
-| resource_service.go | Resource reads/writes, validation, and fail-closed audited HTTP inventory updates |
-| resource_write_service_test.go | Resource/relation write-flow tests, including sensitive-label rejection and profile validation, Database Proxy/Control Plane create identity |
-| profile_service.go | Typed profile PUT/PATCH/DELETE validation plus fail-closed audited HTTP mutations, including Database Proxy and Control Plane identity |
-| profile_service_test.go | Profile write tests: validation, PATCH partial-merge semantics, not-found/archived/unsupported guards, Database Proxy active/standby and Control Plane ha_monitor |
+| resource_service.go | Resource reads/writes, governed-identity validation, minimum manual typed-profile identity, explicit conflicts, and fail-closed audited HTTP inventory updates |
+| resource_write_service_test.go | Resource/relation write-flow tests, including identity normalization/immutability, sensitive-label rejection, profile validation, and the manual-identity rule matrix |
+| profile_service.go | Typed profile PUT/PATCH/DELETE validation plus fail-closed audited mutations for all typed-profile identities |
+| profile_service_test.go | Profile write tests: validation, PATCH partial-merge semantics, not-found/archived/unsupported guards, and all typed-profile identity rules |
 | relation_service.go | Relation reads/writes plus fail-closed audited HTTP mutations |
 | audit_service.go | Audit event listing (global and per-resource) |
 | auth_service.go | Login, versioned Backend Bearer issuance, current-state VerifyToken (Authorization Version), role/disable/password invalidation, legacy-to-Argon2id transparent migration |
@@ -57,7 +53,7 @@ Business logic layer with interface-based repository dependencies. Each service 
 - `BoundedAuthAuditEmitter`, `NewBoundedAuthAuditEmitter`, `BearerRejectBudget`, `NewBearerRejectBudget`, `ProcessBearerRejectBudget`, `BoundedBearerRejectedLimit`, `AuthAuditSuppressedRejections` — process-shared budget capping untrusted Bearer rejection persistence at 60 events/min per server process (all routers draw from one budget); suppression counter exposed only via the admin auth-audit metrics surface
 - `HashPasswordArgon2id`, `VerifyPassword`, `IsLegacyHash`, `IsArgon2idHash` — password hashing and format detection
 - `AuthService.LegacyHashCount` — non-identity-bearing count of remaining legacy-hash accounts
-- `ErrResourceNotFound`, `ErrInvalidCredentials`, `ErrInvalidToken`, `ErrQueryDisclosureBlocked` sentinel errors
+- `ErrResourceNotFound`, resource name/alias/external-identifier conflict sentinels, `ErrInvalidCredentials`, `ErrInvalidToken`, `ErrQueryDisclosureBlocked`
 - `ErrQuerySavedStatementNotFound`, `ErrQueryForbidden` — saved-statement service sentinel errors
 - `ErrQueryDisclosurePolicyConflict`, `ErrQueryDisclosurePolicyNotFound` — disclosure policy CRUD sentinel errors (duplicate scope → 409, missing scope on update → 404)
 - `QueryDisclosureReader`, `QueryDisclosureWriter` — narrow disclosure policy access interfaces

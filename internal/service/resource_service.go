@@ -18,13 +18,16 @@ import (
 )
 
 var (
-	ErrResourceNotFound    = errors.New("resource not found")
-	ErrResourceConflict    = errors.New("resource conflict")
-	ErrResourceArchived    = errors.New("resource archived")
-	ErrProfileNotSupported = errors.New("resource type does not support profiles")
-	ErrEnvironmentNotFound = errors.New("environment not found")
-	ErrOwnerNotFound       = errors.New("owner not found")
-	ErrValidationFailed    = errors.New("validation failed")
+	ErrResourceNotFound                   = errors.New("resource not found")
+	ErrResourceConflict                   = errors.New("resource conflict")
+	ErrResourceNameConflict               = fmt.Errorf("%w: name already exists for this environment and resource type", ErrResourceConflict)
+	ErrResourceAliasConflict              = fmt.Errorf("%w: alias already exists in this environment", ErrResourceConflict)
+	ErrResourceExternalIdentifierConflict = fmt.Errorf("%w: external identifier already exists", ErrResourceConflict)
+	ErrResourceArchived                   = errors.New("resource archived")
+	ErrProfileNotSupported                = errors.New("resource type does not support profiles")
+	ErrEnvironmentNotFound                = errors.New("environment not found")
+	ErrOwnerNotFound                      = errors.New("owner not found")
+	ErrValidationFailed                   = errors.New("validation failed")
 )
 
 var resourceNamePattern = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]*$`)
@@ -85,14 +88,13 @@ func (s *ResourceService) GetProfile(id uint64) (*model.ResourceProfileResponse,
 }
 
 func (s *ResourceService) Create(ctx context.Context, input model.ResourceCreateInput) (*model.Resource, error) {
+	input = normalizeResourceCreateInput(input)
 	if err := validateResourceCreateInput(input); err != nil {
 		return nil, err
 	}
 	if err := validateReferenceIDs(input.EnvironmentID, input.OwnerID); err != nil {
 		return nil, err
 	}
-	input = normalizeResourceCreateInput(input)
-
 	var (
 		created *model.Resource
 		err     error
@@ -192,6 +194,33 @@ func (s *ResourceService) validateUpdate(id uint64, patch model.ResourcePatchReq
 		if err := validateResourceLabels(*patch.Labels); err != nil {
 			return model.ResourceUpdateInput{}, wrapValidation(err.Error())
 		}
+	}
+	if patch.Aliases != nil {
+		normalized, err := normalizeAliases(*patch.Aliases)
+		if err != nil {
+			return model.ResourceUpdateInput{}, wrapValidation(err.Error())
+		}
+		patch.Aliases = &normalized
+	}
+	if patch.ExternalIdentifiers != nil {
+		normalized, err := normalizeExternalIdentifiers(*patch.ExternalIdentifiers)
+		if err != nil {
+			return model.ResourceUpdateInput{}, wrapValidation(err.Error())
+		}
+		patch.ExternalIdentifiers = &normalized
+	}
+	if patch.ExternalID != nil {
+		next := make([]model.ResourceExternalIdentifier, 0, len(existing.ExternalIdentifiers)+1)
+		for _, identifier := range existing.ExternalIdentifiers {
+			if identifier.System != "legacy" {
+				next = append(next, identifier)
+			}
+		}
+		if value := strings.TrimSpace(*patch.ExternalID); value != "" {
+			next = append(next, model.ResourceExternalIdentifier{System: "legacy", Value: value})
+		}
+		patch.ExternalIdentifiers = &next
+		patch.ExternalID = nil
 	}
 	if patch.EnvironmentID != nil || patch.OwnerID != nil {
 		existing, err := s.Get(id)
@@ -304,11 +333,23 @@ func validateResourceCreateInput(input model.ResourceCreateInput) error {
 		}
 		ve.WithField("healthStatus", "Health status is not supported")
 	}
-	if input.Source != "manual" {
+	if err := input.Origin.Validate(); err != nil {
 		if ve == nil {
 			ve = newValidationError("validation failed")
 		}
-		ve.WithField("source", "Source must be manual")
+		ve.WithField("origin", "Origin must be manual, imported, or discovered")
+	}
+	if _, err := normalizeAliases(input.Aliases); err != nil {
+		if ve == nil {
+			ve = newValidationError("validation failed")
+		}
+		ve.WithField("aliases", err.Error())
+	}
+	if _, err := normalizeExternalIdentifiers(input.ExternalIdentifiers); err != nil {
+		if ve == nil {
+			ve = newValidationError("validation failed")
+		}
+		ve.WithField("externalIdentifiers", err.Error())
 	}
 	if err := model.ValidateResourceSubtype(string(input.ResourceType), input.ResourceSubtype); err != nil {
 		if ve == nil {
@@ -392,10 +433,60 @@ func validateReferenceIDs(environmentID, ownerID uint64) error {
 }
 
 func normalizeResourceCreateInput(input model.ResourceCreateInput) model.ResourceCreateInput {
+	if input.Origin == "" {
+		switch input.Source {
+		case "", "manual":
+			input.Origin = model.ResourceOriginManual
+		case "import", "imported":
+			input.Origin = model.ResourceOriginImported
+		case "discovery", "discovered":
+			input.Origin = model.ResourceOriginDiscovered
+		}
+	}
+	input.Source = string(input.Origin)
+	input.Aliases, _ = normalizeAliases(input.Aliases)
+	if len(input.ExternalIdentifiers) == 0 && strings.TrimSpace(input.ExternalID) != "" {
+		input.ExternalIdentifiers = []model.ResourceExternalIdentifier{{System: "legacy", Value: strings.TrimSpace(input.ExternalID)}}
+	}
+	input.ExternalIdentifiers, _ = normalizeExternalIdentifiers(input.ExternalIdentifiers)
 	if input.Labels == nil {
 		input.Labels = map[string]string{}
 	}
 	return input
+}
+
+func normalizeAliases(aliases []string) ([]string, error) {
+	result := make([]string, 0, len(aliases))
+	seen := make(map[string]bool, len(aliases))
+	for _, raw := range aliases {
+		alias := strings.ToLower(strings.TrimSpace(raw))
+		if alias == "" || len(alias) > 255 || !resourceNamePattern.MatchString(alias) {
+			return nil, errors.New("aliases must be non-empty operations-friendly names of at most 255 characters")
+		}
+		if !seen[alias] {
+			seen[alias] = true
+			result = append(result, alias)
+		}
+	}
+	return result, nil
+}
+
+func normalizeExternalIdentifiers(identifiers []model.ResourceExternalIdentifier) ([]model.ResourceExternalIdentifier, error) {
+	result := make([]model.ResourceExternalIdentifier, 0, len(identifiers))
+	seen := make(map[string]bool, len(identifiers))
+	for _, identifier := range identifiers {
+		system := strings.ToLower(strings.TrimSpace(identifier.System))
+		value := strings.TrimSpace(identifier.Value)
+		if system == "" || value == "" || len(system) > 128 || len(value) > 255 || !resourceNamePattern.MatchString(system) {
+			return nil, errors.New("external identifiers require an operations-friendly system and non-empty value")
+		}
+		key := system + "\x00" + value
+		if !seen[key] {
+			seen[key] = true
+			result = append(result, model.ResourceExternalIdentifier{System: system, Value: value})
+		}
+	}
+	return result, nil
 }
 
 // ValidationError carries field-level validation details.

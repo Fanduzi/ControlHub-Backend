@@ -311,28 +311,43 @@ func (f *fakeResourceRepo) GetResource(id uint64) (*model.Resource, error) {
 
 func (f *fakeResourceRepo) CreateResource(_ context.Context, input model.ResourceCreateInput) (*model.Resource, error) {
 	for _, existing := range f.resources {
-		if existing.EnvironmentID == input.EnvironmentID && existing.Name == input.Name {
-			return nil, service.ErrResourceConflict
+		if existing.EnvironmentID == input.EnvironmentID && existing.ResourceType == input.ResourceType && existing.Name == input.Name {
+			return nil, service.ErrResourceNameConflict
+		}
+		for _, alias := range existing.Aliases {
+			if existing.EnvironmentID == input.EnvironmentID && containsString(input.Aliases, alias) {
+				return nil, service.ErrResourceAliasConflict
+			}
+		}
+		for _, current := range existing.ExternalIdentifiers {
+			for _, next := range input.ExternalIdentifiers {
+				if current == next {
+					return nil, service.ErrResourceExternalIdentifierConflict
+				}
+			}
 		}
 	}
 
 	f.nextID++
 	createdAt := f.now.Add(time.Duration(f.nextID) * time.Minute)
 	created := model.Resource{
-		ID:              10000 + f.nextID,
-		ResourceType:    input.ResourceType,
-		ResourceSubtype: input.ResourceSubtype,
-		Name:            input.Name,
-		DisplayName:     input.DisplayName,
-		EnvironmentID:   input.EnvironmentID,
-		OwnerID:         input.OwnerID,
-		LifecycleStatus: string(input.LifecycleStatus),
-		HealthStatus:    string(input.HealthStatus),
-		Source:          input.Source,
-		ExternalID:      input.ExternalID,
-		Labels:          cloneLabels(input.Labels),
-		CreatedAt:       createdAt,
-		UpdatedAt:       createdAt,
+		ID:                  10000 + f.nextID,
+		ResourceType:        input.ResourceType,
+		ResourceSubtype:     input.ResourceSubtype,
+		Name:                input.Name,
+		DisplayName:         input.DisplayName,
+		EnvironmentID:       input.EnvironmentID,
+		OwnerID:             input.OwnerID,
+		LifecycleStatus:     string(input.LifecycleStatus),
+		HealthStatus:        string(input.HealthStatus),
+		Origin:              input.Origin,
+		Aliases:             append([]string(nil), input.Aliases...),
+		ExternalIdentifiers: append([]model.ResourceExternalIdentifier(nil), input.ExternalIdentifiers...),
+		Source:              input.Source,
+		ExternalID:          input.ExternalID,
+		Labels:              cloneLabels(input.Labels),
+		CreatedAt:           createdAt,
+		UpdatedAt:           createdAt,
 	}
 	f.resources[created.ID] = created
 	f.listOrder = append(f.listOrder, created.ID)
@@ -455,8 +470,11 @@ func (f *fakeResourceRepo) UpdateResource(_ context.Context, id uint64, input mo
 	if input.HealthStatus != nil {
 		updated.HealthStatus = string(*input.HealthStatus)
 	}
-	if input.Source != nil {
-		updated.Source = *input.Source
+	if input.Aliases != nil {
+		updated.Aliases = append([]string(nil), (*input.Aliases)...)
+	}
+	if input.ExternalIdentifiers != nil {
+		updated.ExternalIdentifiers = append([]model.ResourceExternalIdentifier(nil), (*input.ExternalIdentifiers)...)
 	}
 	if input.ExternalID != nil {
 		updated.ExternalID = *input.ExternalID
@@ -1168,6 +1186,14 @@ func (fakeHealthStatusRepo) ListHealthStatuses() ([]model.DictionaryItem, error)
 
 func cloneResource(resource model.Resource) model.Resource {
 	resource.Labels = cloneLabels(resource.Labels)
+	resource.Aliases = append([]string(nil), resource.Aliases...)
+	resource.ExternalIdentifiers = append([]model.ResourceExternalIdentifier(nil), resource.ExternalIdentifiers...)
+	if resource.Origin == "" {
+		resource.Origin = model.ResourceOrigin(resource.Source)
+	}
+	if len(resource.ExternalIdentifiers) == 0 && resource.ExternalID != "" {
+		resource.ExternalIdentifiers = []model.ResourceExternalIdentifier{{System: "legacy", Value: resource.ExternalID}}
+	}
 	return resource
 }
 

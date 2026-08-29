@@ -5,7 +5,7 @@ Data access layer implementing service-layer repository interfaces with raw SQL 
 ## Files
 | File | Responsibility |
 |------|---------------|
-| resource_repository.go | Resource CRUD and typed profiles for core resources, domain_name, virtual_ip, database_proxy, and control_plane_component; authenticated resource/profile mutations atomically commit server-owned field diffs with audit events |
+| resource_repository.go | Resource CRUD, aliases, external identifiers, and all typed profiles; identity and authenticated field-audit mutations commit in one transaction with explicit uniqueness conflicts |
 | relation_repository.go | Relation queries plus atomic create/delete and one audit event per affected CI |
 | audit_repository.go | Audit event queries (global and by resource), including JSON field changes |
 | user_repository.go | User credential lookup by email/id; Authorization Version mutators (role/active/password); UpgradePasswordHash for legacy-to-Argon2id migration; CountLegacyHashUsers for operator visibility |
@@ -25,7 +25,7 @@ Data access layer implementing service-layer repository interfaces with raw SQL 
 - `QueryExecutionRepository.InsertExecutionWithAudit` — repository-owned atomic Execution Evidence Pair: one transaction commits the execution-history row and its fixed per-caller audit event (service passes `query.executed` for execution and `related_record_navigation` for navigation, Issue #36); on any failure both roll back, the counter increments once, and one fixed safe log line is emitted
 - Repository structs satisfy service-layer interfaces
 
-Inventory audit writes are fail-closed. Resource, typed-profile, and
+Inventory audit writes are fail-closed. Resource identity, typed-profile, and
 relationship mutations use the shared `AuditChange` representation; audit
 insert or commit failure rolls the inventory mutation back. Relationship
 mutations write separate target-specific evidence for both affected CIs.

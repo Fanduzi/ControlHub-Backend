@@ -222,6 +222,35 @@ func TestResourceJSONUsesNumericIDs(t *testing.T) {
 	}
 }
 
+func TestResourceIdentityJSON(t *testing.T) {
+	payload := []byte(`{"id":76,"resourceType":"service","name":"orders-api","origin":"imported","aliases":["orders","order-api"],"externalIdentifiers":[{"system":"servicenow","value":"CI-76"}]}`)
+
+	var resource Resource
+	if err := json.Unmarshal(payload, &resource); err != nil {
+		t.Fatalf("unmarshal resource identity: %v", err)
+	}
+	if resource.Origin != ResourceOriginImported {
+		t.Fatalf("origin = %q, want imported", resource.Origin)
+	}
+	if len(resource.Aliases) != 2 || resource.Aliases[0] != "orders" {
+		t.Fatalf("aliases = %#v", resource.Aliases)
+	}
+	if len(resource.ExternalIdentifiers) != 1 || resource.ExternalIdentifiers[0].System != "servicenow" || resource.ExternalIdentifiers[0].Value != "CI-76" {
+		t.Fatalf("external identifiers = %#v", resource.ExternalIdentifiers)
+	}
+}
+
+func TestResourceOriginValidation(t *testing.T) {
+	for _, origin := range []ResourceOrigin{ResourceOriginManual, ResourceOriginImported, ResourceOriginDiscovered} {
+		if err := origin.Validate(); err != nil {
+			t.Fatalf("origin %q should be valid: %v", origin, err)
+		}
+	}
+	if err := ResourceOrigin("crawler").Validate(); err == nil {
+		t.Fatal("unsupported origin should fail validation")
+	}
+}
+
 func TestRelationCreateInputJSONUsesNumericIDs(t *testing.T) {
 	payload := []byte(`{"toResourceId":404,"relationType":"depends_on"}`)
 

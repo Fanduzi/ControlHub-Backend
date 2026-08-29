@@ -1,9 +1,7 @@
 // Package api provides HTTP handlers and routing for the ControlHub REST API.
 // input: internal/api, internal/model, net/http, net/http/httptest, encoding/json
-// output: TestListResources*, TestGetResourceProfile_*, TestCreateResource*, TestCreateDomainName*, TestCreateVirtualIP*
-// pos: Validates resource listing with pagination/filtering, per-type profile responses, core CI typed-profile create contracts, and Domain Name/Virtual IP identity at the HTTP seam
-// output: TestListResources*, TestGetResourceProfile_*
-// pos: Validates resource listing with pagination/filtering and per-type profile responses, including Database Proxy/Control Plane create-with-profile
+// output: TestCreateResource*, TestListResources*, TestGetResourceProfile_*, TestCreateDomainName*, TestCreateVirtualIP*
+// pos: Validates governed identity and explicit conflicts, resource listing, and create/read behavior for all typed profiles at the HTTP seam
 // note: if this file changes, update header and README.md
 package api
 
@@ -72,6 +70,82 @@ func TestCreateResource(t *testing.T) {
 	if resp.Labels["team"] != "order" {
 		t.Fatalf("expected team label order, got %q", resp.Labels["team"])
 	}
+}
+func TestCreateResourceManagesIdentity(t *testing.T) {
+	server := NewTestServer()
+	body := `{
+		"resourceType":"service",
+		"resourceSubtype":"api",
+		"name":"identity-api",
+		"displayName":"Identity API",
+		"environmentId":1,
+		"ownerId":2,
+		"lifecycleStatus":"running",
+		"healthStatus":"healthy",
+		"origin":"imported",
+		"aliases":[" Identity-API ","identity-api"],
+		"externalIdentifiers":[{"system":"servicenow","value":"CI-76"}],
+		"labels":{}
+	}`
+	req := httptest.NewRequest(http.MethodPost, "/resources", strings.NewReader(body))
+	rec := httptest.NewRecorder()
+
+	server.Router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("expected 201, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+	var got model.Resource
+	if err := json.NewDecoder(rec.Body).Decode(&got); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if got.Origin != model.ResourceOriginImported || len(got.Aliases) != 1 || got.Aliases[0] != "identity-api" {
+		t.Fatalf("identity response = origin %q aliases %#v", got.Origin, got.Aliases)
+	}
+}
+
+func TestCreateResourceReturnsExplicitAliasConflict(t *testing.T) {
+	server := NewTestServer()
+	create := func(name, resourceType, alias string) *httptest.ResponseRecorder {
+		subtype := "api"
+		if resourceType == "host" {
+			subtype = "vm"
+		}
+		body := fmt.Sprintf(`{"resourceType":%q,"resourceSubtype":%q,"name":%q,"displayName":%q,"environmentId":1,"ownerId":2,"lifecycleStatus":"running","healthStatus":"healthy","origin":"manual","aliases":[%q],"labels":{}}`, resourceType, subtype, name, name, alias)
+		req := httptest.NewRequest(http.MethodPost, "/resources", strings.NewReader(body))
+		rec := httptest.NewRecorder()
+		server.Router.ServeHTTP(rec, req)
+		return rec
+	}
+	if rec := create("alias-owner", "service", "Shared-Alias"); rec.Code != http.StatusCreated {
+		t.Fatalf("seed alias: status %d body %s", rec.Code, rec.Body.String())
+	}
+	assertAPIError(t, create("alias-conflict", "host", "shared-alias"), http.StatusConflict, "resource_alias_conflict")
+}
+
+func TestCreateResourceReturnsExplicitExternalIdentifierConflict(t *testing.T) {
+	server := NewTestServer()
+	create := func(name, value string) *httptest.ResponseRecorder {
+		body := fmt.Sprintf(`{"resourceType":"service","resourceSubtype":"api","name":%q,"displayName":%q,"environmentId":1,"ownerId":2,"lifecycleStatus":"running","healthStatus":"healthy","origin":"manual","externalIdentifiers":[{"system":"servicenow","value":%q}],"labels":{}}`, name, name, value)
+		req := httptest.NewRequest(http.MethodPost, "/resources", strings.NewReader(body))
+		rec := httptest.NewRecorder()
+		server.Router.ServeHTTP(rec, req)
+		return rec
+	}
+	if rec := create("external-owner", "CI-76"); rec.Code != http.StatusCreated {
+		t.Fatalf("seed external identifier: status %d body %s", rec.Code, rec.Body.String())
+	}
+	assertAPIError(t, create("external-conflict", "CI-76"), http.StatusConflict, "resource_external_identifier_conflict")
+}
+
+func TestPatchResourceRejectsImmutableOrigin(t *testing.T) {
+	server := NewTestServer()
+	req := httptest.NewRequest(http.MethodPatch, "/resources/1", strings.NewReader(`{"origin":"discovered"}`))
+	rec := httptest.NewRecorder()
+
+	server.Router.ServeHTTP(rec, req)
+
+	assertAPIError(t, rec, http.StatusBadRequest, "validation_failed")
 }
 
 func TestCreateResourceRejectsUnsupportedResourceType(t *testing.T) {
@@ -203,7 +277,7 @@ func TestCreateResourceRejectsDuplicateNameWithinEnvironment(t *testing.T) {
 
 	server.Router.ServeHTTP(rec, req)
 
-	assertAPIError(t, rec, http.StatusConflict, "resource_conflict")
+	assertAPIError(t, rec, http.StatusConflict, "resource_name_conflict")
 }
 
 func TestCreateResourceRejectsScalarLabels(t *testing.T) {

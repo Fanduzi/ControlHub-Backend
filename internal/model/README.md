@@ -5,7 +5,8 @@ Domain structs, taxonomy constants, validation methods, and dictionary definitio
 ## Files
 | File | Responsibility |
 |------|---------------|
-| resource.go | Resource struct, ResourceProfileResponse, ResourceType type |
+| resource.go | Resource identity, immutable origin, aliases, external identifiers, profile response, and ResourceType |
+| resource_write.go | Resource create/update inputs, including managed identity collections |
 | relation.go | ResourceRelation struct, RelationType type |
 | audit.go | AuditEvent plus server-owned AuditChange field-diff contract |
 | auth.go | UserCredential (incl. IsActive + AuthorizationVersion), LoginRequest, LoginResponse structs |
@@ -29,7 +30,7 @@ Domain structs, taxonomy constants, validation methods, and dictionary definitio
 ## Exports
 - All domain structs (Resource, ResourceRelation, AuditEvent, etc.)
 - `AuditChange`, `AuditChangeOperation`, and add/update/remove constants for extensible inventory evidence
-- Type constants and validation methods
+- Type constants and validation methods, including `ResourceOrigin`
 - `ResourceTypeDictionary()`, `RelationTypeDictionary()`, `LifecycleStatusDictionary()`, `HealthStatusDictionary()`
 - `QueryEnvironmentPolicy.Validate()`, `ValidateCredentialRef()` (query sandbox credential policy)
 - `QueryCredentialRuntimeStatus.Validate()` / `.IsResolved()`, `QueryCredentialUpsertRequest.Validate()` (Phase 38A credential metadata contract)

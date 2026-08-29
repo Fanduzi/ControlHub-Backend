@@ -1,10 +1,10 @@
 //go:build integration
 
-// Package integration provides Testcontainers-backed tests for the Phase 37G dev
-// ready query target fixture: ensure-local-target → credential seed → readiness,
-// select 1, unsafe rejection, history, no-DSN-stored, idempotency, host:port
-// match, and fail-closed binding. It reuses the shared harness helpers and adds
-// no new setup of its own.
+// Package integration validates the disposable query target fixture against MySQL.
+// input: shared integration harness, query fixture, credential seed, and MySQL
+// output: readiness, execution, identity idempotency, and binding regression tests
+// pos: real-MySQL coverage for the dev query target fixture
+// note: if this file changes, update header and README.md
 package integration
 
 import (
@@ -107,7 +107,13 @@ func TestQueryDevTargetFixture_Idempotent_NoDuplicateRows(t *testing.T) {
 		t.Fatalf("re-seed: %v", err)
 	}
 	var resCount, profCount, credCount int
-	if err := db.QueryRow(`select count(*) from resources where name = ? and source = 'dev-fixture'`, fixtureName(t)).Scan(&resCount); err != nil {
+	if err := db.QueryRow(`
+		select count(*)
+		from resources r
+		join resource_external_identifiers rei on rei.resource_id = r.id
+		where r.name = ? and rei.external_system = 'controlhub-dev-fixture' and rei.external_value = ?`,
+		fixtureName(t), fixtureName(t),
+	).Scan(&resCount); err != nil {
 		t.Fatalf("count resources: %v", err)
 	}
 	if err := db.QueryRow(`select count(*) from resource_profiles_database_instance where resource_id = ?`, id1).Scan(&profCount); err != nil {

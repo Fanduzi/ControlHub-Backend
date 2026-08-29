@@ -32,7 +32,7 @@ func NewResourceRepository(db *sql.DB) *ResourceRepository {
 
 const resourceColumns = `id, resource_type, resource_subtype, name, display_name,
        environment_id, owner_id, lifecycle_status, health_status,
-       source, external_id, labels, created_at, updated_at,
+       origin, labels, created_at, updated_at,
        archived_at, archived_by, archive_reason`
 
 func (r *ResourceRepository) ListResources(ctx context.Context, q model.ResourceListQuery) ([]model.Resource, int, error) {
@@ -41,49 +41,51 @@ func (r *ResourceRepository) ListResources(ctx context.Context, q model.Resource
 
 	if len(q.ResourceTypes) > 0 {
 		ph := buildInClause(len(q.ResourceTypes))
-		conds = append(conds, "resource_type in ("+ph+")")
+		conds = append(conds, "r.resource_type in ("+ph+")")
 		for _, v := range q.ResourceTypes {
 			args = append(args, v)
 		}
 	}
 	if len(q.EnvironmentIDs) > 0 {
 		ph := buildInClause(len(q.EnvironmentIDs))
-		conds = append(conds, "environment_id in ("+ph+")")
+		conds = append(conds, "r.environment_id in ("+ph+")")
 		for _, v := range q.EnvironmentIDs {
 			args = append(args, v)
 		}
 	}
 	if len(q.LifecycleStatus) > 0 {
 		ph := buildInClause(len(q.LifecycleStatus))
-		conds = append(conds, "lifecycle_status in ("+ph+")")
+		conds = append(conds, "r.lifecycle_status in ("+ph+")")
 		for _, v := range q.LifecycleStatus {
 			args = append(args, v)
 		}
 	}
 	if len(q.HealthStatuses) > 0 {
 		ph := buildInClause(len(q.HealthStatuses))
-		conds = append(conds, "health_status in ("+ph+")")
+		conds = append(conds, "r.health_status in ("+ph+")")
 		for _, v := range q.HealthStatuses {
 			args = append(args, v)
 		}
 	}
 	if len(q.ResourceSubtypes) > 0 {
 		ph := buildInClause(len(q.ResourceSubtypes))
-		conds = append(conds, "resource_subtype in ("+ph+")")
+		conds = append(conds, "r.resource_subtype in ("+ph+")")
 		for _, v := range q.ResourceSubtypes {
 			args = append(args, v)
 		}
 	}
 	if q.Query != "" {
 		pattern := "%" + q.Query + "%"
-		conds = append(conds, "(name like ? or display_name like ? or external_id like ?)")
-		args = append(args, pattern, pattern, pattern)
+		conds = append(conds, `(r.name like ? or r.display_name like ?
+			or exists (select 1 from resource_aliases ra where ra.resource_id = r.id and ra.alias like ?)
+			or exists (select 1 from resource_external_identifiers rei where rei.resource_id = r.id and (rei.external_system like ? or rei.external_value like ?)))`)
+		args = append(args, pattern, pattern, pattern, pattern, pattern)
 	}
 
 	if q.ArchivedOnly {
-		conds = append(conds, "archived_at is not null")
+		conds = append(conds, "r.archived_at is not null")
 	} else if !q.IncludeArchived {
-		conds = append(conds, "archived_at is null")
+		conds = append(conds, "r.archived_at is null")
 	}
 
 	where := ""
@@ -92,7 +94,7 @@ func (r *ResourceRepository) ListResources(ctx context.Context, q model.Resource
 	}
 
 	var total int
-	countQuery := "select count(*) from resources " + where
+	countQuery := "select count(*) from resources r " + where
 	if err := r.db.QueryRowContext(ctx, countQuery, args...).Scan(&total); err != nil {
 		return nil, 0, fmt.Errorf("count resources: %w", err)
 	}
@@ -100,7 +102,7 @@ func (r *ResourceRepository) ListResources(ctx context.Context, q model.Resource
 	offset := (q.Page - 1) * q.PageSize
 	dataQuery := `select r.id, r.resource_type, r.resource_subtype, r.name, r.display_name,
        r.environment_id, r.owner_id, r.lifecycle_status, r.health_status,
-       r.source, r.external_id, r.labels, r.created_at, r.updated_at,
+       r.origin, r.labels, r.created_at, r.updated_at,
        r.archived_at, r.archived_by, r.archive_reason,
        (select rr.to_resource_id from resource_relations rr
         where rr.from_resource_id = r.id and rr.relation_type = 'member_of'
@@ -135,8 +137,7 @@ from resources r ` + where + " order by r.name limit ? offset ?"
 			&item.OwnerID,
 			&item.LifecycleStatus,
 			&item.HealthStatus,
-			&item.Source,
-			&item.ExternalID,
+			&item.Origin,
 			&rawLabels,
 			&item.CreatedAt,
 			&item.UpdatedAt,
@@ -169,6 +170,9 @@ from resources r ` + where + " order by r.name limit ? offset ?"
 		} else if err := json.Unmarshal([]byte(rawLabels), &item.Labels); err != nil {
 			return nil, 0, err
 		}
+		if err := loadResourceIdentity(ctx, r.db, &item); err != nil {
+			return nil, 0, err
+		}
 
 		item.ProfileSummary = r.buildProfileSummary(ctx, item.ID, item.ResourceType)
 
@@ -199,7 +203,7 @@ func buildInClause(n int) string {
 func (r *ResourceRepository) GetResource(id uint64) (*model.Resource, error) {
 	query := `select r.id, r.resource_type, r.resource_subtype, r.name, r.display_name,
 	       r.environment_id, r.owner_id, r.lifecycle_status, r.health_status,
-	       r.source, r.external_id, r.labels, r.created_at, r.updated_at,
+	       r.origin, r.labels, r.created_at, r.updated_at,
 	       r.archived_at, r.archived_by, r.archive_reason,
 	       (select rr.to_resource_id from resource_relations rr
 	        where rr.from_resource_id = r.id and rr.relation_type = 'member_of'
@@ -227,8 +231,7 @@ func (r *ResourceRepository) GetResource(id uint64) (*model.Resource, error) {
 		&item.OwnerID,
 		&item.LifecycleStatus,
 		&item.HealthStatus,
-		&item.Source,
-		&item.ExternalID,
+		&item.Origin,
 		&rawLabels,
 		&item.CreatedAt,
 		&item.UpdatedAt,
@@ -262,6 +265,9 @@ func (r *ResourceRepository) GetResource(id uint64) (*model.Resource, error) {
 	if rawLabels == "" || rawLabels == "null" {
 		item.Labels = map[string]string{}
 	} else if err := json.Unmarshal([]byte(rawLabels), &item.Labels); err != nil {
+		return nil, err
+	}
+	if err := loadResourceIdentity(context.Background(), r.db, &item); err != nil {
 		return nil, err
 	}
 
@@ -710,37 +716,11 @@ func (r *ResourceRepository) mutateProfileWithAudit(ctx context.Context, resourc
 const insertResourceSQL = `insert into resources
 	(resource_type, resource_subtype, name, display_name,
 	 environment_id, owner_id, lifecycle_status, health_status,
-	 source, external_id, labels, created_at, updated_at)
-	values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), NOW())`
+	 origin, labels, created_at, updated_at)
+	values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), NOW())`
 
 func (r *ResourceRepository) CreateResource(ctx context.Context, input model.ResourceCreateInput) (*model.Resource, error) {
-	labelsJSON, err := json.Marshal(input.Labels)
-	if err != nil {
-		return nil, fmt.Errorf("marshal labels: %w", err)
-	}
-
-	result, err := r.db.ExecContext(ctx, insertResourceSQL,
-		input.ResourceType, input.ResourceSubtype,
-		input.Name, input.DisplayName,
-		input.EnvironmentID, input.OwnerID,
-		string(input.LifecycleStatus), string(input.HealthStatus),
-		input.Source, input.ExternalID,
-		string(labelsJSON),
-	)
-	if err != nil {
-		var mysqlErr *mysql.MySQLError
-		if errors.As(err, &mysqlErr) && mysqlErr.Number == 1062 {
-			return nil, service.ErrResourceConflict
-		}
-		return nil, fmt.Errorf("insert resource: %w", err)
-	}
-
-	insertID, err := result.LastInsertId()
-	if err != nil {
-		return nil, fmt.Errorf("resource last insert id: %w", err)
-	}
-
-	return r.GetResource(uint64(insertID))
+	return r.createResource(ctx, input, nil)
 }
 
 // CreateResourceWithProfile inserts the resource and its initial typed profile
@@ -750,6 +730,25 @@ func (r *ResourceRepository) CreateResource(ctx context.Context, input model.Res
 // ProfileService.writeProfile in internal/service/profile_service.go; keep the
 // two mappings in sync when profile fields change.
 func (r *ResourceRepository) CreateResourceWithProfile(ctx context.Context, input model.ResourceCreateInput, profile map[string]any) (*model.Resource, error) {
+	return r.createResource(ctx, input, profile)
+}
+
+func (r *ResourceRepository) createResource(ctx context.Context, input model.ResourceCreateInput, profile map[string]any) (*model.Resource, error) {
+	if input.Origin == "" {
+		switch input.Source {
+		case "", "manual":
+			input.Origin = model.ResourceOriginManual
+		case "import", "imported", "terraform":
+			input.Origin = model.ResourceOriginImported
+		case "discovery", "discovered":
+			input.Origin = model.ResourceOriginDiscovered
+		default:
+			input.Origin = model.ResourceOriginImported
+		}
+	}
+	if len(input.ExternalIdentifiers) == 0 && strings.TrimSpace(input.ExternalID) != "" {
+		input.ExternalIdentifiers = []model.ResourceExternalIdentifier{{System: "legacy", Value: input.ExternalID}}
+	}
 	labelsJSON, err := json.Marshal(input.Labels)
 	if err != nil {
 		return nil, fmt.Errorf("marshal labels: %w", err)
@@ -766,13 +765,12 @@ func (r *ResourceRepository) CreateResourceWithProfile(ctx context.Context, inpu
 		input.Name, input.DisplayName,
 		input.EnvironmentID, input.OwnerID,
 		string(input.LifecycleStatus), string(input.HealthStatus),
-		input.Source, input.ExternalID,
+		input.Origin,
 		string(labelsJSON),
 	)
 	if err != nil {
-		var mysqlErr *mysql.MySQLError
-		if errors.As(err, &mysqlErr) && mysqlErr.Number == 1062 {
-			return nil, service.ErrResourceConflict
+		if conflict := classifyResourceConflict(err); conflict != nil {
+			return nil, conflict
 		}
 		return nil, fmt.Errorf("insert resource: %w", err)
 	}
@@ -782,36 +780,36 @@ func (r *ResourceRepository) CreateResourceWithProfile(ctx context.Context, inpu
 		return nil, fmt.Errorf("resource last insert id: %w", err)
 	}
 
-	if err := upsertProfileTx(ctx, tx, uint64(insertID), input.ResourceType, profile); err != nil {
-		return nil, fmt.Errorf("upsert profile for resource %d: %w", insertID, err)
+	resourceID := uint64(insertID)
+	if err := insertResourceIdentityTx(ctx, tx, resourceID, input.EnvironmentID, input.Aliases, input.ExternalIdentifiers); err != nil {
+		return nil, err
+	}
+	if profile != nil {
+		if err := upsertProfileTx(ctx, tx, resourceID, input.ResourceType, profile); err != nil {
+			return nil, fmt.Errorf("upsert profile for resource %d: %w", insertID, err)
+		}
 	}
 
 	if err := tx.Commit(); err != nil {
 		return nil, fmt.Errorf("commit create resource transaction: %w", err)
 	}
 
-	return r.GetResource(uint64(insertID))
+	return r.GetResource(resourceID)
 }
 
 func (r *ResourceRepository) UpdateResource(ctx context.Context, id uint64, input model.ResourceUpdateInput) (*model.Resource, error) {
-	existing, err := r.GetResource(id)
+	tx, err := r.db.BeginTx(ctx, nil)
 	if err != nil {
+		return nil, fmt.Errorf("begin resource update transaction: %w", err)
+	}
+	defer tx.Rollback()
+
+	if _, err := updateResourceTx(ctx, tx, id, input); err != nil {
 		return nil, err
 	}
-
-	query, args := resourceUpdateStatement(id, input)
-	if query == "" {
-		return existing, nil
+	if err := tx.Commit(); err != nil {
+		return nil, fmt.Errorf("commit resource update transaction: %w", err)
 	}
-
-	if _, err := r.db.ExecContext(ctx, query, args...); err != nil {
-		var mysqlErr *mysql.MySQLError
-		if errors.As(err, &mysqlErr) && mysqlErr.Number == 1062 {
-			return nil, service.ErrResourceConflict
-		}
-		return nil, fmt.Errorf("update resource %d: %w", id, err)
-	}
-
 	return r.GetResource(id)
 }
 
@@ -824,20 +822,9 @@ func (r *ResourceRepository) UpdateResourceWithAudit(ctx context.Context, id uin
 	}
 	defer tx.Rollback()
 
-	existing, err := getResourceForUpdate(ctx, tx, id)
+	existing, err := updateResourceTx(ctx, tx, id, input)
 	if err != nil {
 		return nil, err
-	}
-	query, args := resourceUpdateStatement(id, input)
-	if query == "" {
-		return existing, nil
-	}
-	if _, err := tx.ExecContext(ctx, query, args...); err != nil {
-		var mysqlErr *mysql.MySQLError
-		if errors.As(err, &mysqlErr) && mysqlErr.Number == 1062 {
-			return nil, service.ErrResourceConflict
-		}
-		return nil, fmt.Errorf("update resource %d: %w", id, err)
 	}
 
 	if err := insertInventoryAuditTx(ctx, tx, actorUserID, id, eventType, resourceAuditChanges(*existing, input)); err != nil {
@@ -849,6 +836,30 @@ func (r *ResourceRepository) UpdateResourceWithAudit(ctx context.Context, id uin
 	return r.GetResource(id)
 }
 
+func updateResourceTx(ctx context.Context, tx *sql.Tx, id uint64, input model.ResourceUpdateInput) (*model.Resource, error) {
+	existing, err := getResourceForUpdate(ctx, tx, id)
+	if err != nil {
+		return nil, err
+	}
+	query, args := resourceUpdateStatement(id, input)
+	if query != "" {
+		if _, err := tx.ExecContext(ctx, query, args...); err != nil {
+			if conflict := classifyResourceConflict(err); conflict != nil {
+				return nil, conflict
+			}
+			return nil, fmt.Errorf("update resource %d: %w", id, err)
+		}
+	}
+	environmentID := existing.EnvironmentID
+	if input.EnvironmentID != nil {
+		environmentID = *input.EnvironmentID
+	}
+	if err := replaceResourceIdentityTx(ctx, tx, id, environmentID, input); err != nil {
+		return nil, err
+	}
+	return existing, nil
+}
+
 func getResourceForUpdate(ctx context.Context, tx *sql.Tx, id uint64) (*model.Resource, error) {
 	item, err := scanResource(tx.QueryRowContext(ctx, "select "+resourceColumns+" from resources where id = ? for update", id))
 	if errors.Is(err, sql.ErrNoRows) {
@@ -857,7 +868,134 @@ func getResourceForUpdate(ctx context.Context, tx *sql.Tx, id uint64) (*model.Re
 	if err != nil {
 		return nil, fmt.Errorf("lock resource %d: %w", id, err)
 	}
+	if err := loadResourceIdentity(ctx, tx, &item); err != nil {
+		return nil, err
+	}
 	return &item, nil
+}
+
+type resourceIdentityQueryer interface {
+	QueryContext(context.Context, string, ...any) (*sql.Rows, error)
+}
+
+func loadResourceIdentity(ctx context.Context, q resourceIdentityQueryer, item *model.Resource) error {
+	aliasRows, err := q.QueryContext(ctx, `select alias from resource_aliases where resource_id = ? order by alias`, item.ID)
+	if err != nil {
+		return fmt.Errorf("list aliases for resource %d: %w", item.ID, err)
+	}
+	defer aliasRows.Close()
+	item.Aliases = []string{}
+	for aliasRows.Next() {
+		var alias string
+		if err := aliasRows.Scan(&alias); err != nil {
+			return err
+		}
+		item.Aliases = append(item.Aliases, alias)
+	}
+	if err := aliasRows.Err(); err != nil {
+		return err
+	}
+	aliasRows.Close()
+
+	identifierRows, err := q.QueryContext(ctx, `select external_system, external_value from resource_external_identifiers where resource_id = ? order by external_system, external_value`, item.ID)
+	if err != nil {
+		return fmt.Errorf("list external identifiers for resource %d: %w", item.ID, err)
+	}
+	defer identifierRows.Close()
+	item.ExternalIdentifiers = []model.ResourceExternalIdentifier{}
+	for identifierRows.Next() {
+		var identifier model.ResourceExternalIdentifier
+		if err := identifierRows.Scan(&identifier.System, &identifier.Value); err != nil {
+			return err
+		}
+		item.ExternalIdentifiers = append(item.ExternalIdentifiers, identifier)
+		if identifier.System == "legacy" {
+			item.ExternalID = identifier.Value
+		}
+	}
+	if err := identifierRows.Err(); err != nil {
+		return err
+	}
+	item.Source = string(item.Origin)
+	return nil
+}
+
+func insertResourceIdentityTx(ctx context.Context, tx *sql.Tx, resourceID, environmentID uint64, aliases []string, identifiers []model.ResourceExternalIdentifier) error {
+	seenAliases := make(map[string]bool, len(aliases))
+	for _, rawAlias := range aliases {
+		alias := strings.ToLower(strings.TrimSpace(rawAlias))
+		if seenAliases[alias] {
+			continue
+		}
+		seenAliases[alias] = true
+		if _, err := tx.ExecContext(ctx, `insert into resource_aliases (resource_id, environment_id, alias) values (?, ?, ?)`, resourceID, environmentID, alias); err != nil {
+			if conflict := classifyResourceConflict(err); conflict != nil {
+				return conflict
+			}
+			return fmt.Errorf("insert alias for resource %d: %w", resourceID, err)
+		}
+	}
+	seenIdentifiers := make(map[string]bool, len(identifiers))
+	for _, identifier := range identifiers {
+		identifier.System = strings.ToLower(strings.TrimSpace(identifier.System))
+		identifier.Value = strings.TrimSpace(identifier.Value)
+		key := identifier.System + "\x00" + identifier.Value
+		if seenIdentifiers[key] {
+			continue
+		}
+		seenIdentifiers[key] = true
+		if _, err := tx.ExecContext(ctx, `insert into resource_external_identifiers (resource_id, external_system, external_value) values (?, ?, ?)`, resourceID, identifier.System, identifier.Value); err != nil {
+			if conflict := classifyResourceConflict(err); conflict != nil {
+				return conflict
+			}
+			return fmt.Errorf("insert external identifier for resource %d: %w", resourceID, err)
+		}
+	}
+	return nil
+}
+
+func replaceResourceIdentityTx(ctx context.Context, tx *sql.Tx, resourceID, environmentID uint64, input model.ResourceUpdateInput) error {
+	if input.Aliases != nil {
+		if _, err := tx.ExecContext(ctx, `delete from resource_aliases where resource_id = ?`, resourceID); err != nil {
+			return fmt.Errorf("delete aliases for resource %d: %w", resourceID, err)
+		}
+		if err := insertResourceIdentityTx(ctx, tx, resourceID, environmentID, *input.Aliases, nil); err != nil {
+			return err
+		}
+	} else if input.EnvironmentID != nil {
+		if _, err := tx.ExecContext(ctx, `update resource_aliases set environment_id = ? where resource_id = ?`, environmentID, resourceID); err != nil {
+			if conflict := classifyResourceConflict(err); conflict != nil {
+				return conflict
+			}
+			return fmt.Errorf("move aliases for resource %d: %w", resourceID, err)
+		}
+	}
+	if input.ExternalIdentifiers != nil {
+		if _, err := tx.ExecContext(ctx, `delete from resource_external_identifiers where resource_id = ?`, resourceID); err != nil {
+			return fmt.Errorf("delete external identifiers for resource %d: %w", resourceID, err)
+		}
+		if err := insertResourceIdentityTx(ctx, tx, resourceID, environmentID, nil, *input.ExternalIdentifiers); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func classifyResourceConflict(err error) error {
+	var mysqlErr *mysql.MySQLError
+	if !errors.As(err, &mysqlErr) || mysqlErr.Number != 1062 {
+		return nil
+	}
+	switch {
+	case strings.Contains(mysqlErr.Message, "uq_resource_alias_"):
+		return service.ErrResourceAliasConflict
+	case strings.Contains(mysqlErr.Message, "uq_resource_external_identifier"):
+		return service.ErrResourceExternalIdentifierConflict
+	case strings.Contains(mysqlErr.Message, "uq_resource_name_env_type"):
+		return service.ErrResourceNameConflict
+	default:
+		return service.ErrResourceConflict
+	}
 }
 
 func resourceUpdateStatement(id uint64, input model.ResourceUpdateInput) (string, []any) {
@@ -888,17 +1026,11 @@ func resourceUpdateStatement(id uint64, input model.ResourceUpdateInput) (string
 	if input.HealthStatus != nil {
 		add("health_status", string(*input.HealthStatus))
 	}
-	if input.Source != nil {
-		add("source", *input.Source)
-	}
-	if input.ExternalID != nil {
-		add("external_id", *input.ExternalID)
-	}
 	if input.Labels != nil {
 		labelsJSON, _ := json.Marshal(*input.Labels)
 		add("labels", string(labelsJSON))
 	}
-	if len(setClauses) == 0 {
+	if len(setClauses) == 0 && input.Aliases == nil && input.ExternalIdentifiers == nil {
 		return "", nil
 	}
 	setClauses = append(setClauses, "updated_at = NOW()")
@@ -934,11 +1066,11 @@ func resourceAuditChanges(before model.Resource, input model.ResourceUpdateInput
 	if input.HealthStatus != nil {
 		add("manualHealthOverride", before.HealthStatus, string(*input.HealthStatus))
 	}
-	if input.Source != nil {
-		add("source", before.Source, *input.Source)
+	if input.Aliases != nil && !reflect.DeepEqual(before.Aliases, *input.Aliases) {
+		changes = append(changes, model.AuditChange{Field: "identity.aliases", Operation: model.AuditChangeUpdate, Before: before.Aliases, After: *input.Aliases})
 	}
-	if input.ExternalID != nil {
-		add("externalId", before.ExternalID, *input.ExternalID)
+	if input.ExternalIdentifiers != nil && !reflect.DeepEqual(before.ExternalIdentifiers, *input.ExternalIdentifiers) {
+		changes = append(changes, model.AuditChange{Field: "identity.externalIdentifiers", Operation: model.AuditChangeUpdate, Before: before.ExternalIdentifiers, After: *input.ExternalIdentifiers})
 	}
 	if input.Labels != nil {
 		beforeKeys := make([]string, 0, len(before.Labels))
@@ -1056,8 +1188,7 @@ func scanResource(scanner resourceScanner) (model.Resource, error) {
 		&item.OwnerID,
 		&item.LifecycleStatus,
 		&item.HealthStatus,
-		&item.Source,
-		&item.ExternalID,
+		&item.Origin,
 		&rawLabels,
 		&item.CreatedAt,
 		&item.UpdatedAt,
@@ -1082,12 +1213,14 @@ func scanResource(scanner resourceScanner) (model.Resource, error) {
 
 	if rawLabels == "" || rawLabels == "null" {
 		item.Labels = map[string]string{}
+		item.Source = string(item.Origin)
 		return item, nil
 	}
 
 	if err := json.Unmarshal([]byte(rawLabels), &item.Labels); err != nil {
 		return model.Resource{}, err
 	}
+	item.Source = string(item.Origin)
 
 	return item, nil
 }

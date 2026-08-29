@@ -31,6 +31,8 @@ var targetBusinessTables = []string{
 	"environments",
 	"owners",
 	"resources",
+	"resource_aliases",
+	"resource_external_identifiers",
 	"resource_profiles_host",
 	"resource_profiles_database_instance",
 	"resource_profiles_database_cluster",
@@ -408,12 +410,16 @@ func (imp importer) importResources(ctx context.Context, tx *sql.Tx, environment
 		if row.ArchiveReason.Valid {
 			archiveReason = row.ArchiveReason.String
 		}
+		origin, err := legacyResourceOrigin(row.Source)
+		if err != nil {
+			return nil, fmt.Errorf("resource %s: %w", row.Name, err)
+		}
 		result, err := tx.ExecContext(ctx, `
 			insert into resources (
 				resource_type, resource_subtype, name, display_name, environment_id, owner_id,
-				lifecycle_status, health_status, labels, source, external_id, created_at, updated_at,
+				lifecycle_status, health_status, labels, origin, created_at, updated_at,
 				archived_at, archived_by, archive_reason
-			) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 			row.ResourceType,
 			row.ResourceSubtype,
 			row.Name,
@@ -423,8 +429,7 @@ func (imp importer) importResources(ctx context.Context, tx *sql.Tx, environment
 			row.LifecycleStatus,
 			row.HealthStatus,
 			row.Labels,
-			row.Source,
-			row.ExternalID,
+			origin,
 			row.CreatedAt,
 			row.UpdatedAt,
 			archivedAt,
@@ -438,12 +443,30 @@ func (imp importer) importResources(ctx context.Context, tx *sql.Tx, environment
 		if err != nil {
 			return nil, fmt.Errorf("resource last insert id %s: %w", row.Name, err)
 		}
+		if row.ExternalID != "" {
+			if _, err := tx.ExecContext(ctx, `insert into resource_external_identifiers (resource_id, external_system, external_value) values (?, 'legacy', ?)`, newID, row.ExternalID); err != nil {
+				return nil, fmt.Errorf("insert external identifier for resource %s: %w", row.Name, err)
+			}
+		}
 		mapping[row.ID] = uint64(newID)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("iterate source resources: %w", err)
 	}
 	return mapping, nil
+}
+
+func legacyResourceOrigin(source string) (string, error) {
+	switch source {
+	case "", "manual":
+		return "manual", nil
+	case "import", "imported", "terraform":
+		return "imported", nil
+	case "discovery", "discovered":
+		return "discovered", nil
+	default:
+		return "", fmt.Errorf("unsupported legacy source %q", source)
+	}
 }
 
 func (imp importer) importHostProfiles(ctx context.Context, tx *sql.Tx, resourceMap map[string]uint64) error {

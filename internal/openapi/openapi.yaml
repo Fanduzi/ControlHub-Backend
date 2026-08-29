@@ -2303,8 +2303,11 @@ paths:
                     ownerId: 2000000000000000001
                     lifecycleStatus: running
                     healthStatus: healthy
-                    source: manual
-                    externalId: ext-order-mysql
+                    origin: manual
+                    aliases: [orders-primary]
+                    externalIdentifiers:
+                      - system: legacy
+                        value: ext-order-mysql
                     labels:
                       team: order
                     createdAt: "2026-04-11T20:00:00Z"
@@ -2346,7 +2349,7 @@ paths:
               ownerId: 1
               lifecycleStatus: "running"
               healthStatus: "healthy"
-              source: "manual"
+              origin: "manual"
       responses:
         "201":
           description: Resource created
@@ -4337,8 +4340,9 @@ components:
         - ownerId
         - lifecycleStatus
         - healthStatus
-        - source
-        - externalId
+        - origin
+        - aliases
+        - externalIdentifiers
       properties:
         id:
           type: integer
@@ -4367,10 +4371,24 @@ components:
           $ref: "#/components/schemas/LifecycleStatus"
         healthStatus:
           $ref: "#/components/schemas/HealthStatus"
+        origin:
+          $ref: "#/components/schemas/ResourceOrigin"
+        aliases:
+          type: array
+          items:
+            type: string
+        externalIdentifiers:
+          type: array
+          items:
+            $ref: "#/components/schemas/ResourceExternalIdentifier"
         source:
           type: string
+          deprecated: true
+          description: Deprecated compatibility projection of origin.
         externalId:
           type: string
+          deprecated: true
+          description: Deprecated compatibility projection of the legacy external identifier.
         labels:
           type: object
           additionalProperties:
@@ -4687,6 +4705,24 @@ components:
             - virtual_ip: ipAddress (required; a single IPv4 or IPv6 address, not CIDR, port, or an address set)
             - database_proxy: technologySubtype, host, port, role (active or standby), optional version
             - control_plane_component: componentSubtype, endpoint, optional version, role (active or standby)
+    ResourceOrigin:
+      type: string
+      enum: [manual, imported, discovered]
+      description: Immutable provenance assigned when the resource is created.
+    ResourceExternalIdentifier:
+      type: object
+      additionalProperties: false
+      required: [system, value]
+      properties:
+        system:
+          type: string
+          minLength: 1
+          maxLength: 128
+          pattern: "^[a-z0-9][a-z0-9._-]*$"
+        value:
+          type: string
+          minLength: 1
+          maxLength: 255
     ResourceCreateInput:
       type: object
       additionalProperties: false
@@ -4698,7 +4734,7 @@ components:
         - ownerId
         - lifecycleStatus
         - healthStatus
-        - source
+        - origin
       properties:
         resourceType:
           $ref: "#/components/schemas/ResourceType"
@@ -4723,11 +4759,25 @@ components:
           $ref: "#/components/schemas/LifecycleStatus"
         healthStatus:
           $ref: "#/components/schemas/HealthStatus"
+        origin:
+          $ref: "#/components/schemas/ResourceOrigin"
+        aliases:
+          type: array
+          items:
+            type: string
+            minLength: 1
+            maxLength: 255
+            pattern: "^[a-z0-9][a-z0-9._-]*$"
+        externalIdentifiers:
+          type: array
+          items:
+            $ref: "#/components/schemas/ResourceExternalIdentifier"
         source:
           type: string
-          enum: [manual]
+          deprecated: true
         externalId:
           type: string
+          deprecated: true
         labels:
           type: object
           additionalProperties:
@@ -4768,11 +4818,20 @@ components:
           $ref: "#/components/schemas/LifecycleStatus"
         healthStatus:
           $ref: "#/components/schemas/HealthStatus"
-        source:
-          type: string
-          enum: [manual]
+        aliases:
+          type: array
+          items:
+            type: string
+            minLength: 1
+            maxLength: 255
+            pattern: "^[a-z0-9][a-z0-9._-]*$"
+        externalIdentifiers:
+          type: array
+          items:
+            $ref: "#/components/schemas/ResourceExternalIdentifier"
         externalId:
           type: string
+          deprecated: true
         labels:
           type: object
           additionalProperties:
@@ -4831,7 +4890,10 @@ components:
             - relation_not_found
             - relationship_map_not_supported
             - resource_archived
+            - resource_alias_conflict
             - resource_conflict
+            - resource_external_identifier_conflict
+            - resource_name_conflict
             - resource_not_found
             - saved_statement_not_found
             - schema_backend_error
