@@ -292,7 +292,7 @@ Dependency flow (strict, one-directional): `cmd/server` → `api` → `service` 
 | GET | /resources/{id}/topology | Get a rooted topology graph |
 | GET | /environments/{id}/topology | Get an environment-scoped topology workspace |
 | GET | /resources/{id}/audit-events | List audit events for a resource |
-| GET | /audit-events | List audit events |
+| GET | /audit-events | List audit events; optional server-side `environmentId` filter by target resource environment |
 | GET | /inventory/views | List owned personal and shared Inventory views |
 | POST | /inventory/views | Create a personal or admin-shared Inventory view |
 | PUT | /inventory/views/{viewId} | Update an owned personal or admin-managed shared view |
