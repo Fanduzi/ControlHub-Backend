@@ -1,7 +1,7 @@
 // Package api provides HTTP handlers and routing for the ControlHub REST API.
 // input: net/http, encoding/json, internal/service, internal/model
-// output: resource list/detail, rich inventory filtering, audited writes, health observations, effective-value reads, and versioned override set/clear
-// pos: HTTP boundary for inventory search, operational health evidence, effective-value provenance, and audited manual overrides
+// output: resource list/detail, rich inventory filtering, audited writes, health observations, effective-value reads, versioned override set/clear, and admin bulk preview/confirm handlers
+// pos: HTTP boundary for inventory search, operational health evidence, effective-value provenance, audited manual overrides, and bulk mutation review
 // note: if this file changes, update this header and module README.md.
 package api
 
@@ -211,6 +211,46 @@ func handleRecordHealthObservation(resourceService *service.ResourceService) htt
 	}
 }
 
+func handlePreviewBulkResourceMutation(resourceService *service.ResourceService) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		var request service.BulkResourceMutationRequest
+		if err := decodeJSONBody(r, &request); err != nil {
+			writeJSONError(w, http.StatusBadRequest, "malformed_json", "request body must be valid JSON")
+			return
+		}
+		preview, err := resourceService.PreviewBulkResourceMutation(r.Context(), request)
+		if err != nil {
+			writeServiceError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, preview)
+	}
+}
+
+func handleConfirmBulkResourceMutation(resourceService *service.ResourceService) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		var input struct {
+			Request             service.BulkResourceMutationRequest `json:"request"`
+			ReviewedFingerprint string                              `json:"reviewedFingerprint"`
+		}
+		if err := decodeJSONBody(r, &input); err != nil {
+			writeJSONError(w, http.StatusBadRequest, "malformed_json", "request body must be valid JSON")
+			return
+		}
+		actorUserID, ok := actorUserIDFromContext(r.Context())
+		if !ok {
+			writeJSONError(w, http.StatusInternalServerError, "internal_error", "authenticated actor missing")
+			return
+		}
+		preview, err := resourceService.ConfirmBulkResourceMutation(r.Context(), input.Request, input.ReviewedFingerprint, actorUserID)
+		if err != nil {
+			writeServiceError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, preview)
+	}
+}
+
 func handleGetResourceProfile(resourceService *service.ResourceService) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		id, err := parseUint64IDParam(chi.URLParam(r, "id"), "resource id")
@@ -399,6 +439,8 @@ func writeServiceError(w http.ResponseWriter, err error) {
 		writeJSONError(w, http.StatusConflict, "resource_external_identifier_conflict", err.Error())
 	case errors.Is(err, service.ErrResourceConflict):
 		writeJSONError(w, http.StatusConflict, "resource_conflict", err.Error())
+	case errors.Is(err, service.ErrBulkResourceMutationConflict):
+		writeJSONError(w, http.StatusConflict, "bulk_resource_mutation_conflict", err.Error())
 	case errors.Is(err, service.ErrRelationConflict):
 		writeJSONError(w, http.StatusConflict, "relation_conflict", err.Error())
 	case errors.Is(err, service.ErrResourceArchived):

@@ -193,19 +193,38 @@ func (r *ResourceRepository) ClearManualOverrideWithAudit(ctx context.Context, r
 	return tx.Commit()
 }
 
+// PreviewBulkResourceMutation reads the current governed resource state without writing or auditing.
+func (r *ResourceRepository) PreviewBulkResourceMutation(ctx context.Context, request service.BulkResourceMutationRequest) (service.BulkResourcePreview, error) {
+	if err := validateBulkResourceMutation(request); err != nil {
+		return service.BulkResourcePreview{}, err
+	}
+	snapshots := make([]service.ResourceMutationSnapshot, 0, len(request.Targets))
+	for _, target := range request.Targets {
+		resource, err := r.getResource(ctx, target.ResourceID)
+		if errors.Is(err, service.ErrResourceNotFound) {
+			continue
+		}
+		if err != nil {
+			return service.BulkResourcePreview{}, err
+		}
+		snapshots = append(snapshots, bulkResourceSnapshot(*resource))
+	}
+	return service.PreviewBulkResourceMutation(request, snapshots)
+}
+
 // ConfirmBulkResourceMutation locks, re-previews, writes, and audits every
 // requested resource in one transaction.
 func (r *ResourceRepository) ConfirmBulkResourceMutation(ctx context.Context, request service.BulkResourceMutationRequest, reviewedFingerprint string, actorUserID uint64) (service.BulkResourcePreview, error) {
+	if err := validateBulkResourceMutation(request); err != nil {
+		return service.BulkResourcePreview{}, err
+	}
 	tx, err := r.db.BeginTx(ctx, nil)
 	if err != nil {
 		return service.BulkResourcePreview{}, err
 	}
 	defer tx.Rollback()
 
-	input, err := bulkResourceUpdateInput(request.FieldPatch)
-	if err != nil {
-		return service.BulkResourcePreview{}, err
-	}
+	input, _ := bulkResourceUpdateInput(request.FieldPatch)
 	ids := make([]uint64, len(request.Targets))
 	for i, target := range request.Targets {
 		ids[i] = target.ResourceID
@@ -216,11 +235,18 @@ func (r *ResourceRepository) ConfirmBulkResourceMutation(ctx context.Context, re
 	snapshots := make([]service.ResourceMutationSnapshot, 0, len(ids))
 	for _, id := range ids {
 		resource, err := getResourceForUpdate(ctx, tx, id)
+		if errors.Is(err, service.ErrResourceNotFound) {
+			return service.BulkResourcePreview{}, fmt.Errorf("%w: resource %d is missing", service.ErrBulkResourceMutationConflict, id)
+		}
 		if err != nil {
 			return service.BulkResourcePreview{}, err
 		}
 		resources[id] = *resource
-		snapshots = append(snapshots, bulkResourceSnapshot(*resource))
+		current := []model.Resource{*resource}
+		if err := r.attachHealthObservations(ctx, current); err != nil {
+			return service.BulkResourcePreview{}, err
+		}
+		snapshots = append(snapshots, bulkResourceSnapshot(current[0]))
 	}
 	preview, err := service.PreviewBulkResourceMutation(request, snapshots)
 	if err != nil {
@@ -228,11 +254,11 @@ func (r *ResourceRepository) ConfirmBulkResourceMutation(ctx context.Context, re
 	}
 	for _, item := range preview.Items {
 		if item.Conflict || len(item.Errors) != 0 {
-			return preview, fmt.Errorf("bulk resource mutation preview rejected for resource %d", item.ResourceID)
+			return preview, fmt.Errorf("%w: preview rejected for resource %d", service.ErrBulkResourceMutationConflict, item.ResourceID)
 		}
 	}
 	if preview.Fingerprint != reviewedFingerprint {
-		return preview, errors.New("bulk resource mutation fingerprint mismatch")
+		return preview, fmt.Errorf("%w: fingerprint mismatch", service.ErrBulkResourceMutationConflict)
 	}
 
 	for _, id := range ids {
@@ -268,6 +294,16 @@ func (r *ResourceRepository) ConfirmBulkResourceMutation(ctx context.Context, re
 		return preview, err
 	}
 	return preview, nil
+}
+
+func validateBulkResourceMutation(request service.BulkResourceMutationRequest) error {
+	if err := service.ValidateBulkResourceMutation(request); err != nil {
+		return fmt.Errorf("%w: %v", service.ErrValidationFailed, err)
+	}
+	if _, err := bulkResourceUpdateInput(request.FieldPatch); err != nil {
+		return fmt.Errorf("%w: %v", service.ErrValidationFailed, err)
+	}
+	return nil
 }
 
 func bulkResourceSnapshot(resource model.Resource) service.ResourceMutationSnapshot {
@@ -529,6 +565,10 @@ func buildInClause(n int) string {
 }
 
 func (r *ResourceRepository) GetResource(id uint64) (*model.Resource, error) {
+	return r.getResource(context.Background(), id)
+}
+
+func (r *ResourceRepository) getResource(ctx context.Context, id uint64) (*model.Resource, error) {
 	query := `select r.id, r.resource_type, r.resource_subtype, r.name, r.display_name,
 	       r.environment_id, r.owner_id, r.lifecycle_status, r.health_status,
 	       r.origin, r.labels, r.created_at, r.updated_at,
@@ -538,7 +578,7 @@ func (r *ResourceRepository) GetResource(id uint64) (*model.Resource, error) {
 	        limit 1) as cluster_id
 	from resources r where r.id = ?`
 
-	row := r.db.QueryRowContext(context.Background(), query, id)
+	row := r.db.QueryRowContext(ctx, query, id)
 
 	var (
 		item          model.Resource
@@ -597,7 +637,7 @@ func (r *ResourceRepository) GetResource(id uint64) (*model.Resource, error) {
 	} else if err := json.Unmarshal([]byte(rawLabels), &item.Labels); err != nil {
 		return nil, err
 	}
-	if err := loadResourceIdentity(context.Background(), r.db, &item); err != nil {
+	if err := loadResourceIdentity(ctx, r.db, &item); err != nil {
 		return nil, err
 	}
 
@@ -609,7 +649,7 @@ func (r *ResourceRepository) GetResource(id uint64) (*model.Resource, error) {
 	item = items[0]
 
 	if item.ResourceType == model.ResourceTypeDatabaseCluster {
-		item.DatabaseOperationalSummary = r.buildDatabaseOperationalSummary(context.Background(), item.ID)
+		item.DatabaseOperationalSummary = r.buildDatabaseOperationalSummary(ctx, item.ID)
 	}
 
 	return &item, nil

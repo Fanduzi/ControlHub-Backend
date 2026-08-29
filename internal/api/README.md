@@ -53,6 +53,8 @@ HTTP handlers, chi routing, CORS middleware, and fake-repo test infrastructure.
 | POST | /inventory/views | Create a personal view, or an admin-only shared view |
 | PUT | /inventory/views/{viewId} | Rename/replace an owned personal view or admin-managed shared view |
 | DELETE | /inventory/views/{viewId} | Delete an owned personal view or admin-managed shared view |
+| POST | /resources/bulk-mutations/preview | Admin-only side-effect-free bulk mutation preview with ordered per-CI diffs/errors and a review fingerprint |
+| POST | /resources/bulk-mutations/confirm | Admin-only reviewed bulk mutation confirmation; current-state or fingerprint conflicts return 409 |
 | GET | /query-targets/{id}/schema/table-definition | Get MySQL table definition (base tables only) |
 | POST | /query-targets/{id}/execute | Execute a governed read-only statement, with optional page-number result paging for SELECT |
 | POST | /query-targets/{id}/related-records | Governed FK related-record navigation (Issue #36: records through the same atomic Execution Evidence Pair as execution) |

@@ -5,7 +5,7 @@ Data access layer implementing service-layer repository interfaces with raw SQL 
 ## Files
 | File | Responsibility |
 |------|---------------|
-| resource_repository.go | Resource CRUD, governed identity and one-query batched typed-profile reads, latest-per-observer health evidence, effective-health derivation, per-source observed/effective values, atomic audited identity/manual-override mutations, and reviewed bulk mutations in one transaction |
+| resource_repository.go | Resource CRUD, governed identity and one-query batched typed-profile reads, latest-per-observer health evidence, effective-health derivation, per-source observed/effective values, read-only bulk previews, and atomic audited identity/manual-override/bulk mutations |
 | bulk_resource_mutation_test.go | SQL-level bulk confirmation transaction coverage using current resource and governed-identity lock queries, including commit and audit-failure rollback |
 | relation_repository.go | Relation queries plus atomic create/delete, effective-health relation/member projections, and topology resource lookup |
 | audit_repository.go | Audit event queries (global and by resource), including pagination, actor/resource search, and JSON field changes |

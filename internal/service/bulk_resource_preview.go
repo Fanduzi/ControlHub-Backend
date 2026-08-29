@@ -64,11 +64,12 @@ type BulkResourcePreviewItem struct {
 type BulkResourcePreview struct {
 	Items       []BulkResourcePreviewItem `json:"items"`
 	Fingerprint string                    `json:"fingerprint"`
+	Confirmable bool                      `json:"confirmable"`
 }
 
 // PreviewBulkResourceMutation calculates a mutation preview without changing its inputs.
 func PreviewBulkResourceMutation(request BulkResourceMutationRequest, snapshots []ResourceMutationSnapshot) (BulkResourcePreview, error) {
-	if err := validateBulkPreview(request); err != nil {
+	if err := ValidateBulkResourceMutation(request); err != nil {
 		return BulkResourcePreview{}, err
 	}
 
@@ -98,10 +99,18 @@ func PreviewBulkResourceMutation(request BulkResourceMutationRequest, snapshots 
 		return BulkResourcePreview{}, err
 	}
 	preview.Fingerprint = fingerprint
+	preview.Confirmable = true
+	for _, item := range preview.Items {
+		if item.Conflict || len(item.Errors) != 0 {
+			preview.Confirmable = false
+			break
+		}
+	}
 	return preview, nil
 }
 
-func validateBulkPreview(request BulkResourceMutationRequest) error {
+// ValidateBulkResourceMutation checks request-wide invariants before a repository reads targets.
+func ValidateBulkResourceMutation(request BulkResourceMutationRequest) error {
 	if len(request.Targets) == 0 {
 		return fmt.Errorf("at least one target is required")
 	}
@@ -114,6 +123,9 @@ func validateBulkPreview(request BulkResourceMutationRequest) error {
 			return fmt.Errorf("duplicate resource ID %d", target.ResourceID)
 		}
 		ids[target.ResourceID] = struct{}{}
+		if target.ExpectedVersion == "" {
+			return fmt.Errorf("expected version is required for resource %d", target.ResourceID)
+		}
 	}
 	ops := make(map[string]string, len(request.Labels.Add)+len(request.Labels.Update)+len(request.Labels.Remove))
 	for operation, labels := range map[string]map[string]string{"add": request.Labels.Add, "update": request.Labels.Update} {

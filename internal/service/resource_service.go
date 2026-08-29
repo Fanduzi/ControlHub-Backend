@@ -1,7 +1,7 @@
 // Package service provides business logic for resource reads, writes, and typed profile assembly.
 // input: internal/model resource identity, batched typed profiles, required incident relations, health observations, effective values, writes, and read contracts
-// output: resource CRUD, server-derived completeness, governed-profile reads, health ingestion, effective-value projections, and audited inventory/override mutations
-// pos: Business logic for governed resource identity, batched read projections, typed profiles, operational health evidence, and effective values
+// output: resource CRUD, server-derived completeness, governed-profile reads, health ingestion, effective-value projections, audited inventory/override mutations, and bulk preview/confirm delegation
+// pos: Business logic for governed resource identity, batched read projections, typed profiles, operational health evidence, effective values, and bulk mutation checks
 // note: if this file changes, update this header and module README.md.
 package service
 
@@ -28,6 +28,7 @@ var (
 	ErrEnvironmentNotFound                = errors.New("environment not found")
 	ErrOwnerNotFound                      = errors.New("owner not found")
 	ErrValidationFailed                   = errors.New("validation failed")
+	ErrBulkResourceMutationConflict       = errors.New("bulk resource mutation conflict")
 )
 
 var resourceNamePattern = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]*$`)
@@ -73,6 +74,26 @@ type effectiveValueRepository interface {
 
 func NewResourceService(repo ResourceRepository, relationReader completenessRelationReader) *ResourceService {
 	return &ResourceService{repo: repo, relationReader: relationReader}
+}
+
+func (s *ResourceService) PreviewBulkResourceMutation(ctx context.Context, request BulkResourceMutationRequest) (BulkResourcePreview, error) {
+	repo, ok := s.repo.(interface {
+		PreviewBulkResourceMutation(context.Context, BulkResourceMutationRequest) (BulkResourcePreview, error)
+	})
+	if !ok {
+		return BulkResourcePreview{}, errors.New("bulk resource mutation repository is required")
+	}
+	return repo.PreviewBulkResourceMutation(ctx, request)
+}
+
+func (s *ResourceService) ConfirmBulkResourceMutation(ctx context.Context, request BulkResourceMutationRequest, reviewedFingerprint string, actorUserID uint64) (BulkResourcePreview, error) {
+	repo, ok := s.repo.(interface {
+		ConfirmBulkResourceMutation(context.Context, BulkResourceMutationRequest, string, uint64) (BulkResourcePreview, error)
+	})
+	if !ok {
+		return BulkResourcePreview{}, errors.New("bulk resource mutation repository is required")
+	}
+	return repo.ConfirmBulkResourceMutation(ctx, request, reviewedFingerprint, actorUserID)
 }
 
 func (s *ResourceService) List(ctx context.Context, q model.ResourceListQuery) ([]model.Resource, *model.PageInfo, error) {

@@ -1,7 +1,7 @@
 // Package api provides HTTP handlers and routing for the ControlHub REST API.
 // input: internal/api, internal/model, net/http, net/http/httptest, encoding/json
-// output: Governed identity/profile tests plus list/detail completeness, rich inventory filtering, health reads, effective-value provenance, and versioned override tests
-// pos: Validates governed identity, typed profiles, server-derived completeness, search filters, Issue 81 health evidence, and Issue 78 override conflicts at the HTTP seam
+// output: Governed identity/profile tests plus list/detail completeness, rich inventory filtering, health reads, effective-value provenance, versioned override tests, and admin bulk preview/confirm handler coverage
+// pos: Validates governed identity, typed profiles, server-derived completeness, search filters, Issue 81 health evidence, Issue 78 override conflicts, and bulk review/confirm behavior at the HTTP seam
 // note: if this file changes, update this header and module README.md.
 package api
 
@@ -16,6 +16,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 
@@ -93,6 +94,69 @@ func TestResourceEffectiveValuesAndVersionedOverride(t *testing.T) {
 	if _, exists := effective.Values["displayName"]; exists {
 		t.Fatalf("cleared override still effective: %#v", effective.Values["displayName"])
 	}
+}
+
+func TestBulkResourceMutationPreviewAndConfirm(t *testing.T) {
+	server := NewTestServer()
+	repo := &fakeResourceRepo{resources: map[uint64]model.Resource{1: {ID: 1, Name: "one", DisplayName: "One", UpdatedAt: time.Date(2026, 8, 30, 0, 0, 0, 0, time.UTC), Labels: map[string]string{"team": "old"}}}}
+	server.deps.ResourceService = service.NewResourceService(repo, &fakeRelationRepo{resources: repo, relations: map[uint64]model.ResourceRelation{}})
+	server.Router = authenticatedTestRouter(NewRouter(server.deps), mustTestLogin(t, server.deps.AuthService))
+	body := `{"targets":[{"resourceId":1,"expectedVersion":"2026-08-30T00:00:00Z"}],"labels":{"update":{"team":"new"}}}`
+	previewRec := httptest.NewRecorder()
+	server.Router.ServeHTTP(previewRec, httptest.NewRequest(http.MethodPost, "/resources/bulk-mutations/preview", strings.NewReader(body)))
+	if previewRec.Code != http.StatusOK || repo.confirmCalls != 0 || repo.resources[1].Labels["team"] != "old" {
+		t.Fatalf("preview status=%d calls=%d labels=%v", previewRec.Code, repo.confirmCalls, repo.resources[1].Labels)
+	}
+	var preview service.BulkResourcePreview
+	if err := json.NewDecoder(previewRec.Body).Decode(&preview); err != nil || !preview.Confirmable || len(preview.Items[0].LabelDiffs) != 1 {
+		t.Fatalf("preview=%#v err=%v", preview, err)
+	}
+	confirm := fmt.Sprintf(`{"request":%s,"reviewedFingerprint":%q}`, body, preview.Fingerprint)
+	confirmRec := httptest.NewRecorder()
+	server.Router.ServeHTTP(confirmRec, httptest.NewRequest(http.MethodPost, "/resources/bulk-mutations/confirm", strings.NewReader(confirm)))
+	if confirmRec.Code != http.StatusOK || repo.confirmCalls != 1 || repo.resources[1].Labels["team"] != "new" {
+		t.Fatalf("confirm status=%d calls=%d labels=%v", confirmRec.Code, repo.confirmCalls, repo.resources[1].Labels)
+	}
+}
+
+func TestBulkResourceMutationRoutesAreStrictAndAdminOnly(t *testing.T) {
+	server := NewTestServer()
+	repo := &fakeResourceRepo{resources: map[uint64]model.Resource{1: {ID: 1, UpdatedAt: time.Date(2026, 8, 30, 0, 0, 0, 0, time.UTC), Labels: map[string]string{}}}}
+	server.deps.ResourceService = service.NewResourceService(repo, &fakeRelationRepo{resources: repo, relations: map[uint64]model.ResourceRelation{}})
+	server.deps.AuthService = newMiddlewareAuthService("test-secret")
+	router := NewRouter(server.deps)
+	editor := mintToken(t, "test-secret", 7, "editor", time.Date(2026, 6, 22, 8, 0, 0, 0, time.UTC))
+	bad := httptest.NewRequest(http.MethodPost, "/resources/bulk-mutations/preview", strings.NewReader(`{"targets":[],"unknown":true}`))
+	bad.Header.Set("Authorization", "Bearer "+editor)
+	badRec := httptest.NewRecorder()
+	router.ServeHTTP(badRec, bad)
+	if badRec.Code != http.StatusForbidden || repo.previewCalls != 0 {
+		t.Fatalf("editor status=%d previewCalls=%d", badRec.Code, repo.previewCalls)
+	}
+	admin := mintToken(t, "test-secret", 1, "admin", time.Date(2026, 6, 22, 8, 0, 0, 0, time.UTC))
+	strict := httptest.NewRequest(http.MethodPost, "/resources/bulk-mutations/preview", strings.NewReader(`{"targets":[{"resourceId":1,"expectedVersion":"2026-08-30T00:00:00Z"}],"unknown":true}`))
+	strict.Header.Set("Authorization", "Bearer "+admin)
+	strictRec := httptest.NewRecorder()
+	router.ServeHTTP(strictRec, strict)
+	if strictRec.Code != http.StatusBadRequest || repo.previewCalls != 0 {
+		t.Fatalf("strict status=%d previewCalls=%d", strictRec.Code, repo.previewCalls)
+	}
+	conflict := httptest.NewRequest(http.MethodPost, "/resources/bulk-mutations/confirm", strings.NewReader(`{"request":{"targets":[{"resourceId":1,"expectedVersion":"2026-08-30T00:00:00Z"}]},"reviewedFingerprint":"wrong"}`))
+	conflict.Header.Set("Authorization", "Bearer "+admin)
+	conflictRec := httptest.NewRecorder()
+	router.ServeHTTP(conflictRec, conflict)
+	if conflictRec.Code != http.StatusConflict {
+		t.Fatalf("conflict status=%d body=%s", conflictRec.Code, conflictRec.Body.String())
+	}
+}
+
+func mustTestLogin(t *testing.T, auth *service.AuthService) string {
+	t.Helper()
+	login, err := auth.Login("admin@example.com", "secret123")
+	if err != nil {
+		t.Fatal(err)
+	}
+	return login.Token
 }
 
 func TestCreateResource(t *testing.T) {

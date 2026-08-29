@@ -1,7 +1,7 @@
 // Package api provides HTTP handlers and routing for the ControlHub REST API.
 // input: internal/api, internal/model, internal/service, net/http
-// output: TestServer struct, NewTestServer with fake batch-profile, relation, health, and effective-value data
-// pos: Test infrastructure — fake repositories for typed profiles, completeness relations, health observations, and effective values plus a pre-wired handler router
+// output: TestServer struct, NewTestServer with fake batch-profile, relation, health, effective-value, and bulk preview/confirm data
+// pos: Test infrastructure — fake repositories for typed profiles, completeness relations, health observations, effective values, bulk mutation review, and a pre-wired handler router
 // note: if this file changes, update this header and module README.md.
 package api
 
@@ -29,6 +29,8 @@ type fakeResourceRepo struct {
 	effectiveValues map[uint64]map[string]model.EffectiveValue
 	nextID          uint64
 	now             time.Time
+	previewCalls    int
+	confirmCalls    int
 }
 
 func (f *fakeResourceRepo) GetEffectiveValues(_ context.Context, resourceID uint64) (map[string]model.EffectiveValue, error) {
@@ -559,6 +561,52 @@ func (f *fakeResourceRepo) UpsertHealthObservation(_ context.Context, resourceID
 	resource.HealthObserver = observation.Observer
 	f.resources[resourceID] = resource
 	return nil
+}
+
+func (f *fakeResourceRepo) PreviewBulkResourceMutation(_ context.Context, request service.BulkResourceMutationRequest) (service.BulkResourcePreview, error) {
+	f.previewCalls++
+	if err := service.ValidateBulkResourceMutation(request); err != nil {
+		return service.BulkResourcePreview{}, fmt.Errorf("%w: %v", service.ErrValidationFailed, err)
+	}
+	snapshots := make([]service.ResourceMutationSnapshot, 0, len(request.Targets))
+	for _, target := range request.Targets {
+		if resource, ok := f.resources[target.ResourceID]; ok {
+			snapshots = append(snapshots, fakeBulkResourceSnapshot(resource))
+		}
+	}
+	return service.PreviewBulkResourceMutation(request, snapshots)
+}
+
+func (f *fakeResourceRepo) ConfirmBulkResourceMutation(ctx context.Context, request service.BulkResourceMutationRequest, fingerprint string, _ uint64) (service.BulkResourcePreview, error) {
+	f.confirmCalls++
+	preview, err := f.PreviewBulkResourceMutation(ctx, request)
+	if err != nil {
+		return preview, err
+	}
+	if !preview.Confirmable || preview.Fingerprint != fingerprint {
+		return preview, service.ErrBulkResourceMutationConflict
+	}
+	for _, target := range request.Targets {
+		resource := f.resources[target.ResourceID]
+		labels := cloneLabels(resource.Labels)
+		for key, value := range request.Labels.Add {
+			labels[key] = value
+		}
+		for key, value := range request.Labels.Update {
+			labels[key] = value
+		}
+		for _, key := range request.Labels.Remove {
+			delete(labels, key)
+		}
+		resource.Labels = labels
+		resource.UpdatedAt = resource.UpdatedAt.Add(time.Minute)
+		f.resources[target.ResourceID] = resource
+	}
+	return preview, nil
+}
+
+func fakeBulkResourceSnapshot(resource model.Resource) service.ResourceMutationSnapshot {
+	return service.ResourceMutationSnapshot{ID: resource.ID, Version: resource.UpdatedAt.UTC().Format(time.RFC3339Nano), Fields: map[string]any{"name": resource.Name, "resourceSubtype": resource.ResourceSubtype, "displayName": resource.DisplayName, "environmentId": resource.EnvironmentID, "ownerId": resource.OwnerID, "lifecycleStatus": resource.LifecycleStatus, "healthStatus": resource.HealthStatus, "externalId": resource.ExternalID}, Labels: cloneLabels(resource.Labels)}
 }
 
 func (f *fakeResourceRepo) ArchiveResource(_ context.Context, id uint64, reason string) (*model.Resource, error) {

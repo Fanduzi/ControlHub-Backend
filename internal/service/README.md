@@ -56,7 +56,7 @@ Business logic layer with interface-based repository dependencies. Each service 
 - `ResourceService.ObserveHealth` — validated operational evidence ingestion that never emits inventory audit events
 - `RelationService.Rules` returns source-specific relation types, target resource types, and environment constraints derived from the write validator's matrix
 - `DeriveCompleteness` — pure read-only score/status/missing-requirements projection; labels never satisfy a requirement
-- `PreviewBulkResourceMutation` — pure preview of ordered targets against current snapshots; no persistence dependency
+- `PreviewBulkResourceMutation` — pure preview of ordered targets against current snapshots; `ResourceService` delegates persisted preview/confirm reads to its resource repository
 - `BulkResourceMutationRequest`, `BulkResourceMutationTarget`, `ResourceMutationSnapshot`, `LabelOperations`, `BulkResourcePreview` — bulk mutation preview contract values
 - `NewMemoryUserStore`, `AuthService.WithClock`, `AuthService.ChangeUserRole`/`SetUserActive`/`ResetUserPassword` — Authorization Version seams
 - `AuthAuditEmitter`, `NoopEmitter` — fail-open authentication/authorization audit emission interface and discard implementation
