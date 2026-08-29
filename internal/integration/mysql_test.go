@@ -2,8 +2,8 @@
 
 // Package integration provides real-MySQL schema proofs for goose migrations.
 // input: database/sql, Testcontainers database, and schema migrations
-// output: migration version, tables, columns, constraints, governed identity, health observations, effective-value tables, named views, and seed regression tests
-// pos: real-MySQL schema contract coverage through migration 24, including governed identity, typed profiles, named views, and no foreign keys
+// output: migration-25 schema, table, column, constraint, seed, and no-FK proofs
+// pos: real-MySQL clean-migration schema contract coverage
 // note: if this file changes, update this header and module README.md.
 package integration
 
@@ -48,6 +48,8 @@ func TestSchemaUsesBigintPrimaryKeysWithoutForeignKeys(t *testing.T) {
 		"query_saved_statements":           {"id", "target_resource_id", "owner_user_id"},
 		"query_saved_statement_parameters": {"id", "statement_id"},
 		"named_inventory_views":            {"id", "owner_user_id"},
+		"machine_principals":               {"id", "created_by_user_id"},
+		"machine_principal_credentials":    {"id", "machine_principal_id", "created_by_user_id", "rotated_from_credential_id"},
 		"audit_events":                     {"id", "actor_user_id", "target_resource_id"},
 	}
 	for tableName, columns := range expectedUnsignedBigintIDs {
@@ -80,6 +82,8 @@ func TestSchemaUsesBigintPrimaryKeysWithoutForeignKeys(t *testing.T) {
 		"query_saved_statements",
 		"query_saved_statement_parameters",
 		"named_inventory_views",
+		"machine_principals",
+		"machine_principal_credentials",
 		"audit_events",
 	} {
 		assertNoForeignKeys(t, db, tableName)
@@ -127,8 +131,8 @@ func assertSchemaChainBaseline(t *testing.T, db *sql.DB) {
 	if err != nil {
 		t.Fatalf("query max version: %v", err)
 	}
-	if maxVersion != 24 {
-		t.Fatalf("migration version = %d, want 24", maxVersion)
+	if maxVersion != 25 {
+		t.Fatalf("migration version = %d, want 25", maxVersion)
 	}
 
 	expectedTables := []string{
@@ -146,6 +150,7 @@ func assertSchemaChainBaseline(t *testing.T, db *sql.DB) {
 		"resource_profiles_control_plane_component",
 		"audit_events",
 		"named_inventory_views",
+		"machine_principals", "machine_principal_credentials",
 	}
 	for _, table := range expectedTables {
 		if !tableExists(t, db, table) {

@@ -18,6 +18,8 @@ Data access layer implementing service-layer repository interfaces with raw SQL 
 | query_disclosure_repository.go | Phase 38Q governed result-disclosure policy CRUD (insert/update/delete/list/get by scope); duplicate scope insert maps MySQL 1062 to `ErrQueryDisclosurePolicyConflict`, update/get of a missing scope returns `sql.ErrNoRows` (fail-closed), delete is idempotent |
 | query_saved_statement_repository.go | Phase 38W governed saved statements CRUD with ordered parameter definitions and atomic audit (create/update/delete with audit, list with visibility, get by ID) |
 | named_inventory_view_repository.go | Personal/shared named inventory view CRUD, owner-visible listing, and an actor-free shared-only read seam for future machine principals |
+| machine_principal_repository.go | Atomic machine-principal create/credential rotate/revoke with admin audit, hash lookup, and state-bounded last-used updates |
+| machine_principal_repository_test.go | SQL lifecycle, hash-only arguments, safe audit payload, and rollback coverage with sqlmock |
 | auth_audit_emitter.go | MySQL-backed AuthAuditEmitter — fail-open INSERT for auth/authz audit events; AuthAuditPersistenceFailures fixed-category counter |
 
 ## Exports
@@ -25,6 +27,7 @@ Data access layer implementing service-layer repository interfaces with raw SQL 
 - `ResourceRepository.UpsertHealthObservation` and `SetManualHealthOverrideWithAudit` — non-audited operational evidence and audited nullable override persistence
 - `NewQueryExecutionRepository(db)`, `NewQueryTargetRepository(db)`, `NewQueryDisclosureRepository(db)`, `NewQuerySavedStatementRepository(db)` — constructor functions
 - `NewNamedInventoryViewRepository(db)` — named inventory view persistence constructor
+- `NewMachinePrincipalRepository(db)` — machine-principal lifecycle and credential-authentication persistence constructor
 - `QueryDisclosureReader`, `QueryDisclosureWriter` — narrow service-owned interfaces for disclosure policy access
 - `QuerySavedStatementReader`, `QuerySavedStatementWriter` — narrow service-owned interfaces for saved statement access, including atomic parameter-definition replacement
 - `QueryEvidencePersistenceFailures` — dimensionless expvar counter for atomic Execution Evidence Pair persistence failures (Issue #34), readable through the repository's `QueryEvidencePersistenceFailures()` accessor for the service layer
