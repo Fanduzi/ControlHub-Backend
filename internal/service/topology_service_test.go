@@ -182,6 +182,44 @@ func TestBuildTopology_Depth2(t *testing.T) {
 	}
 }
 
+func TestBuildTopology_DefaultDepthIs2(t *testing.T) {
+	repo := buildTestRepo()
+	svc := NewTopologyService(repo)
+
+	resp, err := svc.BuildTopology(model.TopologyQuery{RootID: topoClusterID, Direction: model.TopologyDirectionBoth})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if resp.Depth != 2 {
+		t.Fatalf("depth = %d, want 2", resp.Depth)
+	}
+	nodeIDs := nodeIDs(resp)
+	if _, ok := nodeIDs[topoHost1]; !ok {
+		t.Fatalf("missing depth-2 host in nodes: %v", nodeIDs)
+	}
+}
+
+func TestBuildTopology_Depth5(t *testing.T) {
+	repo := buildChainRepo(6)
+	svc := NewTopologyService(repo)
+
+	resp, err := svc.BuildTopology(model.TopologyQuery{RootID: 1, Depth: 5, Direction: model.TopologyDirectionBoth})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if len(resp.Nodes) != 6 {
+		t.Fatalf("nodes = %d, want 6", len(resp.Nodes))
+	}
+	if resp.Nodes[5].ID != 6 || resp.Nodes[5].Distance != 5 {
+		t.Fatalf("last node = %+v, want id 6 distance 5", resp.Nodes[5])
+	}
+	if resp.Truncated {
+		t.Fatal("truncated = true, want false")
+	}
+}
+
 func TestBuildTopology_DirectionUpstream(t *testing.T) {
 	repo := buildTestRepo()
 	svc := NewTopologyService(repo)
@@ -261,6 +299,49 @@ func TestBuildTopology_CyclicGraphNoLoop(t *testing.T) {
 	if len(nodeIDs(resp)) != 3 {
 		t.Errorf("got %d nodes, want 3: %v", len(nodeIDs(resp)), nodeIDs(resp))
 	}
+	if resp.Truncated {
+		t.Fatal("truncated = true, want false")
+	}
+}
+
+func TestBuildTopology_NodeCap(t *testing.T) {
+	repo := buildChainRepo(TopologyNodeCap + 1)
+	svc := NewTopologyService(repo)
+
+	resp, err := svc.BuildTopology(model.TopologyQuery{RootID: 1, Depth: TopologyNodeCap, Direction: model.TopologyDirectionBoth})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if len(resp.Nodes) != TopologyNodeCap {
+		t.Fatalf("nodes = %d, want cap %d", len(resp.Nodes), TopologyNodeCap)
+	}
+	if !resp.Truncated {
+		t.Fatal("truncated = false, want true")
+	}
+	if ids := nodeIDs(resp); ids[uint64(TopologyNodeCap+1)] {
+		t.Fatalf("node beyond cap included: %v", ids)
+	}
+}
+
+func TestBuildTopology_EdgeCap(t *testing.T) {
+	repo := buildParallelEdgeRepo(TopologyEdgeCap + 1)
+	svc := NewTopologyService(repo)
+
+	resp, err := svc.BuildTopology(model.TopologyQuery{RootID: 1, Depth: 1, Direction: model.TopologyDirectionBoth})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if len(resp.Edges) != TopologyEdgeCap {
+		t.Fatalf("edges = %d, want cap %d", len(resp.Edges), TopologyEdgeCap)
+	}
+	if len(resp.Nodes) != 2 {
+		t.Fatalf("nodes = %d, want 2", len(resp.Nodes))
+	}
+	if !resp.Truncated {
+		t.Fatal("truncated = false, want true")
+	}
 }
 
 func TestBuildTopology_MissingRoot(t *testing.T) {
@@ -277,11 +358,7 @@ func TestBuildTopology_InvalidDepth(t *testing.T) {
 	repo := buildTestRepo()
 	svc := NewTopologyService(repo)
 
-	_, err := svc.BuildTopology(model.TopologyQuery{RootID: topoClusterID, Depth: 3, Direction: model.TopologyDirectionBoth})
-	if !errors.Is(err, ErrInvalidDepth) {
-		t.Errorf("err = %v, want ErrInvalidDepth", err)
-	}
-	_, err = svc.BuildTopology(model.TopologyQuery{RootID: topoClusterID, Depth: 0, Direction: model.TopologyDirectionBoth})
+	_, err := svc.BuildTopology(model.TopologyQuery{RootID: topoClusterID, Depth: -1, Direction: model.TopologyDirectionBoth})
 	if !errors.Is(err, ErrInvalidDepth) {
 		t.Errorf("err = %v, want ErrInvalidDepth", err)
 	}
@@ -348,6 +425,40 @@ func nodeIDs(resp *model.TopologyResponse) map[uint64]bool {
 		m[n.ID] = true
 	}
 	return m
+}
+
+func buildChainRepo(nodes int) *fakeTopologyRepo {
+	resources := make(map[uint64]model.Resource, nodes)
+	relations := make([]model.ResourceRelation, 0, nodes-1)
+	for i := 1; i <= nodes; i++ {
+		id := uint64(i)
+		resources[id] = model.Resource{ID: id, ResourceType: model.ResourceTypeHost, Name: "node", DisplayName: "Node"}
+		if i > 1 {
+			relations = append(relations, model.ResourceRelation{
+				ID:             uint64(i - 1),
+				FromResourceID: uint64(i - 1),
+				ToResourceID:   id,
+				RelationType:   model.RelationTypeDependsOn,
+			})
+		}
+	}
+	return &fakeTopologyRepo{resources: resources, relations: relations}
+}
+
+func buildParallelEdgeRepo(edges int) *fakeTopologyRepo {
+	resources := make(map[uint64]model.Resource, 2)
+	relations := make([]model.ResourceRelation, 0, edges)
+	resources[1] = model.Resource{ID: 1, ResourceType: model.ResourceTypeHost, Name: "root", DisplayName: "Root"}
+	resources[2] = model.Resource{ID: 2, ResourceType: model.ResourceTypeHost, Name: "leaf", DisplayName: "Leaf"}
+	for i := 1; i <= edges; i++ {
+		relations = append(relations, model.ResourceRelation{
+			ID:             uint64(i),
+			FromResourceID: 1,
+			ToResourceID:   2,
+			RelationType:   model.RelationTypeDependsOn,
+		})
+	}
+	return &fakeTopologyRepo{resources: resources, relations: relations}
 }
 
 func TestDetectNodeProblems_HealthyRunning(t *testing.T) {

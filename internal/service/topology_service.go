@@ -14,8 +14,13 @@ import (
 )
 
 var (
-	ErrInvalidDepth     = errors.New("depth must be 1 or 2")
+	ErrInvalidDepth     = errors.New("depth must be non-negative")
 	ErrInvalidDirection = errors.New("direction must be both, upstream, or downstream")
+)
+
+const (
+	TopologyNodeCap = 200
+	TopologyEdgeCap = 400
 )
 
 type TopologyRepository interface {
@@ -32,6 +37,9 @@ func NewTopologyService(repo TopologyRepository) *TopologyService {
 }
 
 func (s *TopologyService) BuildTopology(query model.TopologyQuery) (*model.TopologyResponse, error) {
+	if query.Depth == 0 {
+		query.Depth = 2
+	}
 	if err := validateTopologyQuery(query); err != nil {
 		return nil, err
 	}
@@ -44,6 +52,7 @@ func (s *TopologyService) BuildTopology(query model.TopologyQuery) (*model.Topol
 	nodeSet := map[uint64]*model.Resource{root.ID: root}
 	edgeSet := map[uint64]model.ResourceRelation{}
 	distance := map[uint64]int{root.ID: 0}
+	truncated := false
 
 	frontier := []uint64{root.ID}
 
@@ -89,12 +98,18 @@ func (s *TopologyService) BuildTopology(query model.TopologyQuery) (*model.Topol
 				}
 			}
 
-			if _, seen := edgeSet[rel.ID]; !seen {
-				edgeSet[rel.ID] = rel
+			_, edgeSeen := edgeSet[rel.ID]
+			_, nodeSeen := nodeSet[neighborID]
+			if !edgeSeen && len(edgeSet) >= TopologyEdgeCap {
+				truncated = true
+				continue
 			}
-
+			if neighborID != 0 && !nodeSeen && len(nodeSet) >= TopologyNodeCap {
+				truncated = true
+				continue
+			}
 			if neighborID != 0 {
-				if _, exists := nodeSet[neighborID]; !exists {
+				if !nodeSeen {
 					res, err := s.repo.GetResource(neighborID)
 					if err != nil {
 						continue
@@ -103,6 +118,9 @@ func (s *TopologyService) BuildTopology(query model.TopologyQuery) (*model.Topol
 					distance[neighborID] = hop + 1
 					nextFrontier = append(nextFrontier, neighborID)
 				}
+			}
+			if !edgeSeen {
+				edgeSet[rel.ID] = rel
 			}
 		}
 
@@ -126,12 +144,13 @@ func (s *TopologyService) BuildTopology(query model.TopologyQuery) (*model.Topol
 		Edges:              edges,
 		Groups:             groups,
 		IsDatabaseTopology: isDB,
+		Truncated:          truncated,
 		Problems:           problems,
 	}, nil
 }
 
 func validateTopologyQuery(q model.TopologyQuery) error {
-	if q.Depth < 1 || q.Depth > 2 {
+	if q.Depth < 0 {
 		return ErrInvalidDepth
 	}
 	switch q.Direction {

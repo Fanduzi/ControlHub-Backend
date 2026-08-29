@@ -110,13 +110,14 @@ type TopologyGroup struct {
 }
 
 type TopologyResponse struct {
-	RootResourceID     uint64                 `json:"rootResourceId"`
-	Depth              int                    `json:"depth"`
-	Direction          TopologyDirection      `json:"direction"`
-	Nodes              []TopologyNode         `json:"nodes"`
-	Edges              []TopologyEdge         `json:"edges"`
-	Groups             []TopologyGroup        `json:"groups"`
-	IsDatabaseTopology bool                   `json:"isDatabaseTopology"`
+	RootResourceID     uint64                   `json:"rootResourceId"`
+	Depth              int                      `json:"depth"`
+	Direction          TopologyDirection        `json:"direction"`
+	Nodes              []TopologyNode           `json:"nodes"`
+	Edges              []TopologyEdge           `json:"edges"`
+	Groups             []TopologyGroup          `json:"groups"`
+	IsDatabaseTopology bool                     `json:"isDatabaseTopology"`
+	Truncated          bool                     `json:"truncated"`
 	Problems           []TopologyProblemSummary `json:"problems,omitempty"`
 }
 
