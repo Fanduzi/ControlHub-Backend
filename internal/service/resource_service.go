@@ -1,7 +1,7 @@
 // Package service provides business logic for resource reads, writes, and typed profile assembly.
 // input: internal/model (Resource, ResourceProfileResponse, ResourceType, ResourceListQuery, PageInfo, ResourceCreateInput)
 // output: NewResourceService, ResourceService.List/Get/GetProfile/Create, ErrResourceNotFound, ResourceRepository interface
-// pos: Business logic for resource reads with pagination, create-with-profile atomicity, and strict profile field validation
+// pos: Business logic for resource reads with pagination, create-with-profile atomicity, and strict profile field validation including Domain Name/Virtual IP identity
 // note: if this file changes, update header and README.md
 package service
 
@@ -323,18 +323,24 @@ func validateResourceCreateInput(input model.ResourceCreateInput) error {
 		ve.WithField("labels", err.Error())
 	}
 
-	if input.Profile != nil && input.ResourceType.Validate() == nil {
-		if err := validateProfileFields(input.ResourceType, input.Profile); err != nil {
-			var pe *ValidationError
-			if errors.As(err, &pe) {
-				if ve == nil {
-					ve = newValidationError("validation failed")
+	if input.ResourceType.Validate() == nil {
+		fields := input.Profile
+		if fields == nil && profileRequiresIdentity(input.ResourceType) {
+			fields = map[string]any{}
+		}
+		if fields != nil {
+			if err := validateProfileFields(input.ResourceType, fields, true); err != nil {
+				var pe *ValidationError
+				if errors.As(err, &pe) {
+					if ve == nil {
+						ve = newValidationError("validation failed")
+					}
+					for field, message := range pe.Fields {
+						ve.WithField(field, message)
+					}
+				} else {
+					return err // ErrProfileNotSupported for types without a profile table
 				}
-				for field, message := range pe.Fields {
-					ve.WithField(field, message)
-				}
-			} else {
-				return err // ErrProfileNotSupported for types without a profile table
 			}
 		}
 	}
@@ -343,6 +349,19 @@ func validateResourceCreateInput(input model.ResourceCreateInput) error {
 		return ve
 	}
 	return nil
+}
+
+func profileRequiresIdentity(resourceType model.ResourceType) bool {
+	specs, ok := profileFieldSchemas[resourceType]
+	if !ok {
+		return false
+	}
+	for _, spec := range specs {
+		if spec.required {
+			return true
+		}
+	}
+	return false
 }
 
 func validateReferenceIDs(environmentID, ownerID uint64) error {

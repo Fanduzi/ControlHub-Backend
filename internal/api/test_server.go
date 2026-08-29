@@ -1,7 +1,7 @@
 // Package api provides HTTP handlers and routing for the ControlHub REST API.
 // input: internal/api, internal/model, internal/service, net/http
 // output: TestServer struct, NewTestServer
-// pos: Test infrastructure — fake repos and pre-wired router for handler tests
+// pos: Test infrastructure — fake repos including Domain Name and Virtual IP profiles and pre-wired router for handler tests
 // note: if this file changes, update header and README.md
 package api
 
@@ -93,6 +93,32 @@ func (f *fakeResourceRepo) UpsertDatabaseClusterProfile(_ context.Context, resou
 	return nil
 }
 
+func (f *fakeResourceRepo) UpsertDomainNameProfile(_ context.Context, resourceID uint64, fqdn string) error {
+	res := f.resources[resourceID]
+	f.profiles[resourceID] = &model.ResourceProfileResponse{
+		ResourceID:      res.ID,
+		ResourceType:    model.ResourceTypeDomainName,
+		ResourceSubtype: res.ResourceSubtype,
+		Profile: map[string]any{
+			"fqdn": fqdn,
+		},
+	}
+	return nil
+}
+
+func (f *fakeResourceRepo) UpsertVirtualIPProfile(_ context.Context, resourceID uint64, ipAddress string) error {
+	res := f.resources[resourceID]
+	f.profiles[resourceID] = &model.ResourceProfileResponse{
+		ResourceID:      res.ID,
+		ResourceType:    model.ResourceTypeVirtualIP,
+		ResourceSubtype: res.ResourceSubtype,
+		Profile: map[string]any{
+			"ipAddress": ipAddress,
+		},
+	}
+	return nil
+}
+
 func (f *fakeResourceRepo) UpsertServiceProfile(_ context.Context, resourceID uint64, systemName, repositoryUrl, runtimeEnv string) error {
 	res := f.resources[resourceID]
 	f.profiles[resourceID] = &model.ResourceProfileResponse{
@@ -123,6 +149,10 @@ func (f *fakeResourceRepo) PutProfileWithAudit(ctx context.Context, resourceID u
 		return f.UpsertDatabaseClusterProfile(ctx, resourceID, profileString(fields, "engine"), profileString(fields, "topologyMode"), profileString(fields, "primaryEndpoint"))
 	case model.ResourceTypeService:
 		return f.UpsertServiceProfile(ctx, resourceID, profileString(fields, "systemName"), profileString(fields, "repositoryUrl"), profileString(fields, "runtimeEnv"))
+	case model.ResourceTypeDomainName:
+		return f.UpsertDomainNameProfile(ctx, resourceID, profileString(fields, "fqdn"))
+	case model.ResourceTypeVirtualIP:
+		return f.UpsertVirtualIPProfile(ctx, resourceID, profileString(fields, "ipAddress"))
 	default:
 		return service.ErrProfileNotSupported
 	}
@@ -158,6 +188,10 @@ func (f *fakeResourceRepo) PatchProfile(ctx context.Context, resourceID uint64, 
 		return f.UpsertDatabaseClusterProfile(ctx, resourceID, profileString(merged.Profile, "engine"), profileString(merged.Profile, "topologyMode"), profileString(merged.Profile, "primaryEndpoint"))
 	case model.ResourceTypeService:
 		return f.UpsertServiceProfile(ctx, resourceID, profileString(merged.Profile, "systemName"), profileString(merged.Profile, "repositoryUrl"), profileString(merged.Profile, "runtimeEnv"))
+	case model.ResourceTypeDomainName:
+		return f.UpsertDomainNameProfile(ctx, resourceID, profileString(merged.Profile, "fqdn"))
+	case model.ResourceTypeVirtualIP:
+		return f.UpsertVirtualIPProfile(ctx, resourceID, profileString(merged.Profile, "ipAddress"))
 	default:
 		return service.ErrProfileNotSupported
 	}
@@ -295,6 +329,16 @@ func (f *fakeResourceRepo) CreateResourceWithProfile(ctx context.Context, input 
 		created, err = f.CreateResource(ctx, input)
 		if err == nil {
 			err = f.UpsertServiceProfile(ctx, created.ID, profileString(profile, "systemName"), profileString(profile, "repositoryUrl"), profileString(profile, "runtimeEnv"))
+		}
+	case model.ResourceTypeDomainName:
+		created, err = f.CreateResource(ctx, input)
+		if err == nil {
+			err = f.UpsertDomainNameProfile(ctx, created.ID, profileString(profile, "fqdn"))
+		}
+	case model.ResourceTypeVirtualIP:
+		created, err = f.CreateResource(ctx, input)
+		if err == nil {
+			err = f.UpsertVirtualIPProfile(ctx, created.ID, profileString(profile, "ipAddress"))
 		}
 	default:
 		return nil, service.ErrProfileNotSupported

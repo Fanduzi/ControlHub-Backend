@@ -961,6 +961,101 @@ func TestResourceServiceCreate_EmptyProfileObjectGoesThroughAtomicPath(t *testin
 	}
 }
 
+func TestResourceServiceCreateDomainNameRequiresNormalizedFQDN(t *testing.T) {
+	repo := &fakeResourceWriteRepo{resources: map[uint64]model.Resource{}}
+	svc := NewResourceService(repo)
+
+	created, err := svc.Create(context.Background(), model.ResourceCreateInput{
+		ResourceType:    model.ResourceTypeDomainName,
+		ResourceSubtype: "dns",
+		Name:            "orders-domain",
+		DisplayName:     "Orders Domain",
+		EnvironmentID:   testEnvID,
+		OwnerID:         testOwnerID,
+		LifecycleStatus: model.LifecycleStatusRunning,
+		HealthStatus:    model.HealthStatusHealthy,
+		Source:          "manual",
+		Profile:         map[string]any{"fqdn": "Orders.Example.COM."},
+	})
+	if err != nil {
+		t.Fatalf("expected domain name create to succeed, got %v", err)
+	}
+	if created == nil {
+		t.Fatal("expected created resource")
+	}
+	if repo.profile["fqdn"] != "orders.example.com" {
+		t.Fatalf("expected persisted fqdn orders.example.com, got %#v", repo.profile)
+	}
+}
+
+func TestResourceServiceCreateDomainNameRejectsMissingProfile(t *testing.T) {
+	repo := &fakeResourceWriteRepo{resources: map[uint64]model.Resource{}}
+	svc := NewResourceService(repo)
+
+	_, err := svc.Create(context.Background(), model.ResourceCreateInput{
+		ResourceType:    model.ResourceTypeDomainName,
+		ResourceSubtype: "dns",
+		Name:            "orders-domain-missing",
+		DisplayName:     "Orders Domain Missing",
+		EnvironmentID:   testEnvID,
+		OwnerID:         testOwnerID,
+		LifecycleStatus: model.LifecycleStatusRunning,
+		HealthStatus:    model.HealthStatusHealthy,
+		Source:          "manual",
+	})
+	var ve *ValidationError
+	if !errors.As(err, &ve) {
+		t.Fatalf("expected ValidationError for missing domain name identity, got %v", err)
+	}
+	if ve.Fields["fqdn"] == "" {
+		t.Fatalf("expected fqdn field error, got %#v", ve.Fields)
+	}
+	if len(repo.resources) != 0 {
+		t.Fatalf("expected no resource after missing FQDN, found %d", len(repo.resources))
+	}
+}
+
+func TestResourceServiceCreateVirtualIPRejectsUnknownSubtypeAndCIDR(t *testing.T) {
+	repo := &fakeResourceWriteRepo{resources: map[uint64]model.Resource{}}
+	svc := NewResourceService(repo)
+
+	_, err := svc.Create(context.Background(), model.ResourceCreateInput{
+		ResourceType:    model.ResourceTypeVirtualIP,
+		ResourceSubtype: "anycast",
+		Name:            "vip-unknown-subtype",
+		DisplayName:     "VIP Unknown Subtype",
+		EnvironmentID:   testEnvID,
+		OwnerID:         testOwnerID,
+		LifecycleStatus: model.LifecycleStatusRunning,
+		HealthStatus:    model.HealthStatusHealthy,
+		Source:          "manual",
+		Profile:         map[string]any{"ipAddress": "10.0.0.10"},
+	})
+	var ve *ValidationError
+	if !errors.As(err, &ve) || ve.Fields["resourceSubtype"] == "" {
+		t.Fatalf("expected resourceSubtype rejection, got %v", err)
+	}
+
+	_, err = svc.Create(context.Background(), model.ResourceCreateInput{
+		ResourceType:    model.ResourceTypeVirtualIP,
+		ResourceSubtype: "floating",
+		Name:            "vip-cidr",
+		DisplayName:     "VIP CIDR",
+		EnvironmentID:   testEnvID,
+		OwnerID:         testOwnerID,
+		LifecycleStatus: model.LifecycleStatusRunning,
+		HealthStatus:    model.HealthStatusHealthy,
+		Source:          "manual",
+		Profile:         map[string]any{"ipAddress": "10.0.0.10/24"},
+	})
+	if !errors.As(err, &ve) || ve.Fields["ipAddress"] == "" {
+		t.Fatalf("expected ipAddress rejection for CIDR, got %v", err)
+	}
+	if len(repo.resources) != 0 {
+		t.Fatalf("expected no resource after invalid virtual IP writes, found %d", len(repo.resources))
+	}
+}
+
 func TestResourceServiceCreateRejectsInvalidProfileFields(t *testing.T) {
 	repo := &fakeResourceWriteRepo{resources: map[uint64]model.Resource{}}
 	svc := NewResourceService(repo)

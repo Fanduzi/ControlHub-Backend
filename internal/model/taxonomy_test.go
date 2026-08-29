@@ -1,3 +1,8 @@
+// Package model provides tests for taxonomy subtype dictionaries and validation.
+// input: testing, ResourceSubtypeDictionary, ValidateResourceSubtype
+// output: TestResourceSubtype* functions
+// pos: Pins Domain Name dns and Virtual IP floating as required taxonomy, and rejects unknown subtypes
+// note: if this file changes, update header and README.md
 package model
 
 import "testing"
@@ -20,6 +25,8 @@ func TestResourceSubtypeValidate_Valid(t *testing.T) {
 		{"service", "api"},
 		{"database_proxy", "proxysql"},
 		{"control_plane_component", "orchestrator"},
+		{"domain_name", "dns"},
+		{"virtual_ip", "floating"},
 	}
 	for _, tt := range tests {
 		err := ValidateResourceSubtype(tt.resourceType, tt.subtype)
@@ -36,10 +43,20 @@ func TestResourceSubtypeValidate_Invalid(t *testing.T) {
 	}
 }
 
-func TestResourceSubtypeValidate_NoSubtypes(t *testing.T) {
-	err := ValidateResourceSubtype("domain_name", "anything")
-	if err != nil {
-		t.Errorf("ValidateResourceSubtype(domain_name, anything) should be ignored, got %v", err)
+func TestResourceSubtypeValidate_DomainNameAndVirtualIPRejectUnknown(t *testing.T) {
+	cases := []struct {
+		resourceType string
+		subtype      string
+	}{
+		{"domain_name", "anything"},
+		{"domain_name", ""},
+		{"virtual_ip", "cidr"},
+		{"virtual_ip", ""},
+	}
+	for _, tt := range cases {
+		if err := ValidateResourceSubtype(tt.resourceType, tt.subtype); err == nil {
+			t.Errorf("ValidateResourceSubtype(%q, %q) = nil, want controlled rejection", tt.resourceType, tt.subtype)
+		}
 	}
 }
 
@@ -57,9 +74,13 @@ func TestResourceSubtypeDictionary(t *testing.T) {
 	}
 }
 
-func TestResourceSubtypeDictionary_Empty(t *testing.T) {
-	items := ResourceSubtypeDictionary("domain_name")
-	if len(items) != 0 {
-		t.Errorf("ResourceSubtypeDictionary(domain_name) returned %d items, want 0", len(items))
+func TestResourceSubtypeDictionary_DomainNameAndVirtualIP(t *testing.T) {
+	domain := ResourceSubtypeDictionary("domain_name")
+	if len(domain) != 1 || domain[0].Key != "dns" {
+		t.Errorf("ResourceSubtypeDictionary(domain_name) = %#v, want [dns]", domain)
+	}
+	vip := ResourceSubtypeDictionary("virtual_ip")
+	if len(vip) != 1 || vip[0].Key != "floating" {
+		t.Errorf("ResourceSubtypeDictionary(virtual_ip) = %#v, want [floating]", vip)
 	}
 }

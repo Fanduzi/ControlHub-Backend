@@ -12,7 +12,7 @@ Domain structs, taxonomy constants, validation methods, and dictionary definitio
 | settings.go | Environment, Owner, Role structs |
 | pagination.go | PageInfo, ResourceListQuery, AuditListQuery, pagination helpers/constants |
 | dictionary.go | DictionaryItem struct (shared by all dictionaries) |
-| taxonomy.go | All enum constants (8 resource types, 7 relation types, 5 lifecycle statuses, 4 health statuses), dictionary slices, Validate() methods |
+| taxonomy.go | All enum constants (8 resource types, 7 relation types, 5 lifecycle statuses, 4 health statuses), dictionary slices, Validate() methods; Domain Name `dns` and Virtual IP `floating` subtypes |
 | query_target.go | QueryTarget read-model types, query capability/readiness/safety enums, QueryTargetSafetyStateDictionary + Validate |
 | query_schema.go | Query schema response types, including TableDefinitionResponse |
 | query_execution.go | Query execution request/response/history types, execution status enum, QueryEnvironmentPolicy enum + Validate, ValidateCredentialRef, QueryCredentialMetadata, ErrInvalidCredentialMetadata, Phase 38S governed-result-paging: QueryExecutePaginationRequest/Response, ValidatePagination |

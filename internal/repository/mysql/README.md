@@ -5,7 +5,7 @@ Data access layer implementing service-layer repository interfaces with raw SQL 
 ## Files
 | File | Responsibility |
 |------|---------------|
-| resource_repository.go | Resource CRUD and typed profiles; authenticated resource/profile mutations commit server-owned field diffs in the same transaction |
+| resource_repository.go | Resource CRUD and typed profiles including domain_name FQDN and virtual_ip ipAddress; authenticated resource/profile mutations commit server-owned field diffs in the same transaction |
 | relation_repository.go | Relation queries plus atomic create/delete and one audit event per affected CI |
 | audit_repository.go | Audit event queries (global and by resource), including JSON field changes |
 | user_repository.go | User credential lookup by email/id; Authorization Version mutators (role/active/password); UpgradePasswordHash for legacy-to-Argon2id migration; CountLegacyHashUsers for operator visibility |

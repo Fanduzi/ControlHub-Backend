@@ -2,8 +2,8 @@
 
 // Package integration provides real-MySQL coverage for inventory mutation audit atomicity.
 // input: database/sql, encoding/json, strings, testing, internal/model, internal/repository/mysql
-// output: TestInventoryAuditUpdateSuccess, TestInventoryAuditUpdateRollsBackOnAuditFailure
-// pos: Proves resource field changes and audit evidence commit together against disposable MySQL
+// output: TestInventoryAuditUpdateSuccess, TestInventoryAuditUpdateRollsBackOnAuditFailure, TestInventoryAuditDomainNameAndVirtualIPProfiles
+// pos: Proves resource and typed-profile field changes commit with audit evidence against disposable MySQL
 // note: if this file changes, update header and README.md
 package integration
 
@@ -151,6 +151,72 @@ func assertLatestAuditChange(t *testing.T, db interface {
 	}
 	if len(changes) == 0 || changes[0].Field != field || changes[0].Operation != operation {
 		t.Fatalf("latest audit changes = %#v, want first %s %s", changes, operation, field)
+	}
+}
+
+func TestInventoryAuditDomainNameAndVirtualIPProfiles(t *testing.T) {
+	db := setupTestDB(t)
+	ctx := context.Background()
+	resources := mysql.NewResourceRepository(db)
+
+	domain, err := resources.CreateResource(ctx, model.ResourceCreateInput{
+		ResourceType:    model.ResourceTypeDomainName,
+		ResourceSubtype: "dns",
+		Name:            "inventory-audit-domain",
+		DisplayName:     "Inventory Audit Domain",
+		EnvironmentID:   envProd,
+		OwnerID:         ownerDBA,
+		LifecycleStatus: model.LifecycleStatusRunning,
+		HealthStatus:    model.HealthStatusHealthy,
+		Source:          "manual",
+		Labels:          map[string]string{},
+	})
+	if err != nil {
+		t.Fatalf("create domain name: %v", err)
+	}
+	err = resources.PutProfileWithAudit(ctx, domain.ID, model.ResourceTypeDomainName, map[string]any{
+		"fqdn": "orders.example.com",
+	}, ownerDBA, "inventory.profile.updated")
+	if err != nil {
+		t.Fatalf("put domain name profile with audit: %v", err)
+	}
+	assertLatestAuditChange(t, db, domain.ID, "profile.fqdn", model.AuditChangeAdd)
+	got, err := resources.GetResourceProfile(domain.ID)
+	if err != nil {
+		t.Fatalf("get domain name profile: %v", err)
+	}
+	if got.Profile["fqdn"] != "orders.example.com" {
+		t.Fatalf("domain name profile = %#v, want fqdn orders.example.com", got.Profile)
+	}
+
+	vip, err := resources.CreateResource(ctx, model.ResourceCreateInput{
+		ResourceType:    model.ResourceTypeVirtualIP,
+		ResourceSubtype: "floating",
+		Name:            "inventory-audit-vip",
+		DisplayName:     "Inventory Audit VIP",
+		EnvironmentID:   envProd,
+		OwnerID:         ownerDBA,
+		LifecycleStatus: model.LifecycleStatusRunning,
+		HealthStatus:    model.HealthStatusHealthy,
+		Source:          "manual",
+		Labels:          map[string]string{},
+	})
+	if err != nil {
+		t.Fatalf("create virtual ip: %v", err)
+	}
+	err = resources.PutProfileWithAudit(ctx, vip.ID, model.ResourceTypeVirtualIP, map[string]any{
+		"ipAddress": "10.0.0.10",
+	}, ownerDBA, "inventory.profile.updated")
+	if err != nil {
+		t.Fatalf("put virtual ip profile with audit: %v", err)
+	}
+	assertLatestAuditChange(t, db, vip.ID, "profile.ipAddress", model.AuditChangeAdd)
+	got, err = resources.GetResourceProfile(vip.ID)
+	if err != nil {
+		t.Fatalf("get virtual ip profile: %v", err)
+	}
+	if got.Profile["ipAddress"] != "10.0.0.10" {
+		t.Fatalf("virtual ip profile = %#v, want ipAddress 10.0.0.10", got.Profile)
 	}
 }
 

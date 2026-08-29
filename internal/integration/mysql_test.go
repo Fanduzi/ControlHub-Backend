@@ -1,5 +1,10 @@
 //go:build integration
 
+// Package integration provides real-MySQL schema proofs for goose migrations.
+// input: database/sql, testing
+// output: TestGooseCleanMigration, TestSchemaUsesBigintPrimaryKeysWithoutForeignKeys, TestProfileTablesUseUniqueResourceIDInsteadOfPrimaryKeyResourceID
+// pos: Asserts migrated tables including domain_name and virtual_ip profile tables
+// note: if this file changes, update header and README.md
 package integration
 
 import (
@@ -60,6 +65,8 @@ func TestSchemaUsesBigintPrimaryKeysWithoutForeignKeys(t *testing.T) {
 		"resource_profiles_database_instance",
 		"resource_profiles_database_cluster",
 		"resource_profiles_service",
+		"resource_profiles_domain_name",
+		"resource_profiles_virtual_ip",
 		"query_saved_statements",
 		"query_saved_statement_parameters",
 		"audit_events",
@@ -77,6 +84,8 @@ func TestProfileTablesUseUniqueResourceIDInsteadOfPrimaryKeyResourceID(t *testin
 		"resource_profiles_database_instance",
 		"resource_profiles_database_cluster",
 		"resource_profiles_service",
+		"resource_profiles_domain_name",
+		"resource_profiles_virtual_ip",
 	}
 	for _, tableName := range profileTables {
 		assertUnsignedBigintColumn(t, db, tableName, "id")
@@ -116,6 +125,8 @@ func assertSchemaChainBaseline(t *testing.T, db *sql.DB) {
 		"resource_profiles_database_instance",
 		"resource_profiles_database_cluster",
 		"resource_profiles_service",
+		"resource_profiles_domain_name",
+		"resource_profiles_virtual_ip",
 		"audit_events",
 	}
 	for _, table := range expectedTables {

@@ -1,7 +1,7 @@
 // Package api provides HTTP handlers and routing for the ControlHub REST API.
 // input: internal/api, internal/model, net/http, net/http/httptest, encoding/json
-// output: TestListResources*, TestGetResourceProfile_*
-// pos: Validates resource listing with pagination/filtering and per-type profile responses
+// output: TestListResources*, TestGetResourceProfile_*, TestCreateDomainName*, TestCreateVirtualIP*
+// pos: Validates resource listing/filtering and Domain Name/Virtual IP create-with-profile identity at the HTTP seam
 // note: if this file changes, update header and README.md
 package api
 
@@ -2456,11 +2456,127 @@ func TestCreateResourceWithProfile_Success(t *testing.T) {
 	}
 }
 
+func TestCreateDomainNameNormalizesFQDNAndRejectsUnknownSubtype(t *testing.T) {
+	server := NewTestServer()
+	body := `{
+		"resourceType":"domain_name",
+		"resourceSubtype":"dns",
+		"name":"orders-domain-01",
+		"displayName":"Orders Domain",
+		"environmentId":1,
+		"ownerId":2,
+		"lifecycleStatus":"running",
+		"healthStatus":"healthy",
+		"source":"manual",
+		"profile":{"fqdn":"Orders.Example.COM."}
+	}`
+	req := httptest.NewRequest(http.MethodPost, "/resources", strings.NewReader(body))
+	rec := httptest.NewRecorder()
+	server.Router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("expected 201, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+	var resp model.Resource
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if resp.ResourceSubtype != "dns" {
+		t.Fatalf("expected subtype dns, got %q", resp.ResourceSubtype)
+	}
+
+	profileReq := httptest.NewRequest(http.MethodGet, "/resources/"+strconv.FormatUint(resp.ID, 10)+"/profile", nil)
+	profileRec := httptest.NewRecorder()
+	server.Router.ServeHTTP(profileRec, profileReq)
+	if profileRec.Code != http.StatusOK {
+		t.Fatalf("expected 200 for profile fetch, got %d; body: %s", profileRec.Code, profileRec.Body.String())
+	}
+	var profile model.ResourceProfileResponse
+	if err := json.NewDecoder(profileRec.Body).Decode(&profile); err != nil {
+		t.Fatalf("decode profile: %v", err)
+	}
+	if profile.Profile["fqdn"] != "orders.example.com" {
+		t.Fatalf("expected normalized fqdn orders.example.com, got %#v", profile.Profile)
+	}
+
+	bad := `{
+		"resourceType":"domain_name",
+		"resourceSubtype":"website",
+		"name":"orders-domain-bad",
+		"displayName":"Orders Domain Bad",
+		"environmentId":1,
+		"ownerId":2,
+		"lifecycleStatus":"running",
+		"healthStatus":"healthy",
+		"source":"manual",
+		"profile":{"fqdn":"orders.example.com"}
+	}`
+	badReq := httptest.NewRequest(http.MethodPost, "/resources", strings.NewReader(bad))
+	badRec := httptest.NewRecorder()
+	server.Router.ServeHTTP(badRec, badReq)
+	if badRec.Code == http.StatusCreated {
+		t.Fatalf("unknown domain_name subtype must be rejected, got %d body=%s", badRec.Code, badRec.Body.String())
+	}
+}
+
+func TestCreateVirtualIPRejectsInvalidAddressAndAcceptsSingleIP(t *testing.T) {
+	server := NewTestServer()
+	bad := `{
+		"resourceType":"virtual_ip",
+		"resourceSubtype":"floating",
+		"name":"vip-cidr-01",
+		"displayName":"VIP CIDR",
+		"environmentId":1,
+		"ownerId":2,
+		"lifecycleStatus":"running",
+		"healthStatus":"healthy",
+		"source":"manual",
+		"profile":{"ipAddress":"10.0.0.10/24"}
+	}`
+	badReq := httptest.NewRequest(http.MethodPost, "/resources", strings.NewReader(bad))
+	badRec := httptest.NewRecorder()
+	server.Router.ServeHTTP(badRec, badReq)
+	if badRec.Code == http.StatusCreated {
+		t.Fatalf("CIDR virtual IP must be rejected, got %d body=%s", badRec.Code, badRec.Body.String())
+	}
+
+	body := `{
+		"resourceType":"virtual_ip",
+		"resourceSubtype":"floating",
+		"name":"vip-float-01",
+		"displayName":"VIP Float",
+		"environmentId":1,
+		"ownerId":2,
+		"lifecycleStatus":"running",
+		"healthStatus":"healthy",
+		"source":"manual",
+		"profile":{"ipAddress":"10.0.0.10"}
+	}`
+	req := httptest.NewRequest(http.MethodPost, "/resources", strings.NewReader(body))
+	rec := httptest.NewRecorder()
+	server.Router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("expected 201, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+	var resp model.Resource
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	profileReq := httptest.NewRequest(http.MethodGet, "/resources/"+strconv.FormatUint(resp.ID, 10)+"/profile", nil)
+	profileRec := httptest.NewRecorder()
+	server.Router.ServeHTTP(profileRec, profileReq)
+	var profile model.ResourceProfileResponse
+	if err := json.NewDecoder(profileRec.Body).Decode(&profile); err != nil {
+		t.Fatalf("decode profile: %v", err)
+	}
+	if profile.Profile["ipAddress"] != "10.0.0.10" {
+		t.Fatalf("expected ipAddress 10.0.0.10, got %#v", profile.Profile)
+	}
+}
+
 // TestCreateResourceWithProfile_ProfileWriteFailureIsNotSuccess pins the
 // atomicity contract at the HTTP seam: when the initial profile write cannot
-// succeed, the create must not return any success status. Both a non-empty
-// profile on a type without a profile table and a submitted empty profile
-// object on such a type are profile write requests and must be rejected.
+// succeed, the create must not return any success status. Unknown profile
+// fields and missing Virtual IP identity are both invalid profile writes.
 func TestCreateResourceWithProfile_ProfileWriteFailureIsNotSuccess(t *testing.T) {
 	server := NewTestServer()
 	cases := []struct {

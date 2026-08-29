@@ -1,5 +1,10 @@
 //go:build integration
 
+// Package integration provides real-MySQL coverage for relation repository behavior.
+// input: context, database/sql, testing, internal/model, internal/repository/mysql, internal/service
+// output: TestResourceRepository relation and profile-summary cases
+// pos: Proves relation queries and profile summaries against disposable MySQL
+// note: if this file changes, update header and README.md
 package integration
 
 import (
@@ -287,7 +292,6 @@ func TestResourceRepository_ProfileSummary_NoProfile(t *testing.T) {
 	db := setupTestDB(t)
 	resRepo := mysql.NewResourceRepository(db)
 
-	// domain_name resources have no profile table
 	// Use a resource without profile data — e.g. an order service without a service profile
 	// Let's use a host that has a profile to verify the converse: a service without profile data
 	// Check if there's a resource that definitely has no profile

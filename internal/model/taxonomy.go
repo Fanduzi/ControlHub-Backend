@@ -116,6 +116,12 @@ var resourceSubtypeMap = map[string][]DictionaryItem{
 		{Key: "ha_monitor", Label: "HA Monitor"},
 		{Key: "backup_manager", Label: "Backup Manager"},
 	},
+	string(ResourceTypeDomainName): {
+		{Key: "dns", Label: "DNS"},
+	},
+	string(ResourceTypeVirtualIP): {
+		{Key: "floating", Label: "Floating"},
+	},
 }
 
 var relationTypeDictionaryItems = []DictionaryItem{

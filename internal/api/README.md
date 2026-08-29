@@ -23,8 +23,8 @@ HTTP handlers, chi routing, CORS middleware, and fake-repo test infrastructure.
 | json_body.go | Shared strict JSON body decoding with unknown-field and multiple-value rejection |
 | test_server.go | Fake repositories and NewTestServer() with a default admin actor for handler tests |
 | health_handler_test.go | Health endpoint tests |
-| resource_handler_test.go | Resource and profile endpoint tests, including create-with-profile atomicity at the HTTP seam |
-| profile_handler_test.go | PUT full-replacement and PATCH partial-merge tests: strict JSON decoding, field validation, no-op empty PATCH |
+| resource_handler_test.go | Resource and profile endpoint tests, including create-with-profile atomicity and Domain Name/Virtual IP identity at the HTTP seam |
+| profile_handler_test.go | PUT full-replacement and PATCH partial-merge tests: strict JSON decoding, field validation, no-op empty PATCH, Domain Name FQDN normalize |
 | relation_handler_test.go | Relation endpoint tests |
 | audit_handler_test.go | Audit list contract tests, including field-level before/after changes |
 | auth_handler_test.go | Auth endpoint tests |

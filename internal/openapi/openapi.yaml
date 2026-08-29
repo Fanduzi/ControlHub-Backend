@@ -4683,6 +4683,8 @@ components:
             - database_cluster: engine, topologyMode, primaryEndpoint
             - service: systemName, repositoryUrl, runtimeEnv
             - host: hostname, ipAddress, osName
+            - domain_name: fqdn (required; stored lowercase without a trailing dot; resolution target is not a profile field)
+            - virtual_ip: ipAddress (required; a single IPv4 or IPv6 address, not CIDR, port, or an address set)
     ResourceCreateInput:
       type: object
       additionalProperties: false

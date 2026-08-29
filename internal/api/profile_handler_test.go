@@ -1,7 +1,7 @@
 // Package api provides HTTP tests for profile write endpoints.
 // input: internal/api test server, internal/model, net/http, net/http/httptest, encoding/json
-// output: TestPutResourceProfile_*, TestPatchResourceProfile_*
-// pos: Validates PUT full-replacement, PATCH partial-merge, strict JSON decoding, and field validation at the HTTP seam
+// output: TestPutResourceProfile_*, TestPatchResourceProfile_*, TestPutAndPatchDomainNameProfileNormalizeAndRejectResolutionTarget
+// pos: Validates PUT/PATCH profile writes including Domain Name FQDN normalize and resolution-target rejection
 // note: if this file changes, update header and README.md
 package api
 
@@ -171,5 +171,60 @@ func TestPatchResourceProfile_RejectsNullBody(t *testing.T) {
 	rec := patchProfile(t, server, 6, `null`)
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("expected 400 for null body, got %d body=%s", rec.Code, rec.Body.String())
+	}
+}
+
+func createDomainName(t *testing.T, server *TestServer) uint64 {
+	t.Helper()
+	body := `{
+		"resourceType":"domain_name",
+		"resourceSubtype":"dns",
+		"name":"profile-domain-01",
+		"displayName":"Profile Domain",
+		"environmentId":1,
+		"ownerId":2,
+		"lifecycleStatus":"running",
+		"healthStatus":"healthy",
+		"source":"manual",
+		"profile":{"fqdn":"initial.example.com"}
+	}`
+	req := httptest.NewRequest(http.MethodPost, "/resources", strings.NewReader(body))
+	rec := httptest.NewRecorder()
+	server.Router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("create domain name: expected 201, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	var resp model.Resource
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode created domain name: %v", err)
+	}
+	return resp.ID
+}
+
+func TestPutAndPatchDomainNameProfileNormalizeAndRejectResolutionTarget(t *testing.T) {
+	server := NewTestServer()
+	id := createDomainName(t, server)
+
+	putRec := putProfile(t, server, id, `{"fqdn":"Orders.Example.COM."}`)
+	if putRec.Code != http.StatusNoContent {
+		t.Fatalf("expected 204 for domain name PUT, got %d body=%s", putRec.Code, putRec.Body.String())
+	}
+	profile := getProfile(t, server, id)
+	if profile.Profile["fqdn"] != "orders.example.com" {
+		t.Fatalf("expected PUT to persist normalized fqdn, got %#v", profile.Profile)
+	}
+
+	patchRec := patchProfile(t, server, id, `{"fqdn":"API.Example.COM."}`)
+	if patchRec.Code != http.StatusNoContent {
+		t.Fatalf("expected 204 for domain name PATCH, got %d body=%s", patchRec.Code, patchRec.Body.String())
+	}
+	profile = getProfile(t, server, id)
+	if profile.Profile["fqdn"] != "api.example.com" {
+		t.Fatalf("expected PATCH to persist normalized fqdn, got %#v", profile.Profile)
+	}
+
+	reject := putProfile(t, server, id, `{"fqdn":"orders.example.com","resolutionTarget":"10.0.0.10"}`)
+	if reject.Code == http.StatusNoContent {
+		t.Fatal("resolution target must not be accepted as profile text")
 	}
 }

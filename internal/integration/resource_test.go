@@ -296,7 +296,6 @@ func TestResourceRepository_ResourceSubtypeWithResourceType(t *testing.T) {
 	}
 }
 
-
 func TestResourceRepository_DatabaseClusterOperationalSummary(t *testing.T) {
 	db := setupTestDB(t)
 	repo := mysql.NewResourceRepository(db)
@@ -634,19 +633,18 @@ func TestResourceAPI_CreateWithProfileFailureRollsBack(t *testing.T) {
 }
 
 // TestResourceRepositoryCreateWithProfile_EmptyProfileObjectOnUnsupportedType
-// pins the spec rule "其他 4 种 | 无 profile 表，不接受 profile 字段": a
-// submitted profile object — even an empty one — on a type without a profile
-// table is rejected and rolls the resource insert back.
+// pins the spec rule that types without a profile table reject a submitted
+// profile object — even an empty one — and roll the resource insert back.
 func TestResourceRepositoryCreateWithProfile_EmptyProfileObjectOnUnsupportedType(t *testing.T) {
 	db := setupTestDB(t)
 	repo := mysql.NewResourceRepository(db)
 	ctx := context.Background()
 
-	name := fmt.Sprintf("atomicity-empty-vip-%d", time.Now().UnixNano())
+	name := fmt.Sprintf("atomicity-empty-proxy-%d", time.Now().UnixNano())
 	_, err := repo.CreateResourceWithProfile(ctx, model.ResourceCreateInput{
-		ResourceType:    model.ResourceTypeVirtualIP,
+		ResourceType:    model.ResourceTypeDatabaseProxy,
 		Name:            name,
-		DisplayName:     "Atomicity Empty VIP",
+		DisplayName:     "Atomicity Empty Proxy",
 		EnvironmentID:   envProd,
 		OwnerID:         ownerDBA,
 		LifecycleStatus: model.LifecycleStatusProvisioning,

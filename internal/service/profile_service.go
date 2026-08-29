@@ -1,7 +1,7 @@
 // Package service provides business logic for typed profile writes.
 // input: internal/model (ResourceType, Resource), ProfileRepository interface
 // output: NewProfileService, ProfileService.PutProfile/PatchProfile/DeleteProfile, ProfileRepository interface
-// pos: Business logic for resource profile upserts with archived-resource guard, strict field validation, and PATCH partial-merge semantics
+// pos: Business logic for resource profile upserts with archived-resource guard, strict field validation, Domain Name/Virtual IP identity, and PATCH partial-merge semantics
 // note: if this file changes, update header and README.md
 package service
 
@@ -9,6 +9,8 @@ import (
 	"context"
 	"fmt"
 	"math"
+	"net"
+	"strings"
 	"unicode/utf8"
 
 	"github.com/fan/controlhub/internal/model"
@@ -21,6 +23,8 @@ type ProfileRepository interface {
 	UpsertDatabaseInstanceProfile(ctx context.Context, resourceID uint64, engine, version, host string, port int, role string) error
 	UpsertDatabaseClusterProfile(ctx context.Context, resourceID uint64, engine, topologyMode, primaryEndpoint string) error
 	UpsertServiceProfile(ctx context.Context, resourceID uint64, systemName, repositoryUrl, runtimeEnv string) error
+	UpsertDomainNameProfile(ctx context.Context, resourceID uint64, fqdn string) error
+	UpsertVirtualIPProfile(ctx context.Context, resourceID uint64, ipAddress string) error
 	// PatchProfile partially updates a typed profile in one atomic statement:
 	// submitted fields are set (explicit empty/zero values honored), omitted
 	// fields keep their current values, and the row is created when absent.
@@ -58,14 +62,14 @@ func (s *ProfileService) PutProfile(ctx context.Context, resourceID uint64, fiel
 	if res.ArchivedAt != nil {
 		return ErrResourceArchived
 	}
-	if err := validateProfileFields(res.ResourceType, fields); err != nil {
+	if err := validateProfileFields(res.ResourceType, fields, true); err != nil {
 		return err
 	}
 	return s.writeProfile(ctx, resourceID, res.ResourceType, fields)
 }
 
 func (s *ProfileService) PutProfileInventory(ctx context.Context, actorUserID, resourceID uint64, fields map[string]interface{}) error {
-	res, err := s.inventoryProfileTarget(resourceID, fields)
+	res, err := s.inventoryProfileTarget(resourceID, fields, true)
 	if err != nil {
 		return err
 	}
@@ -89,7 +93,7 @@ func (s *ProfileService) PatchProfile(ctx context.Context, resourceID uint64, fi
 	if res.ArchivedAt != nil {
 		return ErrResourceArchived
 	}
-	if err := validateProfileFields(res.ResourceType, fields); err != nil {
+	if err := validateProfileFields(res.ResourceType, fields, false); err != nil {
 		return err
 	}
 	if len(fields) == 0 {
@@ -99,7 +103,7 @@ func (s *ProfileService) PatchProfile(ctx context.Context, resourceID uint64, fi
 }
 
 func (s *ProfileService) PatchProfileInventory(ctx context.Context, actorUserID, resourceID uint64, fields map[string]interface{}) error {
-	res, err := s.inventoryProfileTarget(resourceID, fields)
+	res, err := s.inventoryProfileTarget(resourceID, fields, false)
 	if err != nil {
 		return err
 	}
@@ -142,7 +146,7 @@ func (s *ProfileService) DeleteProfileInventory(ctx context.Context, actorUserID
 	return repo.DeleteProfileWithAudit(ctx, resourceID, res.ResourceType, actorUserID, "inventory.profile.deleted")
 }
 
-func (s *ProfileService) inventoryProfileTarget(resourceID uint64, fields map[string]interface{}) (*model.Resource, error) {
+func (s *ProfileService) inventoryProfileTarget(resourceID uint64, fields map[string]interface{}, full bool) (*model.Resource, error) {
 	res, err := s.resourceRepo.GetResource(resourceID)
 	if err != nil {
 		return nil, err
@@ -150,7 +154,7 @@ func (s *ProfileService) inventoryProfileTarget(resourceID uint64, fields map[st
 	if res.ArchivedAt != nil {
 		return nil, ErrResourceArchived
 	}
-	if err := validateProfileFields(res.ResourceType, fields); err != nil {
+	if err := validateProfileFields(res.ResourceType, fields, full); err != nil {
 		return nil, err
 	}
 	return res, nil
@@ -183,6 +187,14 @@ func (s *ProfileService) writeProfile(ctx context.Context, resourceID uint64, re
 			getStringField(fields, "systemName"),
 			getStringField(fields, "repositoryUrl"),
 			getStringField(fields, "runtimeEnv"),
+		)
+	case model.ResourceTypeDomainName:
+		return s.profileRepo.UpsertDomainNameProfile(ctx, resourceID,
+			getStringField(fields, "fqdn"),
+		)
+	case model.ResourceTypeVirtualIP:
+		return s.profileRepo.UpsertVirtualIPProfile(ctx, resourceID,
+			getStringField(fields, "ipAddress"),
 		)
 	default:
 		return ErrProfileNotSupported
@@ -226,15 +238,25 @@ const (
 	profileIntField
 )
 
+type profileFieldFormat int
+
+const (
+	profileFormatNone profileFieldFormat = iota
+	profileFormatFQDN
+	profileFormatIP
+)
+
 // profileFieldSpec describes one accepted profile field: its JSON kind and
 // its constraints. maxLen mirrors the MySQL varchar column width in
 // characters (utf8mb4); intMin/intMax bound integer fields.
 type profileFieldSpec struct {
-	key    string
-	kind   profileFieldKind
-	maxLen int
-	intMin int64
-	intMax int64
+	key      string
+	kind     profileFieldKind
+	maxLen   int
+	intMin   int64
+	intMax   int64
+	required bool
+	format   profileFieldFormat
 }
 
 // profileFieldSchemas is the authoritative per-type profile field contract
@@ -263,13 +285,20 @@ var profileFieldSchemas = map[model.ResourceType][]profileFieldSpec{
 		{key: "repositoryUrl", kind: profileStringField, maxLen: 512},
 		{key: "runtimeEnv", kind: profileStringField, maxLen: 64},
 	},
+	model.ResourceTypeDomainName: {
+		{key: "fqdn", kind: profileStringField, maxLen: 255, required: true, format: profileFormatFQDN},
+	},
+	model.ResourceTypeVirtualIP: {
+		{key: "ipAddress", kind: profileStringField, maxLen: 64, required: true, format: profileFormatIP},
+	},
 }
 
 // validateProfileFields rejects unknown fields, non-string values for string
 // fields, fractional or non-integer values for integer fields, out-of-range
 // integers, and overlong strings. Resource types without a profile table
-// return ErrProfileNotSupported. Explicit empty strings are valid.
-func validateProfileFields(resourceType model.ResourceType, fields map[string]interface{}) error {
+// return ErrProfileNotSupported. Explicit empty strings are valid unless the
+// field is required identity. full requires every required identity field.
+func validateProfileFields(resourceType model.ResourceType, fields map[string]interface{}, full bool) error {
 	specs, ok := profileFieldSchemas[resourceType]
 	if !ok {
 		return ErrProfileNotSupported
@@ -305,6 +334,31 @@ func validateProfileFields(resourceType model.ResourceType, fields map[string]in
 				}
 				ve.WithField(key, fmt.Sprintf("must be at most %d characters", spec.maxLen))
 			}
+			switch spec.format {
+			case profileFormatFQDN:
+				normalized := normalizeFQDN(s)
+				fields[key] = normalized
+				if spec.required && normalized == "" {
+					if ve == nil {
+						ve = newValidationError("validation failed")
+					}
+					ve.WithField(key, "fqdn is required")
+				}
+			case profileFormatIP:
+				trimmed := strings.TrimSpace(s)
+				fields[key] = trimmed
+				if spec.required && trimmed == "" {
+					if ve == nil {
+						ve = newValidationError("validation failed")
+					}
+					ve.WithField(key, "ipAddress is required")
+				} else if trimmed != "" && net.ParseIP(trimmed) == nil {
+					if ve == nil {
+						ve = newValidationError("validation failed")
+					}
+					ve.WithField(key, "must be a single IPv4 or IPv6 address")
+				}
+			}
 		case profileIntField:
 			n, ok := profileIntValue(value)
 			if !ok {
@@ -322,10 +376,36 @@ func validateProfileFields(resourceType model.ResourceType, fields map[string]in
 			}
 		}
 	}
+	if full {
+		for _, spec := range specs {
+			if !spec.required {
+				continue
+			}
+			if _, ok := fields[spec.key]; ok {
+				continue
+			}
+			if ve == nil {
+				ve = newValidationError("validation failed")
+			}
+			if spec.format == profileFormatFQDN {
+				ve.WithField(spec.key, "fqdn is required")
+				continue
+			}
+			if spec.format == profileFormatIP {
+				ve.WithField(spec.key, "ipAddress is required")
+				continue
+			}
+			ve.WithField(spec.key, spec.key+" is required")
+		}
+	}
 	if ve != nil {
 		return ve
 	}
 	return nil
+}
+
+func normalizeFQDN(value string) string {
+	return strings.TrimRight(strings.ToLower(strings.TrimSpace(value)), ".")
 }
 
 // profileIntValue accepts int, int64, and integral float64 (the shape JSON

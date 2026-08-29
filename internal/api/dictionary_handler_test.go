@@ -1,7 +1,7 @@
 // Package api provides HTTP handlers and routing for the ControlHub REST API.
 // input: internal/api, internal/model, net/http, net/http/httptest, encoding/json
 // output: TestListEnvironments/Owners/Roles/ResourceTypes/RelationTypes/LifecycleStatuses/HealthStatuses/ResourceSubtypes
-// pos: Validates all dictionary endpoints return correct items
+// pos: Validates all dictionary endpoints return correct items, including Domain Name dns and Virtual IP floating
 // note: if this file changes, update header and README.md
 package api
 
@@ -326,7 +326,7 @@ func TestListResourceSubtypes_MissingResourceType(t *testing.T) {
 
 func TestListResourceSubtypes_UnknownType(t *testing.T) {
 	server := NewTestServer()
-	req := httptest.NewRequest(http.MethodGet, "/resource-subtypes?resourceType=domain_name", nil)
+	req := httptest.NewRequest(http.MethodGet, "/resource-subtypes?resourceType=not_a_type", nil)
 	rec := httptest.NewRecorder()
 
 	server.Router.ServeHTTP(rec, req)
@@ -343,11 +343,40 @@ func TestListResourceSubtypes_UnknownType(t *testing.T) {
 		t.Fatalf("failed to decode response: %v", err)
 	}
 
-	if body.ResourceType != "domain_name" {
-		t.Fatalf("expected resourceType domain_name, got %s", body.ResourceType)
+	if body.ResourceType != "not_a_type" {
+		t.Fatalf("expected resourceType not_a_type, got %s", body.ResourceType)
 	}
 
 	if len(body.Subtypes) != 0 {
-		t.Fatalf("expected 0 subtypes for type with no subtypes, got %d", len(body.Subtypes))
+		t.Fatalf("expected 0 subtypes for unknown type, got %d", len(body.Subtypes))
+	}
+}
+
+func TestListResourceSubtypes_DomainNameAndVirtualIP(t *testing.T) {
+	server := NewTestServer()
+	cases := []struct {
+		resourceType string
+		wantKey      string
+	}{
+		{"domain_name", "dns"},
+		{"virtual_ip", "floating"},
+	}
+	for _, tc := range cases {
+		req := httptest.NewRequest(http.MethodGet, "/resource-subtypes?resourceType="+tc.resourceType, nil)
+		rec := httptest.NewRecorder()
+		server.Router.ServeHTTP(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("%s: expected 200, got %d", tc.resourceType, rec.Code)
+		}
+		var body struct {
+			ResourceType string                 `json:"resourceType"`
+			Subtypes     []model.DictionaryItem `json:"subtypes"`
+		}
+		if err := json.NewDecoder(rec.Body).Decode(&body); err != nil {
+			t.Fatalf("%s: decode: %v", tc.resourceType, err)
+		}
+		if len(body.Subtypes) != 1 || body.Subtypes[0].Key != tc.wantKey {
+			t.Fatalf("%s: subtypes = %#v, want [%s]", tc.resourceType, body.Subtypes, tc.wantKey)
+		}
 	}
 }

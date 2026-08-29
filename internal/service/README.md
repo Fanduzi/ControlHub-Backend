@@ -7,8 +7,8 @@ Business logic layer with interface-based repository dependencies. Each service 
 |------|---------------|
 | resource_service.go | Resource reads/writes, validation, and fail-closed audited HTTP inventory updates |
 | resource_write_service_test.go | Resource/relation write-flow tests, including sensitive-label rejection and profile validation |
-| profile_service.go | Typed profile PUT/PATCH/DELETE validation plus fail-closed audited HTTP mutations |
-| profile_service_test.go | Profile write tests: validation, PATCH partial-merge semantics, not-found/archived/unsupported guards |
+| profile_service.go | Typed profile PUT/PATCH/DELETE validation plus fail-closed audited HTTP mutations; Domain Name FQDN normalize/require and Virtual IP single-address identity |
+| profile_service_test.go | Profile write tests: validation, PATCH partial-merge semantics, not-found/archived/unsupported guards, Domain Name/Virtual IP identity |
 | relation_service.go | Relation reads/writes plus fail-closed audited HTTP mutations |
 | audit_service.go | Audit event listing (global and per-resource) |
 | auth_service.go | Login, versioned Backend Bearer issuance, current-state VerifyToken (Authorization Version), role/disable/password invalidation, legacy-to-Argon2id transparent migration |

@@ -1,7 +1,7 @@
 // Package mysql provides MySQL-backed repository implementations.
 // input: database/sql, internal/model, internal/service
 // output: NewResourceRepository, ResourceRepository struct (implements service.ResourceRepository)
-// pos: MySQL data access for core resource table with pagination and filtering
+// pos: MySQL data access for core resource table, typed profiles including domain_name and virtual_ip, pagination and filtering
 // note: if this file changes, update header and README.md
 package mysql
 
@@ -328,6 +328,18 @@ func fetchProfile(ctx context.Context, q profileQueryer, id uint64, resourceType
 		if err == nil {
 			return map[string]any{"hostname": hostname, "ipAddress": ipAddress, "osName": osName}, nil
 		}
+	case model.ResourceTypeDomainName:
+		var fqdn string
+		err = q.QueryRowContext(ctx, `select fqdn from resource_profiles_domain_name where resource_id = ?`, id).Scan(&fqdn)
+		if err == nil {
+			return map[string]any{"fqdn": fqdn}, nil
+		}
+	case model.ResourceTypeVirtualIP:
+		var ipAddress string
+		err = q.QueryRowContext(ctx, `select ip_address from resource_profiles_virtual_ip where resource_id = ?`, id).Scan(&ipAddress)
+		if err == nil {
+			return map[string]any{"ipAddress": ipAddress}, nil
+		}
 	default:
 		return map[string]any{}, nil
 	}
@@ -354,6 +366,14 @@ const (
 		 VALUES (?, ?, ?, ?, '{}')
 		 ON DUPLICATE KEY UPDATE system_name = VALUES(system_name), repository_url = VALUES(repository_url), runtime_env = VALUES(runtime_env)`
 
+	upsertDomainNameProfileSQL = `INSERT INTO resource_profiles_domain_name (resource_id, fqdn, spec)
+		 VALUES (?, ?, '{}')
+		 ON DUPLICATE KEY UPDATE fqdn = VALUES(fqdn)`
+
+	upsertVirtualIPProfileSQL = `INSERT INTO resource_profiles_virtual_ip (resource_id, ip_address, spec)
+		 VALUES (?, ?, '{}')
+		 ON DUPLICATE KEY UPDATE ip_address = VALUES(ip_address)`
+
 	// patch statements merge submitted fields (COALESCE) and create the row
 	// when absent; omitted fields keep their current values. Each pointer
 	// argument appears twice: once for the INSERT branch, once for UPDATE.
@@ -372,6 +392,14 @@ const (
 	patchServiceProfileSQL = `INSERT INTO resource_profiles_service (resource_id, system_name, repository_url, runtime_env, spec)
 		 VALUES (?, COALESCE(?, ''), COALESCE(?, ''), COALESCE(?, ''), '{}')
 		 ON DUPLICATE KEY UPDATE system_name = COALESCE(?, system_name), repository_url = COALESCE(?, repository_url), runtime_env = COALESCE(?, runtime_env)`
+
+	patchDomainNameProfileSQL = `INSERT INTO resource_profiles_domain_name (resource_id, fqdn, spec)
+		 VALUES (?, COALESCE(?, ''), '{}')
+		 ON DUPLICATE KEY UPDATE fqdn = COALESCE(?, fqdn)`
+
+	patchVirtualIPProfileSQL = `INSERT INTO resource_profiles_virtual_ip (resource_id, ip_address, spec)
+		 VALUES (?, COALESCE(?, ''), '{}')
+		 ON DUPLICATE KEY UPDATE ip_address = COALESCE(?, ip_address)`
 )
 
 // upsertProfileTx writes the typed profile row inside the create-with-profile
@@ -395,6 +423,12 @@ func upsertProfileTx(ctx context.Context, tx *sql.Tx, resourceID uint64, resourc
 	case model.ResourceTypeService:
 		_, err := tx.ExecContext(ctx, upsertServiceProfileSQL, resourceID,
 			profileFieldString(fields, "systemName"), profileFieldString(fields, "repositoryUrl"), profileFieldString(fields, "runtimeEnv"))
+		return err
+	case model.ResourceTypeDomainName:
+		_, err := tx.ExecContext(ctx, upsertDomainNameProfileSQL, resourceID, profileFieldString(fields, "fqdn"))
+		return err
+	case model.ResourceTypeVirtualIP:
+		_, err := tx.ExecContext(ctx, upsertVirtualIPProfileSQL, resourceID, profileFieldString(fields, "ipAddress"))
 		return err
 	default:
 		return service.ErrProfileNotSupported
@@ -491,6 +525,14 @@ func patchProfile(ctx context.Context, execer sqlExecer, resourceID uint64, reso
 		runtimeEnv := profileFieldStringPtr(fields, "runtimeEnv")
 		_, err := execer.ExecContext(ctx, patchServiceProfileSQL, resourceID, systemName, repositoryUrl, runtimeEnv, systemName, repositoryUrl, runtimeEnv)
 		return err
+	case model.ResourceTypeDomainName:
+		fqdn := profileFieldStringPtr(fields, "fqdn")
+		_, err := execer.ExecContext(ctx, patchDomainNameProfileSQL, resourceID, fqdn, fqdn)
+		return err
+	case model.ResourceTypeVirtualIP:
+		ipAddress := profileFieldStringPtr(fields, "ipAddress")
+		_, err := execer.ExecContext(ctx, patchVirtualIPProfileSQL, resourceID, ipAddress, ipAddress)
+		return err
 	default:
 		return service.ErrProfileNotSupported
 	}
@@ -516,6 +558,16 @@ func (r *ResourceRepository) UpsertServiceProfile(ctx context.Context, resourceI
 	return err
 }
 
+func (r *ResourceRepository) UpsertDomainNameProfile(ctx context.Context, resourceID uint64, fqdn string) error {
+	_, err := r.db.ExecContext(ctx, upsertDomainNameProfileSQL, resourceID, fqdn)
+	return err
+}
+
+func (r *ResourceRepository) UpsertVirtualIPProfile(ctx context.Context, resourceID uint64, ipAddress string) error {
+	_, err := r.db.ExecContext(ctx, upsertVirtualIPProfileSQL, resourceID, ipAddress)
+	return err
+}
+
 func (r *ResourceRepository) DeleteProfile(ctx context.Context, resourceID uint64, resourceType string) error {
 	return deleteProfile(ctx, r.db, resourceID, resourceType)
 }
@@ -526,6 +578,8 @@ func deleteProfile(ctx context.Context, execer sqlExecer, resourceID uint64, res
 		"database_instance": "resource_profiles_database_instance",
 		"database_cluster":  "resource_profiles_database_cluster",
 		"service":           "resource_profiles_service",
+		"domain_name":       "resource_profiles_domain_name",
+		"virtual_ip":        "resource_profiles_virtual_ip",
 	}
 	table, ok := tableMap[resourceType]
 	if !ok {

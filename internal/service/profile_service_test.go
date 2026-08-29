@@ -71,6 +71,24 @@ func (f *fakeProfileRepo) UpsertServiceProfile(_ context.Context, resourceID uin
 	return nil
 }
 
+func (f *fakeProfileRepo) UpsertDomainNameProfile(_ context.Context, resourceID uint64, fqdn string) error {
+	f.upsertedType = "domain_name"
+	f.upsertedFields = map[string]interface{}{
+		"resourceID": resourceID,
+		"fqdn":       fqdn,
+	}
+	return nil
+}
+
+func (f *fakeProfileRepo) UpsertVirtualIPProfile(_ context.Context, resourceID uint64, ipAddress string) error {
+	f.upsertedType = "virtual_ip"
+	f.upsertedFields = map[string]interface{}{
+		"resourceID": resourceID,
+		"ipAddress":  ipAddress,
+	}
+	return nil
+}
+
 func (f *fakeProfileRepo) PatchProfile(_ context.Context, _ uint64, _ model.ResourceType, fields map[string]interface{}) error {
 	f.patchedFields = fields
 	return nil
@@ -260,8 +278,6 @@ func TestProfileServicePutProfileArchived(t *testing.T) {
 
 func TestProfileServicePutProfileUnsupportedType(t *testing.T) {
 	unsupportedTypes := []model.ResourceType{
-		model.ResourceTypeDomainName,
-		model.ResourceTypeVirtualIP,
 		model.ResourceTypeDatabaseProxy,
 		model.ResourceTypeControlPlaneComponent,
 	}
@@ -339,7 +355,7 @@ func TestProfileServicePatchProfileUnsupportedType(t *testing.T) {
 	profileRepo := &fakeProfileRepo{}
 	resourceRepo := &fakeResourceWriteRepo{
 		resources: map[uint64]model.Resource{
-			testResource1ID: makeActiveResource(model.ResourceTypeDomainName),
+			testResource1ID: makeActiveResource(model.ResourceTypeDatabaseProxy),
 		},
 	}
 	svc := NewProfileService(profileRepo, resourceRepo)
@@ -347,6 +363,148 @@ func TestProfileServicePatchProfileUnsupportedType(t *testing.T) {
 	err := svc.PatchProfile(context.Background(), testResource1ID, map[string]interface{}{})
 	if !errors.Is(err, ErrProfileNotSupported) {
 		t.Fatalf("expected ErrProfileNotSupported, got %v", err)
+	}
+}
+
+func TestProfileServicePutProfileDomainNameNormalizesFQDN(t *testing.T) {
+	profileRepo := &fakeProfileRepo{}
+	resourceRepo := &fakeResourceWriteRepo{
+		resources: map[uint64]model.Resource{
+			testResource1ID: makeActiveResource(model.ResourceTypeDomainName),
+		},
+	}
+	svc := NewProfileService(profileRepo, resourceRepo)
+
+	err := svc.PutProfile(context.Background(), testResource1ID, map[string]interface{}{
+		"fqdn": "Example.COM.",
+	})
+	if err != nil {
+		t.Fatalf("expected normalized FQDN to be accepted, got %v", err)
+	}
+	if profileRepo.upsertedType != "domain_name" {
+		t.Fatalf("expected upsertedType domain_name, got %q", profileRepo.upsertedType)
+	}
+	if profileRepo.upsertedFields["fqdn"] != "example.com" {
+		t.Fatalf("expected normalized fqdn example.com, got %#v", profileRepo.upsertedFields["fqdn"])
+	}
+}
+
+func TestProfileServicePutProfileDomainNameRejectsMissingFQDN(t *testing.T) {
+	profileRepo := &fakeProfileRepo{}
+	resourceRepo := &fakeResourceWriteRepo{
+		resources: map[uint64]model.Resource{
+			testResource1ID: makeActiveResource(model.ResourceTypeDomainName),
+		},
+	}
+	svc := NewProfileService(profileRepo, resourceRepo)
+
+	err := svc.PutProfile(context.Background(), testResource1ID, map[string]interface{}{})
+	var ve *ValidationError
+	if !errors.As(err, &ve) {
+		t.Fatalf("expected ValidationError for missing fqdn, got %v", err)
+	}
+	if ve.Fields["fqdn"] == "" {
+		t.Fatalf("expected field-level detail for fqdn, got %#v", ve.Fields)
+	}
+	if profileRepo.upsertedType != "" {
+		t.Fatalf("expected no upsert after missing fqdn, got %q", profileRepo.upsertedType)
+	}
+}
+
+func TestProfileServicePutProfileDomainNameRejectsResolutionTarget(t *testing.T) {
+	profileRepo := &fakeProfileRepo{}
+	resourceRepo := &fakeResourceWriteRepo{
+		resources: map[uint64]model.Resource{
+			testResource1ID: makeActiveResource(model.ResourceTypeDomainName),
+		},
+	}
+	svc := NewProfileService(profileRepo, resourceRepo)
+
+	err := svc.PutProfile(context.Background(), testResource1ID, map[string]interface{}{
+		"fqdn":             "orders.example.com",
+		"resolutionTarget": "10.0.0.10",
+	})
+	var ve *ValidationError
+	if !errors.As(err, &ve) {
+		t.Fatalf("expected ValidationError for resolution target profile text, got %v", err)
+	}
+	if ve.Fields["resolutionTarget"] == "" {
+		t.Fatalf("expected field-level detail for resolutionTarget, got %#v", ve.Fields)
+	}
+	if profileRepo.upsertedType != "" {
+		t.Fatalf("expected no upsert when resolution target is submitted as profile text, got %q", profileRepo.upsertedType)
+	}
+}
+
+func TestProfileServicePutProfileVirtualIPAcceptsSingleAddress(t *testing.T) {
+	profileRepo := &fakeProfileRepo{}
+	resourceRepo := &fakeResourceWriteRepo{
+		resources: map[uint64]model.Resource{
+			testResource1ID: makeActiveResource(model.ResourceTypeVirtualIP),
+		},
+	}
+	svc := NewProfileService(profileRepo, resourceRepo)
+
+	err := svc.PutProfile(context.Background(), testResource1ID, map[string]interface{}{
+		"ipAddress": "2001:db8::1",
+	})
+	if err != nil {
+		t.Fatalf("expected single IPv6 address to be accepted, got %v", err)
+	}
+	if profileRepo.upsertedType != "virtual_ip" {
+		t.Fatalf("expected upsertedType virtual_ip, got %q", profileRepo.upsertedType)
+	}
+	if profileRepo.upsertedFields["ipAddress"] != "2001:db8::1" {
+		t.Fatalf("expected ipAddress 2001:db8::1, got %#v", profileRepo.upsertedFields["ipAddress"])
+	}
+}
+
+func TestProfileServicePutProfileVirtualIPRejectsNonSingleAddress(t *testing.T) {
+	invalid := []string{"10.0.0.1/24", "10.0.0.1:80", "10.0.0.1,10.0.0.2", ""}
+	for _, ip := range invalid {
+		profileRepo := &fakeProfileRepo{}
+		resourceRepo := &fakeResourceWriteRepo{
+			resources: map[uint64]model.Resource{
+				testResource1ID: makeActiveResource(model.ResourceTypeVirtualIP),
+			},
+		}
+		svc := NewProfileService(profileRepo, resourceRepo)
+
+		fields := map[string]interface{}{}
+		if ip != "" {
+			fields["ipAddress"] = ip
+		}
+		err := svc.PutProfile(context.Background(), testResource1ID, fields)
+		var ve *ValidationError
+		if !errors.As(err, &ve) {
+			t.Fatalf("ipAddress %q: expected ValidationError, got %v", ip, err)
+		}
+		if ve.Fields["ipAddress"] == "" {
+			t.Fatalf("ipAddress %q: expected field-level detail, got %#v", ip, ve.Fields)
+		}
+		if profileRepo.upsertedType != "" {
+			t.Fatalf("ipAddress %q: expected no upsert, got %q", ip, profileRepo.upsertedType)
+		}
+	}
+}
+
+func TestProfileServicePatchProfileDomainNameNormalizesSubmittedFQDN(t *testing.T) {
+	profileRepo := &fakeProfileRepo{}
+	resourceRepo := &fakeResourceWriteRepo{
+		resources: map[uint64]model.Resource{
+			testResource1ID: makeActiveResource(model.ResourceTypeDomainName),
+		},
+	}
+	svc := NewProfileService(profileRepo, resourceRepo)
+
+	err := svc.PatchProfile(context.Background(), testResource1ID, map[string]interface{}{
+		"fqdn": "Orders.Example.COM.",
+	})
+	if err != nil {
+		t.Fatalf("expected patched FQDN to be accepted, got %v", err)
+	}
+	if profileRepo.patchedFields["fqdn"] != "orders.example.com" {
+		t.Fatalf("expected normalized patched fqdn orders.example.com, got %#v", profileRepo.patchedFields)
 	}
 }
 
