@@ -1,7 +1,7 @@
 // Package mysql provides MySQL-backed repository implementations.
 // input: database/sql, time, internal/model, internal/service
-// output: resource CRUD, governed identity and batched typed-profile reads, rich inventory filtering, health observations/effective health, observed/effective values, and audited versioned manual overrides
-// pos: MySQL data access for resources, identity, typed-profile projections, current health evidence, effective values, and inventory search
+// output: resource CRUD, governed identity and batched typed-profile reads, rich inventory filtering, health observations/effective health, observed/effective values, audited versioned manual overrides, and atomic ConfirmBulkResourceMutation
+// pos: MySQL data access for resources, identity, typed-profile projections, current health evidence, effective values, inventory search, and audited bulk mutation transactions
 // note: if this file changes, update this header and module README.md.
 package mysql
 
@@ -215,12 +215,12 @@ func (r *ResourceRepository) ConfirmBulkResourceMutation(ctx context.Context, re
 	resources := make(map[uint64]model.Resource, len(ids))
 	snapshots := make([]service.ResourceMutationSnapshot, 0, len(ids))
 	for _, id := range ids {
-		resource, err := lockBulkResource(ctx, tx, id)
+		resource, err := getResourceForUpdate(ctx, tx, id)
 		if err != nil {
 			return service.BulkResourcePreview{}, err
 		}
-		resources[id] = resource
-		snapshots = append(snapshots, bulkResourceSnapshot(resource))
+		resources[id] = *resource
+		snapshots = append(snapshots, bulkResourceSnapshot(*resource))
 	}
 	preview, err := service.PreviewBulkResourceMutation(request, snapshots)
 	if err != nil {
@@ -268,26 +268,6 @@ func (r *ResourceRepository) ConfirmBulkResourceMutation(ctx context.Context, re
 		return preview, err
 	}
 	return preview, nil
-}
-
-func lockBulkResource(ctx context.Context, tx *sql.Tx, id uint64) (model.Resource, error) {
-	var resource model.Resource
-	var rawLabels string
-	err := tx.QueryRowContext(ctx, `select id, resource_subtype, name, display_name, environment_id, owner_id,
-		lifecycle_status, health_status, source, external_id, labels, updated_at
-		from resources where id = ? for update`, id).Scan(
-		&resource.ID, &resource.ResourceSubtype, &resource.Name, &resource.DisplayName,
-		&resource.EnvironmentID, &resource.OwnerID, &resource.LifecycleStatus,
-		&resource.HealthStatus, &resource.Source, &resource.ExternalID,
-		&rawLabels, &resource.UpdatedAt,
-	)
-	if err != nil {
-		return model.Resource{}, err
-	}
-	if err := json.Unmarshal([]byte(rawLabels), &resource.Labels); err != nil {
-		return model.Resource{}, err
-	}
-	return resource, nil
 }
 
 func bulkResourceSnapshot(resource model.Resource) service.ResourceMutationSnapshot {

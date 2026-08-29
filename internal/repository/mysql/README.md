@@ -5,7 +5,8 @@ Data access layer implementing service-layer repository interfaces with raw SQL 
 ## Files
 | File | Responsibility |
 |------|---------------|
-| resource_repository.go | Resource CRUD, governed identity and one-query batched typed-profile reads, latest-per-observer health evidence, effective-health derivation, per-source observed/effective values, and atomic audited identity/manual-override mutations |
+| resource_repository.go | Resource CRUD, governed identity and one-query batched typed-profile reads, latest-per-observer health evidence, effective-health derivation, per-source observed/effective values, atomic audited identity/manual-override mutations, and reviewed bulk mutations in one transaction |
+| bulk_resource_mutation_test.go | SQL-level bulk confirmation transaction coverage using current resource and governed-identity lock queries, including commit and audit-failure rollback |
 | relation_repository.go | Relation queries plus atomic create/delete, effective-health relation/member projections, and topology resource lookup |
 | audit_repository.go | Audit event queries (global and by resource), including pagination, actor/resource search, and JSON field changes |
 | user_repository.go | User credential lookup by email/id; Authorization Version mutators (role/active/password); UpgradePasswordHash for legacy-to-Argon2id migration; CountLegacyHashUsers for operator visibility |
@@ -26,6 +27,7 @@ Data access layer implementing service-layer repository interfaces with raw SQL 
 - `QuerySavedStatementReader`, `QuerySavedStatementWriter` — narrow service-owned interfaces for saved statement access, including atomic parameter-definition replacement
 - `QueryEvidencePersistenceFailures` — dimensionless expvar counter for atomic Execution Evidence Pair persistence failures (Issue #34), readable through the repository's `QueryEvidencePersistenceFailures()` accessor for the service layer
 - `QueryExecutionRepository.InsertExecutionWithAudit` — repository-owned atomic Execution Evidence Pair: one transaction commits the execution-history row and its fixed per-caller audit event (service passes `query.executed` for execution and `related_record_navigation` for navigation, Issue #36); on any failure both roll back, the counter increments once, and one fixed safe log line is emitted
+- `ResourceRepository.ConfirmBulkResourceMutation` — stable-order resource locking, in-transaction re-preview/fingerprint verification, typed field and explicit label mutation, and per-CI field audit in one commit
 - Repository structs satisfy service-layer interfaces
 - `ResourceRepository.PutObservedValues`, `GetEffectiveValues`, `SetManualOverrideWithAudit`, and `ClearManualOverrideWithAudit`
 

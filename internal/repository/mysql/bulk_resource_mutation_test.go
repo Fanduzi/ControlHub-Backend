@@ -8,6 +8,7 @@ package mysql
 import (
 	"context"
 	"errors"
+	"regexp"
 	"testing"
 	"time"
 
@@ -51,24 +52,8 @@ func TestConfirmBulkResourceMutationTransaction(t *testing.T) {
 			}
 			defer db.Close()
 			mock.ExpectBegin()
-			mock.ExpectQuery(`(?s)select id, resource_subtype.*from resources where id = \? for update`).
-				WithArgs(uint64(7)).
-				WillReturnRows(sqlmock.NewRows([]string{
-					"id", "resource_subtype", "name", "display_name", "environment_id", "owner_id",
-					"lifecycle_status", "health_status", "source", "external_id", "labels", "updated_at",
-				}).AddRow(7, "api", "resource-7", "before", 1, 1, "running", "healthy", "manual", "", `{}`, updatedAt))
-			mock.ExpectQuery(`(?s)select id, resource_type.*from resources where id = \? for update`).
-				WithArgs(uint64(7)).
-				WillReturnRows(sqlmock.NewRows([]string{
-					"id", "resource_type", "resource_subtype", "name", "display_name",
-					"environment_id", "owner_id", "lifecycle_status", "health_status",
-					"origin", "labels", "created_at", "updated_at",
-					"archived_at", "archived_by", "archive_reason",
-				}).AddRow(7, "service", "api", "resource-7", "before", 1, 1, "running", "healthy", "manual", `{}`, updatedAt, updatedAt, nil, nil, nil))
-			mock.ExpectQuery(`select alias from resource_aliases`).WithArgs(uint64(7)).
-				WillReturnRows(sqlmock.NewRows([]string{"alias"}))
-			mock.ExpectQuery(`select external_system, external_value from resource_external_identifiers`).WithArgs(uint64(7)).
-				WillReturnRows(sqlmock.NewRows([]string{"external_system", "external_value"}))
+			expectBulkResourceForUpdate(mock, updatedAt)
+			expectBulkResourceForUpdate(mock, updatedAt)
 			mock.ExpectExec(`(?i)update resources`).WillReturnResult(sqlmock.NewResult(0, 1))
 			audit := mock.ExpectExec(`(?i)insert into audit_events`)
 			if tc.auditErr != nil {
@@ -91,4 +76,21 @@ func TestConfirmBulkResourceMutationTransaction(t *testing.T) {
 			}
 		})
 	}
+}
+
+func expectBulkResourceForUpdate(mock sqlmock.Sqlmock, updatedAt time.Time) {
+	mock.ExpectQuery(regexp.QuoteMeta("select " + resourceColumns + " from resources where id = ? for update")).
+		WithArgs(uint64(7)).
+		WillReturnRows(sqlmock.NewRows([]string{
+			"id", "resource_type", "resource_subtype", "name", "display_name",
+			"environment_id", "owner_id", "lifecycle_status", "health_status",
+			"origin", "labels", "created_at", "updated_at",
+			"archived_at", "archived_by", "archive_reason",
+		}).AddRow(7, "service", "api", "resource-7", "before", 1, 1, "running", "healthy", "manual", `{}`, updatedAt, updatedAt, nil, nil, nil))
+	mock.ExpectQuery(regexp.QuoteMeta(`select alias from resource_aliases where resource_id = ? order by alias`)).
+		WithArgs(uint64(7)).
+		WillReturnRows(sqlmock.NewRows([]string{"alias"}))
+	mock.ExpectQuery(regexp.QuoteMeta(`select external_system, external_value from resource_external_identifiers where resource_id = ? order by external_system, external_value`)).
+		WithArgs(uint64(7)).
+		WillReturnRows(sqlmock.NewRows([]string{"external_system", "external_value"}))
 }
