@@ -34,7 +34,7 @@ func (s *scopeMatrixMachineService) Authenticate(_ context.Context, _ string, re
 	return model.MachinePrincipalIdentity{ID: 91, CredentialID: 92, Scopes: []model.MachineScope{s.granted}}, nil
 }
 
-func (*scopeMatrixMachineService) List(context.Context, service.AuthenticatedUser) ([]model.MachinePrincipal, error) {
+func (*scopeMatrixMachineService) List(context.Context, service.AuthenticatedUser) ([]model.MachinePrincipalListItem, error) {
 	return nil, nil
 }
 

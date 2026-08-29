@@ -1,6 +1,6 @@
 // Package service implements business logic for resource management.
 // input: context, crypto/sha256, crypto/subtle, database/sql, errors, fmt, strings, time, unicode/utf8, internal/model
-// output: MachinePrincipalService lifecycle/authentication boundary and repository contract
+// output: MachinePrincipalService lifecycle/authentication boundary, safe admin list, and repository contract
 // pos: Admin-governed machine-principal application service
 // note: if this file changes, update this header and module README.md.
 package service
@@ -45,7 +45,7 @@ type MachineCredentialAuthentication struct {
 }
 
 type MachinePrincipalRepository interface {
-	List(context.Context) ([]model.MachinePrincipal, error)
+	List(context.Context) ([]model.MachinePrincipalListItem, error)
 	Create(context.Context, uint64, string, MachineCredentialInsert) (model.MachinePrincipal, model.MachineCredential, error)
 	Rotate(context.Context, uint64, uint64, MachineCredentialInsert) (model.MachinePrincipal, model.MachineCredential, error)
 	Revoke(context.Context, uint64, uint64, time.Time) error
@@ -53,7 +53,7 @@ type MachinePrincipalRepository interface {
 	MarkUsed(context.Context, uint64, time.Time) error
 }
 
-func (s *MachinePrincipalService) List(ctx context.Context, actor AuthenticatedUser) ([]model.MachinePrincipal, error) {
+func (s *MachinePrincipalService) List(ctx context.Context, actor AuthenticatedUser) ([]model.MachinePrincipalListItem, error) {
 	if err := requireMachinePrincipalAdmin(actor); err != nil {
 		return nil, err
 	}

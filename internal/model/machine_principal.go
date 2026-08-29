@@ -1,6 +1,6 @@
 // Package model provides domain entities for the resource management system.
 // input: fmt and time
-// output: machine-principal records, closed scopes, requests, and bounded credential expiry
+// output: machine-principal records, safe credential lifecycle list metadata, closed scopes, requests, and bounded credential expiry
 // pos: Domain contract and pure rules for machine-principal credentials
 // note: if this file changes, update this header and module README.md.
 package model
@@ -38,10 +38,28 @@ type MachinePrincipal struct {
 	CreatedAt       time.Time `json:"createdAt"`
 }
 
+// MachinePrincipalListItem is the administrator list projection. It exposes
+// only the credential lifecycle fields needed to rotate or revoke after reload.
+type MachinePrincipalListItem struct {
+	ID              uint64                       `json:"id"`
+	Name            string                       `json:"name"`
+	CreatedByUserID uint64                       `json:"createdByUserId"`
+	CreatedAt       time.Time                    `json:"createdAt"`
+	Credentials     []MachineCredentialLifecycle `json:"credentials"`
+}
+
+type MachineCredentialLifecycle struct {
+	ID         uint64     `json:"id"`
+	CreatedAt  time.Time  `json:"createdAt"`
+	ExpiresAt  time.Time  `json:"expiresAt"`
+	LastUsedAt *time.Time `json:"lastUsedAt"`
+	RevokedAt  *time.Time `json:"revokedAt"`
+}
+
 type MachineCredential struct {
 	ID                      uint64         `json:"id"`
 	MachinePrincipalID      uint64         `json:"machinePrincipalId"`
-	LookupID                string         `json:"lookupId"`
+	LookupID                string         `json:"-"`
 	Scopes                  []MachineScope `json:"scopes"`
 	ExpiresAt               time.Time      `json:"expiresAt"`
 	LastUsedAt              *time.Time     `json:"lastUsedAt"`

@@ -1,6 +1,6 @@
 // Package api provides HTTP handlers and routing for the ControlHub REST API.
 // input: context, errors, net/http, chi/v5, internal/model, internal/service
-// output: machine-principal administration handlers and controlled errors
+// output: safe machine-principal lifecycle list, administration handlers, and controlled errors
 // pos: HTTP boundary for one-time machine credential issuance and lifecycle
 // note: if this file changes, update this header and module README.md.
 package api
@@ -16,7 +16,7 @@ import (
 )
 
 type machinePrincipalAPI interface {
-	List(context.Context, service.AuthenticatedUser) ([]model.MachinePrincipal, error)
+	List(context.Context, service.AuthenticatedUser) ([]model.MachinePrincipalListItem, error)
 	Create(context.Context, service.AuthenticatedUser, model.MachinePrincipalCreateRequest) (model.MachineCredentialIssue, error)
 	Rotate(context.Context, service.AuthenticatedUser, uint64, model.MachineCredentialRotateRequest) (model.MachineCredentialIssue, error)
 	Revoke(context.Context, service.AuthenticatedUser, uint64) error
@@ -35,7 +35,7 @@ func handleListMachinePrincipals(svc machinePrincipalAPI) http.HandlerFunc {
 			return
 		}
 		writeJSON(w, http.StatusOK, struct {
-			Items []model.MachinePrincipal `json:"items"`
+			Items []model.MachinePrincipalListItem `json:"items"`
 		}{items})
 	}
 }

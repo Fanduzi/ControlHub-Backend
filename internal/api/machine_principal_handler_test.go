@@ -20,16 +20,18 @@ import (
 )
 
 type fakeMachinePrincipalAPI struct {
-	items       []model.MachinePrincipal
+	items       []model.MachinePrincipalListItem
 	create      model.MachineCredentialIssue
 	rotate      model.MachineCredentialIssue
 	createErr   error
 	rotateErr   error
 	revokeErr   error
 	createdWith model.MachinePrincipalCreateRequest
+	rotatedID   uint64
+	revokedID   uint64
 }
 
-func (f *fakeMachinePrincipalAPI) List(context.Context, service.AuthenticatedUser) ([]model.MachinePrincipal, error) {
+func (f *fakeMachinePrincipalAPI) List(context.Context, service.AuthenticatedUser) ([]model.MachinePrincipalListItem, error) {
 	return f.items, nil
 }
 
@@ -38,11 +40,13 @@ func (f *fakeMachinePrincipalAPI) Create(_ context.Context, _ service.Authentica
 	return f.create, f.createErr
 }
 
-func (f *fakeMachinePrincipalAPI) Rotate(context.Context, service.AuthenticatedUser, uint64, model.MachineCredentialRotateRequest) (model.MachineCredentialIssue, error) {
+func (f *fakeMachinePrincipalAPI) Rotate(_ context.Context, _ service.AuthenticatedUser, credentialID uint64, _ model.MachineCredentialRotateRequest) (model.MachineCredentialIssue, error) {
+	f.rotatedID = credentialID
 	return f.rotate, f.rotateErr
 }
 
-func (f *fakeMachinePrincipalAPI) Revoke(context.Context, service.AuthenticatedUser, uint64) error {
+func (f *fakeMachinePrincipalAPI) Revoke(_ context.Context, _ service.AuthenticatedUser, credentialID uint64) error {
+	f.revokedID = credentialID
 	return f.revokeErr
 }
 
@@ -55,7 +59,7 @@ func machinePrincipalRouter(svc machinePrincipalAPI) http.Handler {
 func TestMachinePrincipalAdminRoutes(t *testing.T) {
 	secret := "chmp_plaintext-must-only-appear-here"
 	svc := &fakeMachinePrincipalAPI{
-		items:  []model.MachinePrincipal{{ID: 1, Name: "inventory-agent"}},
+		items:  []model.MachinePrincipalListItem{{ID: 1, Name: "inventory-agent"}},
 		create: model.MachineCredentialIssue{Principal: model.MachinePrincipal{ID: 2, Name: "created"}, Credential: model.MachineCredential{ID: 3}, Secret: secret},
 		rotate: model.MachineCredentialIssue{Principal: model.MachinePrincipal{ID: 2, Name: "created"}, Credential: model.MachineCredential{ID: 4}, Secret: secret},
 	}
@@ -109,13 +113,80 @@ func TestMachinePrincipalAdminRoutes(t *testing.T) {
 	}
 }
 
+func TestMachinePrincipalListReturnsSafeCredentialLifecycleMetadata(t *testing.T) {
+	createdAt := time.Date(2026, 8, 30, 12, 0, 0, 0, time.UTC)
+	lastUsedAt := createdAt.Add(time.Hour)
+	revokedAt := createdAt.Add(2 * time.Hour)
+	router := machinePrincipalRouter(&fakeMachinePrincipalAPI{items: []model.MachinePrincipalListItem{{
+		ID: 1, Name: "inventory-agent", CreatedByUserID: 7, CreatedAt: createdAt,
+		Credentials: []model.MachineCredentialLifecycle{
+			{ID: 20, CreatedAt: createdAt, ExpiresAt: createdAt.Add(30 * 24 * time.Hour), LastUsedAt: &lastUsedAt},
+			{ID: 21, CreatedAt: createdAt, ExpiresAt: createdAt.Add(30 * 24 * time.Hour), RevokedAt: &revokedAt},
+		},
+	}}})
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/admin/machine-principals", nil)
+	req.Header.Set("Authorization", "Bearer "+ssAdminToken(t))
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("list = %d, want 200: %s", rec.Code, rec.Body.String())
+	}
+	for _, required := range []string{"\"credentials\"", "\"id\":20", "\"createdAt\"", "\"expiresAt\"", "\"lastUsedAt\"", "\"revokedAt\""} {
+		if !strings.Contains(rec.Body.String(), required) {
+			t.Fatalf("list missing %s: %s", required, rec.Body.String())
+		}
+	}
+	for _, forbidden := range []string{"secret", "hash", "lookup", "scope", "machinePrincipalId", "rotatedFromCredentialId"} {
+		if strings.Contains(strings.ToLower(rec.Body.String()), strings.ToLower(forbidden)) {
+			t.Fatalf("list exposed %q: %s", forbidden, rec.Body.String())
+		}
+	}
+}
+
+func TestMachinePrincipalListCredentialIDDrivesLifecycleRoutes(t *testing.T) {
+	const credentialID = 20
+	svc := &fakeMachinePrincipalAPI{
+		items:  []model.MachinePrincipalListItem{{ID: 1, Credentials: []model.MachineCredentialLifecycle{{ID: credentialID}}}},
+		rotate: model.MachineCredentialIssue{Credential: model.MachineCredential{ID: 21}, Secret: "one-time"},
+	}
+	router := machinePrincipalRouter(svc)
+	list := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodGet, "/admin/machine-principals", nil)
+	request.Header.Set("Authorization", "Bearer "+ssAdminToken(t))
+	router.ServeHTTP(list, request)
+	if list.Code != http.StatusOK || !strings.Contains(list.Body.String(), `"id":20`) {
+		t.Fatalf("list = %d: %s", list.Code, list.Body.String())
+	}
+	for _, tc := range []struct {
+		path, body string
+		want       int
+	}{
+		{"/admin/machine-credentials/20/rotate", `{"scopes":["inventory:read"]}`, http.StatusCreated},
+		{"/admin/machine-credentials/20/revoke", "", http.StatusNoContent},
+	} {
+		rec := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodPost, tc.path, strings.NewReader(tc.body))
+		req.Header.Set("Authorization", "Bearer "+ssAdminToken(t))
+		if tc.body != "" {
+			req.Header.Set("Content-Type", "application/json")
+		}
+		router.ServeHTTP(rec, req)
+		if rec.Code != tc.want {
+			t.Fatalf("%s = %d, want %d: %s", tc.path, rec.Code, tc.want, rec.Body.String())
+		}
+	}
+	if svc.rotatedID != credentialID || svc.revokedID != credentialID {
+		t.Fatalf("lifecycle IDs = rotate %d revoke %d, want listed %d", svc.rotatedID, svc.revokedID, credentialID)
+	}
+}
+
 type fakeMachineCredentialRepo struct {
 	auth service.MachineCredentialAuthentication
 	err  error
 	used bool
 }
 
-func (f *fakeMachineCredentialRepo) List(context.Context) ([]model.MachinePrincipal, error) {
+func (f *fakeMachineCredentialRepo) List(context.Context) ([]model.MachinePrincipalListItem, error) {
 	return nil, nil
 }
 func (f *fakeMachineCredentialRepo) Create(context.Context, uint64, string, service.MachineCredentialInsert) (model.MachinePrincipal, model.MachineCredential, error) {
@@ -192,7 +263,7 @@ type recordingMachineCredentialRepo struct {
 	auth service.MachineCredentialAuthentication
 }
 
-func (r *recordingMachineCredentialRepo) List(context.Context) ([]model.MachinePrincipal, error) {
+func (r *recordingMachineCredentialRepo) List(context.Context) ([]model.MachinePrincipalListItem, error) {
 	return nil, nil
 }
 func (r *recordingMachineCredentialRepo) Create(_ context.Context, _ uint64, name string, c service.MachineCredentialInsert) (model.MachinePrincipal, model.MachineCredential, error) {

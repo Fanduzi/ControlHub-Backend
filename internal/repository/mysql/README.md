@@ -18,7 +18,7 @@ Data access layer implementing service-layer repository interfaces with raw SQL 
 | query_disclosure_repository.go | Phase 38Q governed result-disclosure policy CRUD (insert/update/delete/list/get by scope); duplicate scope insert maps MySQL 1062 to `ErrQueryDisclosurePolicyConflict`, update/get of a missing scope returns `sql.ErrNoRows` (fail-closed), delete is idempotent |
 | query_saved_statement_repository.go | Phase 38W governed saved statements CRUD with ordered parameter definitions and atomic audit (create/update/delete with audit, list with visibility, get by ID) |
 | named_inventory_view_repository.go | Personal/shared named inventory view CRUD, owner-visible listing, and an actor-free shared-only read seam for future machine principals |
-| machine_principal_repository.go | Atomic machine-principal create/credential rotate/revoke with admin audit, hash lookup, and idempotent state-bounded last-used updates |
+| machine_principal_repository.go | Single-query safe lifecycle aggregation plus atomic machine-principal create/credential rotate/revoke with admin audit, hash lookup, and idempotent state-bounded last-used updates |
 | machine_principal_repository_test.go | SQL lifecycle, hash-only arguments, safe audit payload, and rollback coverage with sqlmock |
 | auth_audit_emitter.go | MySQL-backed AuthAuditEmitter — fail-open INSERT for auth/authz audit events; AuthAuditPersistenceFailures fixed-category counter |
 

@@ -1,6 +1,6 @@
 // Package mysql provides MySQL-backed repository implementations.
 // input: context, crypto/sha256, database/sql, encoding/json, fmt, internal/model, internal/service
-// output: atomic hash-only machine-principal credential persistence with administrator audit
+// output: atomic hash-only machine-principal credential persistence, safe lifecycle list metadata, and administrator audit
 // pos: MySQL repository for the independent machine-principal lifecycle
 // note: if this file changes, update this header and module README.md.
 package mysql
@@ -23,19 +23,43 @@ func NewMachinePrincipalRepository(db *sql.DB) *MachinePrincipalRepository {
 	return &MachinePrincipalRepository{db: db}
 }
 
-func (r *MachinePrincipalRepository) List(ctx context.Context) ([]model.MachinePrincipal, error) {
-	rows, err := r.db.QueryContext(ctx, `SELECT id, name, created_by_user_id, created_at FROM machine_principals ORDER BY id`)
+func (r *MachinePrincipalRepository) List(ctx context.Context) ([]model.MachinePrincipalListItem, error) {
+	rows, err := r.db.QueryContext(ctx, `SELECT p.id, p.name, p.created_by_user_id, p.created_at,
+		c.id, c.created_at, c.expires_at, c.last_used_at, c.revoked_at
+		FROM machine_principals p
+		LEFT JOIN machine_principal_credentials c ON c.machine_principal_id = p.id
+		ORDER BY p.id, c.id`)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	items := make([]model.MachinePrincipal, 0)
+	items := make([]model.MachinePrincipalListItem, 0)
+	var current *model.MachinePrincipalListItem
 	for rows.Next() {
-		var item model.MachinePrincipal
-		if err := rows.Scan(&item.ID, &item.Name, &item.CreatedByUserID, &item.CreatedAt); err != nil {
+		var item model.MachinePrincipalListItem
+		var credentialID sql.Null[uint64]
+		var credentialCreatedAt, expiresAt, lastUsedAt, revokedAt sql.NullTime
+		if err := rows.Scan(&item.ID, &item.Name, &item.CreatedByUserID, &item.CreatedAt,
+			&credentialID, &credentialCreatedAt, &expiresAt, &lastUsedAt, &revokedAt); err != nil {
 			return nil, err
 		}
-		items = append(items, item)
+		if current == nil || current.ID != item.ID {
+			item.Credentials = make([]model.MachineCredentialLifecycle, 0)
+			items = append(items, item)
+			current = &items[len(items)-1]
+		}
+		if credentialID.Valid {
+			credential := model.MachineCredentialLifecycle{ID: credentialID.V, CreatedAt: credentialCreatedAt.Time, ExpiresAt: expiresAt.Time}
+			if lastUsedAt.Valid {
+				usedAt := lastUsedAt.Time
+				credential.LastUsedAt = &usedAt
+			}
+			if revokedAt.Valid {
+				revoked := revokedAt.Time
+				credential.RevokedAt = &revoked
+			}
+			current.Credentials = append(current.Credentials, credential)
+		}
 	}
 	return items, rows.Err()
 }

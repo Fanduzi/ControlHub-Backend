@@ -56,7 +56,7 @@ HTTP handlers, chi routing, CORS middleware, and fake-repo test infrastructure.
 | GET | /query-targets | `governed-select` machine scope or authenticated user |
 | GET | /audit-events and /resources/{id}/audit-events | `audit:read` machine scope or admin user |
 | GET | /inventory/views | `named-views:read` returns shared views only for machines; users retain personal/shared behavior |
-| GET/POST | /admin/machine-principals | Admin user machine-principal administration |
+| GET/POST | /admin/machine-principals | Admin machine-principal administration; GET includes only credential IDs and lifecycle timestamps for reload-safe rotate/revoke |
 | POST | /admin/machine-credentials/{credentialId}/rotate or /revoke | Admin user credential lifecycle administration |
 | POST | /resources/{id}/health-observations | Store an observer's latest operational health evidence without inventory audit |
 | POST | /admin/ingestions/preview | Admin-only bounded CSV/JSON upload preview; no writes; returns exact-match create/update/conflict rows and fingerprint |

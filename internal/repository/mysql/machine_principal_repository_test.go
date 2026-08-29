@@ -58,6 +58,44 @@ func TestMachinePrincipalRepositoryCreateCommitsHashAndSafeAudit(t *testing.T) {
 	}
 }
 
+func TestMachinePrincipalRepositoryListAggregatesSafeLifecycleMetadata(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock.New: %v", err)
+	}
+	defer db.Close()
+	createdAt := time.Date(2026, 8, 30, 12, 0, 0, 0, time.UTC)
+	lastUsedAt := createdAt.Add(time.Hour)
+	revokedAt := createdAt.Add(2 * time.Hour)
+	maxCredentialID := ^uint64(0)
+	mock.ExpectQuery("SELECT p.id, p.name, p.created_by_user_id, p.created_at").WillReturnRows(sqlmock.NewRows([]string{
+		"principal_id", "principal_name", "created_by_user_id", "principal_created_at", "credential_id", "credential_created_at", "expires_at", "last_used_at", "revoked_at",
+	}).
+		AddRow(10, "inventory agent", 7, createdAt, 20, createdAt, createdAt.Add(30*24*time.Hour), lastUsedAt, nil).
+		AddRow(10, "inventory agent", 7, createdAt, 21, createdAt.Add(time.Minute), createdAt.Add(30*24*time.Hour), nil, revokedAt).
+		AddRow(11, "max-id agent", 7, createdAt, "18446744073709551615", createdAt, createdAt.Add(30*24*time.Hour), nil, nil))
+
+	items, err := NewMachinePrincipalRepository(db).List(t.Context())
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if len(items) != 2 || len(items[0].Credentials) != 2 || items[0].Credentials[0].ID != 20 || items[0].Credentials[0].LastUsedAt == nil || items[0].Credentials[1].RevokedAt == nil || items[1].Credentials[0].ID != maxCredentialID {
+		t.Fatalf("aggregated lifecycle list = %#v", items)
+	}
+	raw, err := json.Marshal(items)
+	if err != nil {
+		t.Fatalf("marshal lifecycle list: %v", err)
+	}
+	for _, forbidden := range []string{"secret", "hash", "lookup", "scope", "machinePrincipalId", "rotatedFromCredentialId"} {
+		if strings.Contains(strings.ToLower(string(raw)), strings.ToLower(forbidden)) {
+			t.Fatalf("list exposed %q: %s", forbidden, raw)
+		}
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("unmet expectations: %v", err)
+	}
+}
+
 func TestMachinePrincipalRepositoryCreateRollsBackWhenAuditFails(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	if err != nil {

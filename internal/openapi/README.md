@@ -20,7 +20,7 @@ Embeds and validates the OpenAPI contract served by the API documentation route.
 - `/inventory/views`: authenticated personal/shared named inventory view CRUD; shared mutations are admin-only and personal mutations are owner-only.
 - `/resources/bulk-mutations/preview` and `/resources/bulk-mutations/confirm`: admin-only reviewed bulk mutation contract with per-CI diffs/errors and fingerprint conflict protection.
 - `machineCredential`: independent opaque Bearer scheme; the documented closed route matrix grants inventory, relation/topology, query-target discovery, audit, and shared-only Named View reads without User/session fallback.
-- Machine credential plaintext appears only in `MachineCredentialIssue` create/rotate responses; reusable principal/credential schemas omit it.
+- Machine credential plaintext appears only in `MachineCredentialIssue` create/rotate responses; admin list lifecycle metadata includes only credential ID and created/expires/revoked/last-used timestamps, never lookup IDs or other auth material.
 - `GET /ops/auth-audit-metrics` response schema: fixed admin-only shape with exactly `authAuditPersistenceFailures` and `authAuditSuppressedRejections` counters; carries no identity, request, or credential material
 - `GET /ops/query-evidence-metrics` response schema (Issue #34): fixed admin-only shape with exactly `queryEvidencePersistenceFailures`; carries no identity, target, statement, value, credential, DSN, request, or raw error material
 - `POST /admin/ingestions/preview` and `/confirm` use a strict multipart `format` (`csv` or `json`) plus one bounded `file`; confirm additionally requires the reviewed 64-hex fingerprint and returns a fresh preview in controlled 409 conflict/drift responses.

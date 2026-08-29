@@ -92,6 +92,46 @@ func TestOpenAPIMachineCredentialContract(t *testing.T) {
 	}
 }
 
+func TestOpenAPIMachinePrincipalListLifecycleContract(t *testing.T) {
+	loader := openapi3.NewLoader()
+	doc, err := loader.LoadFromData(openapi.YAML)
+	if err != nil {
+		t.Fatalf("load OpenAPI: %v", err)
+	}
+	list := doc.Components.Schemas["MachinePrincipalListItem"]
+	if list == nil || list.Value == nil || list.Value.Properties["credentials"] == nil {
+		t.Fatal("MachinePrincipalListItem must document credential lifecycle metadata")
+	}
+	credential := doc.Components.Schemas["MachineCredentialLifecycle"]
+	if credential == nil || credential.Value == nil {
+		t.Fatal("MachineCredentialLifecycle schema missing")
+	}
+	for _, required := range []string{"id", "createdAt", "expiresAt", "lastUsedAt", "revokedAt"} {
+		if credential.Value.Properties[required] == nil || !containsString(credential.Value.Required, required) {
+			t.Fatalf("MachineCredentialLifecycle.%s must be required", required)
+		}
+	}
+	for _, forbidden := range []string{"secret", "secretHash", "lookupId", "scopes", "machinePrincipalId", "rotatedFromCredentialId"} {
+		if credential.Value.Properties[forbidden] != nil {
+			t.Fatalf("MachineCredentialLifecycle must not expose %s", forbidden)
+		}
+	}
+	for _, forbidden := range []string{"secret", "secretHash", "lookupId"} {
+		if doc.Components.Schemas["MachineCredential"].Value.Properties[forbidden] != nil {
+			t.Fatalf("MachineCredential must not expose %s", forbidden)
+		}
+	}
+}
+
+func containsString(values []string, want string) bool {
+	for _, value := range values {
+		if value == want {
+			return true
+		}
+	}
+	return false
+}
+
 func operationAt(t *testing.T, doc *openapi3.T, path, method string) *openapi3.Operation {
 	t.Helper()
 	item := doc.Paths.Value(path)

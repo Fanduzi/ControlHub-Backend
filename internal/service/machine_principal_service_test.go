@@ -8,13 +8,80 @@ package service
 import (
 	"context"
 	"crypto/sha256"
+	"encoding/json"
 	"errors"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/fan/controlhub/internal/model"
 )
+
+func TestMachinePrincipalServiceListReturnsReloadableLifecycleMetadata(t *testing.T) {
+	createdAt := time.Date(2026, 8, 30, 12, 0, 0, 0, time.UTC)
+	lastUsedAt := createdAt.Add(time.Hour)
+	revokedAt := createdAt.Add(2 * time.Hour)
+	repo := &fakeMachinePrincipalRepository{list: []model.MachinePrincipalListItem{{
+		ID: 10, Name: "inventory agent", CreatedByUserID: 7, CreatedAt: createdAt,
+		Credentials: []model.MachineCredentialLifecycle{
+			{ID: 20, CreatedAt: createdAt, ExpiresAt: createdAt.Add(30 * 24 * time.Hour), LastUsedAt: &lastUsedAt},
+			{ID: 21, CreatedAt: createdAt.Add(time.Minute), ExpiresAt: createdAt.Add(30 * 24 * time.Hour), RevokedAt: &revokedAt},
+		},
+	}}}
+
+	items, err := NewMachinePrincipalService(repo).List(t.Context(), AuthenticatedUser{ID: 7, Role: "admin"})
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if len(items) != 1 || len(items[0].Credentials) != 2 || items[0].Credentials[0].ID != 20 || items[0].Credentials[1].RevokedAt == nil {
+		t.Fatalf("reloadable lifecycle list = %#v", items)
+	}
+	raw, err := json.Marshal(items)
+	if err != nil {
+		t.Fatalf("marshal lifecycle list: %v", err)
+	}
+	for _, forbidden := range []string{"secret", "hash", "lookup", "scope", "machinePrincipalId", "rotatedFromCredentialId"} {
+		if strings.Contains(strings.ToLower(string(raw)), strings.ToLower(forbidden)) {
+			t.Fatalf("lifecycle list exposed %q: %s", forbidden, raw)
+		}
+	}
+}
+
+func TestMachinePrincipalServiceListedCredentialDrivesOverlapAndRevoke(t *testing.T) {
+	now := time.Date(2026, 8, 30, 12, 0, 0, 0, time.UTC)
+	repo := &fakeMachinePrincipalRepository{}
+	svc := NewMachinePrincipalService(repo).WithClock(func() time.Time { return now })
+	admin := AuthenticatedUser{ID: 7, Role: "admin"}
+	oldIssue, err := svc.Create(t.Context(), admin, model.MachinePrincipalCreateRequest{Name: "inventory agent", Scopes: []model.MachineScope{model.MachineScopeInventoryRead}})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	repo.list = []model.MachinePrincipalListItem{{ID: oldIssue.Principal.ID, Credentials: []model.MachineCredentialLifecycle{{ID: oldIssue.Credential.ID, CreatedAt: oldIssue.Credential.CreatedAt, ExpiresAt: oldIssue.Credential.ExpiresAt}}}}
+	items, err := svc.List(t.Context(), admin)
+	if err != nil || len(items) != 1 || len(items[0].Credentials) != 1 {
+		t.Fatalf("List = %#v, %v", items, err)
+	}
+	listedID := items[0].Credentials[0].ID
+	newIssue, err := svc.Rotate(t.Context(), admin, listedID, model.MachineCredentialRotateRequest{Scopes: []model.MachineScope{model.MachineScopeInventoryRead}})
+	if err != nil {
+		t.Fatalf("Rotate listed credential: %v", err)
+	}
+	for name, secret := range map[string]string{"old": oldIssue.Secret, "new": newIssue.Secret} {
+		if _, err := svc.Authenticate(t.Context(), secret, model.MachineScopeInventoryRead); err != nil {
+			t.Fatalf("%s credential during overlap: %v", name, err)
+		}
+	}
+	if err := svc.Revoke(t.Context(), admin, listedID); err != nil {
+		t.Fatalf("Revoke listed credential: %v", err)
+	}
+	if _, err := svc.Authenticate(t.Context(), oldIssue.Secret, model.MachineScopeInventoryRead); !errors.Is(err, ErrMachineCredentialRevoked) {
+		t.Fatalf("listed credential after revoke = %v, want revoked", err)
+	}
+	if _, err := svc.Authenticate(t.Context(), newIssue.Secret, model.MachineScopeInventoryRead); err != nil {
+		t.Fatalf("replacement credential after listed revoke: %v", err)
+	}
+}
 
 func TestMachinePrincipalServiceCreateReturnsSecretOnceAndPersistsHashOnly(t *testing.T) {
 	now := time.Date(2026, 8, 30, 12, 0, 0, 0, time.UTC)
@@ -154,6 +221,7 @@ func TestMachinePrincipalServiceAuthenticateRejectsExpiryAndMissingScope(t *test
 }
 
 type fakeMachinePrincipalRepository struct {
+	list        []model.MachinePrincipalListItem
 	createCalls int
 	created     MachineCredentialInsert
 	rotateCalls int
@@ -163,8 +231,8 @@ type fakeMachinePrincipalRepository struct {
 	used        []uint64
 }
 
-func (f *fakeMachinePrincipalRepository) List(context.Context) ([]model.MachinePrincipal, error) {
-	return nil, nil
+func (f *fakeMachinePrincipalRepository) List(context.Context) ([]model.MachinePrincipalListItem, error) {
+	return f.list, nil
 }
 
 func (f *fakeMachinePrincipalRepository) Create(_ context.Context, actorID uint64, name string, credential MachineCredentialInsert) (model.MachinePrincipal, model.MachineCredential, error) {

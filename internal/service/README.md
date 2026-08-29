@@ -49,8 +49,8 @@ Business logic layer with interface-based repository dependencies. Each service 
 | named_inventory_view_service.go | NamedInventoryViewService — owner-only personal CRUD, admin-only shared mutation, user-visible listing, and shared-only read seam |
 | machine_credential.go | `crypto/rand` opaque credential generation, stable lookup-ID parsing, and SHA-256 lookup hashing |
 | machine_credential_test.go | Pure opaque-token format, entropy-size, parsing, and hash regression tests |
-| machine_principal_service.go | Admin-only create/rotate/revoke and scoped expiry/revoke-aware machine authentication with last-used updates |
-| machine_principal_service_test.go | One-time secret, scope, expiry, revoke, overlap, and admin-boundary service tests |
+| machine_principal_service.go | Admin-only safe lifecycle list/create/rotate/revoke and scoped expiry/revoke-aware machine authentication with last-used updates |
+| machine_principal_service_test.go | Safe list, one-time secret, scope, expiry, reload/revoke, overlap, and admin-boundary service tests |
 | auth_service_test.go | Auth service tests (login, versioned verify, invalidation causes, generic errors) |
 | memory_user_store.go | In-memory UserCredentialRepository for unit/handler tests |
 | dictionary_service_test.go | Dictionary service tests |
@@ -79,7 +79,7 @@ Business logic layer with interface-based repository dependencies. Each service 
 - `ErrResourceNotFound`, resource name/alias/external-identifier conflict sentinels, `ErrInvalidCredentials`, `ErrInvalidToken`, `ErrQueryDisclosureBlocked`
 - `ErrQuerySavedStatementNotFound`, `ErrQueryForbidden` — saved-statement service sentinel errors
 - `NamedInventoryViewService.List/Create/Update/Delete/ListShared` and controlled validation/forbidden/not-found errors
-- `MachinePrincipalService.Create/Rotate/Revoke/Authenticate`, returning plaintext only from create/rotate and never from persisted metadata or authenticated identity
+- `MachinePrincipalService.List/Create/Rotate/Revoke/Authenticate`, returning credential lifecycle IDs/timestamps on list, plaintext only from create/rotate, and never lookup IDs or other auth material from public metadata
 - `ErrQueryDisclosurePolicyConflict`, `ErrQueryDisclosurePolicyNotFound` — disclosure policy CRUD sentinel errors (duplicate scope → 409, missing scope on update → 404)
 - `QueryDisclosureReader`, `QueryDisclosureWriter` — narrow disclosure policy access interfaces
 - `DisclosurePlan`, `ColumnDisclosure` — resolved per-column disclosure decisions
