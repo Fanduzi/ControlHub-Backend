@@ -25,6 +25,8 @@ HTTP handlers, chi routing, CORS middleware, and fake-repo test infrastructure.
 | health_handler_test.go | Health endpoint tests |
 | resource_handler_test.go | Resource and profile endpoint tests, including create-with-profile atomicity, minimum manual identity, service worker subtype, and Domain Name/Virtual IP identity at the HTTP seam |
 | profile_handler_test.go | PUT full-replacement and PATCH partial-merge tests: strict JSON decoding, field validation, no-op empty PATCH, Domain Name FQDN normalize |
+| resource_handler_test.go | Resource and profile endpoint tests, including create-with-profile atomicity at the HTTP seam and Database Proxy/Control Plane identity |
+| profile_handler_test.go | PUT full-replacement and PATCH partial-merge tests: strict JSON decoding, field validation, no-op empty PATCH, Database Proxy role contract |
 | relation_handler_test.go | Relation endpoint tests |
 | audit_handler_test.go | Audit list contract tests, including field-level before/after changes |
 | auth_handler_test.go | Auth endpoint tests |

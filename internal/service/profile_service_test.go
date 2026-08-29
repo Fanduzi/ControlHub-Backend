@@ -1,7 +1,7 @@
 // Package service provides tests for profile write operations.
 // input: internal/service ProfileService, internal/model, testing
 // output: TestProfileService* functions
-// pos: Validates profile write business rules: strict field validation, PUT full replacement, PATCH partial merge
+// pos: Validates profile write business rules: strict field validation, PUT full replacement, PATCH partial merge, Database Proxy/Control Plane identity
 // note: if this file changes, update header and README.md
 package service
 
@@ -73,9 +73,23 @@ func (f *fakeProfileRepo) UpsertServiceProfile(_ context.Context, resourceID uin
 
 func (f *fakeProfileRepo) UpsertDomainNameProfile(_ context.Context, resourceID uint64, fqdn string) error {
 	f.upsertedType = "domain_name"
+	f.upsertedType = "domain_name"
 	f.upsertedFields = map[string]interface{}{
 		"resourceID": resourceID,
 		"fqdn":       fqdn,
+	}
+	return nil
+}
+
+func (f *fakeProfileRepo) UpsertDatabaseProxyProfile(_ context.Context, resourceID uint64, technologySubtype, host string, port int, role, version string) error {
+	f.upsertedType = "database_proxy"
+	f.upsertedFields = map[string]interface{}{
+		"resourceID":        resourceID,
+		"technologySubtype": technologySubtype,
+		"host":              host,
+		"port":              port,
+		"role":              role,
+		"version":           version,
 	}
 	return nil
 }
@@ -85,6 +99,18 @@ func (f *fakeProfileRepo) UpsertVirtualIPProfile(_ context.Context, resourceID u
 	f.upsertedFields = map[string]interface{}{
 		"resourceID": resourceID,
 		"ipAddress":  ipAddress,
+	}
+	return nil
+}
+
+func (f *fakeProfileRepo) UpsertControlPlaneComponentProfile(_ context.Context, resourceID uint64, componentSubtype, endpoint, version, role string) error {
+	f.upsertedType = "control_plane_component"
+	f.upsertedFields = map[string]interface{}{
+		"resourceID":       resourceID,
+		"componentSubtype": componentSubtype,
+		"endpoint":         endpoint,
+		"version":          version,
+		"role":             role,
 	}
 	return nil
 }
@@ -276,10 +302,110 @@ func TestProfileServicePutProfileArchived(t *testing.T) {
 
 // ---------- PutProfile: unsupported type ----------
 
+func TestProfileServicePutProfileDatabaseProxyAcceptsActiveStandbyRole(t *testing.T) {
+	profileRepo := &fakeProfileRepo{}
+	resourceRepo := &fakeResourceWriteRepo{
+		resources: map[uint64]model.Resource{
+			testResource1ID: makeActiveResource(model.ResourceTypeDatabaseProxy),
+		},
+	}
+	svc := NewProfileService(profileRepo, resourceRepo)
+
+	err := svc.PutProfile(context.Background(), testResource1ID, map[string]interface{}{
+		"technologySubtype": "proxysql",
+		"host":              "proxy-prod-01",
+		"port":              6033,
+		"role":              "active",
+		"version":           "2.5.5",
+	})
+	if err != nil {
+		t.Fatalf("expected database_proxy profile to be accepted, got %v", err)
+	}
+	if profileRepo.upsertedType != "database_proxy" {
+		t.Fatalf("expected upsertedType database_proxy, got %q", profileRepo.upsertedType)
+	}
+	if profileRepo.upsertedFields["technologySubtype"] != "proxysql" {
+		t.Fatalf("expected technologySubtype proxysql, got %#v", profileRepo.upsertedFields["technologySubtype"])
+	}
+	if profileRepo.upsertedFields["host"] != "proxy-prod-01" {
+		t.Fatalf("expected host proxy-prod-01, got %#v", profileRepo.upsertedFields["host"])
+	}
+	if profileRepo.upsertedFields["port"] != 6033 {
+		t.Fatalf("expected port 6033, got %#v", profileRepo.upsertedFields["port"])
+	}
+	if profileRepo.upsertedFields["role"] != "active" {
+		t.Fatalf("expected role active, got %#v", profileRepo.upsertedFields["role"])
+	}
+	if profileRepo.upsertedFields["version"] != "2.5.5" {
+		t.Fatalf("expected version 2.5.5, got %#v", profileRepo.upsertedFields["version"])
+	}
+
+	err = svc.PutProfile(context.Background(), testResource1ID, map[string]interface{}{
+		"technologySubtype": "proxysql",
+		"host":              "proxy-prod-01",
+		"port":              6033,
+		"role":              "primary",
+	})
+	var ve *ValidationError
+	if !errors.As(err, &ve) {
+		t.Fatalf("expected ValidationError for non active/standby role, got %v", err)
+	}
+	if ve.Fields["role"] == "" {
+		t.Fatalf("expected field-level detail for role, got %#v", ve.Fields)
+	}
+}
+
+func TestProfileServicePutProfileControlPlaneComponentRejectsAmbiguousHA(t *testing.T) {
+	profileRepo := &fakeProfileRepo{}
+	resourceRepo := &fakeResourceWriteRepo{
+		resources: map[uint64]model.Resource{
+			testResource1ID: makeActiveResource(model.ResourceTypeControlPlaneComponent),
+		},
+	}
+	svc := NewProfileService(profileRepo, resourceRepo)
+
+	err := svc.PutProfile(context.Background(), testResource1ID, map[string]interface{}{
+		"componentSubtype": "ha_monitor",
+		"endpoint":         "http://ha-monitor:10008",
+		"role":             "standby",
+		"version":          "3.2.1",
+	})
+	if err != nil {
+		t.Fatalf("expected control_plane_component profile to be accepted, got %v", err)
+	}
+	if profileRepo.upsertedType != "control_plane_component" {
+		t.Fatalf("expected upsertedType control_plane_component, got %q", profileRepo.upsertedType)
+	}
+	if profileRepo.upsertedFields["componentSubtype"] != "ha_monitor" {
+		t.Fatalf("expected componentSubtype ha_monitor, got %#v", profileRepo.upsertedFields["componentSubtype"])
+	}
+	if profileRepo.upsertedFields["endpoint"] != "http://ha-monitor:10008" {
+		t.Fatalf("expected endpoint http://ha-monitor:10008, got %#v", profileRepo.upsertedFields["endpoint"])
+	}
+	if profileRepo.upsertedFields["role"] != "standby" {
+		t.Fatalf("expected role standby, got %#v", profileRepo.upsertedFields["role"])
+	}
+
+	err = svc.PutProfile(context.Background(), testResource1ID, map[string]interface{}{
+		"componentSubtype": "ha",
+		"endpoint":         "http://ha-monitor:10008",
+		"role":             "active",
+	})
+	var ve *ValidationError
+	if !errors.As(err, &ve) {
+		t.Fatalf("expected ValidationError for ambiguous ha componentSubtype, got %v", err)
+	}
+	if ve.Fields["componentSubtype"] == "" {
+		t.Fatalf("expected field-level detail for componentSubtype, got %#v", ve.Fields)
+	}
+	if profileRepo.upsertedType != "control_plane_component" {
+		t.Fatalf("expected no additional upsert after ambiguous ha, got %q", profileRepo.upsertedType)
+	}
+}
+
 func TestProfileServicePutProfileUnsupportedType(t *testing.T) {
 	unsupportedTypes := []model.ResourceType{
-		model.ResourceTypeDatabaseProxy,
-		model.ResourceTypeControlPlaneComponent,
+		model.ResourceType("unsupported"),
 	}
 
 	for _, rt := range unsupportedTypes {
@@ -355,7 +481,7 @@ func TestProfileServicePatchProfileUnsupportedType(t *testing.T) {
 	profileRepo := &fakeProfileRepo{}
 	resourceRepo := &fakeResourceWriteRepo{
 		resources: map[uint64]model.Resource{
-			testResource1ID: makeActiveResource(model.ResourceTypeDatabaseProxy),
+			testResource1ID: makeActiveResource(model.ResourceType("unsupported")),
 		},
 	}
 	svc := NewProfileService(profileRepo, resourceRepo)

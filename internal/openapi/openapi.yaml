@@ -4685,6 +4685,8 @@ components:
             - host: hostname, ipAddress, osName
             - domain_name: fqdn (required; stored lowercase without a trailing dot; resolution target is not a profile field)
             - virtual_ip: ipAddress (required; a single IPv4 or IPv6 address, not CIDR, port, or an address set)
+            - database_proxy: technologySubtype, host, port, role (active or standby), optional version
+            - control_plane_component: componentSubtype, endpoint, optional version, role (active or standby)
     ResourceCreateInput:
       type: object
       additionalProperties: false

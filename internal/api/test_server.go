@@ -134,6 +134,39 @@ func (f *fakeResourceRepo) UpsertServiceProfile(_ context.Context, resourceID ui
 	return nil
 }
 
+func (f *fakeResourceRepo) UpsertDatabaseProxyProfile(_ context.Context, resourceID uint64, technologySubtype, host string, port int, role, version string) error {
+	res := f.resources[resourceID]
+	f.profiles[resourceID] = &model.ResourceProfileResponse{
+		ResourceID:      res.ID,
+		ResourceType:    model.ResourceTypeDatabaseProxy,
+		ResourceSubtype: res.ResourceSubtype,
+		Profile: map[string]any{
+			"technologySubtype": technologySubtype,
+			"host":              host,
+			"port":              port,
+			"role":              role,
+			"version":           version,
+		},
+	}
+	return nil
+}
+
+func (f *fakeResourceRepo) UpsertControlPlaneComponentProfile(_ context.Context, resourceID uint64, componentSubtype, endpoint, version, role string) error {
+	res := f.resources[resourceID]
+	f.profiles[resourceID] = &model.ResourceProfileResponse{
+		ResourceID:      res.ID,
+		ResourceType:    model.ResourceTypeControlPlaneComponent,
+		ResourceSubtype: res.ResourceSubtype,
+		Profile: map[string]any{
+			"componentSubtype": componentSubtype,
+			"endpoint":         endpoint,
+			"version":          version,
+			"role":             role,
+		},
+	}
+	return nil
+}
+
 func (f *fakeResourceRepo) DeleteProfile(_ context.Context, resourceID uint64, _ string) error {
 	delete(f.profiles, resourceID)
 	return nil
@@ -153,6 +186,10 @@ func (f *fakeResourceRepo) PutProfileWithAudit(ctx context.Context, resourceID u
 		return f.UpsertDomainNameProfile(ctx, resourceID, profileString(fields, "fqdn"))
 	case model.ResourceTypeVirtualIP:
 		return f.UpsertVirtualIPProfile(ctx, resourceID, profileString(fields, "ipAddress"))
+	case model.ResourceTypeDatabaseProxy:
+		return f.UpsertDatabaseProxyProfile(ctx, resourceID, profileString(fields, "technologySubtype"), profileString(fields, "host"), profileInt(fields, "port"), profileString(fields, "role"), profileString(fields, "version"))
+	case model.ResourceTypeControlPlaneComponent:
+		return f.UpsertControlPlaneComponentProfile(ctx, resourceID, profileString(fields, "componentSubtype"), profileString(fields, "endpoint"), profileString(fields, "version"), profileString(fields, "role"))
 	default:
 		return service.ErrProfileNotSupported
 	}
@@ -192,6 +229,10 @@ func (f *fakeResourceRepo) PatchProfile(ctx context.Context, resourceID uint64, 
 		return f.UpsertDomainNameProfile(ctx, resourceID, profileString(merged.Profile, "fqdn"))
 	case model.ResourceTypeVirtualIP:
 		return f.UpsertVirtualIPProfile(ctx, resourceID, profileString(merged.Profile, "ipAddress"))
+	case model.ResourceTypeDatabaseProxy:
+		return f.UpsertDatabaseProxyProfile(ctx, resourceID, profileString(merged.Profile, "technologySubtype"), profileString(merged.Profile, "host"), profileInt(merged.Profile, "port"), profileString(merged.Profile, "role"), profileString(merged.Profile, "version"))
+	case model.ResourceTypeControlPlaneComponent:
+		return f.UpsertControlPlaneComponentProfile(ctx, resourceID, profileString(merged.Profile, "componentSubtype"), profileString(merged.Profile, "endpoint"), profileString(merged.Profile, "version"), profileString(merged.Profile, "role"))
 	default:
 		return service.ErrProfileNotSupported
 	}
@@ -335,10 +376,20 @@ func (f *fakeResourceRepo) CreateResourceWithProfile(ctx context.Context, input 
 		if err == nil {
 			err = f.UpsertDomainNameProfile(ctx, created.ID, profileString(profile, "fqdn"))
 		}
+	case model.ResourceTypeDatabaseProxy:
+		created, err = f.CreateResource(ctx, input)
+		if err == nil {
+			err = f.UpsertDatabaseProxyProfile(ctx, created.ID, profileString(profile, "technologySubtype"), profileString(profile, "host"), profileInt(profile, "port"), profileString(profile, "role"), profileString(profile, "version"))
+		}
 	case model.ResourceTypeVirtualIP:
 		created, err = f.CreateResource(ctx, input)
 		if err == nil {
 			err = f.UpsertVirtualIPProfile(ctx, created.ID, profileString(profile, "ipAddress"))
+		}
+	case model.ResourceTypeControlPlaneComponent:
+		created, err = f.CreateResource(ctx, input)
+		if err == nil {
+			err = f.UpsertControlPlaneComponentProfile(ctx, created.ID, profileString(profile, "componentSubtype"), profileString(profile, "endpoint"), profileString(profile, "version"), profileString(profile, "role"))
 		}
 	default:
 		return nil, service.ErrProfileNotSupported
@@ -574,6 +625,26 @@ func profileToSummary(resourceType model.ResourceType, profile map[string]any) *
 		}
 		if v, ok := profile["role"]; ok {
 			s.Role = fmt.Sprintf("%v", v)
+		}
+		return s
+	case model.ResourceTypeDatabaseProxy:
+		s := &model.ProfileSummary{}
+		if v, ok := profile["host"]; ok {
+			s.Hostname = fmt.Sprintf("%v", v)
+		}
+		if v, ok := profile["port"]; ok {
+			switch p := v.(type) {
+			case float64:
+				s.Port = int(p)
+			case int:
+				s.Port = p
+			}
+		}
+		if v, ok := profile["role"]; ok {
+			s.Role = fmt.Sprintf("%v", v)
+		}
+		if v, ok := profile["version"]; ok {
+			s.Version = fmt.Sprintf("%v", v)
 		}
 		return s
 	case model.ResourceTypeHost:

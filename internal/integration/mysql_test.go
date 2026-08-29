@@ -67,6 +67,8 @@ func TestSchemaUsesBigintPrimaryKeysWithoutForeignKeys(t *testing.T) {
 		"resource_profiles_service",
 		"resource_profiles_domain_name",
 		"resource_profiles_virtual_ip",
+		"resource_profiles_database_proxy",
+		"resource_profiles_control_plane_component",
 		"query_saved_statements",
 		"query_saved_statement_parameters",
 		"audit_events",
@@ -86,6 +88,8 @@ func TestProfileTablesUseUniqueResourceIDInsteadOfPrimaryKeyResourceID(t *testin
 		"resource_profiles_service",
 		"resource_profiles_domain_name",
 		"resource_profiles_virtual_ip",
+		"resource_profiles_database_proxy",
+		"resource_profiles_control_plane_component",
 	}
 	for _, tableName := range profileTables {
 		assertUnsignedBigintColumn(t, db, tableName, "id")
@@ -127,6 +131,8 @@ func assertSchemaChainBaseline(t *testing.T, db *sql.DB) {
 		"resource_profiles_service",
 		"resource_profiles_domain_name",
 		"resource_profiles_virtual_ip",
+		"resource_profiles_database_proxy",
+		"resource_profiles_control_plane_component",
 		"audit_events",
 	}
 	for _, table := range expectedTables {

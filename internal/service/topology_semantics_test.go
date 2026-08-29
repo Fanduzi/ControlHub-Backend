@@ -115,7 +115,7 @@ func buildDatabaseTestRepo() *fakeTopologyRepo {
 			},
 			semanticHAManagerID: {
 				ID: semanticHAManagerID, ResourceType: model.ResourceTypeControlPlaneComponent,
-				ResourceSubtype: "ha", Name: "ha-manager-prod", DisplayName: "HA Manager",
+				ResourceSubtype: "ha_monitor", Name: "ha-manager-prod", DisplayName: "HA Manager",
 				EnvironmentID: semanticEnvProd, OwnerID: semanticOwnerPlatform,
 				LifecycleStatus: "running", HealthStatus: "healthy",
 			},

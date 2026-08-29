@@ -2,6 +2,7 @@
 // input: internal/service write APIs, internal/model, testing
 // output: TestResourceService* and TestRelationService* functions
 // pos: Validates write-side business rules before repository persistence, including core CI manual identity
+// pos: Validates write-side business rules before repository persistence, including Database Proxy/Control Plane typed identity
 // note: if this file changes, update header and README.md
 package service
 
@@ -1242,6 +1243,108 @@ func TestResourceServiceCreateVirtualIPRejectsUnknownSubtypeAndCIDR(t *testing.T
 	}
 	if len(repo.resources) != 0 {
 		t.Fatalf("expected no resource after invalid virtual IP writes, found %d", len(repo.resources))
+	}
+}
+
+func TestResourceServiceCreateDatabaseProxyRequiresTypedProfile(t *testing.T) {
+	repo := &fakeResourceWriteRepo{resources: map[uint64]model.Resource{}}
+	svc := NewResourceService(repo)
+
+	created, err := svc.Create(context.Background(), model.ResourceCreateInput{
+		ResourceType:    model.ResourceTypeDatabaseProxy,
+		ResourceSubtype: "proxysql",
+		Name:            "orders-proxysql-01",
+		DisplayName:     "Orders ProxySQL",
+		EnvironmentID:   testEnvID,
+		OwnerID:         testOwnerID,
+		LifecycleStatus: model.LifecycleStatusRunning,
+		HealthStatus:    model.HealthStatusHealthy,
+		Source:          "manual",
+		Profile: map[string]any{
+			"technologySubtype": "proxysql",
+			"host":              "proxy-prod-01",
+			"port":              6033,
+			"role":              "standby",
+		},
+	})
+	if err != nil {
+		t.Fatalf("expected database_proxy create to succeed, got %v", err)
+	}
+	if created == nil {
+		t.Fatal("expected created resource")
+	}
+	if repo.profile["technologySubtype"] != "proxysql" || repo.profile["role"] != "standby" {
+		t.Fatalf("expected persisted proxy profile, got %#v", repo.profile)
+	}
+
+	_, err = svc.Create(context.Background(), model.ResourceCreateInput{
+		ResourceType:    model.ResourceTypeDatabaseProxy,
+		ResourceSubtype: "proxysql",
+		Name:            "orders-proxysql-missing",
+		DisplayName:     "Orders ProxySQL Missing",
+		EnvironmentID:   testEnvID,
+		OwnerID:         testOwnerID,
+		LifecycleStatus: model.LifecycleStatusRunning,
+		HealthStatus:    model.HealthStatusHealthy,
+		Source:          "manual",
+	})
+	var ve *ValidationError
+	if !errors.As(err, &ve) {
+		t.Fatalf("expected ValidationError for missing proxy identity, got %v", err)
+	}
+	if ve.Fields["host"] == "" || ve.Fields["port"] == "" || ve.Fields["role"] == "" {
+		t.Fatalf("expected host/port/role field errors, got %#v", ve.Fields)
+	}
+}
+
+func TestResourceServiceCreateControlPlaneRejectsAmbiguousHA(t *testing.T) {
+	repo := &fakeResourceWriteRepo{resources: map[uint64]model.Resource{}}
+	svc := NewResourceService(repo)
+
+	_, err := svc.Create(context.Background(), model.ResourceCreateInput{
+		ResourceType:    model.ResourceTypeControlPlaneComponent,
+		ResourceSubtype: "ha",
+		Name:            "ha-manager-ambiguous",
+		DisplayName:     "HA Manager Ambiguous",
+		EnvironmentID:   testEnvID,
+		OwnerID:         testOwnerID,
+		LifecycleStatus: model.LifecycleStatusRunning,
+		HealthStatus:    model.HealthStatusHealthy,
+		Source:          "manual",
+		Profile: map[string]any{
+			"componentSubtype": "ha",
+			"endpoint":         "http://ha:10008",
+			"role":             "active",
+		},
+	})
+	if err == nil {
+		t.Fatal("ambiguous ha subtype must be rejected")
+	}
+
+	created, err := svc.Create(context.Background(), model.ResourceCreateInput{
+		ResourceType:    model.ResourceTypeControlPlaneComponent,
+		ResourceSubtype: "ha_monitor",
+		Name:            "ha-monitor-prod",
+		DisplayName:     "HA Monitor",
+		EnvironmentID:   testEnvID,
+		OwnerID:         testOwnerID,
+		LifecycleStatus: model.LifecycleStatusRunning,
+		HealthStatus:    model.HealthStatusHealthy,
+		Source:          "manual",
+		Profile: map[string]any{
+			"componentSubtype": "ha_monitor",
+			"endpoint":         "http://ha-monitor:10008",
+			"role":             "active",
+		},
+	})
+	if err != nil {
+		t.Fatalf("expected ha_monitor create to succeed, got %v", err)
+	}
+	if created == nil {
+		t.Fatal("expected created resource")
+	}
+	if repo.profile["componentSubtype"] != "ha_monitor" {
+		t.Fatalf("expected persisted ha_monitor profile, got %#v", repo.profile)
 	}
 }
 

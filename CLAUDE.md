@@ -67,6 +67,7 @@ make migrate-down-one # roll back one migration
 **No ORM** — raw `database/sql` with manual `rows.Scan()`. JSON columns (`labels`, `spec`) use `json.Unmarshal`.
 
 **Profile tables** are per-resource-type: `resource_profiles_host`, `resource_profiles_database_instance`, `resource_profiles_database_cluster`, `resource_profiles_service`, `resource_profiles_domain_name`, `resource_profiles_virtual_ip`. Newer resource types (`database_proxy`, `control_plane_component`) have no profile table yet.
+**Profile tables** are per-resource-type: `resource_profiles_host`, `resource_profiles_database_instance`, `resource_profiles_database_cluster`, `resource_profiles_service`, `resource_profiles_database_proxy`, `resource_profiles_control_plane_component`. Newer resource types (`domain_name`, `virtual_ip`) have no profile table yet.
 
 **Audit events** are MySQL-backed for dev; ClickHouse migration planned. No FK constraints on `audit_events` table.
 

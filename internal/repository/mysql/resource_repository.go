@@ -2,6 +2,7 @@
 // input: database/sql, internal/model, internal/service
 // output: NewResourceRepository, ResourceRepository struct (implements service.ResourceRepository)
 // pos: MySQL data access for core resource table, typed profiles including domain_name and virtual_ip, pagination and filtering
+// pos: MySQL data access for core resource table, typed profiles including database_proxy and control_plane_component, pagination and filtering
 // note: if this file changes, update header and README.md
 package mysql
 
@@ -334,11 +335,24 @@ func fetchProfile(ctx context.Context, q profileQueryer, id uint64, resourceType
 		if err == nil {
 			return map[string]any{"fqdn": fqdn}, nil
 		}
+	case model.ResourceTypeDatabaseProxy:
+		var technologySubtype, host, role, version string
+		var port int
+		err = q.QueryRowContext(ctx, `select technology_subtype, host, port, role, version from resource_profiles_database_proxy where resource_id = ?`, id).Scan(&technologySubtype, &host, &port, &role, &version)
+		if err == nil {
+			return map[string]any{"technologySubtype": technologySubtype, "host": host, "port": port, "role": role, "version": version}, nil
+		}
 	case model.ResourceTypeVirtualIP:
 		var ipAddress string
 		err = q.QueryRowContext(ctx, `select ip_address from resource_profiles_virtual_ip where resource_id = ?`, id).Scan(&ipAddress)
 		if err == nil {
 			return map[string]any{"ipAddress": ipAddress}, nil
+		}
+	case model.ResourceTypeControlPlaneComponent:
+		var componentSubtype, endpoint, version, role string
+		err = q.QueryRowContext(ctx, `select component_subtype, endpoint, version, role from resource_profiles_control_plane_component where resource_id = ?`, id).Scan(&componentSubtype, &endpoint, &version, &role)
+		if err == nil {
+			return map[string]any{"componentSubtype": componentSubtype, "endpoint": endpoint, "version": version, "role": role}, nil
 		}
 	default:
 		return map[string]any{}, nil
@@ -396,10 +410,24 @@ const (
 	patchDomainNameProfileSQL = `INSERT INTO resource_profiles_domain_name (resource_id, fqdn, spec)
 		 VALUES (?, COALESCE(?, ''), '{}')
 		 ON DUPLICATE KEY UPDATE fqdn = COALESCE(?, fqdn)`
+	upsertDatabaseProxyProfileSQL = `INSERT INTO resource_profiles_database_proxy (resource_id, technology_subtype, host, port, role, version, spec)
+		 VALUES (?, ?, ?, ?, ?, ?, '{}')
+		 ON DUPLICATE KEY UPDATE technology_subtype = VALUES(technology_subtype), host = VALUES(host), port = VALUES(port), role = VALUES(role), version = VALUES(version)`
 
 	patchVirtualIPProfileSQL = `INSERT INTO resource_profiles_virtual_ip (resource_id, ip_address, spec)
 		 VALUES (?, COALESCE(?, ''), '{}')
 		 ON DUPLICATE KEY UPDATE ip_address = COALESCE(?, ip_address)`
+	upsertControlPlaneComponentProfileSQL = `INSERT INTO resource_profiles_control_plane_component (resource_id, component_subtype, endpoint, version, role, spec)
+		 VALUES (?, ?, ?, ?, ?, '{}')
+		 ON DUPLICATE KEY UPDATE component_subtype = VALUES(component_subtype), endpoint = VALUES(endpoint), version = VALUES(version), role = VALUES(role)`
+
+	patchDatabaseProxyProfileSQL = `INSERT INTO resource_profiles_database_proxy (resource_id, technology_subtype, host, port, role, version, spec)
+		 VALUES (?, COALESCE(?, ''), COALESCE(?, ''), COALESCE(?, 0), COALESCE(?, ''), COALESCE(?, ''), '{}')
+		 ON DUPLICATE KEY UPDATE technology_subtype = COALESCE(?, technology_subtype), host = COALESCE(?, host), port = COALESCE(?, port), role = COALESCE(?, role), version = COALESCE(?, version)`
+
+	patchControlPlaneComponentProfileSQL = `INSERT INTO resource_profiles_control_plane_component (resource_id, component_subtype, endpoint, version, role, spec)
+		 VALUES (?, COALESCE(?, ''), COALESCE(?, ''), COALESCE(?, ''), COALESCE(?, ''), '{}')
+		 ON DUPLICATE KEY UPDATE component_subtype = COALESCE(?, component_subtype), endpoint = COALESCE(?, endpoint), version = COALESCE(?, version), role = COALESCE(?, role)`
 )
 
 // upsertProfileTx writes the typed profile row inside the create-with-profile
@@ -427,8 +455,18 @@ func upsertProfileTx(ctx context.Context, tx *sql.Tx, resourceID uint64, resourc
 	case model.ResourceTypeDomainName:
 		_, err := tx.ExecContext(ctx, upsertDomainNameProfileSQL, resourceID, profileFieldString(fields, "fqdn"))
 		return err
+	case model.ResourceTypeDatabaseProxy:
+		_, err := tx.ExecContext(ctx, upsertDatabaseProxyProfileSQL, resourceID,
+			profileFieldString(fields, "technologySubtype"), profileFieldString(fields, "host"),
+			profileFieldInt(fields, "port"), profileFieldString(fields, "role"), profileFieldString(fields, "version"))
+		return err
 	case model.ResourceTypeVirtualIP:
 		_, err := tx.ExecContext(ctx, upsertVirtualIPProfileSQL, resourceID, profileFieldString(fields, "ipAddress"))
+		return err
+	case model.ResourceTypeControlPlaneComponent:
+		_, err := tx.ExecContext(ctx, upsertControlPlaneComponentProfileSQL, resourceID,
+			profileFieldString(fields, "componentSubtype"), profileFieldString(fields, "endpoint"),
+			profileFieldString(fields, "version"), profileFieldString(fields, "role"))
 		return err
 	default:
 		return service.ErrProfileNotSupported
@@ -529,9 +567,24 @@ func patchProfile(ctx context.Context, execer sqlExecer, resourceID uint64, reso
 		fqdn := profileFieldStringPtr(fields, "fqdn")
 		_, err := execer.ExecContext(ctx, patchDomainNameProfileSQL, resourceID, fqdn, fqdn)
 		return err
+	case model.ResourceTypeDatabaseProxy:
+		technologySubtype := profileFieldStringPtr(fields, "technologySubtype")
+		host := profileFieldStringPtr(fields, "host")
+		port := profileFieldIntPtr(fields, "port")
+		role := profileFieldStringPtr(fields, "role")
+		version := profileFieldStringPtr(fields, "version")
+		_, err := execer.ExecContext(ctx, patchDatabaseProxyProfileSQL, resourceID, technologySubtype, host, port, role, version, technologySubtype, host, port, role, version)
+		return err
 	case model.ResourceTypeVirtualIP:
 		ipAddress := profileFieldStringPtr(fields, "ipAddress")
 		_, err := execer.ExecContext(ctx, patchVirtualIPProfileSQL, resourceID, ipAddress, ipAddress)
+		return err
+	case model.ResourceTypeControlPlaneComponent:
+		componentSubtype := profileFieldStringPtr(fields, "componentSubtype")
+		endpoint := profileFieldStringPtr(fields, "endpoint")
+		version := profileFieldStringPtr(fields, "version")
+		role := profileFieldStringPtr(fields, "role")
+		_, err := execer.ExecContext(ctx, patchControlPlaneComponentProfileSQL, resourceID, componentSubtype, endpoint, version, role, componentSubtype, endpoint, version, role)
 		return err
 	default:
 		return service.ErrProfileNotSupported
@@ -563,8 +616,18 @@ func (r *ResourceRepository) UpsertDomainNameProfile(ctx context.Context, resour
 	return err
 }
 
+func (r *ResourceRepository) UpsertDatabaseProxyProfile(ctx context.Context, resourceID uint64, technologySubtype, host string, port int, role, version string) error {
+	_, err := r.db.ExecContext(ctx, upsertDatabaseProxyProfileSQL, resourceID, technologySubtype, host, port, role, version)
+	return err
+}
+
 func (r *ResourceRepository) UpsertVirtualIPProfile(ctx context.Context, resourceID uint64, ipAddress string) error {
 	_, err := r.db.ExecContext(ctx, upsertVirtualIPProfileSQL, resourceID, ipAddress)
+	return err
+}
+
+func (r *ResourceRepository) UpsertControlPlaneComponentProfile(ctx context.Context, resourceID uint64, componentSubtype, endpoint, version, role string) error {
+	_, err := r.db.ExecContext(ctx, upsertControlPlaneComponentProfileSQL, resourceID, componentSubtype, endpoint, version, role)
 	return err
 }
 
@@ -574,12 +637,14 @@ func (r *ResourceRepository) DeleteProfile(ctx context.Context, resourceID uint6
 
 func deleteProfile(ctx context.Context, execer sqlExecer, resourceID uint64, resourceType string) error {
 	tableMap := map[string]string{
-		"host":              "resource_profiles_host",
-		"database_instance": "resource_profiles_database_instance",
-		"database_cluster":  "resource_profiles_database_cluster",
-		"service":           "resource_profiles_service",
-		"domain_name":       "resource_profiles_domain_name",
-		"virtual_ip":        "resource_profiles_virtual_ip",
+		"host":                    "resource_profiles_host",
+		"database_instance":       "resource_profiles_database_instance",
+		"database_cluster":        "resource_profiles_database_cluster",
+		"service":                 "resource_profiles_service",
+		"domain_name":             "resource_profiles_domain_name",
+		"virtual_ip":              "resource_profiles_virtual_ip",
+		"database_proxy":          "resource_profiles_database_proxy",
+		"control_plane_component": "resource_profiles_control_plane_component",
 	}
 	table, ok := tableMap[resourceType]
 	if !ok {
@@ -1037,6 +1102,8 @@ func (r *ResourceRepository) buildProfileSummary(ctx context.Context, resourceID
 		return r.buildHostProfileSummary(ctx, resourceID)
 	case model.ResourceTypeService:
 		return r.buildServiceProfileSummary(ctx, resourceID)
+	case model.ResourceTypeDatabaseProxy:
+		return r.buildDatabaseProxyProfileSummary(ctx, resourceID)
 	default:
 		return nil
 	}
@@ -1107,6 +1174,24 @@ func (r *ResourceRepository) buildServiceProfileSummary(ctx context.Context, id 
 	}
 	return &model.ProfileSummary{
 		Hostname: systemName,
+	}
+}
+
+func (r *ResourceRepository) buildDatabaseProxyProfileSummary(ctx context.Context, id uint64) *model.ProfileSummary {
+	var host, role, version string
+	var port int
+	err := r.db.QueryRowContext(ctx,
+		`select host, port, role, version from resource_profiles_database_proxy where resource_id = ?`,
+		id,
+	).Scan(&host, &port, &role, &version)
+	if err != nil {
+		return nil
+	}
+	return &model.ProfileSummary{
+		Hostname: host,
+		Port:     port,
+		Role:     role,
+		Version:  version,
 	}
 }
 

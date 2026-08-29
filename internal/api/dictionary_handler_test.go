@@ -2,6 +2,8 @@
 // input: internal/api, internal/model, net/http, net/http/httptest, encoding/json
 // output: TestListEnvironments/Owners/Roles/ResourceTypes/RelationTypes/LifecycleStatuses/HealthStatuses/ResourceSubtypes including service worker
 // pos: Validates all dictionary endpoints return correct items, including Domain Name dns, Virtual IP floating, and service worker
+// output: TestListEnvironments/Owners/Roles/ResourceTypes/RelationTypes/LifecycleStatuses/HealthStatuses/ResourceSubtypes
+// pos: Validates all dictionary endpoints return correct items, including Database Proxy technology subtypes and Control Plane ha_monitor
 // note: if this file changes, update header and README.md
 package api
 
@@ -408,6 +410,51 @@ func TestListResourceSubtypes_DomainNameAndVirtualIP(t *testing.T) {
 		}
 		if len(body.Subtypes) != 1 || body.Subtypes[0].Key != tc.wantKey {
 			t.Fatalf("%s: subtypes = %#v, want [%s]", tc.resourceType, body.Subtypes, tc.wantKey)
+		}
+	}
+}
+
+func TestListResourceSubtypes_DatabaseProxyAndControlPlane(t *testing.T) {
+	server := NewTestServer()
+	cases := []struct {
+		resourceType string
+		wantKey      string
+		wantCount    int
+	}{
+		{"database_proxy", "proxysql", 4},
+		{"control_plane_component", "ha_monitor", 3},
+	}
+	for _, tc := range cases {
+		req := httptest.NewRequest(http.MethodGet, "/resource-subtypes?resourceType="+tc.resourceType, nil)
+		rec := httptest.NewRecorder()
+		server.Router.ServeHTTP(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("%s: expected 200, got %d", tc.resourceType, rec.Code)
+		}
+		var body struct {
+			ResourceType string                 `json:"resourceType"`
+			Subtypes     []model.DictionaryItem `json:"subtypes"`
+		}
+		if err := json.NewDecoder(rec.Body).Decode(&body); err != nil {
+			t.Fatalf("%s: decode: %v", tc.resourceType, err)
+		}
+		if len(body.Subtypes) != tc.wantCount {
+			t.Fatalf("%s: subtypes = %#v, want count %d", tc.resourceType, body.Subtypes, tc.wantCount)
+		}
+		foundWant, foundHA := false, false
+		for _, item := range body.Subtypes {
+			if item.Key == tc.wantKey {
+				foundWant = true
+			}
+			if item.Key == "ha" {
+				foundHA = true
+			}
+		}
+		if !foundWant {
+			t.Fatalf("%s: missing required subtype %s in %#v", tc.resourceType, tc.wantKey, body.Subtypes)
+		}
+		if foundHA {
+			t.Fatalf("%s: ambiguous ha subtype must not be advertised", tc.resourceType)
 		}
 	}
 }

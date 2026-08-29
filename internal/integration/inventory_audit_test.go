@@ -234,3 +234,83 @@ func inventoryAuditResource(name string) model.ResourceCreateInput {
 		Labels:          map[string]string{"team": "operations"},
 	}
 }
+
+func TestInventoryAuditDatabaseProxyAndControlPlaneProfiles(t *testing.T) {
+	db := setupTestDB(t)
+	ctx := context.Background()
+	resources := mysql.NewResourceRepository(db)
+
+	proxy, err := resources.CreateResource(ctx, model.ResourceCreateInput{
+		ResourceType:    model.ResourceTypeDatabaseProxy,
+		ResourceSubtype: "proxysql",
+		Name:            "inventory-audit-proxy",
+		DisplayName:     "Inventory Audit Proxy",
+		EnvironmentID:   envProd,
+		OwnerID:         ownerDBA,
+		LifecycleStatus: model.LifecycleStatusRunning,
+		HealthStatus:    model.HealthStatusHealthy,
+		Source:          "manual",
+		Labels:          map[string]string{},
+	})
+	if err != nil {
+		t.Fatalf("create database proxy: %v", err)
+	}
+	err = resources.PutProfileWithAudit(ctx, proxy.ID, model.ResourceTypeDatabaseProxy, map[string]any{
+		"technologySubtype": "proxysql",
+		"host":              "proxy-prod-01",
+		"port":              6033,
+		"role":              "active",
+		"version":           "2.5.5",
+	}, ownerDBA, "inventory.profile.updated")
+	if err != nil {
+		t.Fatalf("put database proxy profile with audit: %v", err)
+	}
+	assertAuditChangePresent(t, db, proxy.ID, "profile.host", model.AuditChangeAdd)
+	got, err := resources.GetResourceProfile(proxy.ID)
+	if err != nil {
+		t.Fatalf("get database proxy profile: %v", err)
+	}
+	if got.Profile["host"] != "proxy-prod-01" || got.Profile["role"] != "active" {
+		t.Fatalf("database proxy profile = %#v, want host/role identity", got.Profile)
+	}
+
+	control, err := resources.CreateResource(ctx, model.ResourceCreateInput{
+		ResourceType:    model.ResourceTypeControlPlaneComponent,
+		ResourceSubtype: "ha_monitor",
+		Name:            "inventory-audit-ha-monitor",
+		DisplayName:     "Inventory Audit HA Monitor",
+		EnvironmentID:   envProd,
+		OwnerID:         ownerDBA,
+		LifecycleStatus: model.LifecycleStatusRunning,
+		HealthStatus:    model.HealthStatusHealthy,
+		Source:          "manual",
+		Labels:          map[string]string{},
+	})
+	if err != nil {
+		t.Fatalf("create control plane component: %v", err)
+	}
+	err = resources.PutProfileWithAudit(ctx, control.ID, model.ResourceTypeControlPlaneComponent, map[string]any{
+		"componentSubtype": "ha_monitor",
+		"endpoint":         "http://ha-monitor:10008",
+		"role":             "standby",
+	}, ownerDBA, "inventory.profile.updated")
+	if err != nil {
+		t.Fatalf("put control plane profile with audit: %v", err)
+	}
+	assertAuditChangePresent(t, db, control.ID, "profile.endpoint", model.AuditChangeAdd)
+	got, err = resources.GetResourceProfile(control.ID)
+	if err != nil {
+		t.Fatalf("get control plane profile: %v", err)
+	}
+	if got.Profile["componentSubtype"] != "ha_monitor" || got.Profile["endpoint"] != "http://ha-monitor:10008" {
+		t.Fatalf("control plane profile = %#v, want ha_monitor endpoint", got.Profile)
+	}
+
+	var haCount int
+	if err := db.QueryRowContext(ctx, `select count(*) from resources where resource_type = 'control_plane_component' and resource_subtype = 'ha'`).Scan(&haCount); err != nil {
+		t.Fatalf("count ambiguous ha subtypes: %v", err)
+	}
+	if haCount != 0 {
+		t.Fatalf("ambiguous ha subtype remains after migration, count=%d", haCount)
+	}
+}

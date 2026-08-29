@@ -2,6 +2,8 @@
 // input: internal/api test server, internal/model, net/http, net/http/httptest, encoding/json
 // output: TestPutResourceProfile_*, TestPatchResourceProfile_*, TestPutAndPatchDomainNameProfileNormalizeAndRejectResolutionTarget
 // pos: Validates PUT/PATCH profile writes including Domain Name FQDN normalize and resolution-target rejection
+// output: TestPutResourceProfile_*, TestPatchResourceProfile_*
+// pos: Validates PUT full-replacement, PATCH partial-merge, strict JSON decoding, and field validation at the HTTP seam including Database Proxy identity
 // note: if this file changes, update header and README.md
 package api
 
@@ -175,7 +177,6 @@ func TestPatchResourceProfile_RejectsNullBody(t *testing.T) {
 }
 
 func createDomainName(t *testing.T, server *TestServer) uint64 {
-	t.Helper()
 	body := `{
 		"resourceType":"domain_name",
 		"resourceSubtype":"dns",
@@ -197,6 +198,33 @@ func createDomainName(t *testing.T, server *TestServer) uint64 {
 	var resp model.Resource
 	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
 		t.Fatalf("decode created domain name: %v", err)
+	}
+	return resp.ID
+}
+
+func createDatabaseProxy(t *testing.T, server *TestServer) uint64 {
+	t.Helper()
+	body := `{
+		"resourceType":"database_proxy",
+		"resourceSubtype":"proxysql",
+		"name":"profile-proxy-01",
+		"displayName":"Profile Proxy",
+		"environmentId":1,
+		"ownerId":2,
+		"lifecycleStatus":"running",
+		"healthStatus":"healthy",
+		"source":"manual",
+		"profile":{"technologySubtype":"proxysql","host":"proxy-initial","port":6033,"role":"active"}
+	}`
+	req := httptest.NewRequest(http.MethodPost, "/resources", strings.NewReader(body))
+	rec := httptest.NewRecorder()
+	server.Router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("create database proxy: expected 201, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	var resp model.Resource
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode created database proxy: %v", err)
 	}
 	return resp.ID
 }
@@ -226,5 +254,24 @@ func TestPutAndPatchDomainNameProfileNormalizeAndRejectResolutionTarget(t *testi
 	reject := putProfile(t, server, id, `{"fqdn":"orders.example.com","resolutionTarget":"10.0.0.10"}`)
 	if reject.Code == http.StatusNoContent {
 		t.Fatal("resolution target must not be accepted as profile text")
+	}
+}
+
+func TestPutAndPatchDatabaseProxyProfileRejectsPrimaryRole(t *testing.T) {
+	server := NewTestServer()
+	id := createDatabaseProxy(t, server)
+
+	putRec := putProfile(t, server, id, `{"technologySubtype":"proxysql","host":"proxy-prod-01","port":6033,"role":"standby","version":"2.5.5"}`)
+	if putRec.Code != http.StatusNoContent {
+		t.Fatalf("expected 204 for database_proxy PUT, got %d body=%s", putRec.Code, putRec.Body.String())
+	}
+	profile := getProfile(t, server, id)
+	if profile.Profile["role"] != "standby" || profile.Profile["host"] != "proxy-prod-01" {
+		t.Fatalf("expected PUT to persist proxy identity, got %#v", profile.Profile)
+	}
+
+	reject := putProfile(t, server, id, `{"technologySubtype":"proxysql","host":"proxy-prod-01","port":6033,"role":"primary"}`)
+	if reject.Code == http.StatusNoContent {
+		t.Fatal("primary role must not be accepted for database_proxy")
 	}
 }

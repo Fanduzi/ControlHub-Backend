@@ -1,7 +1,7 @@
 // Package service provides business logic for resource reads, writes, and typed profile assembly.
 // input: internal/model (Resource, ResourceProfileResponse, ResourceType, ResourceListQuery, PageInfo, ResourceCreateInput)
 // output: NewResourceService, ResourceService.List/Get/GetProfile/Create, ErrResourceNotFound, ResourceRepository interface
-// pos: Business logic for resource reads with pagination, create-with-profile atomicity, strict profile field validation including Domain Name/Virtual IP identity, and minimum manual identity
+// pos: Business logic for resource reads with pagination, create-with-profile atomicity, strict profile field validation including Domain Name/Virtual IP and Database Proxy/Control Plane identity, and minimum manual identity
 // note: if this file changes, update header and README.md
 package service
 

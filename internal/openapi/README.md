@@ -6,6 +6,7 @@ Embeds and validates the OpenAPI contract served by the API documentation route.
 | File | Responsibility |
 |------|---------------|
 | openapi.yaml | Source OpenAPI contract, including Operator Access Boundary security, inventory audit field diffs, core CI typed-profile identity, Domain Name/Virtual IP profile keys, metrics responses, and the closed Controlled Error Code enum |
+| openapi.yaml | Source OpenAPI contract, including Operator Access Boundary security, inventory audit field diffs, metrics responses, the closed Controlled Error Code enum, and Database Proxy/Control Plane typed profile fields |
 | embed.go | Embeds the YAML for serving and tests |
 | openapi_test.go | Validates schema, topology, pagination, and executions contract tests |
 | operator_access_boundary_test.go | Proves every protected operation documents the status codes its operatoraccess class requires |

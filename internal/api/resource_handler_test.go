@@ -2,6 +2,8 @@
 // input: internal/api, internal/model, net/http, net/http/httptest, encoding/json
 // output: TestListResources*, TestGetResourceProfile_*, TestCreateResource*, TestCreateDomainName*, TestCreateVirtualIP*
 // pos: Validates resource listing with pagination/filtering, per-type profile responses, core CI typed-profile create contracts, and Domain Name/Virtual IP identity at the HTTP seam
+// output: TestListResources*, TestGetResourceProfile_*
+// pos: Validates resource listing with pagination/filtering and per-type profile responses, including Database Proxy/Control Plane create-with-profile
 // note: if this file changes, update header and README.md
 package api
 
@@ -2519,6 +2521,65 @@ func TestCreateDomainNameNormalizesFQDNAndRejectsUnknownSubtype(t *testing.T) {
 	server.Router.ServeHTTP(badRec, badReq)
 	if badRec.Code == http.StatusCreated {
 		t.Fatalf("unknown domain_name subtype must be rejected, got %d body=%s", badRec.Code, badRec.Body.String())
+	}
+}
+
+func TestCreateDatabaseProxyAndControlPlaneProfiles(t *testing.T) {
+	server := NewTestServer()
+	body := `{
+		"resourceType":"database_proxy",
+		"resourceSubtype":"proxysql",
+		"name":"orders-proxysql-01",
+		"displayName":"Orders ProxySQL",
+		"environmentId":1,
+		"ownerId":2,
+		"lifecycleStatus":"running",
+		"healthStatus":"healthy",
+		"source":"manual",
+		"profile":{"technologySubtype":"proxysql","host":"proxy-prod-01","port":6033,"role":"active","version":"2.5.5"}
+	}`
+	req := httptest.NewRequest(http.MethodPost, "/resources", strings.NewReader(body))
+	rec := httptest.NewRecorder()
+	server.Router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("expected 201, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+	var resp model.Resource
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+
+	profileReq := httptest.NewRequest(http.MethodGet, "/resources/"+strconv.FormatUint(resp.ID, 10)+"/profile", nil)
+	profileRec := httptest.NewRecorder()
+	server.Router.ServeHTTP(profileRec, profileReq)
+	if profileRec.Code != http.StatusOK {
+		t.Fatalf("expected 200 for profile fetch, got %d; body: %s", profileRec.Code, profileRec.Body.String())
+	}
+	var profile model.ResourceProfileResponse
+	if err := json.NewDecoder(profileRec.Body).Decode(&profile); err != nil {
+		t.Fatalf("decode profile: %v", err)
+	}
+	if profile.Profile["technologySubtype"] != "proxysql" || profile.Profile["role"] != "active" {
+		t.Fatalf("expected persisted proxy profile, got %#v", profile.Profile)
+	}
+
+	control := `{
+		"resourceType":"control_plane_component",
+		"resourceSubtype":"ha",
+		"name":"ha-manager-ambiguous",
+		"displayName":"HA Manager Ambiguous",
+		"environmentId":1,
+		"ownerId":2,
+		"lifecycleStatus":"running",
+		"healthStatus":"healthy",
+		"source":"manual",
+		"profile":{"componentSubtype":"ha","endpoint":"http://ha:10008","role":"active"}
+	}`
+	badReq := httptest.NewRequest(http.MethodPost, "/resources", strings.NewReader(control))
+	badRec := httptest.NewRecorder()
+	server.Router.ServeHTTP(badRec, badReq)
+	if badRec.Code == http.StatusCreated {
+		t.Fatalf("ambiguous ha subtype must be rejected, got %d body=%s", badRec.Code, badRec.Body.String())
 	}
 }
 

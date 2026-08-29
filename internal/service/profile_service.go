@@ -1,7 +1,7 @@
 // Package service provides business logic for typed profile writes.
 // input: internal/model (ResourceType, Resource), ProfileRepository interface
 // output: NewProfileService, ProfileService.PutProfile/PatchProfile/DeleteProfile, ProfileRepository interface, minimum manual identity validation
-// pos: Business logic for resource profile upserts with archived-resource guard, strict field validation, Domain Name/Virtual IP identity, PATCH partial-merge semantics, and manual-registration identity
+// pos: Business logic for resource profile upserts with archived-resource guard, strict field validation, Domain Name/Virtual IP identity, Database Proxy/Control Plane identity, PATCH partial-merge semantics, and manual-registration identity
 // note: if this file changes, update header and README.md
 package service
 
@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"math"
 	"net"
+	"slices"
 	"strings"
 	"unicode/utf8"
 
@@ -27,6 +28,8 @@ type ProfileRepository interface {
 	UpsertServiceProfile(ctx context.Context, resourceID uint64, systemName, repositoryUrl, runtimeEnv string) error
 	UpsertDomainNameProfile(ctx context.Context, resourceID uint64, fqdn string) error
 	UpsertVirtualIPProfile(ctx context.Context, resourceID uint64, ipAddress string) error
+	UpsertDatabaseProxyProfile(ctx context.Context, resourceID uint64, technologySubtype, host string, port int, role, version string) error
+	UpsertControlPlaneComponentProfile(ctx context.Context, resourceID uint64, componentSubtype, endpoint, version, role string) error
 	// PatchProfile partially updates a typed profile in one atomic statement:
 	// submitted fields are set (explicit empty/zero values honored), omitted
 	// fields keep their current values, and the row is created when absent.
@@ -198,6 +201,21 @@ func (s *ProfileService) writeProfile(ctx context.Context, resourceID uint64, re
 		return s.profileRepo.UpsertVirtualIPProfile(ctx, resourceID,
 			getStringField(fields, "ipAddress"),
 		)
+	case model.ResourceTypeDatabaseProxy:
+		return s.profileRepo.UpsertDatabaseProxyProfile(ctx, resourceID,
+			getStringField(fields, "technologySubtype"),
+			getStringField(fields, "host"),
+			getIntField(fields, "port"),
+			getStringField(fields, "role"),
+			getStringField(fields, "version"),
+		)
+	case model.ResourceTypeControlPlaneComponent:
+		return s.profileRepo.UpsertControlPlaneComponentProfile(ctx, resourceID,
+			getStringField(fields, "componentSubtype"),
+			getStringField(fields, "endpoint"),
+			getStringField(fields, "version"),
+			getStringField(fields, "role"),
+		)
 	default:
 		return ErrProfileNotSupported
 	}
@@ -261,11 +279,12 @@ type profileFieldSpec struct {
 	required bool
 	format   profileFieldFormat
 	identity bool
+	allowed  []string
 }
 
 // profileFieldSchemas is the authoritative per-type profile field contract
 // (docs/superpowers/specs/2026-04-22-resource-crud-redesign.md). Keep in sync
-// with the resource_profiles_* tables in migrations/0001_initial_schema.sql.
+// with the resource_profiles_* tables in migrations/0001_initial_schema.sql and 00019.
 var profileFieldSchemas = map[model.ResourceType][]profileFieldSpec{
 	model.ResourceTypeHost: {
 		{key: "hostname", kind: profileStringField, maxLen: 255, identity: true},
@@ -295,13 +314,27 @@ var profileFieldSchemas = map[model.ResourceType][]profileFieldSpec{
 	model.ResourceTypeVirtualIP: {
 		{key: "ipAddress", kind: profileStringField, maxLen: 64, required: true, format: profileFormatIP},
 	},
+	model.ResourceTypeDatabaseProxy: {
+		{key: "technologySubtype", kind: profileStringField, maxLen: 64, required: true, allowed: []string{"proxysql", "chproxy", "haproxy", "maxscale"}},
+		{key: "host", kind: profileStringField, maxLen: 255, required: true},
+		{key: "port", kind: profileIntField, intMin: 1, intMax: 65535, required: true},
+		{key: "role", kind: profileStringField, maxLen: 64, required: true, allowed: []string{"active", "standby"}},
+		{key: "version", kind: profileStringField, maxLen: 64},
+	},
+	model.ResourceTypeControlPlaneComponent: {
+		{key: "componentSubtype", kind: profileStringField, maxLen: 64, required: true, allowed: []string{"orchestrator", "ha_monitor", "backup_manager"}},
+		{key: "endpoint", kind: profileStringField, maxLen: 255, required: true},
+		{key: "version", kind: profileStringField, maxLen: 64},
+		{key: "role", kind: profileStringField, maxLen: 64, required: true, allowed: []string{"active", "standby"}},
+	},
 }
 
 // validateProfileFields rejects unknown fields, non-string values for string
 // fields, fractional or non-integer values for integer fields, out-of-range
-// integers, and overlong strings. Resource types without a profile table
-// return ErrProfileNotSupported. Explicit empty strings are valid unless the
-// field is required identity. full requires every required identity field.
+// integers, overlong strings, FQDN/IP formats, and values outside allowed enumerations.
+// Resource types without a profile table return ErrProfileNotSupported.
+// Explicit empty strings are valid unless the field is required identity.
+// full requires every required identity field.
 func validateProfileFields(resourceType model.ResourceType, fields map[string]interface{}, full bool) error {
 	specs, ok := profileFieldSchemas[resourceType]
 	if !ok {
@@ -361,6 +394,19 @@ func validateProfileFields(resourceType model.ResourceType, fields map[string]in
 						ve = newValidationError("validation failed")
 					}
 					ve.WithField(key, "must be a single IPv4 or IPv6 address")
+				}
+			}
+			if spec.format == profileFormatNone {
+				if spec.required && s == "" {
+					if ve == nil {
+						ve = newValidationError("validation failed")
+					}
+					ve.WithField(key, spec.key+" is required")
+				} else if s != "" && len(spec.allowed) > 0 && !slices.Contains(spec.allowed, s) {
+					if ve == nil {
+						ve = newValidationError("validation failed")
+					}
+					ve.WithField(key, "must be one of "+fmt.Sprintf("%v", spec.allowed))
 				}
 			}
 		case profileIntField:

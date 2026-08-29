@@ -328,7 +328,7 @@ func classifyEdgeSemanticType(rel model.ResourceRelation, nodeSet map[uint64]*mo
 		return model.EdgeSemanticTraffic
 	case model.RelationTypeManages:
 		if from, ok := nodeSet[rel.FromResourceID]; ok {
-			if from.ResourceSubtype == "ha" {
+			if from.ResourceSubtype == "ha_monitor" {
 				return model.EdgeSemanticMonitoring
 			}
 		}
