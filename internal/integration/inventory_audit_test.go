@@ -314,3 +314,23 @@ func TestInventoryAuditDatabaseProxyAndControlPlaneProfiles(t *testing.T) {
 		t.Fatalf("ambiguous ha subtype remains after migration, count=%d", haCount)
 	}
 }
+
+func assertAuditChangePresent(t *testing.T, db interface {
+	QueryRowContext(context.Context, string, ...any) *sql.Row
+}, targetID uint64, field string, operation model.AuditChangeOperation) {
+	t.Helper()
+	var raw string
+	if err := db.QueryRowContext(context.Background(), `select changes from audit_events where target_resource_id = ? order by id desc limit 1`, targetID).Scan(&raw); err != nil {
+		t.Fatalf("read latest audit change: %v", err)
+	}
+	var changes []model.AuditChange
+	if err := json.Unmarshal([]byte(raw), &changes); err != nil {
+		t.Fatalf("decode latest audit change: %v", err)
+	}
+	for _, change := range changes {
+		if change.Field == field && change.Operation == operation {
+			return
+		}
+	}
+	t.Fatalf("latest audit changes = %#v, want %s %s", changes, operation, field)
+}
