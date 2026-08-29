@@ -2,8 +2,8 @@
 
 // Package integration provides real-MySQL schema proofs for goose migrations.
 // input: database/sql, Testcontainers database, and schema migrations
-// output: migration version, tables, columns, constraints, governed identity, health observations, and seed regression tests
-// pos: real-MySQL schema contract coverage through migration 22, including governed identity, typed profiles, and no foreign keys
+// output: migration version, tables, columns, constraints, governed identity, health observations, effective-value tables, and seed regression tests
+// pos: real-MySQL schema contract coverage through migration 23, including governed identity, typed profiles, and no foreign keys
 // note: if this file changes, update header and README.md
 package integration
 
@@ -74,6 +74,8 @@ func TestSchemaUsesBigintPrimaryKeysWithoutForeignKeys(t *testing.T) {
 		"resource_profiles_virtual_ip",
 		"resource_profiles_database_proxy",
 		"resource_profiles_control_plane_component",
+		"resource_observed_values",
+		"resource_manual_overrides",
 		"query_saved_statements",
 		"query_saved_statement_parameters",
 		"audit_events",

@@ -174,6 +174,9 @@ func (r *ResourceRepository) ClearManualOverrideWithAudit(ctx context.Context, r
 	var raw string
 	var current uint64
 	if err := tx.QueryRowContext(ctx, `select field_value, version from resource_manual_overrides where resource_id = ? and field_name = ? for update`, resourceID, field).Scan(&raw, &current); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return service.ErrResourceNotFound
+		}
 		return err
 	}
 	if current != expectedVersion {

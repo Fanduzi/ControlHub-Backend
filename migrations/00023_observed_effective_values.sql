@@ -10,8 +10,7 @@ create table resource_observed_values (
   field_name varchar(64) not null,
   field_value json not null,
   observed_at datetime(6) not null default current_timestamp(6),
-  primary key (resource_id, source, field_name),
-  constraint fk_resource_observed_values_resource foreign key (resource_id) references resources(id) on delete cascade
+  primary key (resource_id, source, field_name)
 ) engine=innodb default charset=utf8mb4 collate=utf8mb4_0900_ai_ci;
 
 create table resource_manual_overrides (
@@ -21,9 +20,7 @@ create table resource_manual_overrides (
   version bigint unsigned not null,
   updated_by bigint unsigned not null,
   updated_at datetime(6) not null default current_timestamp(6),
-  primary key (resource_id, field_name),
-  constraint fk_resource_manual_overrides_resource foreign key (resource_id) references resources(id) on delete cascade,
-  constraint fk_resource_manual_overrides_actor foreign key (updated_by) references users(id)
+  primary key (resource_id, field_name)
 ) engine=innodb default charset=utf8mb4 collate=utf8mb4_0900_ai_ci;
 
 -- +goose Down
