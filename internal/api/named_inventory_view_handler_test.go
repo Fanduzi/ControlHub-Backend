@@ -1,7 +1,7 @@
 // Package api tests named inventory view HTTP handlers.
 // input: net/http, net/http/httptest, testing, internal/model, internal/service
-// output: named inventory view list/create router contract tests
-// pos: Covers view response metadata, strict create decoding, and controlled errors
+// output: named inventory view authentication, list/create router contract tests
+// pos: Covers route authentication, view response metadata, strict create decoding, and controlled errors
 // note: if this file changes, update this header and README.md.
 package api
 
@@ -61,6 +61,26 @@ func TestNamedInventoryViewListIncludesCanManageShared(t *testing.T) {
 	}
 	if len(response.Items) != 1 || !response.CanManageShared {
 		t.Fatalf("response = %+v, want one item and canManageShared=true", response)
+	}
+}
+
+func TestNamedInventoryViewRoutesRequireAuthentication(t *testing.T) {
+	router := namedInventoryViewRouter(&fakeNamedInventoryViewService{})
+	for _, request := range []struct {
+		method string
+		path   string
+		body   string
+	}{
+		{http.MethodGet, "/inventory/views", ""},
+		{http.MethodPost, "/inventory/views", namedInventoryViewRequestBody},
+		{http.MethodPut, "/inventory/views/1", namedInventoryViewUpdateRequestBody},
+		{http.MethodDelete, "/inventory/views/1", ""},
+	} {
+		rec := httptest.NewRecorder()
+		router.ServeHTTP(rec, ssRequest(request.method, request.path, request.body, ""))
+		if rec.Code != http.StatusUnauthorized {
+			t.Fatalf("%s %s = %d, want 401: %s", request.method, request.path, rec.Code, rec.Body.String())
+		}
 	}
 }
 

@@ -2,9 +2,9 @@
 
 // Package integration provides real-MySQL schema proofs for goose migrations.
 // input: database/sql, Testcontainers database, and schema migrations
-// output: migration version, tables, columns, constraints, governed identity, health observations, effective-value tables, and seed regression tests
-// pos: real-MySQL schema contract coverage through migration 23, including governed identity, typed profiles, and no foreign keys
-// note: if this file changes, update header and README.md
+// output: migration version, tables, columns, constraints, governed identity, health observations, effective-value tables, named views, and seed regression tests
+// pos: real-MySQL schema contract coverage through migration 24, including governed identity, typed profiles, named views, and no foreign keys
+// note: if this file changes, update this header and module README.md.
 package integration
 
 import (
@@ -47,6 +47,7 @@ func TestSchemaUsesBigintPrimaryKeysWithoutForeignKeys(t *testing.T) {
 		"resource_relations":               {"id", "from_resource_id", "to_resource_id"},
 		"query_saved_statements":           {"id", "target_resource_id", "owner_user_id"},
 		"query_saved_statement_parameters": {"id", "statement_id"},
+		"named_inventory_views":            {"id", "owner_user_id"},
 		"audit_events":                     {"id", "actor_user_id", "target_resource_id"},
 	}
 	for tableName, columns := range expectedUnsignedBigintIDs {
@@ -78,6 +79,7 @@ func TestSchemaUsesBigintPrimaryKeysWithoutForeignKeys(t *testing.T) {
 		"resource_manual_overrides",
 		"query_saved_statements",
 		"query_saved_statement_parameters",
+		"named_inventory_views",
 		"audit_events",
 	} {
 		assertNoForeignKeys(t, db, tableName)
@@ -125,8 +127,8 @@ func assertSchemaChainBaseline(t *testing.T, db *sql.DB) {
 	if err != nil {
 		t.Fatalf("query max version: %v", err)
 	}
-	if maxVersion < 22 {
-		t.Fatalf("expected at least 22 migrations applied, got version %d", maxVersion)
+	if maxVersion != 24 {
+		t.Fatalf("migration version = %d, want 24", maxVersion)
 	}
 
 	expectedTables := []string{
@@ -143,6 +145,7 @@ func assertSchemaChainBaseline(t *testing.T, db *sql.DB) {
 		"resource_profiles_database_proxy",
 		"resource_profiles_control_plane_component",
 		"audit_events",
+		"named_inventory_views",
 	}
 	for _, table := range expectedTables {
 		if !tableExists(t, db, table) {

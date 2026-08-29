@@ -80,6 +80,13 @@ func TestNamedInventoryViewContract(t *testing.T) {
 	if len(otherVisible) != 1 || otherVisible[0].ID != shared.ID {
 		t.Fatalf("other views = %+v, want shared only", otherVisible)
 	}
+	sharedOnly, err := views.ListShared(ctx)
+	if err != nil {
+		t.Fatalf("list shared-only seam: %v", err)
+	}
+	if len(sharedOnly) != 1 || sharedOnly[0].ID != shared.ID {
+		t.Fatalf("shared-only views = %+v, want shared view", sharedOnly)
+	}
 	if got, want := mustJSON(t, ownerVisible[0].State), mustJSON(t, state); got != want {
 		t.Fatalf("state round-trip = %s, want %s", got, want)
 	}

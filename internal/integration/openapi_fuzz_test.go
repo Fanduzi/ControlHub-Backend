@@ -1,9 +1,9 @@
 //go:build integration
 
 // Package integration provides MySQL-backed integration tests.
-// input: disposable MySQL, API router, Schemathesis CLI
-// output: OpenAPI fuzz integration coverage
-// pos: Verifies the served contract with authenticated generated requests
+// input: disposable MySQL, fully wired API router, net/http/httptest, Schemathesis CLI
+// output: OpenAPI fuzz integration coverage for every served operation
+// pos: Verifies the production dependency graph and served contract with authenticated generated requests
 // note: if this file changes, update header and README.md
 package integration
 
@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -125,11 +126,23 @@ func TestOpenAPIFuzz(t *testing.T) {
 			service.NewMySQLSchemaInspector(),
 			queryTargetRepo,
 		),
+		NamedInventoryViewService: service.NewNamedInventoryViewService(mysql.NewNamedInventoryViewRepository(db)),
 		QueryExecutionAuth: api.QueryExecutionAuthConfig{
 			Clock: time.Now,
 		},
 	}
 	router := api.NewRouter(deps)
+	for _, method := range []string{http.MethodGet, http.MethodPost, http.MethodPut, http.MethodDelete} {
+		path := "/inventory/views"
+		if method == http.MethodPut || method == http.MethodDelete {
+			path += "/1"
+		}
+		recorder := httptest.NewRecorder()
+		router.ServeHTTP(recorder, httptest.NewRequest(method, path, nil))
+		if recorder.Code == http.StatusNotFound {
+			t.Fatalf("fuzz router omitted %s %s", method, path)
+		}
+	}
 
 	server := &http.Server{Handler: router}
 	// Start server in background.

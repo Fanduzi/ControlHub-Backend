@@ -251,7 +251,7 @@ If Schemathesis finds contract violations, the test fails with a summary. Report
 
 ## Architecture
 
-ControlHub is a read-heavy resource management backend exposing dictionary-driven APIs for a frontend console. Resources are typed entities (8 types) linked by directed relations (7 types), with immutable origin, environment-scoped aliases, globally unique external identifiers, per-type profile projections, and a taxonomy system of static dictionaries. Manual registration of host, database instance, database cluster, and service requires that type's typed-profile minimum identity; service taxonomy includes worker. Domain Name uses subtype `dns` and a required normalized FQDN; Virtual IP uses subtype `floating` and a required single IP address.
+ControlHub is a read-heavy resource management backend exposing dictionary-driven APIs for a frontend console. Resources are typed entities (8 types) linked by directed relations (7 types), with immutable origin, environment-scoped aliases, globally unique external identifiers, per-type profile projections, named personal/shared Inventory views, and a taxonomy system of static dictionaries. Manual registration of host, database instance, database cluster, and service requires that type's typed-profile minimum identity; service taxonomy includes worker. Domain Name uses subtype `dns` and a required normalized FQDN; Virtual IP uses subtype `floating` and a required single IP address.
 
 ### Modules
 
@@ -284,6 +284,10 @@ Dependency flow (strict, one-directional): `cmd/server` → `api` → `service` 
 | GET | /resources/{id}/relations | List relations for a resource |
 | GET | /resources/{id}/audit-events | List audit events for a resource |
 | GET | /audit-events | List audit events |
+| GET | /inventory/views | List owned personal and shared Inventory views |
+| POST | /inventory/views | Create a personal or admin-shared Inventory view |
+| PUT | /inventory/views/{viewId} | Update an owned personal or admin-managed shared view |
+| DELETE | /inventory/views/{viewId} | Delete an owned personal or admin-managed shared view |
 | GET | /environments | List environments |
 | GET | /owners | List owners |
 | GET | /roles | List roles |
@@ -308,7 +312,8 @@ mutations, audit reads, and operational metrics reads (auth-audit and
 query-evidence metrics). Handler-admin operations cover credential writes and
 all disclosure-policy operations, including GET. Saved-statement mutations are
 not a router-wide admin gate: Phase 38R authorizes personal statements by owner
-and shared templates by admin role.
+and shared templates by admin role. Named Inventory views follow the same
+owner/admin split while remaining readable as shared views by every user.
 
 Resource list and detail responses include effective `healthStatus`,
 `healthFreshness` (`fresh`, `stale`, or `never`), `healthObservedAt`,

@@ -1,3 +1,8 @@
+-- input: application-owned user IDs and reusable Inventory search presentation state at schema version 21
+-- output: named_inventory_views table at schema version 24 with no foreign keys
+-- pos: forward-only persistence for personal and shared named Inventory views
+-- note: if this file changes, update this header and internal/repository/mysql/README.md.
+
 -- +goose Up
 -- Named inventory views persist reusable search presentation state only.
 -- User identity integrity is enforced by the application; no foreign keys.

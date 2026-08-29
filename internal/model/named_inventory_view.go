@@ -84,6 +84,14 @@ func (r NamedInventoryViewUpdateRequest) Validate() error {
 }
 
 func (s NamedInventoryViewState) Validate() error {
+	for _, id := range s.Filters.EnvironmentIDs {
+		if id == 0 {
+			return fmt.Errorf("environment ids must be positive")
+		}
+	}
+	if s.Filters.OwnerID != nil && *s.Filters.OwnerID == 0 {
+		return fmt.Errorf("owner id must be positive")
+	}
 	if s.Sort.Field == "" || (s.Sort.Direction != "asc" && s.Sort.Direction != "desc") {
 		return fmt.Errorf("sort field and asc or desc direction are required")
 	}
