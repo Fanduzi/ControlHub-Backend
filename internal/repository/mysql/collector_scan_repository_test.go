@@ -1,7 +1,7 @@
 // Package mysql tests collector scan ledger persistence.
 // input: context, crypto/sha256, database/sql, errors, testing, time, sqlmock, and collector scan models
-// output: caller-owned transaction, exact-retry idempotency, typed-conflict, and rollback coverage
-// pos: Focused SQL contract for the collector completed-scan ledger primitive
+// output: caller-owned transaction, ledger idempotency/conflict, and collector CI state transition coverage
+// pos: Focused SQL contract for collector ledger and per-principal/per-CI state primitives
 // note: if this file changes, update this header and module README.md.
 package mysql
 
@@ -170,6 +170,161 @@ func TestInsertCollectorScanLedgerExactRetryReturnsPriorID(t *testing.T) {
 	}
 	if err := tx.Commit(); err != nil {
 		t.Fatalf("Commit: %v", err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("unmet expectations: %v", err)
+	}
+}
+
+func TestApplyCollectorScanStatesRediscoveryClearsMissingState(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock.New: %v", err)
+	}
+	defer db.Close()
+	missingSince := time.Date(2026, 8, 30, 10, 0, 0, 0, time.UTC)
+	completedAt := missingSince.Add(time.Hour)
+
+	mock.ExpectBegin()
+	mock.ExpectQuery("select resource_id, consecutive_complete_scan_omissions, last_seen_collector_scan_id, last_completed_collector_scan_id, missing_since").
+		WithArgs(uint64(7)).
+		WillReturnRows(sqlmock.NewRows([]string{"resource_id", "consecutive_complete_scan_omissions", "last_seen_collector_scan_id", "last_completed_collector_scan_id", "missing_since"}).
+			AddRow(11, 3, "scan-old", "scan-old", missingSince))
+	mock.ExpectExec("update collector_ci_scan_states").
+		WithArgs(uint8(0), "scan-new", "scan-new", nil, uint64(7), uint64(11)).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectCommit()
+	tx, err := db.BeginTx(t.Context(), nil)
+	if err != nil {
+		t.Fatalf("BeginTx: %v", err)
+	}
+
+	err = ApplyCollectorScanStates(t.Context(), tx, 7, 41, model.CollectorScan{
+		ID:          "scan-new",
+		Result:      model.CollectorScanResultComplete,
+		CompletedAt: completedAt,
+	}, []uint64{11})
+	if err != nil {
+		t.Fatalf("ApplyCollectorScanStates: %v", err)
+	}
+	if err := tx.Commit(); err != nil {
+		t.Fatalf("Commit: %v", err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("unmet expectations: %v", err)
+	}
+}
+
+func TestApplyCollectorScanStatesThirdCompleteOmissionBecomesMissing(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock.New: %v", err)
+	}
+	defer db.Close()
+	completedAt := time.Date(2026, 8, 30, 12, 0, 0, 0, time.UTC)
+
+	mock.ExpectBegin()
+	mock.ExpectQuery("select resource_id, consecutive_complete_scan_omissions, last_seen_collector_scan_id, last_completed_collector_scan_id, missing_since").
+		WithArgs(uint64(7)).
+		WillReturnRows(sqlmock.NewRows([]string{"resource_id", "consecutive_complete_scan_omissions", "last_seen_collector_scan_id", "last_completed_collector_scan_id", "missing_since"}).
+			AddRow(11, 2, "scan-seen", "scan-2", nil))
+	mock.ExpectExec("update collector_ci_scan_states").
+		WithArgs(uint8(3), "scan-seen", "scan-3", completedAt, uint64(7), uint64(11)).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectCommit()
+	tx, err := db.BeginTx(t.Context(), nil)
+	if err != nil {
+		t.Fatalf("BeginTx: %v", err)
+	}
+
+	err = ApplyCollectorScanStates(t.Context(), tx, 7, 41, model.CollectorScan{
+		ID:          "scan-3",
+		Result:      model.CollectorScanResultComplete,
+		CompletedAt: completedAt,
+	}, nil)
+	if err != nil {
+		t.Fatalf("ApplyCollectorScanStates: %v", err)
+	}
+	if err := tx.Commit(); err != nil {
+		t.Fatalf("Commit: %v", err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("unmet expectations: %v", err)
+	}
+}
+
+func TestApplyCollectorScanStatesUnseenIncompleteAndFailedDoNotChangeState(t *testing.T) {
+	for _, result := range []model.CollectorScanResult{model.CollectorScanResultIncomplete, model.CollectorScanResultFailed} {
+		t.Run(string(result), func(t *testing.T) {
+			db, mock, err := sqlmock.New()
+			if err != nil {
+				t.Fatalf("sqlmock.New: %v", err)
+			}
+			defer db.Close()
+
+			mock.ExpectBegin()
+			mock.ExpectQuery("select resource_id, consecutive_complete_scan_omissions, last_seen_collector_scan_id, last_completed_collector_scan_id, missing_since").
+				WithArgs(uint64(7)).
+				WillReturnRows(sqlmock.NewRows([]string{"resource_id", "consecutive_complete_scan_omissions", "last_seen_collector_scan_id", "last_completed_collector_scan_id", "missing_since"}).
+					AddRow(11, 2, "scan-seen", "scan-2", nil))
+			mock.ExpectCommit()
+			tx, err := db.BeginTx(t.Context(), nil)
+			if err != nil {
+				t.Fatalf("BeginTx: %v", err)
+			}
+
+			err = ApplyCollectorScanStates(t.Context(), tx, 7, 41, model.CollectorScan{
+				ID:          "scan-new",
+				Result:      result,
+				CompletedAt: time.Date(2026, 8, 30, 12, 0, 0, 0, time.UTC),
+			}, nil)
+			if err != nil {
+				t.Fatalf("ApplyCollectorScanStates: %v", err)
+			}
+			if err := tx.Commit(); err != nil {
+				t.Fatalf("Commit: %v", err)
+			}
+			if err := mock.ExpectationsWereMet(); err != nil {
+				t.Fatalf("unmet expectations: %v", err)
+			}
+		})
+	}
+}
+
+func TestApplyCollectorScanStatesDeduplicatesAndSortsBeforeInsertError(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock.New: %v", err)
+	}
+	defer db.Close()
+	completedAt := time.Date(2026, 8, 30, 12, 0, 0, 0, time.UTC)
+
+	mock.ExpectBegin()
+	mock.ExpectQuery("select resource_id, consecutive_complete_scan_omissions, last_seen_collector_scan_id, last_completed_collector_scan_id, missing_since").
+		WithArgs(uint64(7)).
+		WillReturnRows(sqlmock.NewRows([]string{"resource_id", "consecutive_complete_scan_omissions", "last_seen_collector_scan_id", "last_completed_collector_scan_id", "missing_since"}))
+	mock.ExpectExec("insert into collector_ci_scan_states").
+		WithArgs(uint64(7), uint64(3), uint8(0), "scan-new", "scan-new", nil).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec("insert into collector_ci_scan_states").
+		WithArgs(uint64(7), uint64(7), uint8(0), "scan-new", "scan-new", nil).
+		WillReturnError(sql.ErrConnDone)
+	mock.ExpectRollback()
+	tx, err := db.BeginTx(t.Context(), nil)
+	if err != nil {
+		t.Fatalf("BeginTx: %v", err)
+	}
+
+	err = ApplyCollectorScanStates(t.Context(), tx, 7, 41, model.CollectorScan{
+		ID:          "scan-new",
+		Result:      model.CollectorScanResultComplete,
+		CompletedAt: completedAt,
+	}, []uint64{9, 3, 7, 3})
+	if !errors.Is(err, sql.ErrConnDone) {
+		t.Fatalf("insert error = %v, want sql.ErrConnDone", err)
+	}
+	if err := tx.Rollback(); err != nil {
+		t.Fatalf("Rollback: %v", err)
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatalf("unmet expectations: %v", err)

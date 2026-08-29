@@ -18,8 +18,8 @@ Data access layer implementing service-layer repository interfaces with raw SQL 
 | named_inventory_view_repository.go | Personal/shared named inventory view CRUD, owner-visible listing, and an actor-free shared-only read seam for future machine principals |
 | machine_principal_repository.go | Single-query safe lifecycle aggregation plus atomic machine-principal create/credential rotate/revoke with admin audit, hash lookup, and idempotent state-bounded last-used updates |
 | machine_principal_repository_test.go | SQL lifecycle, hash-only arguments, safe audit payload, and rollback coverage with sqlmock |
-| collector_scan_repository.go | Caller-transaction completed-scan ledger insert-or-compare with exact-retry idempotency and typed conflict |
-| collector_scan_repository_test.go | SQL insert, retry, conflict, and caller-owned rollback coverage with sqlmock |
+| collector_scan_repository.go | Caller-transaction completed-scan ledger insert-or-compare plus deterministic per-principal/per-CI state application |
+| collector_scan_repository_test.go | SQL ledger, rediscovery, third-omission, non-complete no-op, deterministic-order, and caller-owned rollback coverage with sqlmock |
 | auth_audit_emitter.go | MySQL-backed AuthAuditEmitter — fail-open INSERT for auth/authz audit events; AuthAuditPersistenceFailures fixed-category counter |
 
 ## Exports
@@ -29,6 +29,7 @@ Data access layer implementing service-layer repository interfaces with raw SQL 
 - `NewNamedInventoryViewRepository(db)` — named inventory view persistence constructor
 - `NewMachinePrincipalRepository(db)` — machine-principal lifecycle and credential-authentication persistence constructor
 - `InsertCollectorScanLedger(ctx, tx, entry)` — caller-owned transaction primitive returning the durable ledger ID for inserts and exact retries; differing retries return `CollectorScanConflictError`
+- `ApplyCollectorScanStates(ctx, tx, machinePrincipalID, ledgerID, scan, seenResourceIDs)` — caller-owned transaction primitive that locks one principal's existing states in resource-ID order, applies the pure collector transition, and inserts new seen states deterministically
 - `QueryDisclosureReader`, `QueryDisclosureWriter` — narrow service-owned interfaces for disclosure policy access
 - `QuerySavedStatementReader`, `QuerySavedStatementWriter` — narrow service-owned interfaces for saved statement access, including atomic parameter-definition replacement
 - `QueryEvidencePersistenceFailures` — dimensionless expvar counter for atomic Execution Evidence Pair persistence failures (Issue #34), readable through the repository's `QueryEvidencePersistenceFailures()` accessor for the service layer
