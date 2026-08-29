@@ -13,7 +13,8 @@ Domain structs, taxonomy constants, validation methods, and dictionary definitio
 | audit.go | AuditEvent plus server-owned AuditChange field-diff contract |
 | auth.go | UserCredential (incl. IsActive + AuthorizationVersion), LoginRequest, LoginResponse structs |
 | settings.go | Environment, Owner, Role structs |
-| pagination.go | PageInfo, ResourceListQuery, AuditListQuery (including actor/resource search), pagination helpers/constants |
+| pagination.go | PageInfo, ResourceListQuery with search, owner, and label filters; ResourceLabelFilter; AuditListQuery including actor/resource search; pagination helpers/constants |
+| named_inventory_view.go | Minimal validated named-view contract containing inventory filters, sort, and columns without result/page snapshots |
 | dictionary.go | DictionaryItem struct (shared by all dictionaries) |
 | taxonomy.go | All enum constants (8 resource types, 7 relation types, 5 lifecycle statuses, 4 health statuses), dictionary slices including service worker subtype, Validate() methods; Domain Name `dns` and Virtual IP `floating` subtypes |
 | taxonomy.go | All enum constants (8 resource types, 7 relation types, 5 lifecycle statuses, 4 health statuses), dictionary slices, Validate() methods. Database Proxy technology subtypes and Control Plane ha_monitor; ambiguous ha is rejected. |
@@ -41,6 +42,7 @@ Domain structs, taxonomy constants, validation methods, and dictionary definitio
 - `QueryCredentialRuntimeStatus.Validate()` / `.IsResolved()`, `QueryCredentialUpsertRequest.Validate()` (Phase 38A credential metadata contract)
 - `ResultDisclosureMode.Validate()`, `ResultDisclosurePolicyUpsertRequest.Validate()` (Phase 38Q governed result-disclosure policy)
 - `QuerySavedStatementScope.Validate()`, typed parameter definitions, `QuerySavedStatementCreateRequest.Validate()`, `QuerySavedStatementUpdateRequest.Validate()`, `QuerySavedStatementExecuteRequest.Validate()` + `MaxQuerySavedStatementExecuteValuesSize` (Phase 38W governed saved statements)
+- `NamedInventoryView`, personal/shared scopes, state/request types, and validation for reusable inventory presentation state
 - `ValidatePagination()`, `QueryExecutePaginationRequest`, `QueryExecutePaginationResponse`, `AllowedPageSizes` (Phase 38S governed query-result paging)
 
 ## Phase 38S governed query-result paging

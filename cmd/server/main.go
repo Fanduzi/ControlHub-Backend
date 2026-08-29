@@ -126,6 +126,7 @@ func buildDependencies(db *sql.DB, cfg config.Config) api.Dependencies {
 		queryTargetRepo,
 		queryGuard, // reuse the shared guard
 	)
+	namedInventoryViewSvc := service.NewNamedInventoryViewService(mysql.NewNamedInventoryViewRepository(db))
 
 	// Query explain service (Phase 38N) — a distinct governed operation that
 	// never executes the bare SELECT and never creates a query_executions
@@ -162,6 +163,7 @@ func buildDependencies(db *sql.DB, cfg config.Config) api.Dependencies {
 		QueryExplainService:        queryExplainSvc,
 		QueryDisclosureService:     queryDisclosureSvc,
 		QuerySavedStatementService: querySavedStatementSvc,
+		NamedInventoryViewService:  namedInventoryViewSvc,
 		QueryExecutionAuth: api.QueryExecutionAuthConfig{
 			Clock: time.Now,
 		},

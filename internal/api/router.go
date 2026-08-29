@@ -1,7 +1,7 @@
 // Package api provides HTTP handlers and routing for the ControlHub REST API.
 // input: chi/v5, time, internal/service (all services)
-// output: Dependencies struct, NewRouter, CORS, health observation, and relationship-rule discovery routes
-// pos: HTTP routing entry point for authenticated inventory, health evidence, relationship discovery, query, and admin operations
+// output: Dependencies struct, NewRouter, CORS, health observation, relationship-rule discovery, and named inventory view routes
+// pos: HTTP routing entry point for authenticated inventory, named views, health evidence, relationship discovery, query, and admin operations
 // note: if this file changes, update this header and module README.md.
 package api
 
@@ -60,6 +60,7 @@ type Dependencies struct {
 	// *service.QuerySavedStatementService satisfies it. All four routes require
 	// a fresh bearer token (same freshness policy as query execution).
 	QuerySavedStatementService querySavedStatementAPI
+	NamedInventoryViewService  namedInventoryViewAPI
 	// AuthAuditEmitter records authentication and authorization outcomes.
 	// Nil is treated as NoopEmitter; fail-open semantics apply.
 	AuthAuditEmitter service.AuthAuditEmitter
@@ -118,6 +119,12 @@ func NewRouter(deps Dependencies) *chi.Mux {
 		r.Get("/health-statuses", handleListHealthStatuses(deps.HealthStatusService))
 		r.Get("/resource-subtypes", handleListResourceSubtypes(deps.ResourceSubtypeService))
 		r.Get("/query-targets", handleListQueryTargets(deps.QueryTargetService))
+		if deps.NamedInventoryViewService != nil {
+			r.Get("/inventory/views", handleListNamedInventoryViews(deps.NamedInventoryViewService))
+			r.Post("/inventory/views", handleCreateNamedInventoryView(deps.NamedInventoryViewService))
+			r.Put("/inventory/views/{viewId}", handleUpdateNamedInventoryView(deps.NamedInventoryViewService))
+			r.Delete("/inventory/views/{viewId}", handleDeleteNamedInventoryView(deps.NamedInventoryViewService))
+		}
 
 		r.Group(func(r chi.Router) {
 			r.Use(requireAdminActor(emitter))

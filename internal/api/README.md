@@ -5,7 +5,7 @@ HTTP handlers, chi routing, CORS middleware, and fake-repo test infrastructure.
 ## Files
 | File | Responsibility |
 |------|---------------|
-| router.go | Route registration, including admin health observation ingestion, Operator Access Boundary middleware, Dependencies, CORS, and bounded auth-audit wiring |
+| router.go | Route registration, including authenticated inventory/dictionary/named-view reads, admin health observation ingestion, Operator Access Boundary middleware, Dependencies, CORS, and bounded auth-audit wiring |
 | health_handler.go | GET /health endpoint |
 | resource_handler.go | Resource list/detail identity and health fields, explicit identity conflicts, non-audited observation ingestion, and PATCH changes through atomic inventory audit |
 | profile_handler.go | PUT/PATCH/DELETE /resources/{id}/profile handlers with strict decoding and token-derived atomic inventory audit |
@@ -19,6 +19,7 @@ HTTP handlers, chi routing, CORS middleware, and fake-repo test infrastructure.
 | query_credential_handler.go | Phase 38A credential metadata handlers (GET/PUT/DELETE) |
 | query_disclosure_handler.go | Phase 38Q disclosure policy CRUD/list handlers (handler-admin) |
 | query_saved_statement_handler.go | Phase 38W saved statement CRUD handlers with strict typed parameter declaration decoding |
+| named_inventory_view_handler.go | Authenticated personal/shared named inventory view CRUD with controlled validation, forbidden, and not-found errors |
 | legacy_hash_handler.go | Admin-only GET /admin/legacy-hash-count — non-identity-bearing legacy password hash count |
 | json_body.go | Shared strict JSON body decoding with unknown-field and multiple-value rejection |
 | test_server.go | Fake repositories and NewTestServer() with a default admin actor for handler tests |
@@ -46,6 +47,11 @@ HTTP handlers, chi routing, CORS middleware, and fake-repo test infrastructure.
 
 `GET /resources` supports inventory `q` search, exact `ownerId`, and repeatable exact `label=key:value` filters; repeated labels combine with AND.
 | GET | /resources/{id}/relation-rules | Discover server-owned outgoing relation and target constraints |
+| GET | /resources | List resources with stable pagination and existing filters plus free-text `q`, exact `ownerId`, and repeatable AND-combined `label=key:value` filters |
+| GET | /inventory/views | List the actor's personal views and all shared views |
+| POST | /inventory/views | Create a personal view, or an admin-only shared view |
+| PUT | /inventory/views/{viewId} | Rename/replace an owned personal view or admin-managed shared view |
+| DELETE | /inventory/views/{viewId} | Delete an owned personal view or admin-managed shared view |
 | GET | /query-targets/{id}/schema/table-definition | Get MySQL table definition (base tables only) |
 | POST | /query-targets/{id}/execute | Execute a governed read-only statement, with optional page-number result paging for SELECT |
 | POST | /query-targets/{id}/related-records | Governed FK related-record navigation (Issue #36: records through the same atomic Execution Evidence Pair as execution) |

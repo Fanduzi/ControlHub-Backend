@@ -26,6 +26,7 @@ Application bootstrap and manual dependency injection.
 | Query Explain | QueryExplainService | (none — reuses access resolver + audit repo) | 38N |
 | Query Disclosure | QueryDisclosureService | QueryDisclosureRepository | 38Q |
 | Query Saved Statement | QuerySavedStatementService | QuerySavedStatementRepository | 38W (personal typed declarations) |
+| Named Inventory View | NamedInventoryViewService | NamedInventoryViewRepository | T13 |
 
 Create-with-profile is atomic: `ResourceService.Create` routes embedded profiles through the repository's single transaction (`CreateResourceWithProfile`), so a failed initial profile write returns an error and leaves no resource row.
 

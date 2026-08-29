@@ -38,6 +38,7 @@ Business logic layer with interface-based repository dependencies. Each service 
 | query_disclosure_projection.go | Column provenance resolution from SQL AST and FK metadata |
 | query_disclosure_mask.go | applyDisclosureMask for server-side value redaction |
 | query_saved_statement_service.go | QuerySavedStatementService — authorized target-scoped saved statement CRUD with typed declaration validation and guard validation |
+| named_inventory_view_service.go | NamedInventoryViewService — owner-only personal CRUD, admin-only shared mutation, user-visible listing, and shared-only read seam |
 | auth_service_test.go | Auth service tests (login, versioned verify, invalidation causes, generic errors) |
 | memory_user_store.go | In-memory UserCredentialRepository for unit/handler tests |
 | dictionary_service_test.go | Dictionary service tests |
@@ -58,6 +59,7 @@ Business logic layer with interface-based repository dependencies. Each service 
 - `AuthService.LegacyHashCount` — non-identity-bearing count of remaining legacy-hash accounts
 - `ErrResourceNotFound`, resource name/alias/external-identifier conflict sentinels, `ErrInvalidCredentials`, `ErrInvalidToken`, `ErrQueryDisclosureBlocked`
 - `ErrQuerySavedStatementNotFound`, `ErrQueryForbidden` — saved-statement service sentinel errors
+- `NamedInventoryViewService.List/Create/Update/Delete/ListShared` and controlled validation/forbidden/not-found errors
 - `ErrQueryDisclosurePolicyConflict`, `ErrQueryDisclosurePolicyNotFound` — disclosure policy CRUD sentinel errors (duplicate scope → 409, missing scope on update → 404)
 - `QueryDisclosureReader`, `QueryDisclosureWriter` — narrow disclosure policy access interfaces
 - `DisclosurePlan`, `ColumnDisclosure` — resolved per-column disclosure decisions
