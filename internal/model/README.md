@@ -5,6 +5,8 @@ Domain structs, taxonomy constants, validation methods, and dictionary definitio
 ## Files
 | File | Responsibility |
 |------|---------------|
+| collector_scan.go | Completed-scan ledger values, exact retry matching, and pure capped per-CI omission/Missing transitions |
+| collector_scan_test.go | COMPLETE-only omission, idempotency, rediscovery, and conflicting-retry regression tests |
 | resource.go | Resource governed identity, immutable origin, aliases, external identifiers, effective health evidence, list/detail-only read-only Completeness, profile response, and ResourceType |
 | resource_write.go | Resource create/update inputs, including managed identity collections and nullable manual health override |
 | health_observation.go | HealthObservation value and exact fresh/stale/never boundary calculation |
@@ -47,6 +49,7 @@ Domain structs, taxonomy constants, validation methods, and dictionary definitio
 - `QuerySavedStatementScope.Validate()`, typed parameter definitions, `QuerySavedStatementCreateRequest.Validate()`, `QuerySavedStatementUpdateRequest.Validate()`, `QuerySavedStatementExecuteRequest.Validate()` + `MaxQuerySavedStatementExecuteValuesSize` (Phase 38W governed saved statements)
 - `NamedInventoryView`, personal/shared scopes, state/request types, and validation for reusable inventory presentation state
 - `MachinePrincipal`, `MachineCredential`, safe `MachinePrincipalListItem`/`MachineCredentialLifecycle` projections, the seven closed `MachineScope` values, and bounded expiry normalization
+- `CollectorScan`, `CollectorScanLedgerEntry`, `CollectorCIState`, and `ApplyCollectorScan()` for capped complete-scan Missing transitions and retry matching
 - `ValidatePagination()`, `QueryExecutePaginationRequest`, `QueryExecutePaginationResponse`, `AllowedPageSizes` (Phase 38S governed query-result paging)
 
 ## Phase 38S governed query-result paging

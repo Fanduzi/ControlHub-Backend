@@ -7,7 +7,7 @@ MySQL-backed integration tests run against disposable Testcontainers databases.
 |------|---------------|
 | health_observation_test.go | Real-MySQL latest observation, freshness, effective filtering, no-audit, and atomic manual override contracts |
 | testenv_test.go | Starts MySQL, applies migrations, and provides database helpers |
-| mysql_test.go | Exact migration-26 schema/table, user/machine evidence columns/checks/indexes, unsigned-ID, and no-foreign-key guards after clean migration |
+| mysql_test.go | Exact migration-27 schema/table, collector/user/machine constraints and indexes, unsigned-ID, and no-foreign-key guards after clean migration |
 | resource_test.go | Resource repository CRUD, rich/structured filtering, constant-query batched-profile reads, observation-derived cluster rollups, create-with-profile atomicity, profile validation, and PATCH partial-merge semantics against real MySQL |
 | inventory_audit_test.go | Real-MySQL inventory audit atomicity, typed-profile and relationship behavior, per-CI evidence, multi-source observations, override precedence, stale-write conflicts, clear, effective provenance, and per-CI relationship evidence |
 | bulk_resource_mutation_test.go | Real-MySQL reviewed bulk success/idempotent preview/conflict, structurally decoded externalId field audit, true multi-target mid-batch rollback, audit-failure rollback, archived-CI lock validation, and two-connection lock/drift enforcement |

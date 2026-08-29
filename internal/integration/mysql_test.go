@@ -2,7 +2,7 @@
 
 // Package integration provides real-MySQL schema proofs for goose migrations.
 // input: database/sql, Testcontainers database, and schema migrations
-// output: migration-26 schema, user/machine evidence constraints/indexes, seed, and no-FK proofs
+// output: migration-27 schema, collector/user/machine constraints and indexes, seed, and no-FK proofs
 // pos: real-MySQL clean-migration schema contract coverage
 // note: if this file changes, update this header and module README.md.
 package integration
@@ -50,9 +50,14 @@ func TestSchemaUsesBigintPrimaryKeysWithoutForeignKeys(t *testing.T) {
 		"named_inventory_views":            {"id", "owner_user_id"},
 		"machine_principals":               {"id", "created_by_user_id"},
 		"machine_principal_credentials":    {"id", "machine_principal_id", "created_by_user_id", "rotated_from_credential_id"},
+		"collector_scan_ledger":            {"id", "machine_principal_id"},
 		"query_executions":                 {"id", "target_resource_id", "actor_user_id", "actor_machine_principal_id"},
 		"audit_events":                     {"id", "actor_user_id", "actor_machine_principal_id", "target_resource_id"},
 	}
+	for _, columnName := range []string{"machine_principal_id", "resource_id"} {
+		assertUnsignedBigintColumn(t, db, "collector_ci_scan_states", columnName)
+	}
+	assertPrimaryKeyColumns(t, db, "collector_ci_scan_states", "machine_principal_id", "resource_id")
 	for tableName, columns := range expectedUnsignedBigintIDs {
 		for _, columnName := range columns {
 			assertUnsignedBigintColumn(t, db, tableName, columnName)
@@ -85,6 +90,8 @@ func TestSchemaUsesBigintPrimaryKeysWithoutForeignKeys(t *testing.T) {
 		"named_inventory_views",
 		"machine_principals",
 		"machine_principal_credentials",
+		"collector_scan_ledger",
+		"collector_ci_scan_states",
 		"query_executions",
 		"audit_events",
 	} {
@@ -133,8 +140,8 @@ func assertSchemaChainBaseline(t *testing.T, db *sql.DB) {
 	if err != nil {
 		t.Fatalf("query max version: %v", err)
 	}
-	if maxVersion != 26 {
-		t.Fatalf("migration version = %d, want 26", maxVersion)
+	if maxVersion != 27 {
+		t.Fatalf("migration version = %d, want 27", maxVersion)
 	}
 
 	expectedTables := []string{
@@ -153,6 +160,7 @@ func assertSchemaChainBaseline(t *testing.T, db *sql.DB) {
 		"audit_events",
 		"named_inventory_views",
 		"machine_principals", "machine_principal_credentials",
+		"collector_scan_ledger", "collector_ci_scan_states",
 	}
 	for _, table := range expectedTables {
 		if !tableExists(t, db, table) {
@@ -194,6 +202,12 @@ func assertSchemaChainBaseline(t *testing.T, db *sql.DB) {
 	}
 	if !indexExists(t, db, "audit_events", "idx_audit_events_machine_actor_created") {
 		t.Error("expected machine actor index on audit_events")
+	}
+	if !indexExists(t, db, "collector_scan_ledger", "uq_collector_scan_ledger_principal_scan") {
+		t.Error("expected per-principal collector scan idempotency key")
+	}
+	if !indexExists(t, db, "collector_ci_scan_states", "idx_collector_ci_scan_states_missing") {
+		t.Error("expected per-principal Missing-state lookup index")
 	}
 }
 

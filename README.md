@@ -336,8 +336,10 @@ Opaque `chmp_` Machine Credentials use a separate, closed scope matrix for
 Inventory, relation/topology, query-target discovery, audit, shared Named View
 reads, ordinary governed query execution, and the reserved collector-only
 `inventory:ingest` and `health:write` routes. Collector actor/observer binding
-and complete-scan persistence land with migration 00027 in the next #87 slice;
-this checkpoint adds only the closed capabilities and route gates. Only
+and ingestion wiring remain deferred. Migration 00027 now provides a
+per-principal completed-scan ledger and capped per-principal/per-CI omission
+state; only successful complete scans can make a CI Missing after three
+consecutive omissions, and rediscovery resets that state. Only
 `POST /query-targets/{id}/execute` accepts the `governed-select` machine scope;
 all sibling query routes remain user-only. Machine execution evidence records
 the machine principal identity, never a synthetic User or credential material.
