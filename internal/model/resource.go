@@ -1,8 +1,8 @@
 // Package model provides domain entities for the resource management system.
 // input: errors, time packages
-// output: Resource struct, ResourceProfileResponse struct, ResourceType and identity types
+// output: Resource struct with governed identity and health evidence, ResourceProfileResponse, ResourceType and identity types
 // pos: Core domain entity for the resource management system
-// note: if this file changes, update header and README.md
+// note: if this file changes, update this header and module README.md.
 package model
 
 import (
@@ -44,18 +44,22 @@ type ResourceProfileResponse struct {
 }
 
 type Resource struct {
-	ID                  uint64                       `json:"id"`
-	ResourceType        ResourceType                 `json:"resourceType"`
-	ResourceSubtype     string                       `json:"resourceSubtype"`
-	Name                string                       `json:"name"`
-	DisplayName         string                       `json:"displayName"`
-	EnvironmentID       uint64                       `json:"environmentId"`
-	OwnerID             uint64                       `json:"ownerId"`
-	LifecycleStatus     string                       `json:"lifecycleStatus"`
-	HealthStatus        string                       `json:"healthStatus"`
-	Origin              ResourceOrigin               `json:"origin"`
-	Aliases             []string                     `json:"aliases"`
-	ExternalIdentifiers []ResourceExternalIdentifier `json:"externalIdentifiers"`
+	ID                   uint64                       `json:"id"`
+	ResourceType         ResourceType                 `json:"resourceType"`
+	ResourceSubtype      string                       `json:"resourceSubtype"`
+	Name                 string                       `json:"name"`
+	DisplayName          string                       `json:"displayName"`
+	EnvironmentID        uint64                       `json:"environmentId"`
+	OwnerID              uint64                       `json:"ownerId"`
+	LifecycleStatus      string                       `json:"lifecycleStatus"`
+	HealthStatus         string                       `json:"healthStatus"`
+	HealthFreshness      HealthFreshness              `json:"healthFreshness"`
+	HealthObservedAt     *time.Time                   `json:"healthObservedAt"`
+	HealthObserver       string                       `json:"healthObserver"`
+	ManualHealthOverride *HealthStatus                `json:"manualHealthOverride"`
+	Origin               ResourceOrigin               `json:"origin"`
+	Aliases              []string                     `json:"aliases"`
+	ExternalIdentifiers  []ResourceExternalIdentifier `json:"externalIdentifiers"`
 	// Source and ExternalID keep internal callers compiling during the API
 	// transition; new clients use Origin and ExternalIdentifiers.
 	Source                     string                      `json:"source,omitempty"`

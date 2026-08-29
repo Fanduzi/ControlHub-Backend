@@ -1,10 +1,8 @@
-// Package operatoraccess is test-support metadata describing every protected
-// API operation and its authorization class. It is imported only by tests.
+// Package operatoraccess describes protected API operation classes for tests.
 // input: standard library only
-// output: Class, Operation, All (incl. admin-only /ops/query-evidence-metrics, Issue #34)
-// pos: Single source of truth for protected-operation coverage, shared by the
-// router boundary test, the OpenAPI contract test, and integration tests
-// note: if this file changes, update header and README.md
+// output: Class, Operation, All (including admin health-observation ingestion)
+// pos: Shared source of truth for router, OpenAPI, and integration authorization tests
+// note: if this file changes, update this header and module README.md.
 package operatoraccess
 
 // Class is the authorization class of a protected operation. Consumers derive
@@ -76,6 +74,7 @@ func All() []Operation {
 		// Router-admin inventory mutations.
 		{RouterAdmin, "POST", "/resources", "/resources"},
 		{RouterAdmin, "PATCH", "/resources/{id}", "/resources/1"},
+		{RouterAdmin, "POST", "/resources/{id}/health-observations", "/resources/1/health-observations"},
 		{RouterAdmin, "POST", "/resources/{id}/archive", "/resources/1/archive"},
 		{RouterAdmin, "POST", "/resources/{id}/unarchive", "/resources/1/unarchive"},
 		{RouterAdmin, "PUT", "/resources/{id}/profile", "/resources/1/profile"},

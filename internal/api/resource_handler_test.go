@@ -1,8 +1,8 @@
 // Package api provides HTTP handlers and routing for the ControlHub REST API.
 // input: internal/api, internal/model, net/http, net/http/httptest, encoding/json
-// output: TestCreateResource*, TestListResources*, TestGetResourceProfile_*, TestCreateDomainName*, TestCreateVirtualIP*
-// pos: Validates governed identity and explicit conflicts, resource listing, and create/read behavior for all typed profiles at the HTTP seam
-// note: if this file changes, update header and README.md
+// output: Governed identity/profile tests plus resource health reads, observation ingestion, and override clearing
+// pos: Validates governed identity, typed profiles, and Issue 81 health evidence at the HTTP seam
+// note: if this file changes, update this header and module README.md.
 package api
 
 import (
@@ -429,6 +429,78 @@ func TestPatchResource(t *testing.T) {
 	}
 }
 
+func TestPatchResourceClearsManualHealthOverride(t *testing.T) {
+	server := NewTestServer()
+	req := httptest.NewRequest(http.MethodPatch, "/resources/1", strings.NewReader(`{"healthStatus":null}`))
+	rec := httptest.NewRecorder()
+
+	server.Router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+	var resp model.Resource
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if resp.ManualHealthOverride != nil {
+		t.Fatalf("manualHealthOverride = %v, want null", resp.ManualHealthOverride)
+	}
+}
+
+func TestRecordHealthObservation(t *testing.T) {
+	server := NewTestServer()
+	body := `{"status":"warning","observedAt":"2026-04-11T19:59:00Z","observer":"prometheus"}`
+	req := httptest.NewRequest(http.MethodPost, "/resources/1/health-observations", strings.NewReader(body))
+	rec := httptest.NewRecorder()
+
+	server.Router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("expected 204, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestResourceListAndDetailExposeHealthEvidence(t *testing.T) {
+	server := NewTestServer()
+
+	listReq := httptest.NewRequest(http.MethodGet, "/resources?resourceType=database_instance&pageSize=100", nil)
+	listRec := httptest.NewRecorder()
+	server.Router.ServeHTTP(listRec, listReq)
+	if listRec.Code != http.StatusOK {
+		t.Fatalf("list status = %d; body: %s", listRec.Code, listRec.Body.String())
+	}
+	var list paginatedResourceResponse
+	if err := json.NewDecoder(listRec.Body).Decode(&list); err != nil {
+		t.Fatalf("decode list: %v", err)
+	}
+	if len(list.Items) == 0 {
+		t.Fatal("expected list item")
+	}
+	assertResourceHealthEvidence(t, list.Items[0])
+
+	detailReq := httptest.NewRequest(http.MethodGet, "/resources/1", nil)
+	detailRec := httptest.NewRecorder()
+	server.Router.ServeHTTP(detailRec, detailReq)
+	if detailRec.Code != http.StatusOK {
+		t.Fatalf("detail status = %d; body: %s", detailRec.Code, detailRec.Body.String())
+	}
+	var detail struct {
+		Resource model.Resource `json:"resource"`
+	}
+	if err := json.NewDecoder(detailRec.Body).Decode(&detail); err != nil {
+		t.Fatalf("decode detail: %v", err)
+	}
+	assertResourceHealthEvidence(t, detail.Resource)
+}
+
+func assertResourceHealthEvidence(t *testing.T, resource model.Resource) {
+	t.Helper()
+	if resource.HealthStatus != "healthy" || resource.HealthFreshness != model.HealthFreshnessFresh ||
+		resource.HealthObservedAt == nil || resource.HealthObserver != "prometheus" {
+		t.Fatalf("health evidence = status %q freshness %q observedAt %v observer %q", resource.HealthStatus, resource.HealthFreshness, resource.HealthObservedAt, resource.HealthObserver)
+	}
+}
 func TestPatchResourceRejectsImmutableFields(t *testing.T) {
 	server := NewTestServer()
 	body := `{"resourceType":"host"}`
@@ -2039,74 +2111,74 @@ func TestAuditHandlerJSONErrors(t *testing.T) {
 	})
 }
 
-	// --- Dictionary handler JSON error tests (Task 2) ---
+// --- Dictionary handler JSON error tests (Task 2) ---
 
-	type failingEnvRepo struct{}
+type failingEnvRepo struct{}
 
-	func (failingEnvRepo) ListEnvironments() ([]model.Environment, error) {
-		return nil, fmt.Errorf("db connection lost")
-	}
+func (failingEnvRepo) ListEnvironments() ([]model.Environment, error) {
+	return nil, fmt.Errorf("db connection lost")
+}
 
-	func TestDictionaryHandlerJSONErrors(t *testing.T) {
-		t.Run("environments returns JSON on service failure", func(t *testing.T) {
-			svc := service.NewEnvironmentService(failingEnvRepo{})
-			handler := handleListEnvironments(svc)
+func TestDictionaryHandlerJSONErrors(t *testing.T) {
+	t.Run("environments returns JSON on service failure", func(t *testing.T) {
+		svc := service.NewEnvironmentService(failingEnvRepo{})
+		handler := handleListEnvironments(svc)
 
-			w := httptest.NewRecorder()
-			r := httptest.NewRequest("GET", "/environments", nil)
-			handler.ServeHTTP(w, r)
+		w := httptest.NewRecorder()
+		r := httptest.NewRequest("GET", "/environments", nil)
+		handler.ServeHTTP(w, r)
 
-			if w.Code != http.StatusInternalServerError {
-				t.Fatalf("expected 500, got %d; body: %s", w.Code, w.Body.String())
-			}
-			ct := w.Header().Get("Content-Type")
-			if ct != "application/json" {
-				t.Fatalf("expected Content-Type application/json, got %q", ct)
-			}
+		if w.Code != http.StatusInternalServerError {
+			t.Fatalf("expected 500, got %d; body: %s", w.Code, w.Body.String())
+		}
+		ct := w.Header().Get("Content-Type")
+		if ct != "application/json" {
+			t.Fatalf("expected Content-Type application/json, got %q", ct)
+		}
 
-			var body apiErrorResponse
-			if err := json.NewDecoder(w.Body).Decode(&body); err != nil {
-				t.Fatalf("decode response: %v", err)
-			}
-			if body.Error != "internal_error" {
-				t.Fatalf("expected error code internal_error, got %q", body.Error)
-			}
-			if body.Message == "" {
-				t.Fatal("expected non-empty error message")
-			}
-		})
+		var body apiErrorResponse
+		if err := json.NewDecoder(w.Body).Decode(&body); err != nil {
+			t.Fatalf("decode response: %v", err)
+		}
+		if body.Error != "internal_error" {
+			t.Fatalf("expected error code internal_error, got %q", body.Error)
+		}
+		if body.Message == "" {
+			t.Fatal("expected non-empty error message")
+		}
+	})
 
-		t.Run("resource-subtypes returns JSON 400 when missing resourceType", func(t *testing.T) {
-			svc := service.NewResourceSubtypeService()
-			handler := handleListResourceSubtypes(svc)
+	t.Run("resource-subtypes returns JSON 400 when missing resourceType", func(t *testing.T) {
+		svc := service.NewResourceSubtypeService()
+		handler := handleListResourceSubtypes(svc)
 
-			w := httptest.NewRecorder()
-			r := httptest.NewRequest("GET", "/resource-subtypes", nil)
-			handler.ServeHTTP(w, r)
+		w := httptest.NewRecorder()
+		r := httptest.NewRequest("GET", "/resource-subtypes", nil)
+		handler.ServeHTTP(w, r)
 
-			if w.Code != http.StatusBadRequest {
-				t.Fatalf("expected 400, got %d; body: %s", w.Code, w.Body.String())
-			}
-			ct := w.Header().Get("Content-Type")
-			if ct != "application/json" {
-				t.Fatalf("expected Content-Type application/json, got %q", ct)
-			}
+		if w.Code != http.StatusBadRequest {
+			t.Fatalf("expected 400, got %d; body: %s", w.Code, w.Body.String())
+		}
+		ct := w.Header().Get("Content-Type")
+		if ct != "application/json" {
+			t.Fatalf("expected Content-Type application/json, got %q", ct)
+		}
 
-			var body apiErrorResponse
-			if err := json.NewDecoder(w.Body).Decode(&body); err != nil {
-				t.Fatalf("decode response: %v", err)
-			}
-			if body.Error != "validation_failed" {
-				t.Fatalf("expected error code validation_failed, got %q", body.Error)
-			}
-			if body.Message == "" {
-				t.Fatal("expected non-empty error message")
-			}
-			if !strings.Contains(body.Message, "resourceType") {
-				t.Fatalf("expected message to mention resourceType, got %q", body.Message)
-			}
-		})
-	}
+		var body apiErrorResponse
+		if err := json.NewDecoder(w.Body).Decode(&body); err != nil {
+			t.Fatalf("decode response: %v", err)
+		}
+		if body.Error != "validation_failed" {
+			t.Fatalf("expected error code validation_failed, got %q", body.Error)
+		}
+		if body.Message == "" {
+			t.Fatal("expected non-empty error message")
+		}
+		if !strings.Contains(body.Message, "resourceType") {
+			t.Fatalf("expected message to mention resourceType, got %q", body.Message)
+		}
+	})
+}
 
 // --- Phase 17A: Readable relation views ---
 
@@ -2363,135 +2435,135 @@ func TestGetResource_NoProfileSummaryWithoutProfileData(t *testing.T) {
 	}
 }
 
-	// --- Phase 26A: DatabaseOperationalSummary tests ---
+// --- Phase 26A: DatabaseOperationalSummary tests ---
 
-	func TestListResources_DatabaseClusterIncludesOperationalSummary(t *testing.T) {
-		server := NewTestServer()
-		req := httptest.NewRequest(http.MethodGet, "/resources?resourceType=database_cluster", nil)
-		rec := httptest.NewRecorder()
+func TestListResources_DatabaseClusterIncludesOperationalSummary(t *testing.T) {
+	server := NewTestServer()
+	req := httptest.NewRequest(http.MethodGet, "/resources?resourceType=database_cluster", nil)
+	rec := httptest.NewRecorder()
 
-		server.Router.ServeHTTP(rec, req)
+	server.Router.ServeHTTP(rec, req)
 
-		if rec.Code != http.StatusOK {
-			t.Fatalf("expected 200, got %d; body: %s", rec.Code, rec.Body.String())
-		}
-
-		var resp paginatedResourceResponse
-		if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
-			t.Fatalf("decode: %v", err)
-		}
-
-		if len(resp.Items) == 0 {
-			t.Fatal("expected at least one database_cluster")
-		}
-
-		var chCluster *model.Resource
-		for i := range resp.Items {
-			if resp.Items[i].ResourceSubtype == "clickhouse" {
-				chCluster = &resp.Items[i]
-				break
-			}
-		}
-		if chCluster == nil {
-			t.Fatal("expected clickhouse cluster in results")
-		}
-
-		if chCluster.DatabaseOperationalSummary == nil {
-			t.Fatal("expected databaseOperationalSummary for clickhouse cluster, got nil")
-		}
-		s := chCluster.DatabaseOperationalSummary
-		if s.MemberCount != 2 {
-			t.Fatalf("expected memberCount 2, got %d", s.MemberCount)
-		}
-		if s.CriticalMemberCount != 1 {
-			t.Fatalf("expected criticalMemberCount 1, got %d", s.CriticalMemberCount)
-		}
-		if s.WorstMemberName != "Analytics ClickHouse Node 02" {
-			t.Fatalf("expected worstMemberName 'Analytics ClickHouse Node 02', got %q", s.WorstMemberName)
-		}
-		if s.WorstMemberStatus != "critical" {
-			t.Fatalf("expected worstMemberStatus 'critical', got %q", s.WorstMemberStatus)
-		}
-		if s.ReplicaMemberCount != 2 {
-			t.Fatalf("expected replicaMemberCount 2, got %d", s.ReplicaMemberCount)
-		}
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d; body: %s", rec.Code, rec.Body.String())
 	}
 
-	func TestGetResource_DatabaseClusterIncludesOperationalSummary(t *testing.T) {
-		server := NewTestServer()
-		req := httptest.NewRequest(http.MethodGet, "/resources/9", nil)
-		rec := httptest.NewRecorder()
-
-		server.Router.ServeHTTP(rec, req)
-
-		if rec.Code != http.StatusOK {
-			t.Fatalf("expected 200, got %d; body: %s", rec.Code, rec.Body.String())
-		}
-
-		var wrapper struct {
-			Resource model.Resource `json:"resource"`
-		}
-		if err := json.NewDecoder(rec.Body).Decode(&wrapper); err != nil {
-			t.Fatalf("decode: %v", err)
-		}
-
-		if wrapper.Resource.DatabaseOperationalSummary == nil {
-			t.Fatal("expected databaseOperationalSummary for database cluster resource 9")
-		}
-		s := wrapper.Resource.DatabaseOperationalSummary
-		if s.MemberCount != 2 {
-			t.Fatalf("expected memberCount 2, got %d", s.MemberCount)
-		}
-		if s.CriticalMemberCount != 1 {
-			t.Fatalf("expected criticalMemberCount 1, got %d", s.CriticalMemberCount)
-		}
+	var resp paginatedResourceResponse
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode: %v", err)
 	}
 
-	func TestGetResource_NonDatabaseClusterNoOperationalSummary(t *testing.T) {
-		server := NewTestServer()
-		req := httptest.NewRequest(http.MethodGet, "/resources/2", nil)
-		rec := httptest.NewRecorder()
-
-		server.Router.ServeHTTP(rec, req)
-
-		if rec.Code != http.StatusOK {
-			t.Fatalf("expected 200, got %d; body: %s", rec.Code, rec.Body.String())
-		}
-
-		var wrapper struct {
-			Resource model.Resource `json:"resource"`
-		}
-		if err := json.NewDecoder(rec.Body).Decode(&wrapper); err != nil {
-			t.Fatalf("decode: %v", err)
-		}
-
-		if wrapper.Resource.DatabaseOperationalSummary != nil {
-			t.Fatalf("expected no databaseOperationalSummary for host resource, got %+v", wrapper.Resource.DatabaseOperationalSummary)
-		}
+	if len(resp.Items) == 0 {
+		t.Fatal("expected at least one database_cluster")
 	}
 
-	func TestListResources_NonDatabaseResourcesNoOperationalSummary(t *testing.T) {
-		server := NewTestServer()
-		req := httptest.NewRequest(http.MethodGet, "/resources?resourceType=host", nil)
-		rec := httptest.NewRecorder()
-
-		server.Router.ServeHTTP(rec, req)
-
-		if rec.Code != http.StatusOK {
-			t.Fatalf("expected 200, got %d", rec.Code)
-		}
-
-		var resp paginatedResourceResponse
-		if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
-			t.Fatalf("decode: %v", err)
-		}
-
-		for _, item := range resp.Items {
-			if item.DatabaseOperationalSummary != nil {
-				t.Fatalf("host resource %d should not have databaseOperationalSummary", item.ID)
-			}
+	var chCluster *model.Resource
+	for i := range resp.Items {
+		if resp.Items[i].ResourceSubtype == "clickhouse" {
+			chCluster = &resp.Items[i]
+			break
 		}
 	}
+	if chCluster == nil {
+		t.Fatal("expected clickhouse cluster in results")
+	}
+
+	if chCluster.DatabaseOperationalSummary == nil {
+		t.Fatal("expected databaseOperationalSummary for clickhouse cluster, got nil")
+	}
+	s := chCluster.DatabaseOperationalSummary
+	if s.MemberCount != 2 {
+		t.Fatalf("expected memberCount 2, got %d", s.MemberCount)
+	}
+	if s.CriticalMemberCount != 1 {
+		t.Fatalf("expected criticalMemberCount 1, got %d", s.CriticalMemberCount)
+	}
+	if s.WorstMemberName != "Analytics ClickHouse Node 02" {
+		t.Fatalf("expected worstMemberName 'Analytics ClickHouse Node 02', got %q", s.WorstMemberName)
+	}
+	if s.WorstMemberStatus != "critical" {
+		t.Fatalf("expected worstMemberStatus 'critical', got %q", s.WorstMemberStatus)
+	}
+	if s.ReplicaMemberCount != 2 {
+		t.Fatalf("expected replicaMemberCount 2, got %d", s.ReplicaMemberCount)
+	}
+}
+
+func TestGetResource_DatabaseClusterIncludesOperationalSummary(t *testing.T) {
+	server := NewTestServer()
+	req := httptest.NewRequest(http.MethodGet, "/resources/9", nil)
+	rec := httptest.NewRecorder()
+
+	server.Router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+
+	var wrapper struct {
+		Resource model.Resource `json:"resource"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&wrapper); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+
+	if wrapper.Resource.DatabaseOperationalSummary == nil {
+		t.Fatal("expected databaseOperationalSummary for database cluster resource 9")
+	}
+	s := wrapper.Resource.DatabaseOperationalSummary
+	if s.MemberCount != 2 {
+		t.Fatalf("expected memberCount 2, got %d", s.MemberCount)
+	}
+	if s.CriticalMemberCount != 1 {
+		t.Fatalf("expected criticalMemberCount 1, got %d", s.CriticalMemberCount)
+	}
+}
+
+func TestGetResource_NonDatabaseClusterNoOperationalSummary(t *testing.T) {
+	server := NewTestServer()
+	req := httptest.NewRequest(http.MethodGet, "/resources/2", nil)
+	rec := httptest.NewRecorder()
+
+	server.Router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+
+	var wrapper struct {
+		Resource model.Resource `json:"resource"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&wrapper); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+
+	if wrapper.Resource.DatabaseOperationalSummary != nil {
+		t.Fatalf("expected no databaseOperationalSummary for host resource, got %+v", wrapper.Resource.DatabaseOperationalSummary)
+	}
+}
+
+func TestListResources_NonDatabaseResourcesNoOperationalSummary(t *testing.T) {
+	server := NewTestServer()
+	req := httptest.NewRequest(http.MethodGet, "/resources?resourceType=host", nil)
+	rec := httptest.NewRecorder()
+
+	server.Router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rec.Code)
+	}
+
+	var resp paginatedResourceResponse
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+
+	for _, item := range resp.Items {
+		if item.DatabaseOperationalSummary != nil {
+			t.Fatalf("host resource %d should not have databaseOperationalSummary", item.ID)
+		}
+	}
+}
 
 func TestCreateResourceWithProfile_Success(t *testing.T) {
 	server := NewTestServer()

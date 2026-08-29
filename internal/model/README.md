@@ -5,8 +5,9 @@ Domain structs, taxonomy constants, validation methods, and dictionary definitio
 ## Files
 | File | Responsibility |
 |------|---------------|
-| resource.go | Resource identity, immutable origin, aliases, external identifiers, profile response, and ResourceType |
-| resource_write.go | Resource create/update inputs, including managed identity collections |
+| resource.go | Resource governed identity, effective health evidence, profile response, and ResourceType |
+| resource_write.go | Resource create/update inputs, including managed identity collections and nullable manual health override |
+| health_observation.go | HealthObservation value and exact fresh/stale/never boundary calculation |
 | relation.go | ResourceRelation struct, RelationType type |
 | audit.go | AuditEvent plus server-owned AuditChange field-diff contract |
 | auth.go | UserCredential (incl. IsActive + AuthorizationVersion), LoginRequest, LoginResponse structs |
@@ -22,6 +23,7 @@ Domain structs, taxonomy constants, validation methods, and dictionary definitio
 | query_disclosure.go | Phase 38Q governed result-disclosure policy: ResultDisclosureMode enum + Validate, ResultDisclosurePolicy, ResultDisclosurePolicyUpsertRequest + Validate, ResultDisclosurePolicyListQuery |
 | query_saved_statement.go | Phase 38W governed saved statements: immutable scopes, typed parameter definitions, request validation, template-execution request/limits, and list response types |
 | resource_test.go | Validation and dictionary completeness tests |
+| health_observation_test.go | Freshness time-boundary contract tests |
 | query_execution_test.go | Environment-policy, credential_ref fail-closed validator tests, Phase 38S governed-result-paging contract tests (ValidatePagination, JSON omitempty) |
 | query_credential_test.go | Runtime-status and upsert-request validation tests (fail-closed enum, all-environments confirmation) |
 | query_disclosure_test.go | Disclosure-mode and upsert-request validation tests (fail-closed mode, identifier syntax/length) |
@@ -29,6 +31,7 @@ Domain structs, taxonomy constants, validation methods, and dictionary definitio
 
 ## Exports
 - All domain structs (Resource, ResourceRelation, AuditEvent, etc.)
+- `HealthObservation`, `HealthFreshness`, and `HealthObservation.FreshnessAt()`
 - `AuditChange`, `AuditChangeOperation`, and add/update/remove constants for extensible inventory evidence
 - Type constants and validation methods, including `ResourceOrigin`
 - `ResourceTypeDictionary()`, `RelationTypeDictionary()`, `LifecycleStatusDictionary()`, `HealthStatusDictionary()`

@@ -1,9 +1,11 @@
 //go:build integration
-// Package integration provides real-MySQL coverage for the operator access matrix.
-// input: context, encoding/json, fmt, net/http, testing, time, internal/api, internal/model, internal/repository/mysql, internal/service, internal/testsupport/operatoraccess
-// output: TestOperatorAccessBoundary
-// pos: Proves the operator access matrix on real MySQL with a self-contained fixture
-// note: if this file changes, update header and README.md
+
+// Package integration provides real-MySQL coverage for the operator access boundary.
+// input: context, encoding/json, fmt, net/http, net/http/httptest, strings, testing, time, internal/api, internal/model, internal/repository/mysql, internal/service, internal/testsupport/operatoraccess
+// output: TestOperatorAccessBoundary integration case, including health observation ingestion
+// pos: Proves the operator access matrix on real MySQL with self-contained resource and query-target fixtures
+// note: if this file changes, update this header and module README.md.
+//
 package integration
 
 import (
@@ -263,6 +265,8 @@ func boundaryBody(op operatoraccess.Operation) string {
 		return fmt.Sprintf(`{"resourceType":"host","resourceSubtype":"vm","name":"operator-boundary-%d","displayName":"Operator Boundary","environmentId":1,"ownerId":1,"lifecycleStatus":"running","healthStatus":"healthy","source":"manual","labels":{},"profile":{"hostname":"boundary.internal","ipAddress":"10.0.0.8"}}`, time.Now().UnixNano())
 	case "PATCH /resources/{id}":
 		return `{"displayName":"Operator Boundary Updated"}`
+	case "POST /resources/{id}/health-observations":
+		return `{"status":"warning","observedAt":"2026-08-30T00:00:00Z","observer":"boundary-test"}`
 	case "POST /resources/{id}/archive":
 		return `{"reason":"boundary test"}`
 	case "PUT /resources/{id}/profile", "PATCH /resources/{id}/profile":

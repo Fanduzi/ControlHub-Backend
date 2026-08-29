@@ -1,8 +1,8 @@
 // Package api provides HTTP handlers and routing for the ControlHub REST API.
 // input: internal/api, internal/model, internal/service, net/http
 // output: TestServer struct, NewTestServer
-// pos: Test infrastructure — fake repos including Domain Name and Virtual IP profiles and pre-wired router for handler tests
-// note: if this file changes, update header and README.md
+// pos: Test infrastructure — fake repositories for typed profiles and health observations plus a pre-wired handler router
+// note: if this file changes, update this header and module README.md.
 package api
 
 import (
@@ -469,6 +469,11 @@ func (f *fakeResourceRepo) UpdateResource(_ context.Context, id uint64, input mo
 	}
 	if input.HealthStatus != nil {
 		updated.HealthStatus = string(*input.HealthStatus)
+		override := *input.HealthStatus
+		updated.ManualHealthOverride = &override
+	}
+	if input.ClearHealthStatus {
+		updated.ManualHealthOverride = nil
 	}
 	if input.Aliases != nil {
 		updated.Aliases = append([]string(nil), (*input.Aliases)...)
@@ -491,6 +496,20 @@ func (f *fakeResourceRepo) UpdateResource(_ context.Context, id uint64, input mo
 
 func (f *fakeResourceRepo) UpdateResourceWithAudit(ctx context.Context, id uint64, input model.ResourceUpdateInput, _ uint64, _ string) (*model.Resource, error) {
 	return f.UpdateResource(ctx, id, input)
+}
+
+func (f *fakeResourceRepo) UpsertHealthObservation(_ context.Context, resourceID uint64, observation model.HealthObservation) error {
+	resource, ok := f.resources[resourceID]
+	if !ok {
+		return service.ErrResourceNotFound
+	}
+	observedAt := observation.ObservedAt
+	resource.HealthStatus = string(observation.Status)
+	resource.HealthFreshness = model.HealthFreshnessFresh
+	resource.HealthObservedAt = &observedAt
+	resource.HealthObserver = observation.Observer
+	f.resources[resourceID] = resource
+	return nil
 }
 
 func (f *fakeResourceRepo) ArchiveResource(_ context.Context, id uint64, reason string) (*model.Resource, error) {
@@ -1041,9 +1060,11 @@ func (f *fakeSavedStatementService) Delete(_ context.Context, _ service.Authenti
 func NewTestServer() *TestServer {
 	archivedAt := time.Date(2026, 4, 11, 22, 0, 0, 0, time.UTC)
 	archiveReason := "retired"
+	healthObservedAt := time.Date(2026, 4, 11, 19, 55, 0, 0, time.UTC)
+	healthyOverride := model.HealthStatusHealthy
 	resourceRepo := &fakeResourceRepo{
 		resources: map[uint64]model.Resource{
-			1: {ID: 1, ResourceType: model.ResourceTypeDatabaseInstance, ResourceSubtype: "mysql", Name: "order-mysql-prod", DisplayName: "Order MySQL Prod", EnvironmentID: 1, OwnerID: 2, LifecycleStatus: "running", HealthStatus: "healthy", Source: "manual", ExternalID: "ext-order-mysql", Labels: map[string]string{"team": "order"}, CreatedAt: time.Date(2026, 4, 11, 20, 0, 0, 0, time.UTC), UpdatedAt: time.Date(2026, 4, 11, 20, 0, 0, 0, time.UTC)},
+			1: {ID: 1, ResourceType: model.ResourceTypeDatabaseInstance, ResourceSubtype: "mysql", Name: "order-mysql-prod", DisplayName: "Order MySQL Prod", EnvironmentID: 1, OwnerID: 2, LifecycleStatus: "running", HealthStatus: "healthy", HealthFreshness: model.HealthFreshnessFresh, HealthObservedAt: &healthObservedAt, HealthObserver: "prometheus", ManualHealthOverride: &healthyOverride, Source: "manual", ExternalID: "ext-order-mysql", Labels: map[string]string{"team": "order"}, CreatedAt: time.Date(2026, 4, 11, 20, 0, 0, 0, time.UTC), UpdatedAt: time.Date(2026, 4, 11, 20, 0, 0, 0, time.UTC)},
 			2: {ID: 2, ResourceType: model.ResourceTypeHost, ResourceSubtype: "vm", Name: "prod-host-01", DisplayName: "Prod Host 01", EnvironmentID: 2, OwnerID: 3, LifecycleStatus: "degraded", HealthStatus: "warning", Source: "manual", ExternalID: "ext-prod-host", Labels: map[string]string{"team": "platform"}, CreatedAt: time.Date(2026, 4, 11, 20, 0, 0, 0, time.UTC), UpdatedAt: time.Date(2026, 4, 11, 20, 0, 0, 0, time.UTC)},
 			3: {ID: 3, ResourceType: model.ResourceTypeDatabaseInstance, ResourceSubtype: "mysql", Name: "order-mysql-prod", DisplayName: "Order MySQL Prod", EnvironmentID: 1, OwnerID: 2, LifecycleStatus: "running", HealthStatus: "healthy", Source: "manual", Labels: map[string]string{"team": "order"}, ClusterId: ptrUint64(4), CreatedAt: time.Date(2026, 4, 11, 20, 0, 0, 0, time.UTC), UpdatedAt: time.Date(2026, 4, 11, 20, 0, 0, 0, time.UTC)},
 			4: {ID: 4, ResourceType: model.ResourceTypeDatabaseCluster, ResourceSubtype: "mysql", Name: "order-mysql-cluster-prod", DisplayName: "Order MySQL Cluster Prod", EnvironmentID: 1, OwnerID: 2, LifecycleStatus: "running", HealthStatus: "healthy", Source: "manual", Labels: map[string]string{"team": "order"}, CreatedAt: time.Date(2026, 4, 11, 20, 0, 0, 0, time.UTC), UpdatedAt: time.Date(2026, 4, 11, 20, 0, 0, 0, time.UTC)},

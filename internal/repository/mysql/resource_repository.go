@@ -1,9 +1,8 @@
 // Package mysql provides MySQL-backed repository implementations.
-// input: database/sql, internal/model, internal/service
-// output: NewResourceRepository, ResourceRepository struct (implements service.ResourceRepository)
-// pos: MySQL data access for core resource table, typed profiles including domain_name and virtual_ip, pagination and filtering
-// pos: MySQL data access for core resource table, typed profiles including database_proxy and control_plane_component, pagination and filtering
-// note: if this file changes, update header and README.md
+// input: database/sql, time, internal/model, internal/service
+// output: resource CRUD, governed identity and typed profiles, latest health observations, effective health, and audited manual overrides
+// pos: MySQL data access for resources, identity, typed profiles, and current health evidence
+// note: if this file changes, update this header and module README.md.
 package mysql
 
 import (
@@ -15,6 +14,7 @@ import (
 	"reflect"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/go-sql-driver/mysql"
 
@@ -23,11 +23,16 @@ import (
 )
 
 type ResourceRepository struct {
-	db *sql.DB
+	db               *sql.DB
+	healthThresholds model.HealthFreshnessThresholds
 }
 
-func NewResourceRepository(db *sql.DB) *ResourceRepository {
-	return &ResourceRepository{db: db}
+func NewResourceRepository(db *sql.DB, thresholds ...model.HealthFreshnessThresholds) *ResourceRepository {
+	repo := &ResourceRepository{db: db}
+	if len(thresholds) > 0 {
+		repo.healthThresholds = thresholds[0]
+	}
+	return repo
 }
 
 const resourceColumns = `id, resource_type, resource_subtype, name, display_name,
@@ -60,13 +65,6 @@ func (r *ResourceRepository) ListResources(ctx context.Context, q model.Resource
 			args = append(args, v)
 		}
 	}
-	if len(q.HealthStatuses) > 0 {
-		ph := buildInClause(len(q.HealthStatuses))
-		conds = append(conds, "r.health_status in ("+ph+")")
-		for _, v := range q.HealthStatuses {
-			args = append(args, v)
-		}
-	}
 	if len(q.ResourceSubtypes) > 0 {
 		ph := buildInClause(len(q.ResourceSubtypes))
 		conds = append(conds, "r.resource_subtype in ("+ph+")")
@@ -93,10 +91,13 @@ func (r *ResourceRepository) ListResources(ctx context.Context, q model.Resource
 		where = "where " + strings.Join(conds, " and ")
 	}
 
+	filterEffectiveHealth := len(q.HealthStatuses) > 0
 	var total int
-	countQuery := "select count(*) from resources r " + where
-	if err := r.db.QueryRowContext(ctx, countQuery, args...).Scan(&total); err != nil {
-		return nil, 0, fmt.Errorf("count resources: %w", err)
+	if !filterEffectiveHealth {
+		countQuery := "select count(*) from resources r " + where
+		if err := r.db.QueryRowContext(ctx, countQuery, args...).Scan(&total); err != nil {
+			return nil, 0, fmt.Errorf("count resources: %w", err)
+		}
 	}
 
 	offset := (q.Page - 1) * q.PageSize
@@ -107,9 +108,13 @@ func (r *ResourceRepository) ListResources(ctx context.Context, q model.Resource
        (select rr.to_resource_id from resource_relations rr
         where rr.from_resource_id = r.id and rr.relation_type = 'member_of'
         limit 1) as cluster_id
-from resources r ` + where + " order by r.name limit ? offset ?"
+from resources r ` + where + " order by r.name"
 
-	dataArgs := append(args, q.PageSize, offset)
+	dataArgs := args
+	if !filterEffectiveHealth {
+		dataQuery += " limit ? offset ?"
+		dataArgs = append(dataArgs, q.PageSize, offset)
+	}
 	rows, err := r.db.QueryContext(ctx, dataQuery, dataArgs...)
 	if err != nil {
 		return nil, 0, err
@@ -121,6 +126,7 @@ from resources r ` + where + " order by r.name limit ? offset ?"
 		var (
 			item          model.Resource
 			rawLabels     string
+			manualHealth  sql.NullString
 			archivedAt    sql.NullTime
 			archivedBy    sql.NullInt64
 			archiveReason sql.NullString
@@ -136,7 +142,7 @@ from resources r ` + where + " order by r.name limit ? offset ?"
 			&item.EnvironmentID,
 			&item.OwnerID,
 			&item.LifecycleStatus,
-			&item.HealthStatus,
+			&manualHealth,
 			&item.Origin,
 			&rawLabels,
 			&item.CreatedAt,
@@ -164,6 +170,7 @@ from resources r ` + where + " order by r.name limit ? offset ?"
 			v := uint64(clusterId.Int64)
 			item.ClusterId = &v
 		}
+		setManualHealthOverride(&item, manualHealth)
 
 		if rawLabels == "" || rawLabels == "null" {
 			item.Labels = map[string]string{}
@@ -183,9 +190,38 @@ from resources r ` + where + " order by r.name limit ? offset ?"
 		return nil, 0, err
 	}
 
+	if err := r.attachHealthObservations(ctx, items); err != nil {
+		return nil, 0, err
+	}
+	if filterEffectiveHealth {
+		// ponytail: effective-health filtering scans matched inventory rows in Go;
+		// move health derivation to an indexed read model if inventory scale makes this measurable.
+		filtered := items[:0]
+		for _, item := range items {
+			if containsHealthStatus(q.HealthStatuses, item.HealthStatus) {
+				filtered = append(filtered, item)
+			}
+		}
+		total = len(filtered)
+		if offset >= total {
+			items = []model.Resource{}
+		} else {
+			end := min(offset+q.PageSize, total)
+			items = filtered[offset:end]
+		}
+	}
 	r.attachDatabaseOperationalSummaries(ctx, items)
 
 	return items, total, nil
+}
+
+func containsHealthStatus(statuses []string, status string) bool {
+	for _, candidate := range statuses {
+		if candidate == status {
+			return true
+		}
+	}
+	return false
 }
 
 // buildInClause returns a parameterized placeholder string like "?, ?, ?" for n values.
@@ -215,6 +251,7 @@ func (r *ResourceRepository) GetResource(id uint64) (*model.Resource, error) {
 	var (
 		item          model.Resource
 		rawLabels     string
+		manualHealth  sql.NullString
 		archivedAt    sql.NullTime
 		archivedBy    sql.NullInt64
 		archiveReason sql.NullString
@@ -230,7 +267,7 @@ func (r *ResourceRepository) GetResource(id uint64) (*model.Resource, error) {
 		&item.EnvironmentID,
 		&item.OwnerID,
 		&item.LifecycleStatus,
-		&item.HealthStatus,
+		&manualHealth,
 		&item.Origin,
 		&rawLabels,
 		&item.CreatedAt,
@@ -261,6 +298,7 @@ func (r *ResourceRepository) GetResource(id uint64) (*model.Resource, error) {
 		v := uint64(clusterId.Int64)
 		item.ClusterId = &v
 	}
+	setManualHealthOverride(&item, manualHealth)
 
 	if rawLabels == "" || rawLabels == "null" {
 		item.Labels = map[string]string{}
@@ -272,6 +310,11 @@ func (r *ResourceRepository) GetResource(id uint64) (*model.Resource, error) {
 	}
 
 	item.ProfileSummary = r.buildProfileSummary(context.Background(), item.ID, item.ResourceType)
+	items := []model.Resource{item}
+	if err := r.attachHealthObservations(context.Background(), items); err != nil {
+		return nil, err
+	}
+	item = items[0]
 
 	if item.ResourceType == model.ResourceTypeDatabaseCluster {
 		item.DatabaseOperationalSummary = r.buildDatabaseOperationalSummary(context.Background(), item.ID)
@@ -860,6 +903,35 @@ func updateResourceTx(ctx context.Context, tx *sql.Tx, id uint64, input model.Re
 	return existing, nil
 }
 
+// UpsertHealthObservation stores only the newest evidence from an observer.
+// Observation writes are operational evidence and intentionally emit no
+// inventory audit event.
+func (r *ResourceRepository) UpsertHealthObservation(ctx context.Context, resourceID uint64, observation model.HealthObservation) error {
+	if resourceID == 0 {
+		return errors.New("resource id is required")
+	}
+	if err := observation.Status.Validate(); err != nil {
+		return fmt.Errorf("health status: %w", err)
+	}
+	observation.Observer = strings.TrimSpace(observation.Observer)
+	if observation.Observer == "" || len(observation.Observer) > 191 {
+		return errors.New("observer must be between 1 and 191 characters")
+	}
+	if observation.ObservedAt.IsZero() {
+		return errors.New("observedAt is required")
+	}
+	_, err := r.db.ExecContext(ctx, `insert into resource_health_observations
+		(resource_id, observer, health_status, observed_at) values (?, ?, ?, ?)
+		on duplicate key update
+		  health_status = if(values(observed_at) >= observed_at, values(health_status), health_status),
+		  observed_at = greatest(observed_at, values(observed_at))`,
+		resourceID, observation.Observer, observation.Status, observation.ObservedAt.UTC())
+	if err != nil {
+		return fmt.Errorf("upsert health observation: %w", err)
+	}
+	return nil
+}
+
 func getResourceForUpdate(ctx context.Context, tx *sql.Tx, id uint64) (*model.Resource, error) {
 	item, err := scanResource(tx.QueryRowContext(ctx, "select "+resourceColumns+" from resources where id = ? for update", id))
 	if errors.Is(err, sql.ErrNoRows) {
@@ -1023,7 +1095,9 @@ func resourceUpdateStatement(id uint64, input model.ResourceUpdateInput) (string
 	if input.LifecycleStatus != nil {
 		add("lifecycle_status", string(*input.LifecycleStatus))
 	}
-	if input.HealthStatus != nil {
+	if input.ClearHealthStatus {
+		add("health_status", nil)
+	} else if input.HealthStatus != nil {
 		add("health_status", string(*input.HealthStatus))
 	}
 	if input.Labels != nil {
@@ -1063,8 +1137,16 @@ func resourceAuditChanges(before model.Resource, input model.ResourceUpdateInput
 	if input.LifecycleStatus != nil {
 		add("lifecycleStatus", before.LifecycleStatus, string(*input.LifecycleStatus))
 	}
-	if input.HealthStatus != nil {
-		add("manualHealthOverride", before.HealthStatus, string(*input.HealthStatus))
+	if input.ClearHealthStatus {
+		if before.ManualHealthOverride != nil {
+			changes = append(changes, model.AuditChange{Field: "manualHealthOverride", Operation: model.AuditChangeRemove, Before: string(*before.ManualHealthOverride)})
+		}
+	} else if input.HealthStatus != nil {
+		if before.ManualHealthOverride == nil {
+			changes = append(changes, model.AuditChange{Field: "manualHealthOverride", Operation: model.AuditChangeAdd, After: string(*input.HealthStatus)})
+		} else {
+			add("manualHealthOverride", string(*before.ManualHealthOverride), string(*input.HealthStatus))
+		}
 	}
 	if input.Aliases != nil && !reflect.DeepEqual(before.Aliases, *input.Aliases) {
 		changes = append(changes, model.AuditChange{Field: "identity.aliases", Operation: model.AuditChangeUpdate, Before: before.Aliases, After: *input.Aliases})
@@ -1173,6 +1255,7 @@ func scanResource(scanner resourceScanner) (model.Resource, error) {
 	var (
 		item          model.Resource
 		rawLabels     string
+		manualHealth  sql.NullString
 		archivedAt    sql.NullTime
 		archivedBy    sql.NullInt64
 		archiveReason sql.NullString
@@ -1187,7 +1270,7 @@ func scanResource(scanner resourceScanner) (model.Resource, error) {
 		&item.EnvironmentID,
 		&item.OwnerID,
 		&item.LifecycleStatus,
-		&item.HealthStatus,
+		&manualHealth,
 		&item.Origin,
 		&rawLabels,
 		&item.CreatedAt,
@@ -1210,6 +1293,7 @@ func scanResource(scanner resourceScanner) (model.Resource, error) {
 	if archiveReason.Valid {
 		item.ArchiveReason = &archiveReason.String
 	}
+	setManualHealthOverride(&item, manualHealth)
 
 	if rawLabels == "" || rawLabels == "null" {
 		item.Labels = map[string]string{}
@@ -1223,6 +1307,57 @@ func scanResource(scanner resourceScanner) (model.Resource, error) {
 	item.Source = string(item.Origin)
 
 	return item, nil
+}
+
+func setManualHealthOverride(resource *model.Resource, value sql.NullString) {
+	if value.Valid {
+		override := model.HealthStatus(value.String)
+		resource.ManualHealthOverride = &override
+	}
+}
+
+func (r *ResourceRepository) attachHealthObservations(ctx context.Context, resources []model.Resource) error {
+	if len(resources) == 0 {
+		return nil
+	}
+	ids := make([]uint64, len(resources))
+	byID := make(map[uint64][]model.HealthObservation, len(resources))
+	args := make([]any, len(resources))
+	for i := range resources {
+		ids[i] = resources[i].ID
+		args[i] = resources[i].ID
+	}
+	rows, err := r.db.QueryContext(ctx, `select resource_id, health_status, observed_at, observer
+		from resource_health_observations where resource_id in (`+buildInClause(len(ids))+`)`, args...)
+	if err != nil {
+		return fmt.Errorf("list health observations: %w", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var resourceID uint64
+		var observation model.HealthObservation
+		if err := rows.Scan(&resourceID, &observation.Status, &observation.ObservedAt, &observation.Observer); err != nil {
+			return fmt.Errorf("scan health observation: %w", err)
+		}
+		byID[resourceID] = append(byID[resourceID], observation)
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("list health observations: %w", err)
+	}
+	now := time.Now()
+	for i := range resources {
+		status, freshness, observedAt, observer := model.ResolveHealth(
+			now,
+			r.healthThresholds.For(resources[i].ResourceType),
+			resources[i].ManualHealthOverride,
+			byID[resources[i].ID],
+		)
+		resources[i].HealthStatus = string(status)
+		resources[i].HealthFreshness = freshness
+		resources[i].HealthObservedAt = observedAt
+		resources[i].HealthObserver = observer
+	}
+	return nil
 }
 
 func (r *ResourceRepository) buildProfileSummary(ctx context.Context, resourceID uint64, resourceType model.ResourceType) *model.ProfileSummary {

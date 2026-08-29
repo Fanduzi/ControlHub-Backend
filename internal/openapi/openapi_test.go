@@ -1,8 +1,8 @@
 // Package openapi_test verifies the embedded OpenAPI contract.
 // input: embedded OpenAPI YAML, kin-openapi parser, internal/model
-// output: OpenAPI schema, topology, pagination, executions, and closed ErrorResponse.error enum tests
+// output: OpenAPI schema, resource health observation, topology, pagination, execution, and error-enum tests
 // pos: Prevents documented API contracts from drifting from router behavior
-// note: if this file changes, update header and README.md
+// note: if this file changes, update this header and module README.md.
 package openapi_test
 
 import (
@@ -28,6 +28,32 @@ func TestOpenAPIYAMLIsValid(t *testing.T) {
 
 	if err := doc.Validate(context.Background()); err != nil {
 		t.Fatalf("openapi.yaml validation failed: %v", err)
+	}
+}
+
+func TestOpenAPIResourceHealthObservationContract(t *testing.T) {
+	loader := openapi3.NewLoader()
+	doc, err := loader.LoadFromData(openapi.YAML)
+	if err != nil {
+		t.Fatalf("failed to parse openapi.yaml: %v", err)
+	}
+
+	path := doc.Paths.Value("/resources/{id}/health-observations")
+	if path == nil || path.Post == nil {
+		t.Fatal("POST /resources/{id}/health-observations must be documented")
+	}
+	resource := doc.Components.Schemas["Resource"].Value
+	for _, field := range []string{"healthStatus", "healthFreshness", "healthObservedAt", "healthObserver", "manualHealthOverride"} {
+		if resource.Properties[field] == nil {
+			t.Fatalf("Resource.%s must be documented", field)
+		}
+		if !slices.Contains(resource.Required, field) {
+			t.Fatalf("Resource.%s must be required", field)
+		}
+	}
+	patch := doc.Components.Schemas["ResourcePatchRequest"].Value.Properties["healthStatus"]
+	if patch == nil || patch.Value == nil || !patch.Value.Nullable {
+		t.Fatal("ResourcePatchRequest.healthStatus must allow null to clear the manual override")
 	}
 }
 

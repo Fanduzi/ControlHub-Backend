@@ -5,6 +5,7 @@ MySQL-backed integration tests run against disposable Testcontainers databases.
 ## Files
 | File | Responsibility |
 |------|---------------|
+| health_observation_test.go | Real-MySQL latest observation, freshness, effective filtering, no-audit, and atomic manual override contracts |
 | testenv_test.go | Starts MySQL, applies migrations, and provides database helpers |
 | resource_test.go | Resource repository CRUD/filtering, create-with-profile atomicity, profile validation, and PATCH partial-merge semantics against real MySQL |
 | inventory_audit_test.go | Real-MySQL inventory field-diff success, audit-failure rollback, all typed-profile representations, and per-CI relationship evidence |

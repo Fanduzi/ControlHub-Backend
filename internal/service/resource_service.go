@@ -1,8 +1,8 @@
 // Package service provides business logic for resource reads, writes, and typed profile assembly.
-// input: internal/model (Resource, ResourceProfileResponse, ResourceType, ResourceListQuery, PageInfo, ResourceCreateInput)
-// output: NewResourceService, ResourceService.List/Get/GetProfile/Create, ErrResourceNotFound, ResourceRepository interface
-// pos: Business logic for resource reads with pagination, create-with-profile atomicity, strict profile field validation including Domain Name/Virtual IP and Database Proxy/Control Plane identity, and minimum manual identity
-// note: if this file changes, update header and README.md
+// input: internal/model resource identity, typed profiles, health observations, writes, and read contracts
+// output: resource CRUD, governed-profile reads, health observation ingestion, and audited inventory mutations
+// pos: Business logic for governed resource identity, typed profiles, and operational health evidence
+// note: if this file changes, update this header and module README.md.
 package service
 
 import (
@@ -53,6 +53,10 @@ type ResourceService struct {
 
 type inventoryAuditResourceRepository interface {
 	UpdateResourceWithAudit(ctx context.Context, id uint64, input model.ResourceUpdateInput, actorUserID uint64, eventType string) (*model.Resource, error)
+}
+
+type healthObservationRepository interface {
+	UpsertHealthObservation(ctx context.Context, resourceID uint64, observation model.HealthObservation) error
 }
 
 func NewResourceService(repo ResourceRepository) *ResourceService {
@@ -138,6 +142,36 @@ func (s *ResourceService) UpdateInventory(ctx context.Context, actorUserID, id u
 	return repo.UpdateResourceWithAudit(ctx, id, input, actorUserID, "inventory.resource.updated")
 }
 
+// ObserveHealth persists operational evidence without routing it through the
+// inventory audit seam.
+func (s *ResourceService) ObserveHealth(ctx context.Context, id uint64, observation model.HealthObservation) error {
+	if id == 0 {
+		return wrapValidation("resource id is required")
+	}
+	existing, err := s.Get(id)
+	if err != nil {
+		return err
+	}
+	if existing.IsArchived() {
+		return ErrResourceArchived
+	}
+	if err := observation.Status.Validate(); err != nil {
+		return wrapValidation("health status is not supported")
+	}
+	observation.Observer = strings.TrimSpace(observation.Observer)
+	if observation.Observer == "" || len(observation.Observer) > 191 {
+		return wrapValidation("observer must be between 1 and 191 characters")
+	}
+	if observation.ObservedAt.IsZero() {
+		return wrapValidation("observedAt is required")
+	}
+	repo, ok := s.repo.(healthObservationRepository)
+	if !ok {
+		return errors.New("health observation repository is required")
+	}
+	return repo.UpsertHealthObservation(ctx, id, observation)
+}
+
 func (s *ResourceService) validateUpdate(id uint64, patch model.ResourcePatchRequest) (model.ResourceUpdateInput, error) {
 	if id == 0 {
 		return model.ResourceUpdateInput{}, wrapValidation("resource id is required")
@@ -189,6 +223,9 @@ func (s *ResourceService) validateUpdate(id uint64, patch model.ResourcePatchReq
 		if err := patch.HealthStatus.Validate(); err != nil {
 			return model.ResourceUpdateInput{}, wrapValidation("healthStatus is not supported")
 		}
+	}
+	if patch.ClearHealthStatus && patch.HealthStatus != nil {
+		return model.ResourceUpdateInput{}, wrapValidation("healthStatus cannot be set and cleared together")
 	}
 	if patch.Labels != nil {
 		if err := validateResourceLabels(*patch.Labels); err != nil {

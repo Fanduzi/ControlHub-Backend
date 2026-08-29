@@ -1,8 +1,8 @@
 // Package api provides HTTP handlers and routing for the ControlHub REST API.
 // input: net/http, encoding/json, internal/service, internal/model
-// output: handleListResources, handleGetResource, handleGetResourceProfile, handleCreateResource, handlePatchResource, writeJSON, parseResourceListQuery, parseIntDefault
-// pos: HTTP handlers for resource read and write operations with pagination and filtering
-// note: if this file changes, update header and README.md
+// output: resource list/detail, audited inventory writes, and non-audited health observation ingestion
+// pos: HTTP boundary for resource inventory and operational health evidence
+// note: if this file changes, update this header and module README.md.
 package api
 
 import (
@@ -107,6 +107,26 @@ func handlePatchResource(resourceService *service.ResourceService) http.HandlerF
 		}
 
 		writeJSON(w, http.StatusOK, updated)
+	}
+}
+
+func handleRecordHealthObservation(resourceService *service.ResourceService) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		id, err := parseUint64IDParam(chi.URLParam(r, "id"), "resource id")
+		if err != nil {
+			writeJSONError(w, http.StatusBadRequest, "validation_failed", err.Error())
+			return
+		}
+		var observation model.HealthObservation
+		if err := decodeJSONBody(r, &observation); err != nil {
+			writeJSONError(w, http.StatusBadRequest, "malformed_json", "request body must be valid JSON")
+			return
+		}
+		if err := resourceService.ObserveHealth(r.Context(), id, observation); err != nil {
+			writeServiceError(w, err)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
 	}
 }
 

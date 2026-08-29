@@ -1,8 +1,8 @@
 // Package mysql provides MySQL-backed repository implementations.
-// input: database/sql, internal/model
-// output: NewRelationRepository, RelationRepository struct
-// pos: MySQL data access for resource_relations table
-// note: if this file changes, update header and README.md
+// input: database/sql, internal/model, and effective-health resource reads
+// output: relation CRUD plus relation/member projections with derived health
+// pos: MySQL data access for resource relations and topology resource lookup
+// note: if this file changes, update this header and module README.md.
 package mysql
 
 import (
@@ -80,6 +80,7 @@ func (r *RelationRepository) ListRelationViewsByResourceID(resourceID uint64) ([
 	items := make([]model.ResourceRelationView, 0)
 	for rows.Next() {
 		var item model.ResourceRelationView
+		var manualHealth sql.NullString
 		if err := rows.Scan(
 			&item.ID,
 			&item.FromResourceID,
@@ -91,7 +92,7 @@ func (r *RelationRepository) ListRelationViewsByResourceID(resourceID uint64) ([
 			&item.RelatedResourceDisplayName,
 			&item.RelatedResourceType,
 			&item.RelatedResourceSubtype,
-			&item.RelatedResourceHealthStatus,
+			&manualHealth,
 			&item.RelatedResourceLifecycleStat,
 		); err != nil {
 			return nil, err
@@ -101,6 +102,11 @@ func (r *RelationRepository) ListRelationViewsByResourceID(resourceID uint64) ([
 		} else {
 			item.Direction = "incoming"
 		}
+		related, err := NewResourceRepository(r.db).GetResource(item.RelatedResourceID)
+		if err != nil {
+			return nil, err
+		}
+		item.RelatedResourceHealthStatus = related.HealthStatus
 		items = append(items, item)
 	}
 
@@ -125,6 +131,7 @@ func (r *RelationRepository) ListClusterMembers(clusterID uint64) ([]model.Clust
 	items := make([]model.ClusterMemberView, 0)
 	for rows.Next() {
 		var item model.ClusterMemberView
+		var manualHealth sql.NullString
 		if err := rows.Scan(
 			&item.ResourceID,
 			&item.Name,
@@ -132,10 +139,15 @@ func (r *RelationRepository) ListClusterMembers(clusterID uint64) ([]model.Clust
 			&item.ResourceType,
 			&item.ResourceSubtype,
 			&item.LifecycleStatus,
-			&item.HealthStatus,
+			&manualHealth,
 		); err != nil {
 			return nil, err
 		}
+		resource, err := NewResourceRepository(r.db).GetResource(item.ResourceID)
+		if err != nil {
+			return nil, err
+		}
+		item.HealthStatus = resource.HealthStatus
 		item.ProfileSummary = r.fetchMemberProfileSummary(item.ResourceID, item.ResourceType)
 		items = append(items, item)
 	}
@@ -190,18 +202,7 @@ func (r *RelationRepository) fetchHostProfileSummary(ctx context.Context, id uin
 }
 
 func (r *RelationRepository) GetResource(id uint64) (*model.Resource, error) {
-	query := "select " + resourceColumns + " from resources where id = ?"
-
-	row := r.db.QueryRowContext(context.Background(), query, id)
-
-	item, err := scanResource(row)
-	if err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			return nil, service.ErrResourceNotFound
-		}
-		return nil, err
-	}
-	return &item, nil
+	return NewResourceRepository(r.db).GetResource(id)
 }
 
 func (r *RelationRepository) CreateRelation(ctx context.Context, input model.RelationCreateInput) (*model.ResourceRelation, error) {

@@ -5,8 +5,7 @@ Embeds and validates the OpenAPI contract served by the API documentation route.
 ## Files
 | File | Responsibility |
 |------|---------------|
-| openapi.yaml | Source OpenAPI contract, including Operator Access Boundary security, inventory audit field diffs, core CI typed-profile identity, Domain Name/Virtual IP profile keys, metrics responses, and the closed Controlled Error Code enum |
-| openapi.yaml | Source OpenAPI contract, including Operator Access Boundary security, inventory audit field diffs, metrics responses, the closed Controlled Error Code enum, and Database Proxy/Control Plane typed profile fields |
+| openapi.yaml | Source contract for governed typed-profile identity, resource health evidence/observation ingestion, access security, inventory audit diffs, metrics, and controlled errors |
 | embed.go | Embeds the YAML for serving and tests |
 | openapi_test.go | Validates schema, topology, pagination, and executions contract tests |
 | operator_access_boundary_test.go | Proves every protected operation documents the status codes its operatoraccess class requires |
@@ -20,6 +19,7 @@ Embeds and validates the OpenAPI contract served by the API documentation route.
 - `GET /ops/query-evidence-metrics` response schema (Issue #34): fixed admin-only shape with exactly `queryEvidencePersistenceFailures`; carries no identity, target, statement, value, credential, DSN, request, or raw error material
 - `ErrorResponse.error`: closed Controlled Error Code enum (Issue #53). Adding a code is a contract change. The published set is backend `writeJSONError` literals plus Console BFF snake_case codes.
 - `AuditEvent.changes`: optional server-owned add/update/remove field evidence with before/after values; absent on legacy and non-inventory events.
+- `Resource` always exposes effective status, freshness, observed time, observer, and nullable manual override; POST observations are operational and PATCH null clears the audited override.
 
 ## Dependencies
 - Upstream: `github.com/getkin/kin-openapi` for validation tests

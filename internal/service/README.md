@@ -5,7 +5,7 @@ Business logic layer with interface-based repository dependencies. Each service 
 ## Files
 | File | Responsibility |
 |------|---------------|
-| resource_service.go | Resource reads/writes, governed-identity validation, minimum manual typed-profile identity, explicit conflicts, and fail-closed audited HTTP inventory updates |
+| resource_service.go | Resource reads/writes, governed-identity validation, minimum manual typed-profile identity, health observation ingestion, explicit conflicts, and fail-closed audited inventory updates |
 | resource_write_service_test.go | Resource/relation write-flow tests, including identity normalization/immutability, sensitive-label rejection, profile validation, and the manual-identity rule matrix |
 | profile_service.go | Typed profile PUT/PATCH/DELETE validation plus fail-closed audited mutations for all typed-profile identities |
 | profile_service_test.go | Profile write tests: validation, PATCH partial-merge semantics, not-found/archived/unsupported guards, and all typed-profile identity rules |
@@ -48,6 +48,7 @@ Business logic layer with interface-based repository dependencies. Each service 
 
 ## Exports
 - `NewXxxService(repo) *XxxService` constructors for all services
+- `ResourceService.ObserveHealth` — validated operational evidence ingestion that never emits inventory audit events
 - `NewMemoryUserStore`, `AuthService.WithClock`, `AuthService.ChangeUserRole`/`SetUserActive`/`ResetUserPassword` — Authorization Version seams
 - `AuthAuditEmitter`, `NoopEmitter` — fail-open authentication/authorization audit emission interface and discard implementation
 - `BoundedAuthAuditEmitter`, `NewBoundedAuthAuditEmitter`, `BearerRejectBudget`, `NewBearerRejectBudget`, `ProcessBearerRejectBudget`, `BoundedBearerRejectedLimit`, `AuthAuditSuppressedRejections` — process-shared budget capping untrusted Bearer rejection persistence at 60 events/min per server process (all routers draw from one budget); suppression counter exposed only via the admin auth-audit metrics surface

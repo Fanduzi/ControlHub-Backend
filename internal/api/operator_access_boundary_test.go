@@ -2,7 +2,7 @@
 // input: internal/api router, internal/service, internal/testsupport/operatoraccess, net/http/httptest
 // output: TestOperatorAccessBoundary
 // pos: Router-level authorization matrix for anonymous, editor, and admin operators, driven by the shared operatoraccess policy
-// note: if this file changes, update header and README.md
+// note: if this file changes, update this header and module README.md.
 package api
 
 import (
@@ -212,6 +212,8 @@ func boundaryBody(op operatoraccess.Operation) string {
 		return `{"resourceType":"database_instance","resourceSubtype":"mysql","name":"operator-boundary-resource","displayName":"Operator Boundary Resource","environmentId":1,"ownerId":2,"lifecycleStatus":"running","healthStatus":"healthy","source":"manual","labels":{},"profile":{"engine":"mysql","host":"boundary.internal","port":3306}}`
 	case "PATCH /resources/{id}":
 		return `{"displayName":"Operator Boundary Updated"}`
+	case "POST /resources/{id}/health-observations":
+		return `{"status":"warning","observedAt":"2026-08-30T00:00:00Z","observer":"boundary-test"}`
 	case "POST /resources/{id}/archive":
 		return `{"reason":"boundary test"}`
 	case "PUT /resources/{id}/profile", "PATCH /resources/{id}/profile":

@@ -2308,6 +2308,10 @@ paths:
                     externalIdentifiers:
                       - system: legacy
                         value: ext-order-mysql
+                    healthFreshness: fresh
+                    healthObservedAt: "2026-04-11T19:58:00Z"
+                    healthObserver: prometheus
+                    manualHealthOverride: null
                     labels:
                       team: order
                     createdAt: "2026-04-11T20:00:00Z"
@@ -2469,6 +2473,61 @@ paths:
                 $ref: "#/components/schemas/ErrorResponse"
         "401": {description: Missing or invalid Bearer token, content: {application/json: {schema: {$ref: "#/components/schemas/ErrorResponse"}}}}
         "403": {description: Authenticated actor is not an admin, content: {application/json: {schema: {$ref: "#/components/schemas/ErrorResponse"}}}}
+  /resources/{id}/health-observations:
+    post:
+      summary: Record an observer's latest resource health evidence
+      operationId: recordResourceHealthObservation
+      description: >-
+        Stores the latest observation for the resource and observer. Older
+        observations never replace newer evidence. This operational write does
+        not create an inventory audit event.
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: integer
+            format: int64
+            minimum: 1
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/HealthObservationInput"
+      responses:
+        "204":
+          description: Observation stored
+        "400":
+          description: Invalid resource ID or observation
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "401":
+          description: Missing or invalid Bearer token
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "403":
+          description: Authenticated actor is not an admin
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "404":
+          description: Resource not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "409":
+          description: Resource is archived and cannot accept observations
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
   /resources/{id}/archive:
     post:
       summary: Archive (soft-delete) a resource
@@ -4343,6 +4402,10 @@ components:
         - origin
         - aliases
         - externalIdentifiers
+        - healthFreshness
+        - healthObservedAt
+        - healthObserver
+        - manualHealthOverride
       properties:
         id:
           type: integer
@@ -4371,6 +4434,7 @@ components:
           $ref: "#/components/schemas/LifecycleStatus"
         healthStatus:
           $ref: "#/components/schemas/HealthStatus"
+          description: Conservative effective health from the worst fresh observation and manual override
         origin:
           $ref: "#/components/schemas/ResourceOrigin"
         aliases:
@@ -4381,6 +4445,22 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/ResourceExternalIdentifier"
+        healthFreshness:
+          type: string
+          enum: [fresh, stale, never]
+        healthObservedAt:
+          type: string
+          format: date-time
+          nullable: true
+          description: Timestamp of the observation selected for the effective health readout; null when never observed
+        healthObserver:
+          type: string
+          description: Observer selected for the effective health readout; empty when never observed
+        manualHealthOverride:
+          type: string
+          enum: [healthy, warning, critical, unknown]
+          nullable: true
+          description: Optional audited manual override; null when health is observation-derived
         source:
           type: string
           deprecated: true
@@ -4817,7 +4897,10 @@ components:
         lifecycleStatus:
           $ref: "#/components/schemas/LifecycleStatus"
         healthStatus:
-          $ref: "#/components/schemas/HealthStatus"
+          allOf:
+            - $ref: "#/components/schemas/HealthStatus"
+          nullable: true
+          description: Set the manual health override, or clear it with null; both mutations are inventory-audited atomically
         aliases:
           type: array
           items:
@@ -4836,6 +4919,20 @@ components:
           type: object
           additionalProperties:
             type: string
+    HealthObservationInput:
+      type: object
+      additionalProperties: false
+      required: [status, observedAt, observer]
+      properties:
+        status:
+          $ref: "#/components/schemas/HealthStatus"
+        observedAt:
+          type: string
+          format: date-time
+        observer:
+          type: string
+          minLength: 1
+          maxLength: 191
     RelationCreateInput:
       type: object
       required:

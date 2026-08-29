@@ -5,9 +5,9 @@ HTTP handlers, chi routing, CORS middleware, and fake-repo test infrastructure.
 ## Files
 | File | Responsibility |
 |------|---------------|
-| router.go | Route registration, Operator Access Boundary middleware (authenticated Inventory/dictionary reads; fresh-token query surfaces; admin-gated ops metrics), Dependencies struct, CORS middleware, process-shared bounded untrusted-Bearer audit persistence wiring |
+| router.go | Route registration, including admin health observation ingestion, Operator Access Boundary middleware, Dependencies, CORS, and bounded auth-audit wiring |
 | health_handler.go | GET /health endpoint |
-| resource_handler.go | Resource list/detail handlers; create/PATCH expose origin, aliases, and external identifiers, return explicit identity conflict codes, and route changes through atomic inventory audit |
+| resource_handler.go | Resource list/detail identity and health fields, explicit identity conflicts, non-audited observation ingestion, and PATCH changes through atomic inventory audit |
 | profile_handler.go | PUT/PATCH/DELETE /resources/{id}/profile handlers with strict decoding and token-derived atomic inventory audit |
 | relation_handler.go | Resource relation reads and token-derived atomic audited create/delete handlers |
 | audit_handler.go | Audit event list handlers (global and per-resource), including inventory field changes |
@@ -42,6 +42,7 @@ HTTP handlers, chi routing, CORS middleware, and fake-repo test infrastructure.
 ## Routes
 | Method | Path | Description |
 |--------|------|-------------|
+| POST | /resources/{id}/health-observations | Store an observer's latest operational health evidence without inventory audit |
 | GET | /query-targets/{id}/schema/table-definition | Get MySQL table definition (base tables only) |
 | POST | /query-targets/{id}/execute | Execute a governed read-only statement, with optional page-number result paging for SELECT |
 | POST | /query-targets/{id}/related-records | Governed FK related-record navigation (Issue #36: records through the same atomic Execution Evidence Pair as execution) |

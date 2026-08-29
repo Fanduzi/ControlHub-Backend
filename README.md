@@ -279,6 +279,7 @@ Dependency flow (strict, one-directional): `cmd/server` → `api` → `service` 
 | GET | /health | Health check |
 | GET | /resources | List resources |
 | GET | /resources/{id} | Get resource detail |
+| POST | /resources/{id}/health-observations | Store an observer's latest health evidence without inventory audit |
 | GET | /resources/{id}/profile | Get resource typed profile projection |
 | GET | /resources/{id}/relations | List relations for a resource |
 | GET | /resources/{id}/audit-events | List audit events for a resource |
@@ -308,6 +309,16 @@ query-evidence metrics). Handler-admin operations cover credential writes and
 all disclosure-policy operations, including GET. Saved-statement mutations are
 not a router-wide admin gate: Phase 38R authorizes personal statements by owner
 and shared templates by admin role.
+
+Resource list and detail responses include effective `healthStatus`,
+`healthFreshness` (`fresh`, `stale`, or `never`), `healthObservedAt`,
+`healthObserver`, and the nullable `manualHealthOverride`. Effective health is
+the worst fresh observation; stale or never-observed evidence fails closed and
+never appears healthy. A per-resource-type threshold can be supplied to the
+repository, with a 24-hour fallback. Observation upserts keep one latest row per
+observer and never create inventory audit events. Setting or clearing the
+manual override through resource PATCH commits with the existing #72 audit
+evidence in the same MySQL transaction.
 
 The API, OpenAPI, and MySQL integration authorization tests consume the same
 test-only operation table at `internal/testsupport/operatoraccess/policy.go`.
@@ -342,6 +353,10 @@ current HTTP contract (`GET /audit-events`,
 `GET /resources/{id}/audit-events`) will remain unchanged when the
 migration to ClickHouse happens — only the repository implementation
 will be swapped.
+
+Health observations are operational evidence, not inventory mutations, and are
+therefore intentionally absent from this audit stream. Manual override changes
+remain governed inventory mutations and are audited atomically.
 
 ## Demo Data
 

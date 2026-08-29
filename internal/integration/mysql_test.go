@@ -123,7 +123,7 @@ func assertSchemaChainBaseline(t *testing.T, db *sql.DB) {
 		t.Fatalf("query max version: %v", err)
 	}
 	if maxVersion < 19 {
-		t.Fatalf("expected at least 19 migrations applied, got version %d", maxVersion)
+		t.Fatalf("expected at least 22 migrations applied, got version %d", maxVersion)
 	}
 
 	expectedTables := []string{

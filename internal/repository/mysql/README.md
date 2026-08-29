@@ -5,8 +5,8 @@ Data access layer implementing service-layer repository interfaces with raw SQL 
 ## Files
 | File | Responsibility |
 |------|---------------|
-| resource_repository.go | Resource CRUD, aliases, external identifiers, and all typed profiles; identity and authenticated field-audit mutations commit in one transaction with explicit uniqueness conflicts |
-| relation_repository.go | Relation queries plus atomic create/delete and one audit event per affected CI |
+| resource_repository.go | Resource CRUD, governed identity and typed profiles, latest-per-observer health evidence, effective-health derivation, and atomic audited identity/manual-override mutations |
+| relation_repository.go | Relation queries plus atomic create/delete, effective-health relation/member projections, and topology resource lookup |
 | audit_repository.go | Audit event queries (global and by resource), including JSON field changes |
 | user_repository.go | User credential lookup by email/id; Authorization Version mutators (role/active/password); UpgradePasswordHash for legacy-to-Argon2id migration; CountLegacyHashUsers for operator visibility |
 | dictionary_repository.go | Dictionary queries — DB-backed (environments, owners, roles) and static (resource types, relation types, lifecycle/health statuses) |
@@ -18,6 +18,7 @@ Data access layer implementing service-layer repository interfaces with raw SQL 
 
 ## Exports
 - `NewResourceRepository(db)`, `NewRelationRepository(db)`, `NewAuditRepository(db)`, `NewUserRepository(db)`, `NewDictionaryRepository(db)`, `NewAuthAuditEmitter(db)` — constructor functions
+- `ResourceRepository.UpsertHealthObservation` and `SetManualHealthOverrideWithAudit` — non-audited operational evidence and audited nullable override persistence
 - `NewQueryExecutionRepository(db)`, `NewQueryTargetRepository(db)`, `NewQueryDisclosureRepository(db)`, `NewQuerySavedStatementRepository(db)` — constructor functions
 - `QueryDisclosureReader`, `QueryDisclosureWriter` — narrow service-owned interfaces for disclosure policy access
 - `QuerySavedStatementReader`, `QuerySavedStatementWriter` — narrow service-owned interfaces for saved statement access, including atomic parameter-definition replacement
@@ -29,6 +30,11 @@ Inventory audit writes are fail-closed. Resource identity, typed-profile, and
 relationship mutations use the shared `AuditChange` representation; audit
 insert or commit failure rolls the inventory mutation back. Relationship
 mutations write separate target-specific evidence for both affected CIs.
+
+`resource_health_observations` stores one current row per resource/observer.
+Older evidence cannot replace a newer timestamp. Effective-health filters use
+the same conservative Go calculation as list/detail reads; this path scans the
+matched inventory set until scale justifies a dedicated indexed read model.
 
 ## Dependencies
 - Upstream: `internal/model` (domain types), `database/sql`

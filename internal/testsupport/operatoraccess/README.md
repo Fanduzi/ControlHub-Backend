@@ -6,7 +6,7 @@ authorization class.
 ## Files
 | File | Responsibility |
 |------|---------------|
-| policy.go | Protected-operation table with authorization classes (`AuthenticatedRead`, `RouterAdmin`, `HandlerAdmin`, `FreshAnyRole`, `ConditionalSavedStatementMutation`), canonical OpenAPI paths, and concrete request paths |
+| policy.go | Protected-operation table, including admin-only resource health observation ingestion, canonical OpenAPI paths, and concrete request paths |
 
 ## Exports
 - `operatoraccess.All()` — returns a fresh protected-operation slice
