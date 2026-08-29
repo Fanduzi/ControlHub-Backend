@@ -1,6 +1,6 @@
 // Package mysql provides MySQL-backed repository implementations.
 // input: context, database/sql, errors, fmt, slices, MySQL driver errors, and collector scan models
-// output: caller-transaction collector ledger and deterministic per-principal/per-CI state primitives
+// output: caller-transaction collector ledger plus idempotent per-principal/per-CI state application
 // pos: Durable idempotency and lifecycle-state boundary for completed collector scans
 // note: if this file changes, update this header and module README.md.
 package mysql
@@ -26,24 +26,43 @@ func (e *CollectorScanConflictError) Error() string {
 	return "collector scan retry conflicts with completed ledger entry"
 }
 
-// InsertCollectorScanLedger inserts one terminal scan receipt in tx.
-// The caller owns commit and rollback so later ingestion writes can share it.
-func InsertCollectorScanLedger(ctx context.Context, tx *sql.Tx, entry model.CollectorScanLedgerEntry) (uint64, error) {
+// ApplyCollectorScan records one terminal scan and applies its CI state changes once.
+// The caller owns commit and rollback; exact retries return the prior ledger ID without state SQL.
+func ApplyCollectorScan(ctx context.Context, tx *sql.Tx, entry model.CollectorScanLedgerEntry, seenResourceIDs []uint64) (uint64, error) {
+	if tx == nil {
+		return 0, fmt.Errorf("transaction is required")
+	}
+	ledgerID, inserted, err := insertCollectorScanLedger(ctx, tx, entry)
+	if err != nil || !inserted {
+		return ledgerID, err
+	}
+	if err := applyCollectorScanStates(ctx, tx, entry.MachinePrincipalID, model.CollectorScan{
+		ID:          entry.CollectorScanID,
+		Result:      entry.Result,
+		CompletedAt: entry.CompletedAt,
+	}, seenResourceIDs); err != nil {
+		return 0, err
+	}
+	return ledgerID, nil
+}
+
+func insertCollectorScanLedger(ctx context.Context, tx *sql.Tx, entry model.CollectorScanLedgerEntry) (uint64, bool, error) {
 	result, err := tx.ExecContext(ctx, `insert into collector_scan_ledger
 		(machine_principal_id, collector_scan_id, payload_hash, result, completed_at)
 		values (?, ?, ?, ?, ?)`, entry.MachinePrincipalID, entry.CollectorScanID, entry.PayloadHash[:], string(entry.Result), entry.CompletedAt.UTC())
 	if err != nil {
 		var mysqlErr *drivermysql.MySQLError
 		if errors.As(err, &mysqlErr) && mysqlErr.Number == 1062 {
-			return compareCollectorScanRetry(ctx, tx, entry)
+			id, err := compareCollectorScanRetry(ctx, tx, entry)
+			return id, false, err
 		}
-		return 0, fmt.Errorf("insert collector scan ledger: %w", err)
+		return 0, false, fmt.Errorf("insert collector scan ledger: %w", err)
 	}
 	id, err := result.LastInsertId()
 	if err != nil {
-		return 0, fmt.Errorf("collector scan ledger last insert id: %w", err)
+		return 0, false, fmt.Errorf("collector scan ledger last insert id: %w", err)
 	}
-	return uint64(id), nil
+	return uint64(id), true, nil
 }
 
 func compareCollectorScanRetry(ctx context.Context, tx *sql.Tx, entry model.CollectorScanLedgerEntry) (uint64, error) {
@@ -71,11 +90,9 @@ func compareCollectorScanRetry(ctx context.Context, tx *sql.Tx, entry model.Coll
 	return id, nil
 }
 
-// ApplyCollectorScanStates applies an inserted ledger row to collector CI state in tx.
-// The caller owns commit and rollback.
-func ApplyCollectorScanStates(ctx context.Context, tx *sql.Tx, machinePrincipalID, ledgerID uint64, scan model.CollectorScan, seenResourceIDs []uint64) error {
-	if tx == nil || machinePrincipalID == 0 || ledgerID == 0 {
-		return fmt.Errorf("transaction, machine principal ID, and ledger ID are required")
+func applyCollectorScanStates(ctx context.Context, tx *sql.Tx, machinePrincipalID uint64, scan model.CollectorScan, seenResourceIDs []uint64) error {
+	if machinePrincipalID == 0 {
+		return fmt.Errorf("machine principal ID is required")
 	}
 	if _, err := model.ApplyCollectorScan(model.CollectorCIState{}, scan, false); err != nil {
 		return err
