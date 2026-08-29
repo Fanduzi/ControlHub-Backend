@@ -12,7 +12,7 @@ Domain structs, taxonomy constants, validation methods, and dictionary definitio
 | audit.go | AuditEvent plus server-owned AuditChange field-diff contract |
 | auth.go | UserCredential (incl. IsActive + AuthorizationVersion), LoginRequest, LoginResponse structs |
 | settings.go | Environment, Owner, Role structs |
-| pagination.go | PageInfo, ResourceListQuery, AuditListQuery, pagination helpers/constants |
+| pagination.go | PageInfo, ResourceListQuery, AuditListQuery (including actor/resource search), pagination helpers/constants |
 | dictionary.go | DictionaryItem struct (shared by all dictionaries) |
 | taxonomy.go | All enum constants (8 resource types, 7 relation types, 5 lifecycle statuses, 4 health statuses), dictionary slices including service worker subtype, Validate() methods; Domain Name `dns` and Virtual IP `floating` subtypes |
 | taxonomy.go | All enum constants (8 resource types, 7 relation types, 5 lifecycle statuses, 4 health statuses), dictionary slices, Validate() methods. Database Proxy technology subtypes and Control Plane ha_monitor; ambiguous ha is rejected. |

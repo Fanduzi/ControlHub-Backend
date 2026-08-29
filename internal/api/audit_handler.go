@@ -1,7 +1,7 @@
 // Package api provides HTTP handlers and routing for the ControlHub REST API.
-// input: net/http, internal/service, internal/model
+// input: fmt, net/http, strconv, strings, internal/service, internal/model
 // output: handleListAuditEvents, handleListResourceAuditEvents
-// pos: HTTP handlers for audit event listing with pagination and filtering
+// pos: HTTP handlers for audit event listing with pagination, filtering, and search
 // note: if this file changes, update header and README.md
 package api
 
@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"net/http"
 	"strconv"
+	"strings"
 
 	"github.com/go-chi/chi/v5"
 
@@ -64,6 +65,7 @@ func parseAuditListQuery(r *http.Request) (model.AuditListQuery, error) {
 	query := model.AuditListQuery{
 		EventTypes: model.DedupStrings(q["eventType"]),
 		Results:    model.DedupStrings(q["result"]),
+		Query:      strings.TrimSpace(q.Get("q")),
 		Page:       page,
 		PageSize:   pageSize,
 	}

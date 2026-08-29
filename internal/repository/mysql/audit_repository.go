@@ -1,7 +1,7 @@
 // Package mysql provides MySQL-backed repository implementations.
 // input: database/sql, internal/model
 // output: NewAuditRepository, AuditRepository struct
-// pos: MySQL data access for audit_events table with pagination and filtering
+// pos: MySQL data access for audit_events table with pagination, filtering, and actor/resource search
 // note: if this file changes, update header and README.md
 package mysql
 
@@ -27,6 +27,9 @@ func NewAuditRepository(db *sql.DB) *AuditRepository {
 func (r *AuditRepository) ListAuditEvents(ctx context.Context, q model.AuditListQuery) ([]model.AuditEvent, int, error) {
 	var conds []string
 	var args []any
+	from := `audit_events
+	left join users u on u.id = audit_events.actor_user_id
+	left join resources r on r.id = audit_events.target_resource_id`
 
 	if q.TargetResourceID != nil {
 		conds = append(conds, "target_resource_id = ?")
@@ -46,6 +49,12 @@ func (r *AuditRepository) ListAuditEvents(ctx context.Context, q model.AuditList
 			args = append(args, v)
 		}
 	}
+	query := strings.TrimSpace(q.Query)
+	if query != "" {
+		pattern := "%" + query + "%"
+		conds = append(conds, "(u.display_name like ? or u.email like ? or r.name like ? or r.display_name like ?)")
+		args = append(args, pattern, pattern, pattern, pattern)
+	}
 
 	where := ""
 	if len(conds) > 0 {
@@ -53,14 +62,15 @@ func (r *AuditRepository) ListAuditEvents(ctx context.Context, q model.AuditList
 	}
 
 	var total int
-	countQuery := "select count(*) from audit_events " + where
+	countQuery := "select count(*) from " + from + " " + where
 	if err := r.db.QueryRowContext(ctx, countQuery, args...).Scan(&total); err != nil {
 		return nil, 0, fmt.Errorf("count audit events: %w", err)
 	}
 
 	offset := (q.Page - 1) * q.PageSize
-	dataQuery := `select id, actor_user_id, target_resource_id, event_type, result, changes, created_at
-	from audit_events ` + where + ` order by created_at desc limit ? offset ?`
+	dataQuery := `select audit_events.id, audit_events.actor_user_id, audit_events.target_resource_id,
+		audit_events.event_type, audit_events.result, audit_events.changes, audit_events.created_at
+	from ` + from + " " + where + ` order by audit_events.created_at desc limit ? offset ?`
 
 	dataArgs := append(args, q.PageSize, offset)
 	rows, err := r.db.QueryContext(ctx, dataQuery, dataArgs...)

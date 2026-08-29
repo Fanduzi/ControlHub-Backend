@@ -1,7 +1,7 @@
 // Package api provides HTTP handlers and routing for the ControlHub REST API.
 // input: internal/api, internal/model, net/http, net/http/httptest, encoding/json
-// output: TestListAuditEvents*, TestListResourceAuditEvents_Unchanged
-// pos: Validates audit event listing with pagination and filtering
+// output: TestParseAuditListQuery*, TestListAuditEvents*, TestListResourceAuditEvents_Unchanged
+// pos: Validates audit event listing with pagination, filtering, and search
 // note: if this file changes, update header and README.md
 package api
 
@@ -13,6 +13,18 @@ import (
 
 	"github.com/fan/controlhub/internal/model"
 )
+
+func TestParseAuditListQuery_NormalizesSearchQuery(t *testing.T) {
+	req := httptest.NewRequest(http.MethodGet, "/audit-events?q=%20%20Admin%20%20", nil)
+
+	query, err := parseAuditListQuery(req)
+	if err != nil {
+		t.Fatalf("parse audit query: %v", err)
+	}
+	if query.Query != "Admin" {
+		t.Fatalf("query = %q, want trimmed Admin", query.Query)
+	}
+}
 
 type paginatedAuditResponse struct {
 	Items    []model.AuditEvent `json:"items"`

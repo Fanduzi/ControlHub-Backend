@@ -3043,6 +3043,11 @@ paths:
             format: int64
           description: Filter by target resource ID
         - in: query
+          name: q
+          schema:
+            type: string
+          description: Search operator identity and target resource name
+        - in: query
           name: eventType
           schema:
             type: array

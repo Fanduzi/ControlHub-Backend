@@ -10,7 +10,7 @@ HTTP handlers, chi routing, CORS middleware, and fake-repo test infrastructure.
 | resource_handler.go | Resource list/detail identity and health fields, explicit identity conflicts, non-audited observation ingestion, and PATCH changes through atomic inventory audit |
 | profile_handler.go | PUT/PATCH/DELETE /resources/{id}/profile handlers with strict decoding and token-derived atomic inventory audit |
 | relation_handler.go | Resource relation reads, source-specific rule discovery, and token-derived atomic audited create/delete handlers |
-| audit_handler.go | Audit event list handlers (global and per-resource), including inventory field changes |
+| audit_handler.go | Audit event list handlers (global and per-resource), including pagination, filters, search, and inventory field changes |
 | auth_handler.go | POST /auth/login handler |
 | auth_middleware.go | Bearer, role, Authorization Version, and query-freshness middleware; missing Authorization emits no audit event; supplied untrusted Bearer rejection emits the fixed event within the 60/min per-process budget |
 | dictionary_handler.go | Dictionary list handlers (environments, owners, roles, resource-types, relation-types, lifecycle-statuses, health-statuses) |

@@ -5,7 +5,7 @@ Embeds and validates the OpenAPI contract served by the API documentation route.
 ## Files
 | File | Responsibility |
 |------|---------------|
-| openapi.yaml | Source contract for governed typed-profile identity, health observations, relationship-rule discovery, access security, inventory audit diffs, metrics, and controlled errors |
+| openapi.yaml | Source contract for governed typed-profile identity, health observations, relationship-rule discovery, access security, audit pagination/search and field diffs, metrics, and controlled errors |
 | embed.go | Embeds the YAML for serving and tests |
 | openapi_test.go | Validates schema, topology, pagination, and executions contract tests |
 | operator_access_boundary_test.go | Proves every protected operation documents the status codes its operatoraccess class requires |
@@ -21,6 +21,7 @@ Embeds and validates the OpenAPI contract served by the API documentation route.
 - `AuditEvent.changes`: optional server-owned add/update/remove field evidence with before/after values; absent on legacy and non-inventory events.
 - `Resource` always exposes effective status, freshness, observed time, observer, and nullable manual override; POST observations are operational and PATCH null clears the audited override.
 - `GET /resources/{id}/relation-rules`: source-specific relation types, target resource types, and same-environment constraints consumed by the console; writes revalidate the same server matrix.
+- `GET /audit-events?q=...`: optional search over operator identity and target resource name, combined with the existing filters.
 
 ## Dependencies
 - Upstream: `github.com/getkin/kin-openapi` for validation tests
