@@ -10,7 +10,7 @@ MySQL-backed integration tests run against disposable Testcontainers databases.
 | mysql_test.go | Exact schema-version, table, unsigned-ID, and no-foreign-key guards after clean migration |
 | resource_test.go | Resource repository CRUD/filtering, constant-query batched-profile reads, observation-derived cluster rollups, create-with-profile atomicity, profile validation, and PATCH partial-merge semantics against real MySQL |
 | inventory_audit_test.go | Real-MySQL inventory audit atomicity, typed-profile and relationship behavior, per-CI evidence, multi-source observations, override precedence, stale-write conflicts, clear, effective provenance, and per-CI relationship evidence |
-| bulk_resource_mutation_test.go | Real-MySQL reviewed bulk mutation success, audit-failure rollback, and concurrent drift/re-preview enforcement |
+| bulk_resource_mutation_test.go | Real-MySQL reviewed bulk success/idempotent preview/conflict, externalId field audit, true multi-target mid-batch rollback, audit-failure rollback, and two-connection lock/drift enforcement |
 | typed_profile_identity_test.go | Real-MySQL create/read/edit for the four core typed profiles, minimum manual identity rejection, worker subtype, labels-as-classification, and T01 profile audit |
 | resource_identity_test.go | MySQL identity normalization/uniqueness, immutable ID/origin, and atomic identity-plus-field-audit rollback coverage |
 | resource_identity_migration_test.go | Fail-loud v21 migration preflight for duplicate legacy external IDs before schema mutation |

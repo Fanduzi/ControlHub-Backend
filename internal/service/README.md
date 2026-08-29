@@ -5,7 +5,7 @@ Business logic layer with interface-based repository dependencies. Each service 
 ## Files
 | File | Responsibility |
 |------|---------------|
-| resource_service.go | Resource reads/writes, list/detail server-derived completeness from governed identity, one typed-profile batch, and one required relation batch; governed-identity validation, minimum manual typed-profile identity, health observation ingestion, explicit conflicts, and fail-closed audited inventory updates |
+| resource_service.go | Resource reads/writes, list/detail server-derived completeness from governed identity, one typed-profile batch, one required relation batch, shared current-resource update validation, governed-identity validation, minimum manual typed-profile identity, health observation ingestion, explicit conflicts, and fail-closed audited inventory updates |
 | resource_write_service_test.go | Resource/relation write-flow tests, including identity normalization/immutability, sensitive-label rejection, profile validation, and the manual-identity rule matrix |
 | bulk_resource_preview.go | Pure bulk resource mutation preview contract: ordered per-target version checks, field/label diffs, validation, and SHA-256 drift fingerprinting |
 | bulk_resource_preview_test.go | Bulk resource mutation preview contract tests: label semantics, invalid targets/operations, input purity, ordering, composite fields, and fingerprint drift |
@@ -56,6 +56,7 @@ Business logic layer with interface-based repository dependencies. Each service 
 - `ResourceService.ObserveHealth` — validated operational evidence ingestion that never emits inventory audit events
 - `RelationService.Rules` returns source-specific relation types, target resource types, and environment constraints derived from the write validator's matrix
 - `DeriveCompleteness` — pure read-only score/status/missing-requirements projection; labels never satisfy a requirement
+- `ValidateResourceUpdate` — normal update validation against an already-read current resource, reused by locked bulk mutations
 - `PreviewBulkResourceMutation` — pure preview of ordered targets against current snapshots; `ResourceService` delegates persisted preview/confirm reads to its resource repository
 - `BulkResourceMutationRequest`, `BulkResourceMutationTarget`, `ResourceMutationSnapshot`, `LabelOperations`, `BulkResourcePreview` — bulk mutation preview contract values
 - `NewMemoryUserStore`, `AuthService.WithClock`, `AuthService.ChangeUserRole`/`SetUserActive`/`ResetUserPassword` — Authorization Version seams

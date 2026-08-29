@@ -1,7 +1,7 @@
 // Package mysql provides MySQL-backed repository implementations.
 // input: database/sql, time, internal/model, internal/service
-// output: resource CRUD, governed identity and batched typed-profile reads, rich inventory filtering, health observations/effective health, observed/effective values, audited versioned manual overrides, and atomic ConfirmBulkResourceMutation
-// pos: MySQL data access for resources, identity, typed-profile projections, current health evidence, effective values, inventory search, and audited bulk mutation transactions
+// output: resource CRUD, governed identity and batched typed-profile reads, rich inventory filtering, health observations/effective health, observed/effective values, validated previews, audited versioned manual overrides, and atomic ConfirmBulkResourceMutation
+// pos: MySQL data access for resources, identity, typed-profile projections, current health evidence, effective values, inventory search, and bulk transactions reusing normal update validation under row locks
 // note: if this file changes, update this header and module README.md.
 package mysql
 
@@ -198,7 +198,9 @@ func (r *ResourceRepository) PreviewBulkResourceMutation(ctx context.Context, re
 	if err := validateBulkResourceMutation(request); err != nil {
 		return service.BulkResourcePreview{}, err
 	}
+	patch, _ := bulkResourcePatch(request.FieldPatch)
 	snapshots := make([]service.ResourceMutationSnapshot, 0, len(request.Targets))
+	validationErrors := make(map[uint64]string, len(request.Targets))
 	for _, target := range request.Targets {
 		resource, err := r.getResource(ctx, target.ResourceID)
 		if errors.Is(err, service.ErrResourceNotFound) {
@@ -208,8 +210,13 @@ func (r *ResourceRepository) PreviewBulkResourceMutation(ctx context.Context, re
 			return service.BulkResourcePreview{}, err
 		}
 		snapshots = append(snapshots, bulkResourceSnapshot(*resource))
+		if _, err := validatedBulkResourceUpdate(*resource, patch, request.Labels); err != nil {
+			validationErrors[resource.ID] = err.Error()
+		}
 	}
-	return service.PreviewBulkResourceMutation(request, snapshots)
+	preview, err := service.PreviewBulkResourceMutation(request, snapshots)
+	applyBulkResourceValidationErrors(&preview, validationErrors)
+	return preview, err
 }
 
 // ConfirmBulkResourceMutation locks, re-previews, writes, and audits every
@@ -224,7 +231,7 @@ func (r *ResourceRepository) ConfirmBulkResourceMutation(ctx context.Context, re
 	}
 	defer tx.Rollback()
 
-	input, _ := bulkResourceUpdateInput(request.FieldPatch)
+	patch, _ := bulkResourcePatch(request.FieldPatch)
 	ids := make([]uint64, len(request.Targets))
 	for i, target := range request.Targets {
 		ids[i] = target.ResourceID
@@ -232,6 +239,8 @@ func (r *ResourceRepository) ConfirmBulkResourceMutation(ctx context.Context, re
 	sort.Slice(ids, func(i, j int) bool { return ids[i] < ids[j] })
 
 	resources := make(map[uint64]model.Resource, len(ids))
+	inputs := make(map[uint64]model.ResourceUpdateInput, len(ids))
+	validationErrors := make(map[uint64]string, len(ids))
 	snapshots := make([]service.ResourceMutationSnapshot, 0, len(ids))
 	for _, id := range ids {
 		resource, err := getResourceForUpdate(ctx, tx, id)
@@ -247,11 +256,18 @@ func (r *ResourceRepository) ConfirmBulkResourceMutation(ctx context.Context, re
 			return service.BulkResourcePreview{}, err
 		}
 		snapshots = append(snapshots, bulkResourceSnapshot(current[0]))
+		input, err := validatedBulkResourceUpdate(*resource, patch, request.Labels)
+		if err != nil {
+			validationErrors[id] = err.Error()
+		} else {
+			inputs[id] = input
+		}
 	}
 	preview, err := service.PreviewBulkResourceMutation(request, snapshots)
 	if err != nil {
 		return service.BulkResourcePreview{}, err
 	}
+	applyBulkResourceValidationErrors(&preview, validationErrors)
 	for _, item := range preview.Items {
 		if item.Conflict || len(item.Errors) != 0 {
 			return preview, fmt.Errorf("%w: preview rejected for resource %d", service.ErrBulkResourceMutationConflict, item.ResourceID)
@@ -263,23 +279,7 @@ func (r *ResourceRepository) ConfirmBulkResourceMutation(ctx context.Context, re
 
 	for _, id := range ids {
 		before := resources[id]
-		labels := make(map[string]string, len(before.Labels))
-		for key, value := range before.Labels {
-			labels[key] = value
-		}
-		for key, value := range request.Labels.Add {
-			labels[key] = value
-		}
-		for key, value := range request.Labels.Update {
-			labels[key] = value
-		}
-		for _, key := range request.Labels.Remove {
-			delete(labels, key)
-		}
-		itemInput := input
-		if len(request.Labels.Add)+len(request.Labels.Update)+len(request.Labels.Remove) != 0 {
-			itemInput.Labels = &labels
-		}
+		itemInput := inputs[id]
 		updated, err := updateResourceTx(ctx, tx, id, itemInput)
 		if err != nil {
 			return preview, err
@@ -300,7 +300,7 @@ func validateBulkResourceMutation(request service.BulkResourceMutationRequest) e
 	if err := service.ValidateBulkResourceMutation(request); err != nil {
 		return fmt.Errorf("%w: %v", service.ErrValidationFailed, err)
 	}
-	if _, err := bulkResourceUpdateInput(request.FieldPatch); err != nil {
+	if _, err := bulkResourcePatch(request.FieldPatch); err != nil {
 		return fmt.Errorf("%w: %v", service.ErrValidationFailed, err)
 	}
 	return nil
@@ -320,12 +320,12 @@ func bulkResourceSnapshot(resource model.Resource) service.ResourceMutationSnaps
 	}
 }
 
-func bulkResourceUpdateInput(fields map[string]any) (model.ResourceUpdateInput, error) {
+func bulkResourcePatch(fields map[string]any) (model.ResourcePatchRequest, error) {
 	encoded, err := json.Marshal(fields)
 	if err != nil {
-		return model.ResourceUpdateInput{}, err
+		return model.ResourcePatchRequest{}, err
 	}
-	var patch struct {
+	var fieldsPatch struct {
 		Name            *string                `json:"name"`
 		ResourceSubtype *string                `json:"resourceSubtype"`
 		DisplayName     *string                `json:"displayName"`
@@ -337,15 +337,44 @@ func bulkResourceUpdateInput(fields map[string]any) (model.ResourceUpdateInput, 
 	}
 	decoder := json.NewDecoder(strings.NewReader(string(encoded)))
 	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(&patch); err != nil {
-		return model.ResourceUpdateInput{}, err
+	if err := decoder.Decode(&fieldsPatch); err != nil {
+		return model.ResourcePatchRequest{}, err
 	}
-	return model.ResourceUpdateInput{
-		Name: patch.Name, ResourceSubtype: patch.ResourceSubtype, DisplayName: patch.DisplayName,
-		EnvironmentID: patch.EnvironmentID, OwnerID: patch.OwnerID,
-		LifecycleStatus: patch.LifecycleStatus, HealthStatus: patch.HealthStatus,
-		ExternalID: patch.ExternalID,
+	return model.ResourcePatchRequest{
+		Name: fieldsPatch.Name, ResourceSubtype: fieldsPatch.ResourceSubtype,
+		DisplayName: fieldsPatch.DisplayName, EnvironmentID: fieldsPatch.EnvironmentID,
+		OwnerID: fieldsPatch.OwnerID, LifecycleStatus: fieldsPatch.LifecycleStatus,
+		HealthStatus: fieldsPatch.HealthStatus, ExternalID: fieldsPatch.ExternalID,
 	}, nil
+}
+
+func validatedBulkResourceUpdate(resource model.Resource, patch model.ResourcePatchRequest, operations service.LabelOperations) (model.ResourceUpdateInput, error) {
+	if len(operations.Add)+len(operations.Update)+len(operations.Remove) != 0 {
+		labels := make(map[string]string, len(resource.Labels)+len(operations.Add))
+		for key, value := range resource.Labels {
+			labels[key] = value
+		}
+		for key, value := range operations.Add {
+			labels[key] = value
+		}
+		for key, value := range operations.Update {
+			labels[key] = value
+		}
+		for _, key := range operations.Remove {
+			delete(labels, key)
+		}
+		patch.Labels = &labels
+	}
+	return service.ValidateResourceUpdate(resource, patch)
+}
+
+func applyBulkResourceValidationErrors(preview *service.BulkResourcePreview, validationErrors map[uint64]string) {
+	for i := range preview.Items {
+		if message := validationErrors[preview.Items[i].ResourceID]; message != "" {
+			preview.Items[i].Errors = append(preview.Items[i].Errors, message)
+			preview.Confirmable = false
+		}
+	}
 }
 
 const resourceColumns = `id, resource_type, resource_subtype, name, display_name,

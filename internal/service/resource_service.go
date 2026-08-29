@@ -1,6 +1,6 @@
 // Package service provides business logic for resource reads, writes, and typed profile assembly.
 // input: internal/model resource identity, batched typed profiles, required incident relations, health observations, effective values, writes, and read contracts
-// output: resource CRUD, server-derived completeness, governed-profile reads, health ingestion, effective-value projections, audited inventory/override mutations, and bulk preview/confirm delegation
+// output: resource CRUD, server-derived completeness, governed-profile reads, shared update validation, health ingestion, effective-value projections, audited inventory/override mutations, and bulk preview/confirm delegation
 // pos: Business logic for governed resource identity, batched read projections, typed profiles, operational health evidence, effective values, and bulk mutation checks
 // note: if this file changes, update this header and module README.md.
 package service
@@ -285,6 +285,12 @@ func (s *ResourceService) validateUpdate(id uint64, patch model.ResourcePatchReq
 	if err != nil {
 		return model.ResourceUpdateInput{}, err
 	}
+	return ValidateResourceUpdate(*existing, patch)
+}
+
+// ValidateResourceUpdate applies the normal resource update rules to a
+// current resource without performing another repository read.
+func ValidateResourceUpdate(existing model.Resource, patch model.ResourcePatchRequest) (model.ResourceUpdateInput, error) {
 	if existing.IsArchived() {
 		return model.ResourceUpdateInput{}, ErrResourceArchived
 	}
@@ -365,10 +371,6 @@ func (s *ResourceService) validateUpdate(id uint64, patch model.ResourcePatchReq
 		patch.ExternalID = nil
 	}
 	if patch.EnvironmentID != nil || patch.OwnerID != nil {
-		existing, err := s.Get(id)
-		if err != nil {
-			return model.ResourceUpdateInput{}, err
-		}
 		environmentID := existing.EnvironmentID
 		ownerID := existing.OwnerID
 		if patch.EnvironmentID != nil {
