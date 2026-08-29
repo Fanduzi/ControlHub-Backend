@@ -1,4 +1,5 @@
 //go:build integration
+
 // Package integration provides real-MySQL coverage for core CI typed profiles.
 // input: context, encoding/json, testing, internal/model, internal/repository/mysql, internal/service
 // output: TestTypedProfileManualIdentity*
@@ -22,7 +23,7 @@ import (
 func TestTypedProfileManualIdentity_CreateReadEditAndAudit(t *testing.T) {
 	db := setupTestDB(t)
 	repo := mysql.NewResourceRepository(db)
-	resources := service.NewResourceService(repo)
+	resources := service.NewResourceService(repo, mysql.NewRelationRepository(db))
 	profiles := service.NewProfileService(repo, repo)
 	ctx := context.Background()
 	name := fmt.Sprintf("t02-host-%d", time.Now().UnixNano())
@@ -91,7 +92,7 @@ func TestTypedProfileManualIdentity_CreateReadEditAndAudit(t *testing.T) {
 
 func TestTypedProfileManualIdentity_RejectsMissingFieldsAndUnknownSubtype(t *testing.T) {
 	db := setupTestDB(t)
-	svc := service.NewResourceService(mysql.NewResourceRepository(db))
+	svc := service.NewResourceService(mysql.NewResourceRepository(db), mysql.NewRelationRepository(db))
 	ctx := context.Background()
 
 	_, err := svc.Create(ctx, model.ResourceCreateInput{
@@ -131,7 +132,7 @@ func TestTypedProfileManualIdentity_RejectsMissingFieldsAndUnknownSubtype(t *tes
 func TestTypedProfileManualIdentity_AcceptsAllFourCoreTypes(t *testing.T) {
 	db := setupTestDB(t)
 	repo := mysql.NewResourceRepository(db)
-	svc := service.NewResourceService(repo)
+	svc := service.NewResourceService(repo, mysql.NewRelationRepository(db))
 	ctx := context.Background()
 	suffix := time.Now().UnixNano()
 

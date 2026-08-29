@@ -1,6 +1,6 @@
 // Package api provides HTTP handlers and routing for the ControlHub REST API.
 // input: internal/api, internal/model, internal/service, net/http
-// output: TestServer struct, NewTestServer with fake profile, relation, health, and effective-value data
+// output: TestServer struct, NewTestServer with fake batch-profile, relation, health, and effective-value data
 // pos: Test infrastructure — fake repositories for typed profiles, completeness relations, health observations, and effective values plus a pre-wired handler router
 // note: if this file changes, update this header and module README.md.
 package api
@@ -81,6 +81,18 @@ func (f *fakeResourceRepo) GetResourceProfile(id uint64) (*model.ResourceProfile
 		ResourceSubtype: res.ResourceSubtype,
 		Profile:         map[string]any{},
 	}, nil
+}
+
+func (f *fakeResourceRepo) GetResourceProfiles(_ context.Context, ids []uint64) (map[uint64]map[string]any, error) {
+	profiles := make(map[uint64]map[string]any, len(ids))
+	for _, id := range ids {
+		profile, err := f.GetResourceProfile(id)
+		if err != nil {
+			return nil, err
+		}
+		profiles[id] = profile.Profile
+	}
+	return profiles, nil
 }
 
 func (f *fakeResourceRepo) UpsertHostProfile(_ context.Context, resourceID uint64, hostname, ipAddress, osName string) error {

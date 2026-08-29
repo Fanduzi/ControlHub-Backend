@@ -497,7 +497,7 @@ func TestAuthAudit_FailOpenPreservesRoleDenied403(t *testing.T) {
 		// handler through, the PATCH would genuinely mutate the row, so the
 		// no-execution probe below is a clean proof rather than a nil-service
 		// panic that would mask the bug.
-		ResourceService: service.NewResourceService(mysql.NewResourceRepository(db)),
+		ResourceService: service.NewResourceService(mysql.NewResourceRepository(db), mysql.NewRelationRepository(db)),
 	})
 
 	// Known target resource where the admin-only route has one: the seeded

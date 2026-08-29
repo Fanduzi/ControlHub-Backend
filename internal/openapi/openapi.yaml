@@ -4941,6 +4941,26 @@ components:
           $ref: "#/components/schemas/ProfileSummary"
         databaseOperationalSummary:
           $ref: "#/components/schemas/DatabaseOperationalSummary"
+        completeness:
+          allOf:
+            - $ref: "#/components/schemas/Completeness"
+          readOnly: true
+    Completeness:
+      type: object
+      readOnly: true
+      required: [score, status, missingRequirements]
+      properties:
+        score:
+          type: integer
+          minimum: 0
+          maximum: 100
+        status:
+          type: string
+          enum: [complete, partial]
+        missingRequirements:
+          type: array
+          items:
+            type: string
     ResourceRelation:
       type: object
       required: [id, fromResourceId, toResourceId, relationType, createdAt]

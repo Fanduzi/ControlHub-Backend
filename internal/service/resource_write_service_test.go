@@ -33,6 +33,18 @@ type fakeResourceWriteRepo struct {
 	profileErr       error          // injected failure for create-with-profile
 	profile          map[string]any // last profile written via CreateResourceWithProfile
 	getProfileResult *model.ResourceProfileResponse
+	getProfileCalls  int
+	getProfilesCalls int
+}
+
+type emptyCompletenessRelationReader struct{}
+
+func (emptyCompletenessRelationReader) ListRelationsByResourceIDs([]uint64) ([]model.ResourceRelation, error) {
+	return nil, nil
+}
+
+func newResourceServiceForTest(repo ResourceRepository) *ResourceService {
+	return NewResourceService(repo, emptyCompletenessRelationReader{})
 }
 
 func (f *fakeResourceWriteRepo) ListResources(_ context.Context, _ model.ResourceListQuery) ([]model.Resource, int, error) {
@@ -53,10 +65,20 @@ func (f *fakeResourceWriteRepo) GetResource(id uint64) (*model.Resource, error) 
 }
 
 func (f *fakeResourceWriteRepo) GetResourceProfile(_ uint64) (*model.ResourceProfileResponse, error) {
+	f.getProfileCalls++
 	if f.getProfileResult == nil {
 		return &model.ResourceProfileResponse{Profile: map[string]any{}}, nil
 	}
 	return f.getProfileResult, nil
+}
+
+func (f *fakeResourceWriteRepo) GetResourceProfiles(_ context.Context, ids []uint64) (map[uint64]map[string]any, error) {
+	f.getProfilesCalls++
+	profiles := make(map[uint64]map[string]any, len(ids))
+	for _, id := range ids {
+		profiles[id] = map[string]any{}
+	}
+	return profiles, nil
 }
 
 func (f *fakeResourceWriteRepo) CreateResource(_ context.Context, input model.ResourceCreateInput) (*model.Resource, error) {
@@ -241,7 +263,7 @@ func (f *fakeRelationWriteRepo) ListClusterMembers(_ uint64) ([]model.ClusterMem
 
 func TestResourceServiceCreate(t *testing.T) {
 	repo := &fakeResourceWriteRepo{resources: map[uint64]model.Resource{}}
-	svc := NewResourceService(repo)
+	svc := newResourceServiceForTest(repo)
 
 	created, err := svc.Create(context.Background(), model.ResourceCreateInput{
 		ResourceType:    model.ResourceTypeDatabaseInstance,
@@ -266,7 +288,7 @@ func TestResourceServiceCreate(t *testing.T) {
 }
 
 func TestResourceServiceCreateRejectsUnsupportedResourceType(t *testing.T) {
-	svc := NewResourceService(&fakeResourceWriteRepo{})
+	svc := newResourceServiceForTest(&fakeResourceWriteRepo{})
 
 	_, err := svc.Create(context.Background(), model.ResourceCreateInput{
 		ResourceType:    model.ResourceType("unsupported"),
@@ -285,7 +307,7 @@ func TestResourceServiceCreateRejectsUnsupportedResourceType(t *testing.T) {
 }
 
 func TestResourceServiceCreateRejectsMissingEnvironment(t *testing.T) {
-	svc := NewResourceService(&fakeResourceWriteRepo{})
+	svc := newResourceServiceForTest(&fakeResourceWriteRepo{})
 
 	_, err := svc.Create(context.Background(), model.ResourceCreateInput{
 		ResourceType:    model.ResourceTypeDatabaseInstance,
@@ -306,7 +328,7 @@ func TestResourceServiceCreateRejectsMissingEnvironment(t *testing.T) {
 }
 
 func TestResourceServiceCreateRejectsMissingOwner(t *testing.T) {
-	svc := NewResourceService(&fakeResourceWriteRepo{})
+	svc := newResourceServiceForTest(&fakeResourceWriteRepo{})
 
 	_, err := svc.Create(context.Background(), model.ResourceCreateInput{
 		ResourceType:    model.ResourceTypeDatabaseInstance,
@@ -328,7 +350,7 @@ func TestResourceServiceCreateRejectsMissingOwner(t *testing.T) {
 
 func TestResourceServiceCreateRejectsDuplicateNameWithinEnvironment(t *testing.T) {
 	repo := &fakeResourceWriteRepo{createErr: ErrResourceConflict}
-	svc := NewResourceService(repo)
+	svc := newResourceServiceForTest(repo)
 
 	_, err := svc.Create(context.Background(), model.ResourceCreateInput{
 		ResourceType:    model.ResourceTypeDatabaseInstance,
@@ -359,7 +381,7 @@ func TestResourceServiceUpdateRejectsImmutableFields(t *testing.T) {
 		Source:        "manual",
 		Labels:        map[string]string{},
 	}}}
-	svc := NewResourceService(repo)
+	svc := newResourceServiceForTest(repo)
 	rt := model.ResourceTypeHost
 
 	_, err := svc.Update(context.Background(), testResource1ID, model.ResourcePatchRequest{ResourceType: &rt})
@@ -372,7 +394,7 @@ func TestResourceServiceUpdateRejectsImmutableOrigin(t *testing.T) {
 	repo := &fakeResourceWriteRepo{resources: map[uint64]model.Resource{testResource1ID: {
 		ID: testResource1ID, ResourceType: model.ResourceTypeService, Name: "orders-api", Origin: model.ResourceOriginManual,
 	}}}
-	svc := NewResourceService(repo)
+	svc := newResourceServiceForTest(repo)
 	origin := model.ResourceOriginImported
 
 	_, err := svc.Update(context.Background(), testResource1ID, model.ResourcePatchRequest{Origin: &origin})
@@ -641,7 +663,7 @@ func TestResourceServiceArchive(t *testing.T) {
 		CreatedAt:     now,
 		UpdatedAt:     now,
 	}}}
-	svc := NewResourceService(repo)
+	svc := newResourceServiceForTest(repo)
 
 	archived, err := svc.Archive(context.Background(), testResource1ID, model.ArchiveRequest{})
 	if err != nil {
@@ -654,7 +676,7 @@ func TestResourceServiceArchive(t *testing.T) {
 
 func TestResourceServiceArchiveNotFound(t *testing.T) {
 	repo := &fakeResourceWriteRepo{resources: map[uint64]model.Resource{}}
-	svc := NewResourceService(repo)
+	svc := newResourceServiceForTest(repo)
 
 	_, err := svc.Archive(context.Background(), testMissingID, model.ArchiveRequest{})
 	if !errors.Is(err, ErrResourceNotFound) {
@@ -676,7 +698,7 @@ func TestResourceServiceArchiveIdempotent(t *testing.T) {
 		Labels:        map[string]string{},
 		ArchivedAt:    &archivedAt,
 	}}}
-	svc := NewResourceService(repo)
+	svc := newResourceServiceForTest(repo)
 
 	result, err := svc.Archive(context.Background(), testResource1ID, model.ArchiveRequest{})
 	if err != nil {
@@ -698,7 +720,7 @@ func TestResourceServiceArchiveRejectsBlankReason(t *testing.T) {
 		Source:        "manual",
 		Labels:        map[string]string{},
 	}}}
-	svc := NewResourceService(repo)
+	svc := newResourceServiceForTest(repo)
 	blank := "  "
 
 	_, err := svc.Archive(context.Background(), testResource1ID, model.ArchiveRequest{Reason: &blank})
@@ -718,7 +740,7 @@ func TestResourceServiceArchiveRejectsReasonTooLong(t *testing.T) {
 		Source:        "manual",
 		Labels:        map[string]string{},
 	}}}
-	svc := NewResourceService(repo)
+	svc := newResourceServiceForTest(repo)
 	long := strings.Repeat("a", model.MaxArchiveReasonLength+1)
 
 	_, err := svc.Archive(context.Background(), testResource1ID, model.ArchiveRequest{Reason: &long})
@@ -738,7 +760,7 @@ func TestResourceServiceArchiveAcceptsMaxLengthReason(t *testing.T) {
 		Source:        "manual",
 		Labels:        map[string]string{},
 	}}}
-	svc := NewResourceService(repo)
+	svc := newResourceServiceForTest(repo)
 	maxReason := strings.Repeat("a", model.MaxArchiveReasonLength)
 
 	_, err := svc.Archive(context.Background(), testResource1ID, model.ArchiveRequest{Reason: &maxReason})
@@ -761,7 +783,7 @@ func TestResourceServiceUpdateRejectsArchived(t *testing.T) {
 		Labels:        map[string]string{},
 		ArchivedAt:    &archivedAt,
 	}}}
-	svc := NewResourceService(repo)
+	svc := newResourceServiceForTest(repo)
 	displayName := "New Name"
 
 	_, err := svc.Update(context.Background(), testResource1ID, model.ResourcePatchRequest{DisplayName: &displayName})
@@ -788,7 +810,7 @@ func TestResourceServiceUnarchive(t *testing.T) {
 		CreatedAt:     now,
 		UpdatedAt:     now,
 	}}}
-	svc := NewResourceService(repo)
+	svc := newResourceServiceForTest(repo)
 
 	unarchived, err := svc.Unarchive(context.Background(), testResource1ID)
 	if err != nil {
@@ -804,7 +826,7 @@ func TestResourceServiceUnarchive(t *testing.T) {
 
 func TestResourceServiceUnarchiveNotFound(t *testing.T) {
 	repo := &fakeResourceWriteRepo{resources: map[uint64]model.Resource{}}
-	svc := NewResourceService(repo)
+	svc := newResourceServiceForTest(repo)
 
 	_, err := svc.Unarchive(context.Background(), testMissingID)
 	if !errors.Is(err, ErrResourceNotFound) {
@@ -826,7 +848,7 @@ func TestResourceServiceUnarchiveIdempotentForActive(t *testing.T) {
 		CreatedAt:     now,
 		UpdatedAt:     now,
 	}}}
-	svc := NewResourceService(repo)
+	svc := newResourceServiceForTest(repo)
 
 	result, err := svc.Unarchive(context.Background(), testResource1ID)
 	if err != nil {
@@ -838,7 +860,7 @@ func TestResourceServiceUnarchiveIdempotentForActive(t *testing.T) {
 }
 
 func TestResourceServiceCreateRejectsLabelControlCharacters(t *testing.T) {
-	svc := NewResourceService(&fakeResourceWriteRepo{})
+	svc := newResourceServiceForTest(&fakeResourceWriteRepo{})
 
 	_, err := svc.Create(context.Background(), model.ResourceCreateInput{
 		ResourceType:    model.ResourceTypeDatabaseInstance,
@@ -858,7 +880,7 @@ func TestResourceServiceCreateRejectsLabelControlCharacters(t *testing.T) {
 }
 
 func TestResourceServiceCreateRejectsLabelKeyControlCharacters(t *testing.T) {
-	svc := NewResourceService(&fakeResourceWriteRepo{})
+	svc := newResourceServiceForTest(&fakeResourceWriteRepo{})
 
 	_, err := svc.Create(context.Background(), model.ResourceCreateInput{
 		ResourceType:    model.ResourceTypeDatabaseInstance,
@@ -879,7 +901,7 @@ func TestResourceServiceCreateRejectsLabelKeyControlCharacters(t *testing.T) {
 
 func TestResourceServiceCreateAcceptsValidLabels(t *testing.T) {
 	repo := &fakeResourceWriteRepo{resources: map[uint64]model.Resource{}}
-	svc := NewResourceService(repo)
+	svc := newResourceServiceForTest(repo)
 
 	created, err := svc.Create(context.Background(), model.ResourceCreateInput{
 		ResourceType:    model.ResourceTypeDatabaseInstance,
@@ -913,7 +935,7 @@ func TestResourceServicePatchRejectsLabelControlCharacters(t *testing.T) {
 		Source:        "manual",
 		Labels:        map[string]string{},
 	}}}
-	svc := NewResourceService(repo)
+	svc := newResourceServiceForTest(repo)
 	labels := map[string]string{"team": "or\x00der"}
 
 	_, err := svc.Update(context.Background(), testResource1ID, model.ResourcePatchRequest{Labels: &labels})
@@ -933,7 +955,7 @@ func TestResourceServicePatchRejectsLabelKeyControlCharacters(t *testing.T) {
 		Source:        "manual",
 		Labels:        map[string]string{},
 	}}}
-	svc := NewResourceService(repo)
+	svc := newResourceServiceForTest(repo)
 	labels := map[string]string{"tea\x03m": "order"}
 
 	_, err := svc.Update(context.Background(), testResource1ID, model.ResourcePatchRequest{Labels: &labels})
@@ -953,7 +975,7 @@ func TestResourceServicePatchRejectsSensitiveLabelKeys(t *testing.T) {
 		Source:        "manual",
 		Labels:        map[string]string{},
 	}}}
-	svc := NewResourceService(repo)
+	svc := newResourceServiceForTest(repo)
 	labels := map[string]string{"apiToken": "must-not-enter-inventory"}
 
 	_, err := svc.Update(context.Background(), testResource1ID, model.ResourcePatchRequest{Labels: &labels})
@@ -973,7 +995,7 @@ func TestResourceServicePatchAcceptsValidLabels(t *testing.T) {
 		Source:        "manual",
 		Labels:        map[string]string{},
 	}}}
-	svc := NewResourceService(repo)
+	svc := newResourceServiceForTest(repo)
 	labels := map[string]string{"team": "order", "pci": "true"}
 
 	updated, err := svc.Update(context.Background(), testResource1ID, model.ResourcePatchRequest{Labels: &labels})
@@ -1033,7 +1055,7 @@ func TestResourceServiceCreate_ProfileWriteFailureReturnsErrorAndNoResource(t *t
 		resources:  map[uint64]model.Resource{},
 		profileErr: errors.New("profile write failed"),
 	}
-	svc := NewResourceService(repo)
+	svc := newResourceServiceForTest(repo)
 
 	_, err := svc.Create(context.Background(), model.ResourceCreateInput{
 		ResourceType:    model.ResourceTypeHost,
@@ -1064,7 +1086,7 @@ func TestResourceServiceCreate_ProfileWriteFailureReturnsErrorAndNoResource(t *t
 // resource through the transactional repository seam.
 func TestResourceServiceCreate_WithProfilePersistsProfile(t *testing.T) {
 	repo := &fakeResourceWriteRepo{resources: map[uint64]model.Resource{}}
-	svc := NewResourceService(repo)
+	svc := newResourceServiceForTest(repo)
 
 	created, err := svc.Create(context.Background(), model.ResourceCreateInput{
 		ResourceType:    model.ResourceTypeHost,
@@ -1098,7 +1120,7 @@ func TestResourceServiceCreate_WithProfilePersistsProfile(t *testing.T) {
 
 func TestResourceServiceCreate_EmptyHostProfileRejectedForIdentity(t *testing.T) {
 	repo := &fakeResourceWriteRepo{resources: map[uint64]model.Resource{}}
-	svc := NewResourceService(repo)
+	svc := newResourceServiceForTest(repo)
 
 	_, err := svc.Create(context.Background(), model.ResourceCreateInput{
 		ResourceType:    model.ResourceTypeHost,
@@ -1253,7 +1275,7 @@ func TestResourceServiceCreate_MinimumManualIdentityMatrix(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			repo := &fakeResourceWriteRepo{resources: map[uint64]model.Resource{}}
-			svc := NewResourceService(repo)
+			svc := newResourceServiceForTest(repo)
 			created, err := svc.Create(context.Background(), tt.input)
 			if tt.wantOK {
 				if err != nil {
@@ -1285,7 +1307,7 @@ func TestResourceServiceCreate_MinimumManualIdentityMatrix(t *testing.T) {
 
 func TestResourceServiceCreate_KeepsLabelsAsFreeClassification(t *testing.T) {
 	repo := &fakeResourceWriteRepo{resources: map[uint64]model.Resource{}}
-	svc := NewResourceService(repo)
+	svc := newResourceServiceForTest(repo)
 
 	created, err := svc.Create(context.Background(), model.ResourceCreateInput{
 		ResourceType:    model.ResourceTypeHost,
@@ -1316,7 +1338,7 @@ func TestResourceServiceCreate_KeepsLabelsAsFreeClassification(t *testing.T) {
 
 func TestResourceServiceCreateDomainNameRequiresNormalizedFQDN(t *testing.T) {
 	repo := &fakeResourceWriteRepo{resources: map[uint64]model.Resource{}}
-	svc := NewResourceService(repo)
+	svc := newResourceServiceForTest(repo)
 
 	created, err := svc.Create(context.Background(), model.ResourceCreateInput{
 		ResourceType:    model.ResourceTypeDomainName,
@@ -1343,7 +1365,7 @@ func TestResourceServiceCreateDomainNameRequiresNormalizedFQDN(t *testing.T) {
 
 func TestResourceServiceCreateDomainNameRejectsMissingProfile(t *testing.T) {
 	repo := &fakeResourceWriteRepo{resources: map[uint64]model.Resource{}}
-	svc := NewResourceService(repo)
+	svc := newResourceServiceForTest(repo)
 
 	_, err := svc.Create(context.Background(), model.ResourceCreateInput{
 		ResourceType:    model.ResourceTypeDomainName,
@@ -1370,7 +1392,7 @@ func TestResourceServiceCreateDomainNameRejectsMissingProfile(t *testing.T) {
 
 func TestResourceServiceCreateVirtualIPRejectsUnknownSubtypeAndCIDR(t *testing.T) {
 	repo := &fakeResourceWriteRepo{resources: map[uint64]model.Resource{}}
-	svc := NewResourceService(repo)
+	svc := newResourceServiceForTest(repo)
 
 	_, err := svc.Create(context.Background(), model.ResourceCreateInput{
 		ResourceType:    model.ResourceTypeVirtualIP,
@@ -1411,7 +1433,7 @@ func TestResourceServiceCreateVirtualIPRejectsUnknownSubtypeAndCIDR(t *testing.T
 
 func TestResourceServiceCreateDatabaseProxyRequiresTypedProfile(t *testing.T) {
 	repo := &fakeResourceWriteRepo{resources: map[uint64]model.Resource{}}
-	svc := NewResourceService(repo)
+	svc := newResourceServiceForTest(repo)
 
 	created, err := svc.Create(context.Background(), model.ResourceCreateInput{
 		ResourceType:    model.ResourceTypeDatabaseProxy,
@@ -1462,7 +1484,7 @@ func TestResourceServiceCreateDatabaseProxyRequiresTypedProfile(t *testing.T) {
 
 func TestResourceServiceCreateControlPlaneRejectsAmbiguousHA(t *testing.T) {
 	repo := &fakeResourceWriteRepo{resources: map[uint64]model.Resource{}}
-	svc := NewResourceService(repo)
+	svc := newResourceServiceForTest(repo)
 
 	_, err := svc.Create(context.Background(), model.ResourceCreateInput{
 		ResourceType:    model.ResourceTypeControlPlaneComponent,
@@ -1513,7 +1535,7 @@ func TestResourceServiceCreateControlPlaneRejectsAmbiguousHA(t *testing.T) {
 
 func TestResourceServiceCreateRejectsInvalidProfileFields(t *testing.T) {
 	repo := &fakeResourceWriteRepo{resources: map[uint64]model.Resource{}}
-	svc := NewResourceService(repo)
+	svc := newResourceServiceForTest(repo)
 
 	_, err := svc.Create(context.Background(), model.ResourceCreateInput{
 		ResourceType:    model.ResourceTypeHost,

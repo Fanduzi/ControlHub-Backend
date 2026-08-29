@@ -1,7 +1,7 @@
 // Package service provides business logic for resource reads, writes, and typed profile assembly.
-// input: internal/model resource identity, typed profiles, incident relations, health observations, effective values, writes, and read contracts
+// input: internal/model resource identity, batched typed profiles, required incident relations, health observations, effective values, writes, and read contracts
 // output: resource CRUD, server-derived completeness, governed-profile reads, health ingestion, effective-value projections, and audited inventory/override mutations
-// pos: Business logic for governed resource identity, typed profiles, read projections, operational health evidence, and effective values
+// pos: Business logic for governed resource identity, batched read projections, typed profiles, operational health evidence, and effective values
 // note: if this file changes, update this header and module README.md.
 package service
 
@@ -36,6 +36,7 @@ type ResourceRepository interface {
 	ListResources(ctx context.Context, q model.ResourceListQuery) ([]model.Resource, int, error)
 	GetResource(id uint64) (*model.Resource, error)
 	GetResourceProfile(id uint64) (*model.ResourceProfileResponse, error)
+	GetResourceProfiles(ctx context.Context, ids []uint64) (map[uint64]map[string]any, error)
 	CreateResource(ctx context.Context, input model.ResourceCreateInput) (*model.Resource, error)
 	// CreateResourceWithProfile inserts the resource and its initial profile in
 	// one transaction (all-or-nothing); repositories that cannot run both writes
@@ -70,12 +71,8 @@ type effectiveValueRepository interface {
 	ClearManualOverrideWithAudit(ctx context.Context, resourceID uint64, field string, expectedVersion, actorUserID uint64) error
 }
 
-func NewResourceService(repo ResourceRepository, relationReaders ...completenessRelationReader) *ResourceService {
-	service := &ResourceService{repo: repo}
-	if len(relationReaders) > 0 {
-		service.relationReader = relationReaders[0]
-	}
-	return service
+func NewResourceService(repo ResourceRepository, relationReader completenessRelationReader) *ResourceService {
+	return &ResourceService{repo: repo, relationReader: relationReader}
 }
 
 func (s *ResourceService) List(ctx context.Context, q model.ResourceListQuery) ([]model.Resource, *model.PageInfo, error) {
@@ -83,7 +80,7 @@ func (s *ResourceService) List(ctx context.Context, q model.ResourceListQuery) (
 	if err != nil {
 		return nil, nil, err
 	}
-	if err := s.attachCompleteness(items); err != nil {
+	if err := s.attachCompleteness(ctx, items); err != nil {
 		return nil, nil, err
 	}
 	pageInfo := model.NewPageInfo(q.Page, q.PageSize, total)
@@ -99,14 +96,14 @@ func (s *ResourceService) Get(id uint64) (*model.Resource, error) {
 		return nil, ErrResourceNotFound
 	}
 	items := []model.Resource{*item}
-	if err := s.attachCompleteness(items); err != nil {
+	if err := s.attachCompleteness(context.Background(), items); err != nil {
 		return nil, err
 	}
 	*item = items[0]
 	return item, nil
 }
 
-func (s *ResourceService) attachCompleteness(items []model.Resource) error {
+func (s *ResourceService) attachCompleteness(ctx context.Context, items []model.Resource) error {
 	if len(items) == 0 {
 		return nil
 	}
@@ -115,31 +112,23 @@ func (s *ResourceService) attachCompleteness(items []model.Resource) error {
 	for i := range items {
 		ids[i] = items[i].ID
 	}
+	profiles, err := s.repo.GetResourceProfiles(ctx, ids)
+	if err != nil {
+		return err
+	}
 	relationsByResourceID := make(map[uint64][]model.ResourceRelationView, len(items))
-	if s.relationReader != nil {
-		relations, err := s.relationReader.ListRelationsByResourceIDs(ids)
-		if err != nil {
-			return err
-		}
-		for _, relation := range relations {
-			view := model.ResourceRelationView{FromResourceID: relation.FromResourceID, ToResourceID: relation.ToResourceID, RelationType: relation.RelationType}
-			relationsByResourceID[relation.FromResourceID] = append(relationsByResourceID[relation.FromResourceID], view)
-			relationsByResourceID[relation.ToResourceID] = append(relationsByResourceID[relation.ToResourceID], view)
-		}
+	relations, err := s.relationReader.ListRelationsByResourceIDs(ids)
+	if err != nil {
+		return err
+	}
+	for _, relation := range relations {
+		view := model.ResourceRelationView{FromResourceID: relation.FromResourceID, ToResourceID: relation.ToResourceID, RelationType: relation.RelationType}
+		relationsByResourceID[relation.FromResourceID] = append(relationsByResourceID[relation.FromResourceID], view)
+		relationsByResourceID[relation.ToResourceID] = append(relationsByResourceID[relation.ToResourceID], view)
 	}
 
-	// ponytail: one typed-profile read per returned resource; ListResources has returned,
-	// so its rows are closed before these nested reads. Batch by type only if page-size profiling warrants it.
 	for i := range items {
-		profile, err := s.repo.GetResourceProfile(items[i].ID)
-		if err != nil {
-			return err
-		}
-		fields := map[string]any{}
-		if profile != nil {
-			fields = profile.Profile
-		}
-		completeness := DeriveCompleteness(items[i], fields, relationsByResourceID[items[i].ID])
+		completeness := DeriveCompleteness(items[i], profiles[items[i].ID], relationsByResourceID[items[i].ID])
 		items[i].Completeness = &completeness
 	}
 	return nil

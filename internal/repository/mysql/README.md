@@ -5,7 +5,7 @@ Data access layer implementing service-layer repository interfaces with raw SQL 
 ## Files
 | File | Responsibility |
 |------|---------------|
-| resource_repository.go | Resource CRUD, governed identity and typed profiles, latest-per-observer health evidence, effective-health derivation, per-source observed/effective values, and atomic audited versioned manual overrides |
+| resource_repository.go | Resource CRUD, governed identity and one-query batched typed-profile reads, latest-per-observer health evidence, effective-health derivation, per-source observed/effective values, and atomic audited identity/manual-override mutations |
 | relation_repository.go | Relation queries plus atomic create/delete, effective-health relation/member projections, and topology resource lookup |
 | audit_repository.go | Audit event queries (global and by resource), including pagination, actor/resource search, and JSON field changes |
 | user_repository.go | User credential lookup by email/id; Authorization Version mutators (role/active/password); UpgradePasswordHash for legacy-to-Argon2id migration; CountLegacyHashUsers for operator visibility |

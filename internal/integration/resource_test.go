@@ -3,13 +3,14 @@
 // Package integration provides real-MySQL coverage for repository, API, and
 // migration behavior against disposable Testcontainers databases.
 // input: database/sql, testing, time, internal/model, internal/repository/mysql, internal/service
-// output: TestResource* and TestResourceService* integration cases, including relationship rules and observation-derived cluster rollups
-// pos: Proves resource CRUD, filtering, relationship rules, effective-health rollups, and create-with-profile atomicity against real MySQL
+// output: TestResource* and TestResourceService* integration cases, including relationship rules, batched profile query counts, and observation-derived cluster rollups
+// pos: Proves resource CRUD, filtering, profile batching, relationship rules, effective-health rollups, and create-with-profile atomicity against real MySQL
 // note: if this file changes, update this header and module README.md.
 package integration
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"net/http"
@@ -270,6 +271,61 @@ func TestResourceRepository_FilterByMultiResourceSubtype(t *testing.T) {
 			t.Errorf("got subtype %q, want mysql or clickhouse", item.ResourceSubtype)
 		}
 	}
+}
+
+func TestResourceRepositoryBatchProfilesQueryCountIsConstant(t *testing.T) {
+	db := setupTestDB(t)
+	db.SetMaxOpenConns(1)
+	repo := mysql.NewResourceRepository(db)
+
+	rows, err := db.Query(`select id from resources order by id limit 3`)
+	if err != nil {
+		t.Fatalf("list fixture ids: %v", err)
+	}
+	ids := make([]uint64, 0, 3)
+	for rows.Next() {
+		var id uint64
+		if err := rows.Scan(&id); err != nil {
+			t.Fatalf("scan fixture id: %v", err)
+		}
+		ids = append(ids, id)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("read fixture ids: %v", err)
+	}
+	if err := rows.Close(); err != nil {
+		t.Fatalf("close fixture ids: %v", err)
+	}
+	if len(ids) != 3 {
+		t.Fatalf("fixture ids = %d, want 3", len(ids))
+	}
+
+	oneBefore := mysqlSessionQuestionCount(t, db)
+	if _, err := repo.GetResourceProfiles(context.Background(), ids[:1]); err != nil {
+		t.Fatalf("load one profile: %v", err)
+	}
+	oneQueries := mysqlSessionQuestionCount(t, db) - oneBefore
+
+	manyBefore := mysqlSessionQuestionCount(t, db)
+	if _, err := repo.GetResourceProfiles(context.Background(), ids); err != nil {
+		t.Fatalf("load many profiles: %v", err)
+	}
+	manyQueries := mysqlSessionQuestionCount(t, db) - manyBefore
+	if oneQueries != 1 || manyQueries != oneQueries {
+		t.Fatalf("profile queries one=%d many=%d, want one query regardless of resource count", oneQueries, manyQueries)
+	}
+}
+
+func mysqlSessionQuestionCount(t *testing.T, db *sql.DB) uint64 {
+	t.Helper()
+	var (
+		name  string
+		count uint64
+	)
+	if err := db.QueryRow(`show session status like 'Questions'`).Scan(&name, &count); err != nil {
+		t.Fatalf("read MySQL session query count: %v", err)
+	}
+	return count
 }
 
 func TestResourceRepository_ResourceSubtypeWithResourceType(t *testing.T) {
@@ -545,7 +601,7 @@ func TestResourceRepository_DatabaseClusterOperationalSummary(t *testing.T) {
 func TestResourceServiceCreate_ProfileWriteFailureLeavesNoResource(t *testing.T) {
 	db := setupTestDB(t)
 	repo := mysql.NewResourceRepository(db)
-	svc := service.NewResourceService(repo)
+	svc := service.NewResourceService(repo, mysql.NewRelationRepository(db))
 	ctx := context.Background()
 
 	name := fmt.Sprintf("atomicity-fail-%d", time.Now().UnixNano())
@@ -691,7 +747,7 @@ func TestResourceAPI_CreateWithProfileFailureRollsBack(t *testing.T) {
 	dictRepo := mysql.NewDictionaryRepository(db)
 	qtRepo := mysql.NewQueryTargetRepository(db)
 	router := api.NewRouter(api.Dependencies{
-		ResourceService:        service.NewResourceService(resourceRepo),
+		ResourceService:        service.NewResourceService(resourceRepo, relationRepo),
 		ProfileService:         profileService,
 		RelationService:        service.NewRelationService(relationRepo),
 		TopologyService:        service.NewTopologyService(relationRepo),

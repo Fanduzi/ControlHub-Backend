@@ -5,7 +5,6 @@
 // output: TestOperatorAccessBoundary integration case, including health observation ingestion
 // pos: Proves the operator access matrix on real MySQL with self-contained resource and query-target fixtures
 // note: if this file changes, update this header and module README.md.
-//
 package integration
 
 import (
@@ -41,7 +40,7 @@ func TestOperatorAccessBoundary(t *testing.T) {
 	authService := service.NewAuthService(mysql.NewUserRepository(db), authzIntegrationSecret)
 	qtRepo := mysql.NewQueryTargetRepository(db)
 	router := api.NewRouter(api.Dependencies{
-		ResourceService:        service.NewResourceService(resourceRepo),
+		ResourceService:        service.NewResourceService(resourceRepo, relationRepo),
 		ProfileService:         profileService,
 		RelationService:        service.NewRelationService(relationRepo),
 		TopologyService:        service.NewTopologyService(relationRepo),

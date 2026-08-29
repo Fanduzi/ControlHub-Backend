@@ -1,6 +1,6 @@
 // Package openapi_test verifies the embedded OpenAPI contract.
 // input: embedded OpenAPI YAML, kin-openapi parser, internal/model
-// output: OpenAPI schema, health observation, effective-value override, topology, pagination, execution, and closed error-enum tests
+// output: OpenAPI schema, resource completeness, health observation, effective-value override, topology, pagination, execution, and closed error-enum tests
 // pos: Prevents documented API contracts from drifting from router behavior
 // note: if this file changes, update this header and module README.md.
 package openapi_test
@@ -54,6 +54,32 @@ func TestOpenAPIResourceHealthObservationContract(t *testing.T) {
 	patch := doc.Components.Schemas["ResourcePatchRequest"].Value.Properties["healthStatus"]
 	if patch == nil || patch.Value == nil || !patch.Value.Nullable {
 		t.Fatal("ResourcePatchRequest.healthStatus must allow null to clear the manual override")
+	}
+}
+
+func TestOpenAPIResourceCompletenessContract(t *testing.T) {
+	loader := openapi3.NewLoader()
+	doc, err := loader.LoadFromData(openapi.YAML)
+	if err != nil {
+		t.Fatalf("failed to parse openapi.yaml: %v", err)
+	}
+
+	resource := doc.Components.Schemas["Resource"].Value
+	completeness := resource.Properties["completeness"]
+	if completeness == nil || completeness.Value == nil || len(completeness.Value.AllOf) != 1 || completeness.Value.AllOf[0].Ref != "#/components/schemas/Completeness" {
+		t.Fatalf("Resource.completeness ref = %#v, want #/components/schemas/Completeness", completeness)
+	}
+	if !completeness.Value.ReadOnly {
+		t.Fatal("Resource.completeness must be read-only")
+	}
+	schema := doc.Components.Schemas["Completeness"].Value
+	if !schema.ReadOnly {
+		t.Fatal("Completeness must be read-only")
+	}
+	for _, field := range []string{"score", "status", "missingRequirements"} {
+		if schema.Properties[field] == nil || !slices.Contains(schema.Required, field) {
+			t.Fatalf("Completeness.%s must be documented and required", field)
+		}
 	}
 }
 

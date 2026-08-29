@@ -1,7 +1,7 @@
 // Package service tests server-derived resource completeness rules.
-// input: each resource type's minimum identity and primary #77 structural relation
-// output: exhaustive complete/partial score, missing-key, label-ignore, and input-immutability checks
-// pos: Public pure completeness-rule seam
+// input: each resource type's minimum identity, matrix-valid structural relation, and invalid structural endpoints
+// output: exhaustive complete/partial score, missing-key, label-ignore, matrix-validation, and input-immutability checks
+// pos: Public pure completeness-rule seam against the relationship matrix
 // note: if this file changes, update this header and module README.md.
 package service
 
@@ -78,6 +78,18 @@ func TestDeriveCompleteness_MissingRequirementsAndLabels(t *testing.T) {
 			"name", "displayName", "environment", "owner", "minimumIdentity", "aliasOrExternalCIIdentifier", "structuralRelationship",
 		},
 	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("result = %#v, want %#v", got, want)
+	}
+}
+
+func TestDeriveCompleteness_RequiresMatrixValidStructuralEndpoint(t *testing.T) {
+	resource := resource(model.ResourceTypeService)
+	profile := map[string]any{"systemName": "orders"}
+	invalid := outbound(model.RelationTypeMemberOf, model.ResourceTypeDatabaseCluster)
+
+	got := DeriveCompleteness(resource, profile, []model.ResourceRelationView{invalid})
+	want := model.Completeness{Score: 85, Status: "partial", MissingRequirements: []string{"structuralRelationship"}}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("result = %#v, want %#v", got, want)
 	}

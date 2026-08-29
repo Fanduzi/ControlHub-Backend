@@ -1,4 +1,5 @@
 //go:build integration
+
 // Package integration provides real-MySQL coverage for archive service writes.
 // input: context, testing, time, internal/model, internal/repository/mysql, internal/service
 // output: TestServiceArchive_RejectsUpdateAfterArchive, TestServiceUnarchive_AllowsUpdateAfterUnarchive
@@ -219,7 +220,7 @@ func TestListResources_IncludeArchived(t *testing.T) {
 func TestServiceArchive_RejectsUpdateAfterArchive(t *testing.T) {
 	db := setupTestDB(t)
 	repo := mysql.NewResourceRepository(db)
-	svc := service.NewResourceService(repo)
+	svc := service.NewResourceService(repo, mysql.NewRelationRepository(db))
 	ctx := context.Background()
 
 	created, err := svc.Create(ctx, model.ResourceCreateInput{
@@ -258,7 +259,7 @@ func TestServiceArchive_RejectsUpdateAfterArchive(t *testing.T) {
 func TestServiceArchive_NotFound(t *testing.T) {
 	db := setupTestDB(t)
 	repo := mysql.NewResourceRepository(db)
-	svc := service.NewResourceService(repo)
+	svc := service.NewResourceService(repo, mysql.NewRelationRepository(db))
 
 	_, err := svc.Archive(context.Background(), 999999999, model.ArchiveRequest{})
 	if err == nil {
@@ -542,7 +543,7 @@ func TestListResources_ArchivedOnlyTakesPrecedenceOverIncludeArchived(t *testing
 func TestServiceUnarchive_AllowsUpdateAfterUnarchive(t *testing.T) {
 	db := setupTestDB(t)
 	repo := mysql.NewResourceRepository(db)
-	svc := service.NewResourceService(repo)
+	svc := service.NewResourceService(repo, mysql.NewRelationRepository(db))
 	ctx := context.Background()
 
 	created, err := svc.Create(ctx, model.ResourceCreateInput{

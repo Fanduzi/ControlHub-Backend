@@ -124,12 +124,13 @@ func setupNavigateFixture(t *testing.T) (string, uint64, *sql.DB) {
 	)
 
 	dictRepo := mysql.NewDictionaryRepository(db)
+	relationRepo := mysql.NewRelationRepository(db)
 	profileSvc := service.NewProfileService(resRepo, resRepo)
 
 	deps := api.Dependencies{
-		ResourceService:        service.NewResourceService(resRepo),
-		RelationService:        service.NewRelationService(mysql.NewRelationRepository(db)),
-		TopologyService:        service.NewTopologyService(mysql.NewRelationRepository(db)),
+		ResourceService:        service.NewResourceService(resRepo, relationRepo),
+		RelationService:        service.NewRelationService(relationRepo),
+		TopologyService:        service.NewTopologyService(relationRepo),
 		AuditService:           service.NewAuditService(mysql.NewAuditRepository(db)),
 		AuthService:            service.NewAuthService(mysql.NewUserRepository(db), "nav-integration-jwt-secret"),
 		ProfileService:         profileSvc,

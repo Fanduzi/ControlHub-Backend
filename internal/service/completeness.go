@@ -1,5 +1,5 @@
 // Package service provides server-derived resource completeness rules.
-// input: model resource identity, typed profile values, and resolved relationship views
+// input: model resource identity, typed profile values, resolved relationship views, and the relationship matrix
 // output: DeriveCompleteness returns a read-only completeness score, status, and missing requirement keys
 // pos: Pure inventory-quality projection shared by future resource read paths
 // note: if this file changes, update this header and module README.md.
@@ -80,9 +80,14 @@ func hasStructuralRelation(resource model.Resource, relations []model.ResourceRe
 		return true
 	}
 	for _, relation := range relations {
+		rule, ok := relationshipRules[relation.RelationType]
+		if !ok {
+			continue
+		}
 		switch relation.RelationType {
 		case model.RelationTypeMemberOf, model.RelationTypeRunsOn, model.RelationTypeFronts, model.RelationTypeReplicatesTo:
-			if relation.FromResourceID == resource.ID || relation.ToResourceID == resource.ID {
+			if relation.FromResourceID == resource.ID && containsRelationshipResourceType(rule.sources, resource.ResourceType) ||
+				relation.ToResourceID == resource.ID && containsRelationshipResourceType(rule.targets, resource.ResourceType) {
 				return true
 			}
 		}

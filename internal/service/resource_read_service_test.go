@@ -1,7 +1,8 @@
 // Package service provides tests for resource read operations.
 // input: internal/service ResourceService.List/Get/GetProfile, internal/model, testing
-// output: TestResourceRead* functions
-// pos: Validates resource read pagination and error handling
+// output: TestResourceRead* functions, including batched completeness profiles
+// pos: Validates resource read pagination, error handling, and projection batching
+// note: if this file changes, update this header and module README.md.
 package service
 
 import (
@@ -21,8 +22,8 @@ import (
 type fakeResourceReadRepo struct {
 	*fakeResourceWriteRepo
 
-	listErr      error
-	getErr       error
+	listErr       error
+	getErr        error
 	getProfileErr error
 }
 
@@ -56,7 +57,7 @@ func TestResourceReadListReturnsItemsWithPageInfo(t *testing.T) {
 		testResource1ID: {ID: testResource1ID, Name: "alpha"},
 		testResource2ID: {ID: testResource2ID, Name: "beta"},
 	}}
-	svc := NewResourceService(repo)
+	svc := newResourceServiceForTest(repo)
 
 	items, pageInfo, err := svc.List(context.Background(), model.ResourceListQuery{
 		Page:     1,
@@ -91,9 +92,27 @@ func TestResourceReadListReturnsItemsWithPageInfo(t *testing.T) {
 	}
 }
 
+func TestResourceReadListLoadsCompletenessProfilesInOneBatch(t *testing.T) {
+	repo := &fakeResourceWriteRepo{resources: map[uint64]model.Resource{
+		testResource1ID: {ID: testResource1ID, ResourceType: model.ResourceTypeHost},
+		testResource2ID: {ID: testResource2ID, ResourceType: model.ResourceTypeHost},
+	}}
+	svc := newResourceServiceForTest(repo)
+
+	if _, _, err := svc.List(context.Background(), model.ResourceListQuery{Page: 1, PageSize: 20}); err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if repo.getProfilesCalls != 1 {
+		t.Fatalf("GetResourceProfiles calls = %d, want 1", repo.getProfilesCalls)
+	}
+	if repo.getProfileCalls != 0 {
+		t.Fatalf("GetResourceProfile calls = %d, want 0", repo.getProfileCalls)
+	}
+}
+
 func TestResourceReadListEmptyWhenNoMatch(t *testing.T) {
 	repo := &fakeResourceWriteRepo{resources: map[uint64]model.Resource{}}
-	svc := NewResourceService(repo)
+	svc := newResourceServiceForTest(repo)
 
 	items, pageInfo, err := svc.List(context.Background(), model.ResourceListQuery{
 		Page:     1,
@@ -119,7 +138,7 @@ func TestResourceReadListPropagatesRepoError(t *testing.T) {
 		fakeResourceWriteRepo: &fakeResourceWriteRepo{},
 		listErr:               repoErr,
 	}
-	svc := NewResourceService(repo)
+	svc := newResourceServiceForTest(repo)
 
 	_, _, err := svc.List(context.Background(), model.ResourceListQuery{Page: 1, PageSize: 20})
 	if !errors.Is(err, repoErr) {
@@ -135,7 +154,7 @@ func TestResourceReadGetReturnsResourceWhenFound(t *testing.T) {
 	repo := &fakeResourceWriteRepo{resources: map[uint64]model.Resource{
 		testResource1ID: {ID: testResource1ID, Name: "order-mysql-prod"},
 	}}
-	svc := NewResourceService(repo)
+	svc := newResourceServiceForTest(repo)
 
 	item, err := svc.Get(testResource1ID)
 	if err != nil {
@@ -151,7 +170,7 @@ func TestResourceReadGetReturnsResourceWhenFound(t *testing.T) {
 
 func TestResourceReadGetReturnsNotFoundForMissing(t *testing.T) {
 	repo := &fakeResourceWriteRepo{resources: map[uint64]model.Resource{}}
-	svc := NewResourceService(repo)
+	svc := newResourceServiceForTest(repo)
 
 	_, err := svc.Get(testMissingID)
 	if !errors.Is(err, ErrResourceNotFound) {
@@ -165,7 +184,7 @@ func TestResourceReadGetPropagatesRepoError(t *testing.T) {
 		fakeResourceWriteRepo: &fakeResourceWriteRepo{},
 		getErr:                repoErr,
 	}
-	svc := NewResourceService(repo)
+	svc := newResourceServiceForTest(repo)
 
 	_, err := svc.Get(testResource1ID)
 	if !errors.Is(err, repoErr) {
@@ -184,7 +203,7 @@ func TestResourceReadGetProfileReturnsProfileWhenFound(t *testing.T) {
 		Profile:      map[string]any{"engine": "mysql"},
 	}
 	repo := &fakeResourceWriteRepo{getProfileResult: profile}
-	svc := NewResourceService(repo)
+	svc := newResourceServiceForTest(repo)
 
 	result, err := svc.GetProfile(testResource1ID)
 	if err != nil {
@@ -200,7 +219,7 @@ func TestResourceReadGetProfileReturnsProfileWhenFound(t *testing.T) {
 
 func TestResourceReadGetProfileReturnsNilWhenNotFound(t *testing.T) {
 	repo := &fakeResourceWriteRepo{}
-	svc := NewResourceService(repo)
+	svc := newResourceServiceForTest(repo)
 
 	result, err := svc.GetProfile(testMissingID)
 	if err != nil {
@@ -218,7 +237,7 @@ func TestResourceReadGetProfilePropagatesRepoError(t *testing.T) {
 		fakeResourceWriteRepo: &fakeResourceWriteRepo{},
 		getProfileErr:         repoErr,
 	}
-	svc := NewResourceService(repo)
+	svc := newResourceServiceForTest(repo)
 
 	_, err := svc.GetProfile(testResource1ID)
 	if !errors.Is(err, repoErr) {

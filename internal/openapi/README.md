@@ -21,7 +21,7 @@ Embeds and validates the OpenAPI contract served by the API documentation route.
 - `GET /ops/query-evidence-metrics` response schema (Issue #34): fixed admin-only shape with exactly `queryEvidencePersistenceFailures`; carries no identity, target, statement, value, credential, DSN, request, or raw error material
 - `ErrorResponse.error`: closed Controlled Error Code enum (Issue #53). Adding a code is a contract change. The published set is backend `writeJSONError` literals plus Console BFF snake_case codes.
 - `AuditEvent.changes`: optional server-owned add/update/remove field evidence with before/after values; absent on legacy and non-inventory events.
-- `Resource` always exposes effective status, freshness, observed time, observer, and nullable manual override; POST observations are operational and PATCH null clears the audited override.
+- `Resource` always exposes read-only completeness, effective status, freshness, observed time, observer, and nullable manual override; POST observations are operational and PATCH null clears the audited override.
 - `GET /resources/{id}/relation-rules`: source-specific relation types, target resource types, and same-environment constraints consumed by the console; writes revalidate the same server matrix.
 - `GET /audit-events?q=...`: optional search over operator identity and target resource name, combined with the existing filters.
 - `GET /resources?q=...&ownerId=...&label=key:value`: inventory identifier search, exact owner filtering, and repeatable exact labels combined with AND.

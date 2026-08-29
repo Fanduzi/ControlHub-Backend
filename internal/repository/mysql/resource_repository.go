@@ -1,7 +1,7 @@
 // Package mysql provides MySQL-backed repository implementations.
 // input: database/sql, time, internal/model, internal/service
-// output: resource CRUD, governed identity and typed profiles, rich inventory filtering, health observations/effective health, observed/effective values, and audited versioned manual overrides
-// pos: MySQL data access for resources, identity, typed profiles, current health evidence, effective values, and inventory search
+// output: resource CRUD, governed identity and batched typed-profile reads, rich inventory filtering, health observations/effective health, observed/effective values, and audited versioned manual overrides
+// pos: MySQL data access for resources, identity, typed-profile projections, current health evidence, effective values, and inventory search
 // note: if this file changes, update this header and module README.md.
 package mysql
 
@@ -513,6 +513,62 @@ func (r *ResourceRepository) GetResourceProfile(id uint64) (*model.ResourceProfi
 		ResourceSubtype: res.ResourceSubtype,
 		Profile:         profile,
 	}, nil
+}
+
+// GetResourceProfiles loads typed profiles for a resource page in one query.
+func (r *ResourceRepository) GetResourceProfiles(ctx context.Context, ids []uint64) (map[uint64]map[string]any, error) {
+	profiles := make(map[uint64]map[string]any, len(ids))
+	if len(ids) == 0 {
+		return profiles, nil
+	}
+
+	args := make([]any, len(ids))
+	for i, id := range ids {
+		args[i] = id
+	}
+	rows, err := r.db.QueryContext(ctx, `select r.id, case r.resource_type
+		when 'database_instance' then case when dpi.resource_id is null then null else json_object('engine', dpi.engine, 'version', dpi.version, 'host', dpi.host, 'port', dpi.port, 'role', dpi.role) end
+		when 'database_cluster' then case when dpc.resource_id is null then null else json_object('engine', dpc.engine, 'topologyMode', dpc.topology_mode, 'primaryEndpoint', dpc.primary_endpoint) end
+		when 'service' then case when sp.resource_id is null then null else json_object('systemName', sp.system_name, 'repositoryUrl', sp.repository_url, 'runtimeEnv', sp.runtime_env) end
+		when 'host' then case when hp.resource_id is null then null else json_object('hostname', hp.hostname, 'ipAddress', hp.ip_address, 'osName', hp.os_name) end
+		when 'domain_name' then case when dnp.resource_id is null then null else json_object('fqdn', dnp.fqdn) end
+		when 'database_proxy' then case when dpp.resource_id is null then null else json_object('technologySubtype', dpp.technology_subtype, 'host', dpp.host, 'port', dpp.port, 'role', dpp.role, 'version', dpp.version) end
+		when 'virtual_ip' then case when vip.resource_id is null then null else json_object('ipAddress', vip.ip_address) end
+		when 'control_plane_component' then case when cpp.resource_id is null then null else json_object('componentSubtype', cpp.component_subtype, 'endpoint', cpp.endpoint, 'version', cpp.version, 'role', cpp.role) end
+		else json_object() end
+		from resources r
+		left join resource_profiles_database_instance dpi on dpi.resource_id = r.id
+		left join resource_profiles_database_cluster dpc on dpc.resource_id = r.id
+		left join resource_profiles_service sp on sp.resource_id = r.id
+		left join resource_profiles_host hp on hp.resource_id = r.id
+		left join resource_profiles_domain_name dnp on dnp.resource_id = r.id
+		left join resource_profiles_database_proxy dpp on dpp.resource_id = r.id
+		left join resource_profiles_virtual_ip vip on vip.resource_id = r.id
+		left join resource_profiles_control_plane_component cpp on cpp.resource_id = r.id
+		where r.id in (`+buildInClause(len(ids))+`)`, args...)
+	if err != nil {
+		return nil, fmt.Errorf("list resource profiles: %w", err)
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var id uint64
+		var rawProfile sql.NullString
+		if err := rows.Scan(&id, &rawProfile); err != nil {
+			return nil, fmt.Errorf("scan resource profile: %w", err)
+		}
+		profile := map[string]any{}
+		if rawProfile.Valid && rawProfile.String != "" {
+			if err := json.Unmarshal([]byte(rawProfile.String), &profile); err != nil {
+				return nil, fmt.Errorf("decode resource profile: %w", err)
+			}
+		}
+		profiles[id] = profile
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("list resource profiles: %w", err)
+	}
+	return profiles, nil
 }
 
 func (r *ResourceRepository) fetchProfile(resourceID uint64, resourceType model.ResourceType) (map[string]any, error) {

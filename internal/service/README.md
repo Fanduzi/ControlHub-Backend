@@ -5,13 +5,13 @@ Business logic layer with interface-based repository dependencies. Each service 
 ## Files
 | File | Responsibility |
 |------|---------------|
-| resource_service.go | Resource reads/writes, list/detail server-derived completeness from governed identity, typed profiles, and one relation batch; governed-identity validation, minimum manual typed-profile identity, health observation ingestion, explicit conflicts, and fail-closed audited inventory updates |
+| resource_service.go | Resource reads/writes, list/detail server-derived completeness from governed identity, one typed-profile batch, and one required relation batch; governed-identity validation, minimum manual typed-profile identity, health observation ingestion, explicit conflicts, and fail-closed audited inventory updates |
 | resource_write_service_test.go | Resource/relation write-flow tests, including identity normalization/immutability, sensitive-label rejection, profile validation, and the manual-identity rule matrix |
 | profile_service.go | Typed profile PUT/PATCH/DELETE validation plus fail-closed audited mutations for all typed-profile identities |
 | profile_service_test.go | Profile write tests: validation, PATCH partial-merge semantics, not-found/archived/unsupported guards, and all typed-profile identity rules |
 | relation_service.go | Shared relation read/write entry point; validates server-owned rules before fail-closed audited persistence |
 | relation_rules.go | Single relationship matrix authority plus source-specific discovery response |
-| completeness.go | Pure seven-group, server-derived resource completeness projection using typed-profile minima and the relationship matrix |
+| completeness.go | Pure seven-group, server-derived resource completeness projection using typed-profile minima and matrix-valid structural endpoints; Domain Name has no structural-edge requirement |
 | audit_service.go | Audit event listing (global and per-resource) |
 | auth_service.go | Login, versioned Backend Bearer issuance, current-state VerifyToken (Authorization Version), role/disable/password invalidation, legacy-to-Argon2id transparent migration |
 | auth_audit_emitter.go | AuthAuditEmitter interface, NoopEmitter, and BoundedAuthAuditEmitter decorator capping untrusted Bearer rejection persistence at 60/min per process (fail-open) |
