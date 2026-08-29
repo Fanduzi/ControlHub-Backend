@@ -1,6 +1,6 @@
 // Package api provides HTTP handlers and routing for the ControlHub REST API.
 // input: chi/v5, time, internal/model, internal/service (all services)
-// output: Dependencies, NewRouter, CORS, user-or-machine scoped reads, and user-only health observation, bulk mutation, ingestion, and admin routes
+// output: Dependencies, NewRouter, CORS, user-or-machine scoped reads/ordinary governed execute, and user-only sibling query, health observation, bulk mutation, ingestion, and admin routes
 // pos: HTTP routing entry point for the closed machine route/scope matrix and authenticated inventory, named-view, topology, query, and admin operations
 // note: if this file changes, update this header and module README.md.
 package api
@@ -178,8 +178,19 @@ func NewRouter(deps Dependencies) *chi.Mux {
 		})
 	})
 
-	// Query execution routes (Phase 37) require a fresh bearer token via
-	// requireFreshQueryActor (base signature/structure check + bounded TTL).
+	// Ordinary governed SELECT accepts either a scoped Machine Credential or a
+	// fresh current User bearer. Machine evidence uses the principal ID, never
+	// the credential ID or a fabricated User.
+	if deps.QueryExecutionService != nil {
+		router.With(requireUserOrMachineCredential(
+			deps.MachineCredentialService,
+			model.MachineScopeGovernedSelect,
+			requireFreshQueryActor(deps.AuthService, deps.QueryExecutionAuth, emitter),
+		)).Post("/query-targets/{id}/execute", handleExecuteQuery(deps.QueryExecutionService))
+	}
+
+	// Sibling query routes remain fresh-User-only via requireFreshQueryActor
+	// (base signature/current Authorization Version check + bounded TTL).
 	// All protected routes, including inventory and dictionary reads above,
 	// enforce the fixed MaxQueryTokenAge freshness bound (Issue #21).
 	//
@@ -190,7 +201,6 @@ func NewRouter(deps Dependencies) *chi.Mux {
 		router.Group(func(r chi.Router) {
 			r.Use(requireFreshQueryActor(deps.AuthService, deps.QueryExecutionAuth, emitter))
 			if deps.QueryExecutionService != nil {
-				r.Post("/query-targets/{id}/execute", handleExecuteQuery(deps.QueryExecutionService))
 				r.Get("/query-targets/{id}/executions", handleListQueryExecutions(deps.QueryExecutionService))
 				r.Post("/query-targets/{id}/related-records", handleNavigateRelatedRecords(deps.QueryExecutionService))
 			}

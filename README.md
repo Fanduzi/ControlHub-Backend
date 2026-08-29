@@ -333,9 +333,13 @@ inside the existing single MySQL transaction, so conflicts, drift, or any write
 failure leave no partial batch committed.
 
 Opaque `chmp_` Machine Credentials use a separate, closed scope matrix for
-Inventory, relation/topology, query-target discovery, audit, and shared Named
-View reads. They never become a User, Operator Session, or `authVersion` actor;
-all mutations and unlisted routes fail with controlled machine authorization errors.
+Inventory, relation/topology, query-target discovery, audit, shared Named View
+reads, and ordinary governed query execution. Only
+`POST /query-targets/{id}/execute` accepts the `governed-select` machine scope;
+all sibling query routes remain user-only. Machine execution evidence records
+the machine principal identity, never a synthetic User or credential material.
+All other mutations and unlisted routes fail with controlled machine
+authorization errors.
 
 Resource list and detail responses include effective `healthStatus`,
 `healthFreshness` (`fresh`, `stale`, or `never`), `healthObservedAt`,

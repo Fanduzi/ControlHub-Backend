@@ -1,7 +1,7 @@
 // Package model provides tests for query execution domain validators.
 // input: strings, testing, math, reflect
-// output: TestQueryEnvironmentPolicy_*, TestValidateCredentialRef_*, TestQueryExecutePagination*, TestValidatePagination*
-// pos: Unit tests for environment-policy, credential_ref, and Phase 38S governed-result-paging validators
+// output: TestQueryExecutionIdentityValidate, TestQueryEnvironmentPolicy_*, TestValidateCredentialRef_*, TestQueryExecutePagination*, TestValidatePagination*
+// pos: Unit tests for user/machine execution identity, environment-policy, credential_ref, and governed-result-paging validators
 // note: if this file changes, update header and README.md
 package model
 
@@ -471,5 +471,28 @@ func TestQueryExecuteRequest_RejectsUnknownFields(t *testing.T) {
 	// Verify top-level page/pageSize do NOT populate the nested Pagination.
 	if req.Pagination != nil {
 		t.Error("top-level page/pageSize must not populate Pagination (must be nested under \"pagination\")")
+	}
+}
+
+func TestQueryExecutionIdentityValidate(t *testing.T) {
+	t.Parallel()
+
+	for _, identity := range []QueryExecutionIdentity{
+		{Kind: QueryExecutionActorUser, ID: 42},
+		{Kind: QueryExecutionActorMachine, ID: 91},
+	} {
+		if err := identity.Validate(); err != nil {
+			t.Fatalf("Validate(%+v) = %v, want nil", identity, err)
+		}
+	}
+
+	for _, identity := range []QueryExecutionIdentity{
+		{},
+		{Kind: QueryExecutionActorUser},
+		{Kind: QueryExecutionActorKind("credential"), ID: 92},
+	} {
+		if err := identity.Validate(); err == nil {
+			t.Fatalf("Validate(%+v) = nil, want error", identity)
+		}
 	}
 }

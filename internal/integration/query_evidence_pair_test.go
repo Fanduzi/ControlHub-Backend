@@ -3,8 +3,8 @@
 // Package integration provides Testcontainers-backed tests for the Phase 38X-3A
 // atomic Execution Evidence Pair primitive (Issue #34).
 // input: context, database/sql, bytes, log, strings, testing, Testcontainers MySQL, internal/model, internal/repository/mysql
-// output: TestQueryEvidencePair* (pair commits both rows, rollback on audit/history failure, persistence-failure counter and fixed safe log)
-// pos: Proves the repository-owned atomic Execution Evidence Pair and its failure telemetry against real MySQL state
+// output: TestQueryEvidencePair* and TestMachineEvidenceIdentityConstraints (atomicity, telemetry, exactly/at-most-one actor constraints)
+// pos: Proves repository-owned evidence atomicity and migration-26 user/machine identity constraints against real MySQL state
 // note: if this file changes, update header and README.md
 package integration
 
@@ -64,6 +64,35 @@ func TestQueryEvidencePairCommitsBothRows(t *testing.T) {
 	}
 	if id == 0 {
 		t.Fatal("returned execution id = 0, want the committed id")
+	}
+}
+
+func TestMachineEvidenceIdentityConstraints(t *testing.T) {
+	db := setupTestDB(t)
+	targetID := createQueryTargetResource(t, db, "qe-machine-identity-constraints")
+
+	insertExecution := `insert into query_executions
+		(target_resource_id, actor_user_id, actor_machine_principal_id, engine, statement_digest, statement_preview, status)
+		values (?, ?, ?, 'mysql', '', '', 'success')`
+	if _, err := db.Exec(insertExecution, targetID, nil, nil); err == nil {
+		t.Fatal("query execution without an actor must violate exactly-one constraint")
+	}
+	if _, err := db.Exec(insertExecution, targetID, ownerDBA, 86001); err == nil {
+		t.Fatal("query execution with both actors must violate exactly-one constraint")
+	}
+	if _, err := db.Exec(insertExecution, targetID, nil, 86001); err != nil {
+		t.Fatalf("machine-only query execution identity: %v", err)
+	}
+
+	if _, err := db.Exec(`insert into audit_events
+		(actor_user_id, actor_machine_principal_id, event_type, result)
+		values (?, ?, 'query.machine_constraint_test', 'success')`, ownerDBA, 86001); err == nil {
+		t.Fatal("audit event with both actors must violate at-most-one constraint")
+	}
+	if _, err := db.Exec(`insert into audit_events
+		(actor_user_id, actor_machine_principal_id, event_type, result)
+		values (NULL, NULL, 'query.machine_constraint_test', 'rejected')`); err != nil {
+		t.Fatalf("unauthenticated audit identity must remain valid: %v", err)
 	}
 }
 

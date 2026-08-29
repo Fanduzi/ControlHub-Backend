@@ -1,7 +1,7 @@
 // Package openapi_test verifies the embedded OpenAPI contract.
 // input: context, fmt, testing, kin-openapi parser, internal/openapi
-// output: machine credential scheme, scoped-route, controlled-code, and secret-boundary tests
-// pos: Prevents machine HTTP authorization and one-time secret documentation drift
+// output: machine credential scheme, scoped-route, governed execution evidence, controlled-code, and secret-boundary tests
+// pos: Prevents machine HTTP authorization, evidence identity, and one-time secret documentation drift
 // note: if this file changes, update this header and module README.md.
 package openapi_test
 
@@ -47,6 +47,7 @@ func TestOpenAPIMachineCredentialContract(t *testing.T) {
 		{"/resources/{id}/topology", "GET", "relations:read"},
 		{"/environments/{id}/topology", "GET", "relations:read"},
 		{"/query-targets", "GET", "governed-select"},
+		{"/query-targets/{id}/execute", "POST", "governed-select"},
 		{"/audit-events", "GET", "audit:read"},
 		{"/resources/{id}/audit-events", "GET", "audit:read"},
 		{"/inventory/views", "GET", "named-views:read"},
@@ -89,6 +90,15 @@ func TestOpenAPIMachineCredentialContract(t *testing.T) {
 	issue := doc.Components.Schemas["MachineCredentialIssue"]
 	if issue == nil || issue.Value == nil || issue.Value.Properties["secret"] == nil {
 		t.Fatal("MachineCredentialIssue must document the one-time secret")
+	}
+
+	audit := doc.Components.Schemas["AuditEvent"].Value
+	if audit == nil || audit.Properties["actorMachinePrincipalId"] == nil {
+		t.Fatal("AuditEvent must project actorMachinePrincipalId")
+	}
+	actor := doc.Components.Schemas["QueryExecutionActor"].Value
+	if actor == nil || actor.Properties["kind"] == nil || !containsEnum(actor.Properties["kind"].Value.Enum, "machine") {
+		t.Fatal("QueryExecutionActor.kind must distinguish user and machine evidence")
 	}
 }
 

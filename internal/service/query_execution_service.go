@@ -1,7 +1,7 @@
 // Package service provides business logic for the Phase 37/38S read-only query sandbox.
 // input: context, errors, fmt, net, strconv, strings, time, go-sql-driver/mysql, internal/model
-// output: QueryExecutionService, query execution repository/resolver/executor/clock interfaces, sentinel errors, NewQueryExecutionService, Execute, ListHistory, validateDSNBinding
-// pos: Orchestrates governed MySQL/TiDB query execution, compiler-owned template execution, and FK related-record navigation — one private persistence implementation guarantees atomic Execution Evidence Pair history + audit (Issues #34/#61) in the detached two-second window (Issue #35), including navigation (Issue #36); Preflight and Apply disclosure blocks both publish query_result_disclosure_blocked (Issue #48)
+// output: QueryExecutionService, validated user/machine Execute identity, repository/resolver/executor/clock interfaces, sentinel errors, ListHistory, validateDSNBinding
+// pos: Orchestrates ordinary user/machine governed execution plus user-only template/navigation paths through one atomic identity-aware evidence implementation while preserving cancellation and disclosure behavior
 // note: if this file changes, update this header and module README.md.
 package service
 
@@ -212,14 +212,17 @@ func NewQueryExecutionService(
 // ErrQueryBackendFailure rather than a silent success — Phase 37 never reports
 // an unaudited attempt as complete. The actor is taken from the verified token
 // by the caller, never from the request body.
-func (s *QueryExecutionService) Execute(ctx context.Context, actorUserID uint64, targetID uint64, req model.QueryExecuteRequest) (model.QueryExecuteResponse, error) {
+func (s *QueryExecutionService) Execute(ctx context.Context, identity model.QueryExecutionIdentity, targetID uint64, req model.QueryExecuteRequest) (model.QueryExecuteResponse, error) {
+	if err := identity.Validate(); err != nil {
+		return model.QueryExecuteResponse{}, fmt.Errorf("%w: invalid execution identity", ErrQueryValidationFailed)
+	}
 	start := s.clock.Now()
 
 	// Resolve governed target access. The resolver performs: target lookup,
 	// engine check, credential validation, policy enforcement, secret
 	// resolution, and DSN binding validation — the same checks that
 	// InspectCredentialRuntime performs so the two paths never drift.
-	access, err := s.access.Resolve(ctx, actorUserID, targetID)
+	access, err := s.access.Resolve(ctx, identity.ID, targetID)
 	if err != nil {
 		if errors.Is(err, ErrQueryTargetNotFound) {
 			// Unknown target: no history row (no valid target to attribute it to).
@@ -229,7 +232,7 @@ func (s *QueryExecutionService) Execute(ctx context.Context, actorUserID uint64,
 		if errors.As(err, &accessErr) {
 			// access.Target is populated even on denial so we can record the
 			// rejected attempt. The message is a fixed, leak-free string.
-			return s.reject(ctx, access.Target, actorUserID, nil, "query_not_allowed", accessErr.Error(),
+			return s.reject(ctx, access.Target, identity, nil, "query_not_allowed", accessErr.Error(),
 				fmt.Errorf("%w: %s", ErrQueryNotAllowed, accessErr.Error()), start)
 		}
 		return model.QueryExecuteResponse{}, err
@@ -244,7 +247,7 @@ func (s *QueryExecutionService) Execute(ctx context.Context, actorUserID uint64,
 	var guarded GuardedQuery
 	if req.Pagination != nil {
 		if err := model.ValidatePagination(req.Pagination.Page, req.Pagination.PageSize); err != nil {
-			return s.reject(ctx, target, actorUserID, &guarded, "validation_failed", err.Error(),
+			return s.reject(ctx, target, identity, &guarded, "validation_failed", err.Error(),
 				fmt.Errorf("%w: %v", ErrQueryValidationFailed, err), start)
 		}
 		guarded, err = s.guard.GuardPaginatedSelect(req.Statement, req.Pagination.Page, req.Pagination.PageSize, maxRows)
@@ -257,7 +260,7 @@ func (s *QueryExecutionService) Execute(ctx context.Context, actorUserID uint64,
 	if err != nil {
 		// The guard error is structural (SQL shape) and carries no DSN, so it is
 		// safe to surface as the validation message.
-		return s.reject(ctx, target, actorUserID, &guarded, "validation_failed", err.Error(),
+		return s.reject(ctx, target, identity, &guarded, "validation_failed", err.Error(),
 			fmt.Errorf("%w: %v", ErrQueryValidationFailed, err), start)
 	}
 
@@ -268,7 +271,7 @@ func (s *QueryExecutionService) Execute(ctx context.Context, actorUserID uint64,
 	if req.Pagination != nil {
 		page, pageSize = req.Pagination.Page, req.Pagination.PageSize
 	}
-	return s.executeGuardedChain(ctx, target, actorUserID, access.dsn, &guarded,
+	return s.executeGuardedChain(ctx, target, identity, access.dsn, &guarded,
 		func(execCtx context.Context, dsn string) (QueryDatabaseResult, error) {
 			return s.executor.Query(execCtx, dsn, guarded)
 		}, page, pageSize, start)
@@ -291,7 +294,7 @@ func clampProductionMaxRows(environment string, requested int) int {
 func (s *QueryExecutionService) executeGuardedChain(
 	ctx context.Context,
 	target model.QueryTarget,
-	actorUserID uint64,
+	identity model.QueryExecutionIdentity,
 	dsn string,
 	guarded *GuardedQuery,
 	run func(execCtx context.Context, dsn string) (QueryDatabaseResult, error),
@@ -308,12 +311,12 @@ func (s *QueryExecutionService) executeGuardedChain(
 		// it is a terminal failed/timeout client-cancellation or deadline
 		// outcome and must reach the shared atomic evidence path (Issue #35).
 		if errors.Is(err, ErrQueryDisclosureBlocked) && !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded) {
-			return s.reject(ctx, target, actorUserID, guarded, "query_result_disclosure_blocked", "query blocked by result disclosure policy",
+			return s.reject(ctx, target, identity, guarded, "query_result_disclosure_blocked", "query blocked by result disclosure policy",
 				fmt.Errorf("%w: %w", ErrQueryNotAllowed, err), start)
 		}
 		// All other post-target disclosure terminal failures record fixed safe
 		// failed or timeout evidence and surface the existing controlled error.
-		return s.recordTerminalOutcome(ctx, target, actorUserID, guarded, err, start)
+		return s.recordTerminalOutcome(ctx, target, identity, guarded, err, start)
 	}
 
 	timeout := defaultQueryTimeout
@@ -325,19 +328,19 @@ func (s *QueryExecutionService) executeGuardedChain(
 
 	result, err := run(execCtx, dsn)
 	if err != nil {
-		return s.recordTerminalOutcome(ctx, target, actorUserID, guarded, err, start)
+		return s.recordTerminalOutcome(ctx, target, identity, guarded, err, start)
 	}
 
 	columns, rows, applyErr := s.disclosure.Apply(plan, result.Columns, result.Rows)
 	if applyErr != nil {
-		return s.recordTerminalOutcome(ctx, target, actorUserID, guarded, applyErr, start)
+		return s.recordTerminalOutcome(ctx, target, identity, guarded, applyErr, start)
 	}
 	result.Columns = columns
 	result.Rows = rows
 
 	// Success: record (history + audit) then return. A recording failure must
 	// not yield a success response, so execID is guaranteed non-zero here.
-	execID, perr := s.persistAttempt(ctx, target, actorUserID, guarded, model.QueryExecutionSuccess, result.RowCount, "", "", start)
+	execID, perr := s.persistAttempt(ctx, target, identity, guarded, model.QueryExecutionSuccess, result.RowCount, "", "", start)
 	if perr != nil {
 		return model.QueryExecuteResponse{}, errPersistAttempt
 	}
@@ -375,8 +378,8 @@ func (s *QueryExecutionService) executeGuardedChain(
 // reject records a rejected attempt and returns the provided error. If the
 // attempt cannot be recorded, it returns a controlled errPersistAttempt instead
 // — Phase 37 never silently drops an unaudited rejection.
-func (s *QueryExecutionService) reject(ctx context.Context, target model.QueryTarget, actorUserID uint64, guarded *GuardedQuery, code, msg string, retErr error, start time.Time) (model.QueryExecuteResponse, error) {
-	if _, perr := s.persistAttempt(ctx, target, actorUserID, guarded, model.QueryExecutionRejected, 0, code, msg, start); perr != nil {
+func (s *QueryExecutionService) reject(ctx context.Context, target model.QueryTarget, identity model.QueryExecutionIdentity, guarded *GuardedQuery, code, msg string, retErr error, start time.Time) (model.QueryExecuteResponse, error) {
+	if _, perr := s.persistAttempt(ctx, target, identity, guarded, model.QueryExecutionRejected, 0, code, msg, start); perr != nil {
 		return model.QueryExecuteResponse{}, errPersistAttempt
 	}
 	return model.QueryExecuteResponse{}, retErr
@@ -524,6 +527,7 @@ func (s *QueryExecutionService) findTarget(ctx context.Context, targetID uint64)
 // text, DSN, and credentials are never persisted.
 func (s *QueryExecutionService) NavigateRelatedRecords(ctx context.Context, actorUserID uint64, targetID uint64, req model.RelatedRecordNavigationRequest) (model.RelatedRecordNavigationResponse, error) {
 	start := s.clock.Now()
+	identity := model.QueryExecutionIdentity{Kind: model.QueryExecutionActorUser, ID: actorUserID}
 
 	// 1. Resolve governed target access (same path as Execute).
 	access, err := s.access.Resolve(ctx, actorUserID, targetID)
@@ -535,7 +539,7 @@ func (s *QueryExecutionService) NavigateRelatedRecords(ctx context.Context, acto
 		if errors.As(err, &accessErr) {
 			// access.Target is populated even on denial so we can record the
 			// rejected attempt. Before FK resolution, use fixed generic metadata.
-			return s.rejectNavigation(ctx, access.Target, actorUserID, nil,
+			return s.rejectNavigation(ctx, access.Target, identity, nil,
 				"navigation_not_allowed", accessErr.Error(),
 				fmt.Errorf("%w: %s", ErrQueryNotAllowed, accessErr.Error()), start)
 		}
@@ -556,9 +560,9 @@ func (s *QueryExecutionService) NavigateRelatedRecords(ctx context.Context, acto
 		// navigation_source_error attempt with the public
 		// ErrNavigationSourceNotFound contract unchanged (Issue #40).
 		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
-			return s.recordNavigationTerminalOutcome(ctx, target, actorUserID, nil, err, start)
+			return s.recordNavigationTerminalOutcome(ctx, target, identity, nil, err, start)
 		}
-		return s.rejectNavigation(ctx, target, actorUserID, nil,
+		return s.rejectNavigation(ctx, target, identity, nil,
 			"navigation_source_error", "could not retrieve source table metadata",
 			ErrNavigationSourceNotFound, start)
 	}
@@ -572,21 +576,21 @@ func (s *QueryExecutionService) NavigateRelatedRecords(ctx context.Context, acto
 		}
 	}
 	if matchedFK == nil {
-		return s.rejectNavigation(ctx, target, actorUserID, nil,
+		return s.rejectNavigation(ctx, target, identity, nil,
 			"navigation_fk_not_found", "foreign key not found on source table",
 			ErrNavigationSourceNotFound, start)
 	}
 
 	// 4. Validate the live FK metadata is structurally sound and consistent.
 	if err := validateRelatedRecordsFKMetadata(matchedFK); err != nil {
-		return s.rejectNavigation(ctx, target, actorUserID, nil,
+		return s.rejectNavigation(ctx, target, identity, nil,
 			"navigation_metadata_invalid", "foreign key metadata is invalid",
 			ErrNavigationSourceNotFound, start)
 	}
 
 	// 5. Validate localValues count matches FK column count.
 	if len(req.LocalValues) != len(matchedFK.Columns) {
-		return s.rejectNavigation(ctx, target, actorUserID, nil,
+		return s.rejectNavigation(ctx, target, identity, nil,
 			"navigation_value_mismatch", "localValues count does not match foreign key column count",
 			ErrNavigationValueMismatch, start)
 	}
@@ -603,13 +607,13 @@ func (s *QueryExecutionService) NavigateRelatedRecords(ctx context.Context, acto
 		// deadline outcome and must reach the shared atomic evidence path
 		// (Issue #35), exactly as core query execution does.
 		if errors.Is(err, ErrQueryDisclosureBlocked) && !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded) {
-			return s.rejectNavigation(ctx, target, actorUserID, matchedFK, "query_result_disclosure_blocked", "query blocked by result disclosure policy",
+			return s.rejectNavigation(ctx, target, identity, matchedFK, "query_result_disclosure_blocked", "query blocked by result disclosure policy",
 				fmt.Errorf("%w: %w", ErrQueryNotAllowed, err), start)
 		}
 		// All other post-target disclosure terminal failures record fixed
 		// safe failed or timeout evidence and surface the existing controlled
 		// error (Issue #36).
-		return s.recordNavigationTerminalOutcome(ctx, target, actorUserID, matchedFK, err, start)
+		return s.recordNavigationTerminalOutcome(ctx, target, identity, matchedFK, err, start)
 	}
 
 	// 7. Build the parameterized SELECT from trusted FK metadata.
@@ -651,12 +655,12 @@ func (s *QueryExecutionService) NavigateRelatedRecords(ctx context.Context, acto
 		Limit:     limit,
 	})
 	if err != nil {
-		return s.recordNavigationTerminalOutcome(ctx, target, actorUserID, matchedFK, err, start)
+		return s.recordNavigationTerminalOutcome(ctx, target, identity, matchedFK, err, start)
 	}
 
 	columns, rows, applyErr := s.disclosure.Apply(plan, result.Columns, result.Rows)
 	if applyErr != nil {
-		return s.recordNavigationTerminalOutcome(ctx, target, actorUserID, matchedFK, applyErr, start)
+		return s.recordNavigationTerminalOutcome(ctx, target, identity, matchedFK, applyErr, start)
 	}
 	result.Columns = columns
 	result.Rows = rows
@@ -668,7 +672,7 @@ func (s *QueryExecutionService) NavigateRelatedRecords(ctx context.Context, acto
 	}
 
 	// 11. Record success using canonical inspected relation identity.
-	execID, perr := s.persistNavigationAttempt(ctx, target, actorUserID, matchedFK, model.QueryExecutionSuccess, result.RowCount, "", "", start)
+	execID, perr := s.persistNavigationAttempt(ctx, target, identity, matchedFK, model.QueryExecutionSuccess, result.RowCount, "", "", start)
 	if perr != nil {
 		return model.RelatedRecordNavigationResponse{}, errPersistAttempt
 	}
@@ -701,17 +705,17 @@ func (s *QueryExecutionService) NavigateRelatedRecords(ctx context.Context, acto
 // fragments from the driver — is classified to a fixed status/code/message and
 // never returned or persisted; every Evidence-Bearing Query Attempt's terminal
 // outcome reaches the shared atomic evidence path (Issue #35 / #36).
-func (s *QueryExecutionService) recordNavigationTerminalOutcome(ctx context.Context, target model.QueryTarget, actorUserID uint64, fk *FKSummary, err error, start time.Time) (model.RelatedRecordNavigationResponse, error) {
+func (s *QueryExecutionService) recordNavigationTerminalOutcome(ctx context.Context, target model.QueryTarget, identity model.QueryExecutionIdentity, fk *FKSummary, err error, start time.Time) (model.RelatedRecordNavigationResponse, error) {
 	status, sentinel, code, safeMsg := classifyExecutorError(err)
-	if _, perr := s.persistNavigationAttempt(ctx, target, actorUserID, fk, status, 0, code, safeMsg, start); perr != nil {
+	if _, perr := s.persistNavigationAttempt(ctx, target, identity, fk, status, 0, code, safeMsg, start); perr != nil {
 		return model.RelatedRecordNavigationResponse{}, errPersistAttempt
 	}
 	return model.RelatedRecordNavigationResponse{}, fmt.Errorf("%w: %s", sentinel, safeMsg)
 }
 
 // rejectNavigation records a rejected navigation attempt and returns the error.
-func (s *QueryExecutionService) rejectNavigation(ctx context.Context, target model.QueryTarget, actorUserID uint64, fk *FKSummary, code, msg string, retErr error, start time.Time) (model.RelatedRecordNavigationResponse, error) {
-	if _, perr := s.persistNavigationAttempt(ctx, target, actorUserID, fk, model.QueryExecutionRejected, 0, code, msg, start); perr != nil {
+func (s *QueryExecutionService) rejectNavigation(ctx context.Context, target model.QueryTarget, identity model.QueryExecutionIdentity, fk *FKSummary, code, msg string, retErr error, start time.Time) (model.RelatedRecordNavigationResponse, error) {
+	if _, perr := s.persistNavigationAttempt(ctx, target, identity, fk, model.QueryExecutionRejected, 0, code, msg, start); perr != nil {
 		return model.RelatedRecordNavigationResponse{}, errPersistAttempt
 	}
 	return model.RelatedRecordNavigationResponse{}, retErr
@@ -728,7 +732,7 @@ func (s *QueryExecutionService) rejectNavigation(ctx context.Context, target mod
 // Window detached from request cancellation/deadline, so a client disconnect
 // can never drop navigation evidence; the write is one synchronous bounded
 // attempt with no retry, queue, worker, or disk buffer.
-func (s *QueryExecutionService) persistNavigationAttempt(ctx context.Context, target model.QueryTarget, actorUserID uint64, fk *FKSummary, status model.QueryExecutionStatus, rowCount int, code, msg string, start time.Time) (uint64, error) {
+func (s *QueryExecutionService) persistNavigationAttempt(ctx context.Context, target model.QueryTarget, identity model.QueryExecutionIdentity, fk *FKSummary, status model.QueryExecutionStatus, rowCount int, code, msg string, start time.Time) (uint64, error) {
 	var preview, digest string
 	if fk == nil {
 		// Pre-resolution: fixed generic metadata only. Request-controlled source
@@ -743,7 +747,7 @@ func (s *QueryExecutionService) persistNavigationAttempt(ctx context.Context, ta
 		digest = fmt.Sprintf("nav:%s.%s/%s", refSchema, refTable, fk.Name)
 	}
 
-	rec := s.buildRecord(target, actorUserID, nil, status, rowCount, code, msg, start)
+	rec := s.buildRecord(target, identity, nil, status, rowCount, code, msg, start)
 	rec.StatementDigest = truncateString(digest, 128)
 	rec.StatementPreview = truncateString(preview, 256)
 	return s.persistEvidencePair(ctx, rec, executionEvidenceNavigation)
@@ -818,10 +822,10 @@ func classifyExecutorError(err error) (model.QueryExecutionStatus, error, string
 
 // buildRecord assembles a history record. It never includes the DSN or full
 // result rows — only the digest, short preview, and outcome metadata.
-func (s *QueryExecutionService) buildRecord(target model.QueryTarget, actorUserID uint64, guarded *GuardedQuery, status model.QueryExecutionStatus, rowCount int, code, msg string, start time.Time) model.QueryExecutionRecord {
+func (s *QueryExecutionService) buildRecord(target model.QueryTarget, identity model.QueryExecutionIdentity, guarded *GuardedQuery, status model.QueryExecutionStatus, rowCount int, code, msg string, start time.Time) model.QueryExecutionRecord {
 	rec := model.QueryExecutionRecord{
 		TargetResourceID: target.ResourceID,
-		ActorUserID:      actorUserID,
+		Actor:            model.QueryExecutionActor{Kind: identity.Kind},
 		Engine:           target.ConnectionContext.Engine,
 		Status:           status,
 		RowCount:         rowCount,
@@ -829,6 +833,11 @@ func (s *QueryExecutionService) buildRecord(target model.QueryTarget, actorUserI
 		ErrorCode:        truncateString(code, 64),
 		ErrorMessage:     truncateString(msg, 512),
 		CreatedAt:        s.clock.Now(),
+	}
+	if identity.Kind == model.QueryExecutionActorUser {
+		rec.ActorUserID = identity.ID
+	} else {
+		rec.ActorMachinePrincipalID = identity.ID
 	}
 	if guarded != nil {
 		rec.StatementDigest = guarded.StatementDigest
@@ -844,9 +853,9 @@ func (s *QueryExecutionService) buildRecord(target model.QueryTarget, actorUserI
 // classified to a fixed status/code/message and never returned or persisted;
 // every Evidence-Bearing Query Attempt's terminal outcome reaches the shared
 // atomic evidence path (Issue #35).
-func (s *QueryExecutionService) recordTerminalOutcome(ctx context.Context, target model.QueryTarget, actorUserID uint64, guarded *GuardedQuery, err error, start time.Time) (model.QueryExecuteResponse, error) {
+func (s *QueryExecutionService) recordTerminalOutcome(ctx context.Context, target model.QueryTarget, identity model.QueryExecutionIdentity, guarded *GuardedQuery, err error, start time.Time) (model.QueryExecuteResponse, error) {
 	status, sentinel, code, safeMsg := classifyExecutorError(err)
-	if _, perr := s.persistAttempt(ctx, target, actorUserID, guarded, status, 0, code, safeMsg, start); perr != nil {
+	if _, perr := s.persistAttempt(ctx, target, identity, guarded, status, 0, code, safeMsg, start); perr != nil {
 		return model.QueryExecuteResponse{}, errPersistAttempt
 	}
 	return model.QueryExecuteResponse{}, fmt.Errorf("%w: %s", sentinel, safeMsg)
@@ -867,8 +876,8 @@ func (s *QueryExecutionService) recordTerminalOutcome(ctx context.Context, targe
 // values while severing the Done channel; the write is one synchronous bounded
 // attempt — no retry, queue, worker, or disk buffer. A window expiry or DB
 // failure still surfaces the existing controlled backend failure.
-func (s *QueryExecutionService) persistAttempt(ctx context.Context, target model.QueryTarget, actorUserID uint64, guarded *GuardedQuery, status model.QueryExecutionStatus, rowCount int, code, msg string, start time.Time) (uint64, error) {
-	rec := s.buildRecord(target, actorUserID, guarded, status, rowCount, code, msg, start)
+func (s *QueryExecutionService) persistAttempt(ctx context.Context, target model.QueryTarget, identity model.QueryExecutionIdentity, guarded *GuardedQuery, status model.QueryExecutionStatus, rowCount int, code, msg string, start time.Time) (uint64, error) {
+	rec := s.buildRecord(target, identity, guarded, status, rowCount, code, msg, start)
 	return s.persistEvidencePair(ctx, rec, executionEvidenceQuery)
 }
 

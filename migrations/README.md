@@ -6,6 +6,7 @@ Forward and rollback MySQL schema/data migrations applied in numeric order.
 
 | File | Responsibility |
 |------|---------------|
+| 00026_machine_query_evidence_identity.sql | Makes query execution evidence exactly one-of user/machine actor and audit evidence at-most-one, with machine lookup indexes, no foreign keys, and guarded rollback |
 | 00025_machine_principals.sql | Adds FK-free machine principals and independently expiring/revocable hash-only scoped credentials |
 | 00024_named_inventory_views.sql | Adds reusable personal/shared Inventory view state without result snapshots |
 | 00023_observed_effective_values.sql | Adds FK-free per-CI/source/field observations and versioned manual overrides after migration 00022 |
@@ -20,10 +21,11 @@ Forward and rollback MySQL schema/data migrations applied in numeric order.
 - Nullable `resources.health_status` manual override; rollback maps cleared values to `unknown` before restoring `NOT NULL`.
 - `resource_observed_values` and `resource_manual_overrides` effective-value tables without foreign keys.
 - `machine_principals` and `machine_principal_credentials` with stable lookup IDs, SHA-256 hashes, closed-scope JSON, expiry, last-use, revoke, and rotation lineage.
+- Nullable `actor_machine_principal_id` evidence columns: query executions enforce exactly one user/machine actor; audit events allow at most one; both stay FK-free and indexed for actor history.
 
 ## Dependencies
 
-- Upstream: MySQL 8.0 schema state through migration 00024.
+- Upstream: MySQL 8.0 schema state through migration 00025.
 - Downstream: `internal/repository/mysql` queries and integration tests.
 
 ## Update Rule

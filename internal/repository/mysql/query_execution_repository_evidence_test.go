@@ -1,9 +1,7 @@
-// Package mysql provides tests for the Issue #34 (38X-3A) query-evidence
-// persistence-failure telemetry: the dimensionless counter and the single
-// fixed safe log category emitted by the atomic Execution Evidence Pair.
-// input: bytes, database/sql, log, strings, testing
-// output: TestQueryEvidencePersistenceFailuresCounterIncrementsOnce, TestQueryEvidencePersistenceFailureLogIsFixedAndSafe
-// pos: Proves the failure telemetry is dimensionless and value-free (no actor, target, statement, value, credential, DSN, request, or raw error)
+// Package mysql provides tests for atomic query-evidence persistence.
+// input: bytes, context, database/sql, errors, log, strings, testing, time, sqlmock, internal/model
+// output: machine identity atomic pair/rollback/history tests plus dimensionless persistence-failure counter and fixed safe log tests
+// pos: Proves truthful actor persistence/projection, pair atomicity, and value-free failure telemetry
 // note: if this file changes, update header and README.md
 package mysql
 
@@ -11,12 +9,117 @@ import (
 	"bytes"
 	"context"
 	"database/sql"
+	"errors"
 	"log"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/DATA-DOG/go-sqlmock"
 
 	"github.com/fan/controlhub/internal/model"
 )
+
+func TestInsertExecutionWithAuditMachineIdentityCommitsAtomicPair(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock.New: %v", err)
+	}
+	defer db.Close()
+
+	mock.ExpectBegin()
+	mock.ExpectExec(`insert into query_executions\s+\(target_resource_id, actor_user_id, actor_machine_principal_id`).
+		WithArgs(uint64(22), nil, uint64(91), "mysql", "digest", "preview", "success", 1, int64(7), "", "", nil).
+		WillReturnResult(sqlmock.NewResult(101, 1))
+	mock.ExpectExec(`insert into audit_events \(actor_user_id, actor_machine_principal_id, target_resource_id, event_type, result\)`).
+		WithArgs(nil, uint64(91), uint64(22), "query.executed", "success").
+		WillReturnResult(sqlmock.NewResult(201, 1))
+	mock.ExpectCommit()
+
+	id, err := NewQueryExecutionRepository(db).InsertExecutionWithAudit(context.Background(), model.QueryExecutionRecord{
+		TargetResourceID:        22,
+		ActorMachinePrincipalID: 91,
+		Engine:                  "mysql",
+		StatementDigest:         "digest",
+		StatementPreview:        "preview",
+		Status:                  model.QueryExecutionSuccess,
+		RowCount:                1,
+		DurationMs:              7,
+	}, "query.executed", "success")
+	if err != nil || id != 101 {
+		t.Fatalf("InsertExecutionWithAudit() = (%d, %v), want (101, nil)", id, err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("SQL expectations: %v", err)
+	}
+}
+
+func TestInsertExecutionWithAuditMachineAuditFailureRollsBackHistory(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock.New: %v", err)
+	}
+	defer db.Close()
+
+	mock.ExpectBegin()
+	mock.ExpectExec(`insert into query_executions`).
+		WillReturnResult(sqlmock.NewResult(101, 1))
+	mock.ExpectExec(`insert into audit_events`).
+		WillReturnError(errors.New("forced audit failure"))
+	mock.ExpectRollback()
+
+	_, err = NewQueryExecutionRepository(db).InsertExecutionWithAudit(context.Background(), model.QueryExecutionRecord{
+		TargetResourceID:        22,
+		ActorMachinePrincipalID: 91,
+		Engine:                  "mysql",
+		Status:                  model.QueryExecutionSuccess,
+	}, "query.executed", "success")
+	if err == nil {
+		t.Fatal("InsertExecutionWithAudit() error = nil, want rollback failure")
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("SQL expectations: %v", err)
+	}
+}
+
+func TestListExecutionsProjectsMachinePrincipalIdentity(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock.New: %v", err)
+	}
+	defer db.Close()
+
+	createdAt := time.Date(2026, 8, 30, 6, 0, 0, 0, time.UTC)
+	mock.ExpectQuery(`SELECT qe\.id, qe\.target_resource_id, qe\.actor_user_id, qe\.actor_machine_principal_id.*LEFT JOIN machine_principals mp ON mp\.id = qe\.actor_machine_principal_id`).
+		WithArgs(uint64(22), 20).
+		WillReturnRows(sqlmock.NewRows([]string{
+			"id", "target_resource_id", "actor_user_id", "actor_machine_principal_id", "engine",
+			"statement_digest", "statement_preview", "status", "row_count", "duration_ms",
+			"error_code", "error_message", "created_at", "user_display_name", "machine_name",
+		}).AddRow(101, 22, nil, 91, "mysql", "digest", "preview", "success", 1, 7, "", "", createdAt, nil, "inventory-agent"))
+
+	items, _, err := NewQueryExecutionRepository(db).ListExecutions(context.Background(), model.QueryExecutionListQuery{
+		TargetResourceID: 22,
+		PageSize:         20,
+		Mode:             model.PaginationModeCursor,
+	})
+	if err != nil {
+		t.Fatalf("ListExecutions: %v", err)
+	}
+	if len(items) != 1 {
+		t.Fatalf("items = %d, want 1", len(items))
+	}
+	item := items[0]
+	if item.ActorUserID != 0 || item.ActorMachinePrincipalID != 91 {
+		t.Fatalf("history identity = user:%d machine:%d, want machine principal 91 only", item.ActorUserID, item.ActorMachinePrincipalID)
+	}
+	if item.Actor.Kind != model.QueryExecutionActorMachine || item.Actor.DisplayName != "inventory-agent" {
+		t.Fatalf("history actor = %+v, want machine inventory-agent", item.Actor)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("SQL expectations: %v", err)
+	}
+}
 
 // TestQueryEvidencePersistenceFailuresCounterIncrementsOnce proves the pair
 // primitive increments the dimensionless counter exactly once per failed pair

@@ -1,7 +1,7 @@
 // Package service provides the governed template-execution adapter.
 // input: bytes, context, database/sql, encoding/json, errors, fmt, internal/model
 // output: TemplateValueValidationError, QueryExecutionService.WithTemplateExecution, QueryExecutionService.ExecuteSavedStatement
-// pos: Fresh-query-actor execution of saved statements — re-reads the latest authorized statement, records every post-target terminal outcome without template identity/values, validates typed values, compiles server-side, then runs the governed chain per page
+// pos: User-only fresh-query-actor saved-statement execution that passes a validated user identity into the shared evidence chain without template identity/values
 // note: if this file changes, update this header and module README.md.
 package service
 
@@ -46,6 +46,7 @@ func (s *QueryExecutionService) WithTemplateExecution(statements QuerySavedState
 // never reach history, audit, errors, or logs.
 func (s *QueryExecutionService) ExecuteSavedStatement(ctx context.Context, actorUserID, targetID, statementID uint64, req model.QuerySavedStatementExecuteRequest) (model.QueryExecuteResponse, error) {
 	start := s.clock.Now()
+	identity := model.QueryExecutionIdentity{Kind: model.QueryExecutionActorUser, ID: actorUserID}
 
 	if s.statements == nil || s.compiler == nil {
 		return model.QueryExecuteResponse{}, fmt.Errorf("template execution is not configured")
@@ -58,7 +59,7 @@ func (s *QueryExecutionService) ExecuteSavedStatement(ctx context.Context, actor
 		}
 		var accessErr *TargetAccessError
 		if errors.As(err, &accessErr) {
-			return s.reject(ctx, access.Target, actorUserID, nil, "query_not_allowed", accessErr.Error(),
+			return s.reject(ctx, access.Target, identity, nil, "query_not_allowed", accessErr.Error(),
 				fmt.Errorf("%w: %s", ErrQueryNotAllowed, accessErr.Error()), start)
 		}
 		return model.QueryExecuteResponse{}, err
@@ -68,22 +69,22 @@ func (s *QueryExecutionService) ExecuteSavedStatement(ctx context.Context, actor
 	statement, err := s.statements.GetByID(ctx, targetID, statementID)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
-			return s.reject(ctx, target, actorUserID, nil, "saved_statement_not_found", "saved statement not found",
+			return s.reject(ctx, target, identity, nil, "saved_statement_not_found", "saved statement not found",
 				ErrQuerySavedStatementNotFound, start)
 		}
-		if _, perr := s.persistAttempt(ctx, target, actorUserID, nil, model.QueryExecutionFailed, 0,
+		if _, perr := s.persistAttempt(ctx, target, identity, nil, model.QueryExecutionFailed, 0,
 			"query_backend_error", "saved statement read failed", start); perr != nil {
 			return model.QueryExecuteResponse{}, errPersistAttempt
 		}
 		return model.QueryExecuteResponse{}, fmt.Errorf("get saved statement: %w", err)
 	}
 	if statement.Scope == model.QuerySavedStatementPersonal && statement.OwnerUserID != actorUserID {
-		return s.reject(ctx, target, actorUserID, nil, "saved_statement_not_found", "saved statement not found",
+		return s.reject(ctx, target, identity, nil, "saved_statement_not_found", "saved statement not found",
 			ErrQuerySavedStatementNotFound, start)
 	}
 
 	if err := req.Validate(); err != nil {
-		return s.reject(ctx, target, actorUserID, nil, "validation_failed", err.Error(),
+		return s.reject(ctx, target, identity, nil, "validation_failed", err.Error(),
 			fmt.Errorf("%w: %v", ErrQueryValidationFailed, err), start)
 	}
 
@@ -97,7 +98,7 @@ func (s *QueryExecutionService) ExecuteSavedStatement(ctx context.Context, actor
 		// Record the rejected attempt with fixed metadata (no values) so the
 		// template route honors the every-attempt-recorded guarantee and stays
 		// consistent with access, guard, and disclosure rejections.
-		if _, perr := s.persistAttempt(ctx, target, actorUserID, nil, model.QueryExecutionRejected, 0, "validation_failed", valueErr.Error(), start); perr != nil {
+		if _, perr := s.persistAttempt(ctx, target, identity, nil, model.QueryExecutionRejected, 0, "validation_failed", valueErr.Error(), start); perr != nil {
 			return model.QueryExecuteResponse{}, errPersistAttempt
 		}
 		return model.QueryExecuteResponse{}, valueErr
@@ -113,7 +114,7 @@ func (s *QueryExecutionService) ExecuteSavedStatement(ctx context.Context, actor
 		guardedTemplate, err = s.compiler.CompileAndGuard(s.guard, input, maxRows)
 	}
 	if err != nil {
-		return s.reject(ctx, target, actorUserID, nil, "validation_failed", "saved statement validation failed",
+		return s.reject(ctx, target, identity, nil, "validation_failed", "saved statement validation failed",
 			fmt.Errorf("%w: %v", ErrQueryValidationFailed, err), start)
 	}
 
@@ -127,7 +128,7 @@ func (s *QueryExecutionService) ExecuteSavedStatement(ctx context.Context, actor
 	evidenceSafeQuery := guardedTemplate.query
 	evidenceSafeQuery.StatementDigest = ""
 	evidenceSafeQuery.StatementPreview = ""
-	return s.executeGuardedChain(ctx, target, actorUserID, access.dsn, &evidenceSafeQuery,
+	return s.executeGuardedChain(ctx, target, identity, access.dsn, &evidenceSafeQuery,
 		func(execCtx context.Context, dsn string) (QueryDatabaseResult, error) {
 			return s.executor.QueryTemplate(execCtx, dsn, guardedTemplate)
 		}, page, pageSize, start)

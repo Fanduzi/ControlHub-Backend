@@ -1,6 +1,6 @@
 // Package api provides HTTP handlers and routing for the ControlHub REST API.
 // input: bytes, context, errors, fmt, io, net/http, strconv, strings, time, chi, internal/model, internal/service
-// output: handleExecuteQuery, handleExecuteSavedStatement, handleListQueryExecutions, handleNavigateRelatedRecords, writeQueryExecutionError, writeNavigationError, writeTemplateExecutionError, queryExecutionAPI interface
+// output: user-or-machine ordinary execute identity, user-only sibling query handlers, controlled error mapping, queryExecutionAPI interface
 // pos: HTTP handlers for POST /query-targets/{id}/execute, POST /query-targets/{id}/saved-statements/{statementId}/execute, POST /query-targets/{id}/related-records, and GET /query-targets/{id}/executions (Phase 37 read-only query sandbox, Phase 38S governed result paging, Phase 38W template execution). Execute/related disclosure blocks publish query_result_disclosure_blocked (Issue #48); target-not-enabled remains query_not_allowed.
 // note: if this file changes, update header and README.md
 package api
@@ -27,7 +27,7 @@ import (
 // the handlers thin and lets handler tests substitute a stub. The actor is never
 // accepted from the request body — it is read from the auth middleware context.
 type queryExecutionAPI interface {
-	Execute(ctx context.Context, actorUserID uint64, targetID uint64, req model.QueryExecuteRequest) (model.QueryExecuteResponse, error)
+	Execute(ctx context.Context, identity model.QueryExecutionIdentity, targetID uint64, req model.QueryExecuteRequest) (model.QueryExecuteResponse, error)
 	ExecuteSavedStatement(ctx context.Context, actorUserID, targetID, statementID uint64, req model.QuerySavedStatementExecuteRequest) (model.QueryExecuteResponse, error)
 	ListHistory(ctx context.Context, actorUserID uint64, actorRole string, targetID uint64, q model.QueryExecutionListQuery) (*model.QueryExecutionCursorPage, error)
 	QueryEvidencePersistenceFailures() int64
@@ -56,18 +56,31 @@ func handleExecuteQuery(svc queryExecutionAPI) http.HandlerFunc {
 				return
 			}
 		}
-		actorUserID, ok := actorUserIDFromContext(r.Context())
+		identity, ok := queryExecutionIdentityFromContext(r.Context())
 		if !ok {
 			writeJSONError(w, http.StatusInternalServerError, "internal_error", "authenticated actor missing")
 			return
 		}
-		resp, err := svc.Execute(r.Context(), actorUserID, targetID, req)
+		resp, err := svc.Execute(r.Context(), identity, targetID, req)
 		if err != nil {
 			writeQueryExecutionError(w, err)
 			return
 		}
 		writeJSON(w, http.StatusOK, resp)
 	}
+}
+
+func queryExecutionIdentityFromContext(ctx context.Context) (model.QueryExecutionIdentity, bool) {
+	actorUserID, userOK := actorUserIDFromContext(ctx)
+	machine, machineOK := machinePrincipalFromContext(ctx)
+	if userOK == machineOK {
+		return model.QueryExecutionIdentity{}, false
+	}
+	identity := model.QueryExecutionIdentity{Kind: model.QueryExecutionActorUser, ID: actorUserID}
+	if machineOK {
+		identity = model.QueryExecutionIdentity{Kind: model.QueryExecutionActorMachine, ID: machine.ID}
+	}
+	return identity, identity.Validate() == nil
 }
 
 // decodeTemplateExecuteJSONBody strictly decodes a template-execution request:

@@ -1,7 +1,7 @@
 // Package mysql provides MySQL-backed repository implementations.
 // input: database/sql/driver test doubles, internal/model, encoding/json, testing, time
-// output: repository scan and SQL contract tests
-// pos: Regression coverage for MySQL audit repository behavior
+// output: user/machine actor scan plus operator/resource/principal search SQL contract tests
+// pos: Regression coverage for truthful MySQL audit actor projection and filtering
 // note: if this file changes, update header and README.md
 package mysql
 
@@ -16,31 +16,35 @@ import (
 	"github.com/fan/controlhub/internal/model"
 )
 
-func TestListAuditEvents_SearchUsesSharedPredicates(t *testing.T) {
+func TestListAuditEvents_SearchAndScanMachinePrincipal(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	if err != nil {
 		t.Fatalf("sqlmock.New: %v", err)
 	}
 	defer db.Close()
 
-	const searchPredicate = `from audit_events .*left join users u on u\.id = audit_events\.actor_user_id .*left join resources r on r\.id = audit_events\.target_resource_id .*where \(u\.display_name like \? or u\.email like \? or r\.name like \? or r\.display_name like \?\)`
+	const searchPredicate = `from audit_events .*left join users u on u\.id = audit_events\.actor_user_id .*left join machine_principals mp on mp\.id = audit_events\.actor_machine_principal_id .*left join resources r on r\.id = audit_events\.target_resource_id .*where \(u\.display_name like \? or u\.email like \? or mp\.name like \? or r\.name like \? or r\.display_name like \?\)`
 	mock.ExpectQuery(`select count\(\*\) `+searchPredicate).
-		WithArgs("%Admin%", "%Admin%", "%Admin%", "%Admin%").
+		WithArgs("%agent%", "%agent%", "%agent%", "%agent%", "%agent%").
 		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(1))
-	mock.ExpectQuery(`select audit_events\.id, audit_events\.actor_user_id, audit_events\.target_resource_id, audit_events\.event_type, audit_events\.result, audit_events\.changes, audit_events\.created_at `+searchPredicate+` order by`).
-		WithArgs("%Admin%", "%Admin%", "%Admin%", "%Admin%", 20, 0).
-		WillReturnRows(sqlmock.NewRows([]string{"id", "actor_user_id", "target_resource_id", "event_type", "result", "changes", "created_at"}))
+	mock.ExpectQuery(`select audit_events\.id, audit_events\.actor_user_id, audit_events\.actor_machine_principal_id, audit_events\.target_resource_id, audit_events\.event_type, audit_events\.result, audit_events\.changes, audit_events\.created_at `+searchPredicate+` order by`).
+		WithArgs("%agent%", "%agent%", "%agent%", "%agent%", "%agent%", 20, 0).
+		WillReturnRows(sqlmock.NewRows([]string{"id", "actor_user_id", "actor_machine_principal_id", "target_resource_id", "event_type", "result", "changes", "created_at"}).
+			AddRow(1, nil, 91, 22, "query.executed", "success", nil, time.Date(2026, 8, 30, 6, 0, 0, 0, time.UTC)))
 
 	items, total, err := NewAuditRepository(db).ListAuditEvents(context.Background(), model.AuditListQuery{
-		Query:    "Admin",
+		Query:    "agent",
 		Page:     1,
 		PageSize: 20,
 	})
 	if err != nil {
 		t.Fatalf("list audit events: %v", err)
 	}
-	if len(items) != 0 || total != 1 {
-		t.Fatalf("items=%d total=%d, want no rows and total 1", len(items), total)
+	if len(items) != 1 || total != 1 {
+		t.Fatalf("items=%d total=%d, want one row and total 1", len(items), total)
+	}
+	if items[0].ActorUserID != nil || items[0].ActorMachinePrincipalID == nil || *items[0].ActorMachinePrincipalID != 91 {
+		t.Fatalf("audit identity = user:%v machine:%v, want machine principal 91 only", items[0].ActorUserID, items[0].ActorMachinePrincipalID)
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatalf("SQL expectations: %v", err)

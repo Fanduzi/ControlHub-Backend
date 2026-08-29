@@ -1,7 +1,7 @@
 // Package mysql provides MySQL-backed repository implementations.
 // input: database/sql, internal/model
-// output: NewAuditRepository, AuditRepository struct
-// pos: MySQL data access for audit_events table with pagination, filtering, and actor/resource search
+// output: NewAuditRepository, user/machine-aware AuditRepository list and resource projections
+// pos: MySQL audit_events pagination, filtering, scan, and user/machine/resource search
 // note: if this file changes, update header and README.md
 package mysql
 
@@ -29,6 +29,7 @@ func (r *AuditRepository) ListAuditEvents(ctx context.Context, q model.AuditList
 	var args []any
 	from := `audit_events
 	left join users u on u.id = audit_events.actor_user_id
+	left join machine_principals mp on mp.id = audit_events.actor_machine_principal_id
 	left join resources r on r.id = audit_events.target_resource_id`
 
 	if q.TargetResourceID != nil {
@@ -52,8 +53,8 @@ func (r *AuditRepository) ListAuditEvents(ctx context.Context, q model.AuditList
 	query := strings.TrimSpace(q.Query)
 	if query != "" {
 		pattern := "%" + query + "%"
-		conds = append(conds, "(u.display_name like ? or u.email like ? or r.name like ? or r.display_name like ?)")
-		args = append(args, pattern, pattern, pattern, pattern)
+		conds = append(conds, "(u.display_name like ? or u.email like ? or mp.name like ? or r.name like ? or r.display_name like ?)")
+		args = append(args, pattern, pattern, pattern, pattern, pattern)
 	}
 
 	where := ""
@@ -68,7 +69,7 @@ func (r *AuditRepository) ListAuditEvents(ctx context.Context, q model.AuditList
 	}
 
 	offset := (q.Page - 1) * q.PageSize
-	dataQuery := `select audit_events.id, audit_events.actor_user_id, audit_events.target_resource_id,
+	dataQuery := `select audit_events.id, audit_events.actor_user_id, audit_events.actor_machine_principal_id, audit_events.target_resource_id,
 		audit_events.event_type, audit_events.result, audit_events.changes, audit_events.created_at
 	from ` + from + " " + where + ` order by audit_events.created_at desc limit ? offset ?`
 
@@ -84,7 +85,7 @@ func (r *AuditRepository) ListAuditEvents(ctx context.Context, q model.AuditList
 
 func (r *AuditRepository) ListByResourceID(resourceID uint64) ([]model.AuditEvent, error) {
 	query := `
-	select id, actor_user_id, target_resource_id, event_type, result, changes, created_at
+	select id, actor_user_id, actor_machine_principal_id, target_resource_id, event_type, result, changes, created_at
 	from audit_events
 	where target_resource_id = ?
 	order by created_at desc`
@@ -145,10 +146,12 @@ func scanAuditEventsRows(rows *sql.Rows, total int) ([]model.AuditEvent, int, er
 		var item model.AuditEvent
 		var targetResourceID nullableUint64
 		var actorUserID nullableUint64
+		var actorMachinePrincipalID nullableUint64
 		var rawChanges sql.NullString
 		if err := rows.Scan(
 			&item.ID,
 			&actorUserID,
+			&actorMachinePrincipalID,
 			&targetResourceID,
 			&item.EventType,
 			&item.Result,
@@ -160,6 +163,13 @@ func scanAuditEventsRows(rows *sql.Rows, total int) ([]model.AuditEvent, int, er
 		if actorUserID.Valid {
 			aid := actorUserID.Uint64
 			item.ActorUserID = &aid
+		}
+		if actorMachinePrincipalID.Valid {
+			id := actorMachinePrincipalID.Uint64
+			item.ActorMachinePrincipalID = &id
+		}
+		if item.ActorUserID != nil && item.ActorMachinePrincipalID != nil {
+			return nil, 0, fmt.Errorf("scan audit event: multiple actor identities")
 		}
 		if targetResourceID.Valid {
 			targetID := targetResourceID.Uint64

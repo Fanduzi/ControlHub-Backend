@@ -1,7 +1,7 @@
 // Package mysql provides MySQL-backed repository implementations.
 // input: database/sql, context, errors, expvar, fmt, log, strconv, internal/model
-// output: NewQueryExecutionRepository, QueryExecutionRepository (credential metadata incl. atomic UpsertCredentialMetadataWithAudit / DeleteCredentialMetadataWithAudit + inTx, atomic InsertExecutionWithAudit Execution Evidence Pair, execution history, audit-only InsertAuditEvent, QueryEvidencePersistenceFailures counter), QueryEvidencePersistenceFailures accessor
-// pos: MySQL data access for the Phase 37 read-only query sandbox (query_target_credentials, query_executions, audit_events) incl. the repository-owned atomic Execution Evidence Pair (Issue #34)
+// output: NewQueryExecutionRepository, identity-aware atomic InsertExecutionWithAudit, user/machine execution history, credential metadata/audit operations, QueryEvidencePersistenceFailures accessor
+// pos: MySQL persistence boundary for exactly-one-actor query history and at-most-one-actor audit evidence without credential data
 // note: if this file changes, update header and README.md
 package mysql
 
@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"log"
 	"strconv"
+	"strings"
 
 	"github.com/fan/controlhub/internal/model"
 )
@@ -41,9 +42,10 @@ const (
 		             environment_policy = values(environment_policy)`
 	deleteCredentialMetadataSQL = `delete from query_target_credentials where resource_id = ?`
 	insertAuditEventSQL         = `insert into audit_events (actor_user_id, target_resource_id, event_type, result) values (?, ?, ?, ?)`
+	insertExecutionAuditSQL     = `insert into audit_events (actor_user_id, actor_machine_principal_id, target_resource_id, event_type, result) values (?, ?, ?, ?, ?)`
 	insertExecutionSQL          = `insert into query_executions
-	           (target_resource_id, actor_user_id, engine, statement_digest, statement_preview, status, row_count, duration_ms, error_code, error_message, created_at)
-	           values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, COALESCE(?, CURRENT_TIMESTAMP(6)))`
+	           (target_resource_id, actor_user_id, actor_machine_principal_id, engine, statement_digest, statement_preview, status, row_count, duration_ms, error_code, error_message, created_at)
+	           values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, COALESCE(?, CURRENT_TIMESTAMP(6)))`
 )
 
 // QueryEvidencePersistenceFailures is the dimensionless operational counter for
@@ -204,16 +206,30 @@ func (r *QueryExecutionRepository) DeleteCredentialByResourceID(ctx context.Cont
 
 // executionRecordArgs converts a record into the insertExecutionSQL parameters.
 // When rec.CreatedAt is zero a nil placeholder lets the database default apply.
-func executionRecordArgs(rec model.QueryExecutionRecord) []any {
+func executionRecordArgs(rec model.QueryExecutionRecord) ([]any, error) {
+	actorUserID, actorMachinePrincipalID, err := executionActorArgs(rec)
+	if err != nil {
+		return nil, err
+	}
 	var createdAt any
 	if !rec.CreatedAt.IsZero() {
 		createdAt = rec.CreatedAt.UTC()
 	}
 	return []any{
-		rec.TargetResourceID, rec.ActorUserID, rec.Engine, rec.StatementDigest, rec.StatementPreview,
+		rec.TargetResourceID, actorUserID, actorMachinePrincipalID, rec.Engine, rec.StatementDigest, rec.StatementPreview,
 		string(rec.Status), rec.RowCount, rec.DurationMs, rec.ErrorCode, rec.ErrorMessage,
 		createdAt,
+	}, nil
+}
+
+func executionActorArgs(rec model.QueryExecutionRecord) (any, any, error) {
+	if (rec.ActorUserID == 0) == (rec.ActorMachinePrincipalID == 0) {
+		return nil, nil, errors.New("query execution evidence requires exactly one actor identity")
 	}
+	if rec.ActorUserID != 0 {
+		return rec.ActorUserID, nil, nil
+	}
+	return nil, rec.ActorMachinePrincipalID, nil
 }
 
 // InsertExecutionWithAudit is the repository-owned atomic Execution Evidence
@@ -229,6 +245,11 @@ func executionRecordArgs(rec model.QueryExecutionRecord) []any {
 // carries no driver/database/statement details; callers surface it as the
 // existing controlled backend error.
 func (r *QueryExecutionRepository) InsertExecutionWithAudit(ctx context.Context, rec model.QueryExecutionRecord, eventType, result string) (uint64, error) {
+	args, err := executionRecordArgs(rec)
+	if err != nil {
+		return 0, err
+	}
+	actorUserID, actorMachinePrincipalID := args[1], args[2]
 	tx, err := r.db.BeginTx(ctx, nil)
 	if err != nil {
 		recordQueryEvidencePersistenceFailure()
@@ -236,7 +257,7 @@ func (r *QueryExecutionRepository) InsertExecutionWithAudit(ctx context.Context,
 	}
 	defer func() { _ = tx.Rollback() }() // no-op after Commit; safe on error
 
-	res, err := tx.ExecContext(ctx, insertExecutionSQL, executionRecordArgs(rec)...)
+	res, err := tx.ExecContext(ctx, insertExecutionSQL, args...)
 	if err != nil {
 		recordQueryEvidencePersistenceFailure()
 		return 0, errQueryEvidencePairFailed
@@ -246,7 +267,7 @@ func (r *QueryExecutionRepository) InsertExecutionWithAudit(ctx context.Context,
 		recordQueryEvidencePersistenceFailure()
 		return 0, errQueryEvidencePairFailed
 	}
-	if _, err := tx.ExecContext(ctx, insertAuditEventSQL, rec.ActorUserID, rec.TargetResourceID, eventType, result); err != nil {
+	if _, err := tx.ExecContext(ctx, insertExecutionAuditSQL, actorUserID, actorMachinePrincipalID, rec.TargetResourceID, eventType, result); err != nil {
 		recordQueryEvidencePersistenceFailure()
 		return 0, errQueryEvidencePairFailed
 	}
@@ -317,15 +338,15 @@ func (r *QueryExecutionRepository) ListExecutions(ctx context.Context, q model.Q
 		args = append(args, payload.CreatedAt, payload.CreatedAt, cursorID)
 	}
 
-	listSQL := `SELECT qe.id, qe.target_resource_id, qe.actor_user_id, qe.engine, qe.statement_digest, qe.statement_preview,
+	listSQL := `SELECT qe.id, qe.target_resource_id, qe.actor_user_id, qe.actor_machine_principal_id, qe.engine, qe.statement_digest, qe.statement_preview,
 		 qe.status, qe.row_count, qe.duration_ms, qe.error_code, qe.error_message, qe.created_at,
-		 COALESCE(NULLIF(TRIM(u.display_name), ''), ?) AS actor_display_name
+		 u.display_name AS user_display_name, mp.name AS machine_name
 		 FROM query_executions qe
 		 LEFT JOIN users u ON u.id = qe.actor_user_id
+		 LEFT JOIN machine_principals mp ON mp.id = qe.actor_machine_principal_id
 		 WHERE ` + where + ` ORDER BY qe.created_at DESC, qe.id DESC LIMIT ?`
 
-	listArgs := make([]any, 0, len(args)+2)
-	listArgs = append(listArgs, model.UnknownHistoryActorDisplayName)
+	listArgs := make([]any, 0, len(args)+1)
 	listArgs = append(listArgs, args...)
 
 	if cursorMode {
@@ -345,20 +366,38 @@ func (r *QueryExecutionRepository) ListExecutions(ctx context.Context, q model.Q
 	items := make([]model.QueryExecutionRecord, 0)
 	for rows.Next() {
 		var (
-			rec         model.QueryExecutionRecord
-			status      string
-			displayName string
+			rec             model.QueryExecutionRecord
+			actorUserID     nullableUint64
+			actorMachineID  nullableUint64
+			userDisplayName sql.NullString
+			machineName     sql.NullString
+			status          string
 		)
 		if err := rows.Scan(
-			&rec.ID, &rec.TargetResourceID, &rec.ActorUserID, &rec.Engine,
+			&rec.ID, &rec.TargetResourceID, &actorUserID, &actorMachineID, &rec.Engine,
 			&rec.StatementDigest, &rec.StatementPreview, &status,
 			&rec.RowCount, &rec.DurationMs, &rec.ErrorCode, &rec.ErrorMessage, &rec.CreatedAt,
-			&displayName,
+			&userDisplayName, &machineName,
 		); err != nil {
 			return nil, 0, fmt.Errorf("scan query execution: %w", err)
 		}
+		if actorUserID.Valid == actorMachineID.Valid {
+			return nil, 0, errors.New("scan query execution: expected exactly one actor identity")
+		}
+		if actorUserID.Valid {
+			rec.ActorUserID = actorUserID.Uint64
+			rec.Actor = model.QueryExecutionActor{Kind: model.QueryExecutionActorUser, DisplayName: model.UnknownHistoryActorDisplayName}
+			if userDisplayName.Valid && strings.TrimSpace(userDisplayName.String) != "" {
+				rec.Actor.DisplayName = userDisplayName.String
+			}
+		} else {
+			rec.ActorMachinePrincipalID = actorMachineID.Uint64
+			rec.Actor = model.QueryExecutionActor{Kind: model.QueryExecutionActorMachine, DisplayName: model.UnknownHistoryMachineActorDisplayName}
+			if machineName.Valid && strings.TrimSpace(machineName.String) != "" {
+				rec.Actor.DisplayName = machineName.String
+			}
+		}
 		rec.Status = model.QueryExecutionStatus(status)
-		rec.Actor = model.QueryExecutionActor{DisplayName: displayName}
 		items = append(items, rec)
 	}
 	if err := rows.Err(); err != nil {

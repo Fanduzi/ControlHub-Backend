@@ -1,6 +1,6 @@
 // Package model provides domain entities for the resource management system.
 // input: errors, fmt, math, time packages
-// output: QueryExecution*, QueryResult* types, QueryExecutePagination* types, status/error enums, query credential policy/ref validators, ValidatePagination, ErrInvalidCredentialMetadata
+// output: QueryExecution* and QueryResult* types, validated user-or-machine execution identity, pagination/status/error contracts, query credential policy/ref validators
 // pos: Query sandbox execution requests, responses, and history records
 // note: if this file changes, update header and README.md
 package model
@@ -27,6 +27,32 @@ const (
 	QueryExecutionFailed   QueryExecutionStatus = "failed"
 	QueryExecutionTimeout  QueryExecutionStatus = "timeout"
 )
+
+type QueryExecutionActorKind string
+
+const (
+	QueryExecutionActorUser    QueryExecutionActorKind = "user"
+	QueryExecutionActorMachine QueryExecutionActorKind = "machine"
+)
+
+// QueryExecutionIdentity is the internal evidence identity for one governed
+// execution. ID names either a User or a Machine Principal, never a credential.
+type QueryExecutionIdentity struct {
+	Kind QueryExecutionActorKind
+	ID   uint64
+}
+
+func (i QueryExecutionIdentity) Validate() error {
+	if i.ID == 0 {
+		return fmt.Errorf("query execution identity id must be positive")
+	}
+	switch i.Kind {
+	case QueryExecutionActorUser, QueryExecutionActorMachine:
+		return nil
+	default:
+		return fmt.Errorf("invalid query execution actor kind %q", i.Kind)
+	}
+}
 
 // AllowedPageSizes lists the page sizes permitted for governed query-result
 // paging. Only these values are accepted by ValidatePagination; any other
@@ -92,30 +118,35 @@ type QueryExecuteResponse struct {
 // QueryExecutionActor is the privacy-safe actor projection for history rows.
 // Only displayName is public; email and raw numeric user IDs stay internal.
 type QueryExecutionActor struct {
-	DisplayName string `json:"displayName"`
+	Kind        QueryExecutionActorKind `json:"kind"`
+	DisplayName string                  `json:"displayName"`
 }
 
 // UnknownHistoryActorDisplayName is returned when the actor user row is missing
 // or has an empty display name (deleted/orphaned actors).
 const UnknownHistoryActorDisplayName = "Unknown user"
 
+const UnknownHistoryMachineActorDisplayName = "Unknown machine principal"
+
 // QueryExecutionRecord is the persisted metadata for one execution attempt.
 // It stores a statement digest and short preview, never full result rows.
-// ActorUserID is internal (insert/scan); the public JSON shape uses Actor only.
+// User and machine-principal IDs are internal (insert/scan); the public JSON
+// shape uses the typed Actor projection only. Exactly one internal ID is set.
 type QueryExecutionRecord struct {
-	ID               uint64               `json:"id"`
-	TargetResourceID uint64               `json:"targetResourceId"`
-	ActorUserID      uint64               `json:"-"`
-	Actor            QueryExecutionActor  `json:"actor"`
-	Engine           string               `json:"engine"`
-	StatementDigest  string               `json:"statementDigest"`
-	StatementPreview string               `json:"statementPreview"`
-	Status           QueryExecutionStatus `json:"status"`
-	RowCount         int                  `json:"rowCount"`
-	DurationMs       int64                `json:"durationMs"`
-	ErrorCode        string               `json:"errorCode"`
-	ErrorMessage     string               `json:"errorMessage"`
-	CreatedAt        time.Time            `json:"createdAt"`
+	ID                      uint64               `json:"id"`
+	TargetResourceID        uint64               `json:"targetResourceId"`
+	ActorUserID             uint64               `json:"-"`
+	ActorMachinePrincipalID uint64               `json:"-"`
+	Actor                   QueryExecutionActor  `json:"actor"`
+	Engine                  string               `json:"engine"`
+	StatementDigest         string               `json:"statementDigest"`
+	StatementPreview        string               `json:"statementPreview"`
+	Status                  QueryExecutionStatus `json:"status"`
+	RowCount                int                  `json:"rowCount"`
+	DurationMs              int64                `json:"durationMs"`
+	ErrorCode               string               `json:"errorCode"`
+	ErrorMessage            string               `json:"errorMessage"`
+	CreatedAt               time.Time            `json:"createdAt"`
 }
 
 // PaginationMode controls how ListExecutions selects a page.

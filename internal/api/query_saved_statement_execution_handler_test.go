@@ -59,8 +59,8 @@ func TestTemplateExecute_Success(t *testing.T) {
 	if !stub.templateCalled {
 		t.Fatal("ExecuteSavedStatement was not called")
 	}
-	if stub.gotActor != 42 {
-		t.Fatalf("actor = %d, want 42 (from token, not body)", stub.gotActor)
+	if stub.gotIdentity.ID != 42 {
+		t.Fatalf("actor = %d, want 42 (from token, not body)", stub.gotIdentity.ID)
 	}
 	if stub.gotTargetID != 22 || stub.templateStmt != 7 {
 		t.Fatalf("target=%d stmt=%d, want 22/7 from path", stub.gotTargetID, stub.templateStmt)

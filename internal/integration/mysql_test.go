@@ -2,7 +2,7 @@
 
 // Package integration provides real-MySQL schema proofs for goose migrations.
 // input: database/sql, Testcontainers database, and schema migrations
-// output: migration-25 schema, table, column, constraint, seed, and no-FK proofs
+// output: migration-26 schema, user/machine evidence constraints/indexes, seed, and no-FK proofs
 // pos: real-MySQL clean-migration schema contract coverage
 // note: if this file changes, update this header and module README.md.
 package integration
@@ -50,7 +50,8 @@ func TestSchemaUsesBigintPrimaryKeysWithoutForeignKeys(t *testing.T) {
 		"named_inventory_views":            {"id", "owner_user_id"},
 		"machine_principals":               {"id", "created_by_user_id"},
 		"machine_principal_credentials":    {"id", "machine_principal_id", "created_by_user_id", "rotated_from_credential_id"},
-		"audit_events":                     {"id", "actor_user_id", "target_resource_id"},
+		"query_executions":                 {"id", "target_resource_id", "actor_user_id", "actor_machine_principal_id"},
+		"audit_events":                     {"id", "actor_user_id", "actor_machine_principal_id", "target_resource_id"},
 	}
 	for tableName, columns := range expectedUnsignedBigintIDs {
 		for _, columnName := range columns {
@@ -84,6 +85,7 @@ func TestSchemaUsesBigintPrimaryKeysWithoutForeignKeys(t *testing.T) {
 		"named_inventory_views",
 		"machine_principals",
 		"machine_principal_credentials",
+		"query_executions",
 		"audit_events",
 	} {
 		assertNoForeignKeys(t, db, tableName)
@@ -131,8 +133,8 @@ func assertSchemaChainBaseline(t *testing.T, db *sql.DB) {
 	if err != nil {
 		t.Fatalf("query max version: %v", err)
 	}
-	if maxVersion != 25 {
-		t.Fatalf("migration version = %d, want 25", maxVersion)
+	if maxVersion != 26 {
+		t.Fatalf("migration version = %d, want 26", maxVersion)
 	}
 
 	expectedTables := []string{
@@ -186,6 +188,12 @@ func assertSchemaChainBaseline(t *testing.T, db *sql.DB) {
 	}
 	if !indexExists(t, db, "resource_relations", "uq_relation") {
 		t.Error("expected unique index uq_relation on resource_relations")
+	}
+	if !indexExists(t, db, "query_executions", "idx_query_executions_machine_actor_created") {
+		t.Error("expected machine actor history index on query_executions")
+	}
+	if !indexExists(t, db, "audit_events", "idx_audit_events_machine_actor_created") {
+		t.Error("expected machine actor index on audit_events")
 	}
 }
 

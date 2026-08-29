@@ -344,11 +344,15 @@ paths:
         and payload caps. Allowed statements: SELECT, SHOW DATABASES, SHOW TABLES,
         SHOW COLUMNS, DESCRIBE/DESC, EXPLAIN SELECT. Schema-qualified metadata
         forms (SHOW TABLES FROM db, SHOW COLUMNS FROM db.tbl, DESCRIBE db.tbl)
-        are allowed. Requires a fresh Bearer token (bounded
-        TTL). The actor is derived from the verified token and is never accepted
-        in the request body. The resolved DSN is never returned.
+        are allowed. Accepts either a fresh current User bearer (bounded TTL and
+        Authorization Version) or an independent Machine Credential with the
+        governed-select scope. Evidence records the verified User or Machine
+        Principal identity, never the Machine Credential ID or secret. The actor
+        is never accepted in the request body. The resolved DSN is never returned.
       security:
         - bearerAuth: []
+        - machineCredential: []
+      x-machine-scope: governed-select
       parameters:
         - name: id
           in: path
@@ -513,7 +517,7 @@ paths:
                     error: validation_failed
                     message: "page must be > 0, got 0"
         "401":
-          description: Missing or invalid Bearer token (or token older than the TTL)
+          description: Missing, invalid, expired, or revoked User/Machine credential (including a User token older than the TTL)
           content:
             application/json:
               schema:
@@ -1088,6 +1092,7 @@ paths:
                       - id: 1001
                         targetResourceId: 22
                         actor:
+                          kind: user
                           displayName: "ControlHub Admin"
                         engine: mysql
                         statementDigest: "select id, name from resources where resource_type = ? limit ?"
@@ -1105,6 +1110,7 @@ paths:
                       - id: 1002
                         targetResourceId: 22
                         actor:
+                          kind: user
                           displayName: "ControlHub Admin"
                         engine: mysql
                         statementDigest: "select id, name from resources where resource_type = ? limit ?"
@@ -5783,6 +5789,11 @@ components:
           type: integer
           format: int64
           nullable: true
+        actorMachinePrincipalId:
+          type: integer
+          format: int64
+          nullable: true
+          description: Verified Machine Principal ID; mutually exclusive with actorUserId.
         targetResourceId:
           type: integer
           format: int64
@@ -6454,8 +6465,8 @@ components:
       additionalProperties: false
       description: >
         Body of POST /query-targets/{id}/execute. The actor is never taken from
-        here — it is derived from the verified token. Unknown fields are rejected
-        by strict decoding.
+        here — it is derived from the verified User or Machine credential.
+        Unknown fields are rejected by strict decoding.
       properties:
         statement:
           type: string
@@ -6806,13 +6817,18 @@ components:
           description: Referenced columns in schema ordinal order
     QueryExecutionActor:
       type: object
-      required: [displayName]
+      required: [kind, displayName]
       properties:
+        kind:
+          type: string
+          enum: [user, machine]
+          description: Truthful evidence identity kind; credentials are never actors.
         displayName:
           type: string
           description: >
-            Privacy-safe actor label for history. Never email or raw numeric
-            user id. Missing/deleted users project as "Unknown user".
+            Privacy-safe User or Machine Principal label for history. Never an
+            email, raw numeric ID, or credential. Missing actors use a fixed
+            unknown label for their kind.
     QueryExecutionRecord:
       type: object
       required: [id, targetResourceId, actor, engine, statementDigest, statementPreview, status, rowCount, durationMs, errorCode, errorMessage, createdAt]

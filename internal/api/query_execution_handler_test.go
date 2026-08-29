@@ -1,7 +1,7 @@
 // Package api provides tests for the query execution handlers.
 // input: bytes, context, encoding/json, fmt, net/http, net/http/httptest, strings, testing, time, chi, internal/model, internal/service
-// output: TestQueryExecution_* (execute success/errors including Preflight and Apply-path query_result_disclosure_blocked vs query_not_allowed, auth, history; actor taken from token not body)
-// pos: Handler + auth middleware + error-mapping coverage for the Phase 37 query sandbox endpoints, Phase 38S governed result paging, Issue #48 execute-path disclosure Controlled Error Code including Apply after executor success
+// output: TestQueryExecution_* (execute identity, success/errors including Preflight and Apply-path query_result_disclosure_blocked vs query_not_allowed, auth, history)
+// pos: Handler identity + auth middleware + error-mapping coverage for ordinary governed execution and user-only query siblings
 // note: if this file changes, update header and README.md
 package api
 
@@ -32,7 +32,7 @@ type stubQueryExec struct {
 	listErr        error
 	navResp        model.RelatedRecordNavigationResponse
 	navErr         error
-	gotActor       uint64
+	gotIdentity    model.QueryExecutionIdentity
 	gotRole        string
 	gotTargetID    uint64
 	gotMaxRows     int
@@ -49,9 +49,9 @@ type stubQueryExec struct {
 	templateCalled bool
 }
 
-func (s *stubQueryExec) Execute(_ context.Context, actorUserID uint64, targetID uint64, req model.QueryExecuteRequest) (model.QueryExecuteResponse, error) {
+func (s *stubQueryExec) Execute(_ context.Context, identity model.QueryExecutionIdentity, targetID uint64, req model.QueryExecuteRequest) (model.QueryExecuteResponse, error) {
 	s.executeCalled = true
-	s.gotActor = actorUserID
+	s.gotIdentity = identity
 	s.gotTargetID = targetID
 	s.gotMaxRows = req.MaxRows
 	s.gotPagination = req.Pagination
@@ -69,7 +69,7 @@ func (s *stubQueryExec) Execute(_ context.Context, actorUserID uint64, targetID 
 
 func (s *stubQueryExec) ExecuteSavedStatement(_ context.Context, actorUserID, targetID, statementID uint64, req model.QuerySavedStatementExecuteRequest) (model.QueryExecuteResponse, error) {
 	s.templateCalled = true
-	s.gotActor = actorUserID
+	s.gotIdentity = model.QueryExecutionIdentity{Kind: model.QueryExecutionActorUser, ID: actorUserID}
 	s.gotTargetID = targetID
 	s.templateStmt = statementID
 	s.templateReq = req
@@ -78,7 +78,7 @@ func (s *stubQueryExec) ExecuteSavedStatement(_ context.Context, actorUserID, ta
 
 func (s *stubQueryExec) ListHistory(_ context.Context, actorUserID uint64, actorRole string, targetID uint64, q model.QueryExecutionListQuery) (*model.QueryExecutionCursorPage, error) {
 	s.listCalled = true
-	s.gotActor = actorUserID
+	s.gotIdentity = model.QueryExecutionIdentity{Kind: model.QueryExecutionActorUser, ID: actorUserID}
 	s.gotTargetID = targetID
 	s.gotRole = actorRole
 	s.gotQuery = q
@@ -100,7 +100,7 @@ func (s *stubQueryExec) QueryEvidencePersistenceFailures() int64 { return 0 }
 
 func (s *stubQueryExec) NavigateRelatedRecords(_ context.Context, actorUserID uint64, targetID uint64, req model.RelatedRecordNavigationRequest) (model.RelatedRecordNavigationResponse, error) {
 	s.navCalled = true
-	s.gotActor = actorUserID
+	s.gotIdentity = model.QueryExecutionIdentity{Kind: model.QueryExecutionActorUser, ID: actorUserID}
 	s.gotTargetID = targetID
 	s.gotNavRequest = req
 	return s.navResp, s.navErr
@@ -147,8 +147,8 @@ func TestQueryExecution_Execute_Success(t *testing.T) {
 	if !stub.executeCalled {
 		t.Fatal("Execute was not called")
 	}
-	if stub.gotActor != 42 {
-		t.Fatalf("actor passed to service = %d, want 42 (from token, not body)", stub.gotActor)
+	if stub.gotIdentity != (model.QueryExecutionIdentity{Kind: model.QueryExecutionActorUser, ID: 42}) {
+		t.Fatalf("identity passed to service = %+v, want verified User 42", stub.gotIdentity)
 	}
 	if stub.gotTargetID != 22 {
 		t.Fatalf("target id = %d, want 22", stub.gotTargetID)
@@ -326,8 +326,8 @@ func TestQueryExecution_ListHistory(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200; body=%s", rec.Code, rec.Body.String())
 	}
-	if stub.gotActor != 42 {
-		t.Fatalf("actor passed to ListHistory = %d, want 42 from token", stub.gotActor)
+	if stub.gotIdentity.ID != 42 {
+		t.Fatalf("actor passed to ListHistory = %d, want 42 from token", stub.gotIdentity.ID)
 	}
 	if stub.gotRole != "admin" {
 		t.Fatalf("role passed to ListHistory = %q, want admin", stub.gotRole)
@@ -379,8 +379,8 @@ func TestQueryExecution_ListHistory_PassesNonAdminRole(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200; body=%s", rec.Code, rec.Body.String())
 	}
-	if stub.gotActor != 7 || stub.gotRole != "editor" {
-		t.Fatalf("got actor=%d role=%q, want 7/editor", stub.gotActor, stub.gotRole)
+	if stub.gotIdentity.ID != 7 || stub.gotRole != "editor" {
+		t.Fatalf("got actor=%d role=%q, want 7/editor", stub.gotIdentity.ID, stub.gotRole)
 	}
 }
 

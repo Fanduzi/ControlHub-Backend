@@ -5,15 +5,13 @@ Data access layer implementing service-layer repository interfaces with raw SQL 
 ## Files
 | File | Responsibility |
 |------|---------------|
-| resource_repository.go | Resource CRUD, governed identity and one-query batched typed-profile reads, latest-per-observer health evidence, effective-health derivation, per-source observed/effective values, read-only validated bulk previews, atomic audited identity/manual-override/bulk mutations, and issue #83 atomic ingestion confirmation |
-| bulk_resource_mutation_test.go | SQL-level bulk coverage for transaction commit/rollback, externalId persistence, locked archived-CI rejection, current resource/governed-identity lock queries, normal update validation parity, and audit-failure rollback |
-| relation_repository.go | Relation queries plus atomic create/delete, effective-health relation/member projections, topology resource lookup, and environment candidate starts |
 | resource_repository.go | Resource CRUD, governed identity and one-query batched typed-profile reads, latest-per-observer health evidence, effective-health derivation, per-source observed/effective values, read-only validated bulk previews, atomic audited identity/manual-override/bulk mutations, and additive issue #83 atomic ingestion confirmation |
+| bulk_resource_mutation_test.go | SQL-level bulk coverage for transaction commit/rollback, externalId persistence, locked archived-CI rejection, current resource/governed-identity lock queries, normal update validation parity, and audit-failure rollback |
 | relation_repository.go | Relation queries plus atomic create/delete serialized by stable endpoint resource-row locks, effective-health relation/member projections, topology resource lookup, and environment candidate starts |
-| audit_repository.go | Audit event queries (global and by resource), including pagination, actor/resource search, and JSON field changes |
+| audit_repository.go | Audit event queries (global and by resource), including nullable user/machine actor projection, principal-name search, pagination, and JSON field changes |
 | user_repository.go | User credential lookup by email/id; Authorization Version mutators (role/active/password); UpgradePasswordHash for legacy-to-Argon2id migration; CountLegacyHashUsers for operator visibility |
 | dictionary_repository.go | Dictionary queries — DB-backed (environments, owners, roles) and static (resource types, relation types, lifecycle/health statuses) |
-| query_execution_repository.go | Query credential metadata (get/upsert/delete with audit), atomic `InsertExecutionWithAudit` Execution Evidence Pair (Issues #34/#36) with per-caller fixed audit event type, execution history, audit-only `InsertAuditEvent`, `QueryEvidencePersistenceFailures` counter |
+| query_execution_repository.go | Query credential metadata plus atomic identity-aware `InsertExecutionWithAudit`; each evidence pair stores exactly one user/machine actor in history and audit, and history projects the matching actor kind/name without credential data |
 | query_target_repository.go | Read-only query target read model — joins database_instance resources with profiles, environments, owners, and cluster membership |
 | query_disclosure_repository.go | Phase 38Q governed result-disclosure policy CRUD (insert/update/delete/list/get by scope); duplicate scope insert maps MySQL 1062 to `ErrQueryDisclosurePolicyConflict`, update/get of a missing scope returns `sql.ErrNoRows` (fail-closed), delete is idempotent |
 | query_saved_statement_repository.go | Phase 38W governed saved statements CRUD with ordered parameter definitions and atomic audit (create/update/delete with audit, list with visibility, get by ID) |

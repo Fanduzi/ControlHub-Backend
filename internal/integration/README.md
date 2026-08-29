@@ -7,11 +7,10 @@ MySQL-backed integration tests run against disposable Testcontainers databases.
 |------|---------------|
 | health_observation_test.go | Real-MySQL latest observation, freshness, effective filtering, no-audit, and atomic manual override contracts |
 | testenv_test.go | Starts MySQL, applies migrations, and provides database helpers |
-| mysql_test.go | Exact schema-version, table, unsigned-ID, and no-foreign-key guards after clean migration |
-| resource_test.go | Resource repository CRUD/filtering, constant-query batched-profile reads, observation-derived cluster rollups, create-with-profile atomicity, profile validation, and PATCH partial-merge semantics against real MySQL |
+| mysql_test.go | Exact migration-26 schema/table, user/machine evidence columns/checks/indexes, unsigned-ID, and no-foreign-key guards after clean migration |
+| resource_test.go | Resource repository CRUD, rich/structured filtering, constant-query batched-profile reads, observation-derived cluster rollups, create-with-profile atomicity, profile validation, and PATCH partial-merge semantics against real MySQL |
 | inventory_audit_test.go | Real-MySQL inventory audit atomicity, typed-profile and relationship behavior, per-CI evidence, multi-source observations, override precedence, stale-write conflicts, clear, effective provenance, and per-CI relationship evidence |
 | bulk_resource_mutation_test.go | Real-MySQL reviewed bulk success/idempotent preview/conflict, structurally decoded externalId field audit, true multi-target mid-batch rollback, audit-failure rollback, archived-CI lock validation, and two-connection lock/drift enforcement |
-| ingestion_confirm_test.go | Real-MySQL issue #83 ingestion confirmation tests for multi-row create/update, actor-as-owner default, idempotent reconfirm, conflict/fingerprint rejection, audit-trigger rollback, and manual override preservation |
 | ingestion_confirm_test.go | Discoverable `TestIngestionConfirmation*` real-MySQL issue #83 tests for success, idempotent no-op, immutable-type conflict, additive observations, fingerprint/relation drift, audit-trigger rollback, manual override preservation, and deterministic relation-lock concurrency |
 | typed_profile_identity_test.go | Real-MySQL create/read/edit for the four core typed profiles, minimum manual identity rejection, worker subtype, labels-as-classification, and T01 profile audit |
 | resource_identity_test.go | MySQL identity normalization/uniqueness, immutable ID/origin, and atomic identity-plus-field-audit rollback coverage |
@@ -31,7 +30,7 @@ MySQL-backed integration tests run against disposable Testcontainers databases.
 | openapi_fuzz_test.go | Serves the production dependency graph, including named Inventory views, and fuzzes every non-excluded OpenAPI operation against disposable MySQL |
 | legacy_import_test.go | Proves UUID-to-bigint cutover import against MySQL: full migration, origin/external-identity mapping, non-empty target rejection, parseTime validation, NULL audit actor preserved as NULL, and unknown non-NULL actors/sources failing loud with no partial import |
 | *_test.go | Exercises repository, API, and migration behavior against MySQL |
-| query_evidence_pair_test.go | Proves the atomic Execution Evidence Pair (Issue #34) against real MySQL: history + audit commit together and both roll back on audit/history insert failure; persistence-failure counter increments exactly once per failed pair with a fixed safe log |
+| query_evidence_pair_test.go | Proves atomic history+audit commit/rollback and persistence telemetry plus migration-26 user/machine actor constraints against real MySQL |
 | navigate_related_records_integration_test.go | Proves governed FK related-record navigation over real MySQL, including the Issue #36 atomic-pair rollback proof: a forced `related_record_navigation` audit insert failure rolls the navigation history row back with it (no partial evidence), the controlled backend-error envelope is preserved, and the failure counter increments exactly once |
 
 ## Operator access coverage

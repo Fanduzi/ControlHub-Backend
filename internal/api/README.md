@@ -19,7 +19,7 @@ HTTP handlers, chi routing, CORS middleware, and fake-repo test infrastructure.
 | machine_principal_handler.go | Admin-only machine principal create/list and credential rotate/revoke handlers |
 | dictionary_handler.go | Dictionary list handlers (environments, owners, roles, resource-types, relation-types, lifecycle-statuses, health-statuses) |
 | query_schema_handler.go | handleGetTableDefinition for MySQL table-definition requests |
-| query_execution_handler.go | POST execute, POST saved-statement template execute, POST related-records, and GET execution-history handlers, including optional governed result paging; execute/related disclosure blocks publish `query_result_disclosure_blocked` |
+| query_execution_handler.go | User-or-machine POST ordinary execute plus user-only saved-statement execution, related-record navigation, and execution-history handlers; machine identity is passed without synthesizing a User; execute/related disclosure blocks publish `query_result_disclosure_blocked` |
 | query_credential_handler.go | Phase 38A credential metadata handlers (GET/PUT/DELETE) |
 | query_disclosure_handler.go | Phase 38Q disclosure policy CRUD/list handlers (handler-admin) |
 | query_saved_statement_handler.go | Phase 38W saved statement CRUD handlers with strict typed parameter declaration decoding |
@@ -37,13 +37,13 @@ HTTP handlers, chi routing, CORS middleware, and fake-repo test infrastructure.
 | dictionary_handler_test.go | Dictionary endpoint tests |
 | query_credential_handler_test.go | Credential metadata handler tests |
 | query_disclosure_handler_test.go | Disclosure policy handler tests, including list `query_result_disclosure_blocked` |
-| query_execution_handler_test.go | Query execution handler tests, including Preflight and Apply-path `query_result_disclosure_blocked` vs `query_not_allowed` |
+| query_execution_handler_test.go | Query execution handler tests, including authenticated execution identity and Preflight/Apply-path `query_result_disclosure_blocked` vs `query_not_allowed` |
 | navigate_related_records_handler_test.go | Related-record navigation handler tests, including Preflight and Apply-path disclosure vs not-allowed Controlled Error Codes |
 | query_saved_statement_handler_test.go | Saved statement handler tests |
 | query_saved_statement_execution_handler_test.go | Template-execution handler tests (strict request decoding, controlled field errors, `query_result_disclosure_blocked`) |
 | named_inventory_view_handler_test.go | Named inventory view router tests, including authentication for every CRUD route, shared-management metadata, strict JSON, and controlled errors |
 | ingestion_handler_test.go | Admin multipart ingestion preview/confirm, validation, stale-fingerprint, and conflict response tests |
-| machine_route_scope_test.go | Closed table-driven machine route/scope matrix and secret-safe controlled error tests |
+| machine_route_scope_test.go | Closed table-driven machine route/scope matrix, truthful machine execute identity, user-only sibling query routes, and secret-safe controlled error tests |
 | operator_access_boundary_test.go | Anonymous, editor, and admin router authorization matrix driven by the shared operatoraccess policy, including 38R conditional saved statements (personal by owner — editor or admin — and shared templates admin-only) |
 | ops_handler.go | Admin-only operational metrics handlers: `handleAuthAuditMetrics` (auth audit persistence failures + untrusted-Bearer suppression) and `handleQueryEvidenceMetrics` (Issue #34 — exactly `queryEvidencePersistenceFailures`, read through the service layer) |
 | query_evidence_metrics_test.go | Query-evidence metrics endpoint tests: anonymous/editor/admin 401/403/200 matrix, exactly-one-field response, published counter |
@@ -54,6 +54,7 @@ HTTP handlers, chi routing, CORS middleware, and fake-repo test infrastructure.
 | GET | /resources and inventory dictionaries | `inventory:read` machine scope or authenticated user |
 | GET | /resources/{id}/relations, relation-rules, members, topology | `relations:read` machine scope or authenticated user |
 | GET | /query-targets | `governed-select` machine scope or authenticated user |
+| POST | /query-targets/{id}/execute | `governed-select` machine scope or fresh authenticated user; records principal identity, never credential identity/material |
 | GET | /audit-events and /resources/{id}/audit-events | `audit:read` machine scope or admin user |
 | GET | /inventory/views | `named-views:read` returns shared views only for machines; users retain personal/shared behavior |
 | GET/POST | /admin/machine-principals | Admin machine-principal administration; GET includes only credential IDs and lifecycle timestamps for reload-safe rotate/revoke |
@@ -74,7 +75,7 @@ HTTP handlers, chi routing, CORS middleware, and fake-repo test infrastructure.
 | GET | /resources/{id}/topology | Get a rooted topology graph; depth defaults to 2 and larger depths are bounded by output caps |
 | GET | /environments/{id}/topology | Get an environment-scoped topology workspace; `rootResourceId` is optional |
 | GET | /query-targets/{id}/schema/table-definition | Get MySQL table definition (base tables only) |
-| POST | /query-targets/{id}/execute | Execute a governed read-only statement, with optional page-number result paging for SELECT |
+| POST | /query-targets/{id}/execute | Execute a governed read-only statement as a fresh user or `governed-select` machine principal, with optional page-number result paging for SELECT |
 | POST | /query-targets/{id}/related-records | Governed FK related-record navigation (Issue #36: records through the same atomic Execution Evidence Pair as execution) |
 | GET | /query-disclosure-policies | List disclosure policies (handler-admin) |
 | POST | /query-disclosure-policies | Create a disclosure policy (handler-admin) |

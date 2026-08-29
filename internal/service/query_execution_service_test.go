@@ -1,7 +1,7 @@
 // Package service provides tests for the Phase 37/38S query execution service.
 // input: context, errors, fmt, strings, testing, time, internal/model
-// output: TestExecute_*, TestReadyDerivation_*, TestCredentialResolver_* (fakes for repos/resolver/executor/clock); assertApplyPathDisclosureHTTPSentinel
-// pos: Unit tests for execute gating, compiler-owned template executor dispatch, governed result pages, the environment-policy matrix, atomic Execution Evidence Pair history/audit recording (Issue #34), cancellation-durable terminal evidence via the detached two-second Evidence Persistence Window (Issue #35), credential fail-closed behavior, and execute-path Preflight dual-wrap vs Apply exclusive ErrQueryDisclosureBlocked for HTTP (Issue #48)
+// output: TestExecute_* including machine identity terminal outcomes, readiness/credential tests, and repository/resolver/executor/clock fakes
+// pos: Unit boundary for identity-aware governed execution, atomic terminal evidence, paging, cancellation durability, credential fail-closed behavior, and disclosure error mapping
 // note: if this file changes, update header and README.md
 package service
 
@@ -396,6 +396,10 @@ func enabledCred(policy model.QueryEnvironmentPolicy) model.QueryCredentialMetad
 	}
 }
 
+func userExecutionIdentity(id uint64) model.QueryExecutionIdentity {
+	return model.QueryExecutionIdentity{Kind: model.QueryExecutionActorUser, ID: id}
+}
+
 // executionTestScaffold wires a service with a ready mysql/staging target.
 func executionTestScaffold(t *testing.T) (*QueryExecutionService, *fakeExecRepo, *fakeResolver, *fakeExecutor) {
 	t.Helper()
@@ -435,7 +439,7 @@ func TestExecute_RejectsUnsupportedTarget(t *testing.T) {
 		nil, &fakeDisclosureService{},
 	)
 
-	_, err := svc.Execute(context.Background(), 1, 9001, model.QueryExecuteRequest{Statement: "select 1", MaxRows: 10})
+	_, err := svc.Execute(context.Background(), userExecutionIdentity(1), 9001, model.QueryExecuteRequest{Statement: "select 1", MaxRows: 10})
 	if !errors.Is(err, ErrQueryNotAllowed) {
 		t.Fatalf("error = %v, want ErrQueryNotAllowed", err)
 	}
@@ -452,7 +456,7 @@ func TestExecute_RejectsMissingCredential(t *testing.T) {
 		nil, &fakeDisclosureService{},
 	)
 
-	_, err := svc.Execute(context.Background(), 1, 9001, model.QueryExecuteRequest{Statement: "select 1", MaxRows: 10})
+	_, err := svc.Execute(context.Background(), userExecutionIdentity(1), 9001, model.QueryExecuteRequest{Statement: "select 1", MaxRows: 10})
 	if !errors.Is(err, ErrQueryNotAllowed) {
 		t.Fatalf("error = %v, want ErrQueryNotAllowed", err)
 	}
@@ -471,7 +475,7 @@ func TestExecute_TargetLookupUsesTargetIDFilter(t *testing.T) {
 		nil, &fakeDisclosureService{},
 	)
 
-	_, err := svc.Execute(context.Background(), 1, 9001, model.QueryExecuteRequest{Statement: "select 1", MaxRows: 10})
+	_, err := svc.Execute(context.Background(), userExecutionIdentity(1), 9001, model.QueryExecuteRequest{Statement: "select 1", MaxRows: 10})
 	if err != nil {
 		t.Fatalf("Execute: %v", err)
 	}
@@ -489,7 +493,7 @@ func TestExecute_RejectsUnresolvableCredentialRef(t *testing.T) {
 	// Credential is valid and allowed, but the resolver fails (e.g. env key unset).
 	resolver.err = errors.New("env var not set")
 
-	_, err := svc.Execute(context.Background(), 1, 9001, model.QueryExecuteRequest{Statement: "select 1", MaxRows: 10})
+	_, err := svc.Execute(context.Background(), userExecutionIdentity(1), 9001, model.QueryExecuteRequest{Statement: "select 1", MaxRows: 10})
 	if !errors.Is(err, ErrQueryNotAllowed) {
 		t.Fatalf("error = %v, want ErrQueryNotAllowed", err)
 	}
@@ -509,7 +513,7 @@ func TestExecute_RejectsUnsafeStatement(t *testing.T) {
 	t.Parallel()
 	svc, _, _, executor := executionTestScaffold(t)
 
-	_, err := svc.Execute(context.Background(), 1, 9001, model.QueryExecuteRequest{Statement: "delete from t", MaxRows: 10})
+	_, err := svc.Execute(context.Background(), userExecutionIdentity(1), 9001, model.QueryExecuteRequest{Statement: "delete from t", MaxRows: 10})
 	if !errors.Is(err, ErrQueryValidationFailed) {
 		t.Fatalf("error = %v, want ErrQueryValidationFailed", err)
 	}
@@ -522,7 +526,7 @@ func TestExecute_ExecutesSelectWithLimit(t *testing.T) {
 	t.Parallel()
 	svc, _, _, executor := executionTestScaffold(t)
 
-	resp, err := svc.Execute(context.Background(), 7, 9001, model.QueryExecuteRequest{Statement: "select 1 as value", MaxRows: 50})
+	resp, err := svc.Execute(context.Background(), userExecutionIdentity(7), 9001, model.QueryExecuteRequest{Statement: "select 1 as value", MaxRows: 50})
 	if err != nil {
 		t.Fatalf("Execute error: %v", err)
 	}
@@ -566,7 +570,7 @@ func TestExecute_MapsTimeoutToQueryTimeout(t *testing.T) {
 		nil, &fakeDisclosureService{},
 	)
 
-	_, err := svc2.Execute(context.Background(), 1, 9001, model.QueryExecuteRequest{Statement: "select 1", MaxRows: 10})
+	_, err := svc2.Execute(context.Background(), userExecutionIdentity(1), 9001, model.QueryExecuteRequest{Statement: "select 1", MaxRows: 10})
 	if !errors.Is(err, ErrQueryTimeout) {
 		t.Fatalf("error = %v, want ErrQueryTimeout", err)
 	}
@@ -577,7 +581,7 @@ func TestExecute_RecordsSuccessfulAttempt(t *testing.T) {
 	t.Parallel()
 	svc, repo, _, executor := executionTestScaffold(t)
 
-	if _, err := svc.Execute(context.Background(), 7, 9001, model.QueryExecuteRequest{Statement: "select 1", MaxRows: 10}); err != nil {
+	if _, err := svc.Execute(context.Background(), userExecutionIdentity(7), 9001, model.QueryExecuteRequest{Statement: "select 1", MaxRows: 10}); err != nil {
 		t.Fatalf("Execute error: %v", err)
 	}
 	if len(repo.insertedAttempts) != 1 {
@@ -601,7 +605,7 @@ func TestExecute_RecordsRejectedAttempt(t *testing.T) {
 	t.Parallel()
 	svc, repo, _, executor := executionTestScaffold(t)
 
-	_, err := svc.Execute(context.Background(), 7, 9001, model.QueryExecuteRequest{Statement: "delete from t", MaxRows: 10})
+	_, err := svc.Execute(context.Background(), userExecutionIdentity(7), 9001, model.QueryExecuteRequest{Statement: "delete from t", MaxRows: 10})
 	if !errors.Is(err, ErrQueryValidationFailed) {
 		t.Fatalf("error = %v, want ErrQueryValidationFailed", err)
 	}
@@ -620,6 +624,44 @@ func TestExecute_RecordsRejectedAttempt(t *testing.T) {
 	}
 }
 
+func TestExecute_MachineIdentityReachesEveryTerminalEvidenceOutcome(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name      string
+		statement string
+		execErr   error
+		want      model.QueryExecutionStatus
+	}{
+		{"success", "select 1", nil, model.QueryExecutionSuccess},
+		{"rejected", "delete from t", nil, model.QueryExecutionRejected},
+		{"failed", "select 1", errors.New("driver detail must stay private"), model.QueryExecutionFailed},
+		{"timeout", "select 1", context.DeadlineExceeded, model.QueryExecutionTimeout},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			svc, repo, _, executor := executionTestScaffold(t)
+			executor.err = tc.execErr
+			_, _ = svc.Execute(context.Background(), model.QueryExecutionIdentity{
+				Kind: model.QueryExecutionActorMachine,
+				ID:   91,
+			}, 9001, model.QueryExecuteRequest{Statement: tc.statement, MaxRows: 10})
+
+			if len(repo.pairCalls) != 1 {
+				t.Fatalf("pair calls = %d, want 1", len(repo.pairCalls))
+			}
+			rec := repo.pairCalls[0].rec
+			if rec.ActorUserID != 0 || rec.ActorMachinePrincipalID != 91 || rec.Actor.Kind != model.QueryExecutionActorMachine {
+				t.Fatalf("evidence identity = user:%d machine:%d kind:%q, want machine principal 91 only", rec.ActorUserID, rec.ActorMachinePrincipalID, rec.Actor.Kind)
+			}
+			if rec.Status != tc.want {
+				t.Fatalf("status = %q, want %q", rec.Status, tc.want)
+			}
+		})
+	}
+}
+
 func TestExecute_HistoryWriteFailureOnSuccess_ReturnsBackendError(t *testing.T) {
 	t.Parallel()
 	svc, repo, _, _ := executionTestScaffold(t)
@@ -629,7 +671,7 @@ func TestExecute_HistoryWriteFailureOnSuccess_ReturnsBackendError(t *testing.T) 
 	// + audit) cannot be written, the service must NOT pretend success (no
 	// executionId=0 success response); it returns a controlled backend failure
 	// and no history row is committed.
-	resp, err := svc.Execute(context.Background(), 7, 9001, model.QueryExecuteRequest{Statement: "select 1", MaxRows: 10})
+	resp, err := svc.Execute(context.Background(), userExecutionIdentity(7), 9001, model.QueryExecuteRequest{Statement: "select 1", MaxRows: 10})
 	if !errors.Is(err, ErrQueryBackendFailure) {
 		t.Fatalf("error = %v, want ErrQueryBackendFailure", err)
 	}
@@ -652,7 +694,7 @@ func TestExecute_AuditWriteFailureOnSuccess_ReturnsBackendError(t *testing.T) {
 	// WHY: the audit event is part of the recording guarantee; if the pair
 	// write fails the request fails closed rather than reporting an unaudited
 	// run, and the atomic rollback leaves no history row.
-	_, err := svc.Execute(context.Background(), 7, 9001, model.QueryExecuteRequest{Statement: "select 1", MaxRows: 10})
+	_, err := svc.Execute(context.Background(), userExecutionIdentity(7), 9001, model.QueryExecuteRequest{Statement: "select 1", MaxRows: 10})
 	if !errors.Is(err, ErrQueryBackendFailure) {
 		t.Fatalf("error = %v, want ErrQueryBackendFailure", err)
 	}
@@ -669,7 +711,7 @@ func TestExecute_SuccessUsesSingleAtomicPairWrite(t *testing.T) {
 	t.Parallel()
 	svc, repo, _, _ := executionTestScaffold(t)
 
-	resp, err := svc.Execute(context.Background(), 7, 9001, model.QueryExecuteRequest{Statement: "select 1", MaxRows: 10})
+	resp, err := svc.Execute(context.Background(), userExecutionIdentity(7), 9001, model.QueryExecuteRequest{Statement: "select 1", MaxRows: 10})
 	if err != nil {
 		t.Fatalf("execute: %v", err)
 	}
@@ -693,7 +735,7 @@ func TestExecute_PagedSuccessUsesSingleAtomicPairWritePerPage(t *testing.T) {
 	t.Parallel()
 	svc, repo, _, _ := executionTestScaffold(t)
 
-	resp, err := svc.Execute(context.Background(), 7, 9001, model.QueryExecuteRequest{
+	resp, err := svc.Execute(context.Background(), userExecutionIdentity(7), 9001, model.QueryExecuteRequest{
 		Statement:  "select value from metrics limit 100",
 		MaxRows:    100,
 		Pagination: &model.QueryExecutePaginationRequest{Page: 2, PageSize: 10},
@@ -718,7 +760,7 @@ func TestExecute_PairWriteFailureOnSuccess_ReturnsBackendError_NoHistory(t *test
 	svc, repo, _, _ := executionTestScaffold(t)
 	repo.pairErr = errors.New("evidence store down")
 
-	_, err := svc.Execute(context.Background(), 7, 9001, model.QueryExecuteRequest{Statement: "select 1", MaxRows: 10})
+	_, err := svc.Execute(context.Background(), userExecutionIdentity(7), 9001, model.QueryExecuteRequest{Statement: "select 1", MaxRows: 10})
 	if !errors.Is(err, ErrQueryBackendFailure) {
 		t.Fatalf("error = %v, want ErrQueryBackendFailure", err)
 	}
@@ -740,7 +782,7 @@ func TestExecute_RejectedAttempt_PersistFailure_ReturnsBackendError(t *testing.T
 
 	// WHY: even for a rejected attempt, a recording failure must surface as a
 	// controlled backend failure (never silently swallow + claim "recorded").
-	_, err := svc.Execute(context.Background(), 7, 9001, model.QueryExecuteRequest{Statement: "delete from t", MaxRows: 10})
+	_, err := svc.Execute(context.Background(), userExecutionIdentity(7), 9001, model.QueryExecuteRequest{Statement: "delete from t", MaxRows: 10})
 	if !errors.Is(err, ErrQueryBackendFailure) {
 		t.Fatalf("error = %v, want ErrQueryBackendFailure (persist failure must not be swallowed)", err)
 	}
@@ -768,7 +810,7 @@ func TestExecute_DisclosureBlocked_Rejected(t *testing.T) {
 		nil, &fakeDisclosureService{blockErr: ErrQueryDisclosureBlocked},
 	)
 
-	_, err := svc.Execute(context.Background(), 7, 9001, model.QueryExecuteRequest{Statement: "select 1", MaxRows: 10})
+	_, err := svc.Execute(context.Background(), userExecutionIdentity(7), 9001, model.QueryExecuteRequest{Statement: "select 1", MaxRows: 10})
 	if !errors.Is(err, ErrQueryNotAllowed) {
 		t.Fatalf("error = %v, want ErrQueryNotAllowed (wrapping ErrQueryDisclosureBlocked)", err)
 	}
@@ -824,7 +866,7 @@ func TestExecute_ApplyDisclosureBlocked_Rejected(t *testing.T) {
 		nil, &fakeDisclosureService{applyErr: ErrQueryDisclosureBlocked},
 	)
 
-	_, err := svc.Execute(context.Background(), 7, 9001, model.QueryExecuteRequest{Statement: "select 1", MaxRows: 10})
+	_, err := svc.Execute(context.Background(), userExecutionIdentity(7), 9001, model.QueryExecuteRequest{Statement: "select 1", MaxRows: 10})
 	assertApplyPathDisclosureHTTPSentinel(t, err)
 	if !executor.called {
 		t.Fatal("executor must run before Apply blocks the result")
@@ -885,7 +927,7 @@ func TestExecute_PairWriteFailureOnCanceledRequest_StillReturnsBackendError(t *t
 		nil, &fakeDisclosureService{},
 	)
 
-	_, err := svc.Execute(ctx, 7, 9001, model.QueryExecuteRequest{Statement: "select 1", MaxRows: 10})
+	_, err := svc.Execute(ctx, userExecutionIdentity(7), 9001, model.QueryExecuteRequest{Statement: "select 1", MaxRows: 10})
 	if !errors.Is(err, errPersistAttempt) {
 		t.Fatalf("error = %v, want errPersistAttempt (controlled backend failure)", err)
 	}
@@ -918,7 +960,7 @@ func TestExecute_ClientCanceledDuringExecution_RecordsFailedCanceled(t *testing.
 		nil, &fakeDisclosureService{},
 	)
 
-	_, err := svc.Execute(ctx, 7, 9001, model.QueryExecuteRequest{Statement: "select 1", MaxRows: 10})
+	_, err := svc.Execute(ctx, userExecutionIdentity(7), 9001, model.QueryExecuteRequest{Statement: "select 1", MaxRows: 10})
 	if !errors.Is(err, ErrQueryBackendFailure) {
 		t.Fatalf("error = %v, want ErrQueryBackendFailure", err)
 	}
@@ -968,7 +1010,7 @@ func TestExecute_PagedClientCanceledDuringExecution_RecordsFailedCanceled(t *tes
 		nil, &fakeDisclosureService{},
 	)
 
-	_, err := svc.Execute(ctx, 7, 9001, model.QueryExecuteRequest{
+	_, err := svc.Execute(ctx, userExecutionIdentity(7), 9001, model.QueryExecuteRequest{
 		Statement:  "select value from metrics limit 100",
 		MaxRows:    100,
 		Pagination: &model.QueryExecutePaginationRequest{Page: 1, PageSize: 10},
@@ -1019,7 +1061,7 @@ func TestExecute_ClientCanceledDuringDisclosure_RecordsFailedCanceled(t *testing
 				nil, disclosure,
 			)
 
-			_, err := svc.Execute(ctx, 7, 9001, model.QueryExecuteRequest{Statement: "select 1", MaxRows: 10})
+			_, err := svc.Execute(ctx, userExecutionIdentity(7), 9001, model.QueryExecuteRequest{Statement: "select 1", MaxRows: 10})
 			if !errors.Is(err, ErrQueryBackendFailure) {
 				t.Fatalf("error = %v, want ErrQueryBackendFailure for canceled disclosure work", err)
 			}
@@ -1057,7 +1099,7 @@ func TestExecute_DisclosurePreflightTimeout_RecordsTimeoutEvidence(t *testing.T)
 		nil, disclosure,
 	)
 
-	_, err := svc.Execute(context.Background(), 7, 9001, model.QueryExecuteRequest{Statement: "select 1", MaxRows: 10})
+	_, err := svc.Execute(context.Background(), userExecutionIdentity(7), 9001, model.QueryExecuteRequest{Statement: "select 1", MaxRows: 10})
 	if !errors.Is(err, ErrQueryTimeout) {
 		t.Fatalf("error = %v, want ErrQueryTimeout", err)
 	}
@@ -1093,7 +1135,7 @@ func TestExecute_DisclosurePreflightTerminalFailure_RecordsFailedEvidence(t *tes
 		nil, disclosure,
 	)
 
-	_, err := svc.Execute(context.Background(), 7, 9001, model.QueryExecuteRequest{Statement: "select 1", MaxRows: 10})
+	_, err := svc.Execute(context.Background(), userExecutionIdentity(7), 9001, model.QueryExecuteRequest{Statement: "select 1", MaxRows: 10})
 	if !errors.Is(err, ErrQueryBackendFailure) {
 		t.Fatalf("error = %v, want ErrQueryBackendFailure", err)
 	}
@@ -1140,7 +1182,7 @@ func TestExecute_CompletedQueryBeforeClientCancel_RemainsSuccess(t *testing.T) {
 		nil, &fakeDisclosureService{},
 	)
 
-	resp, err := svc.Execute(ctx, 7, 9001, model.QueryExecuteRequest{Statement: "select 1", MaxRows: 10})
+	resp, err := svc.Execute(ctx, userExecutionIdentity(7), 9001, model.QueryExecuteRequest{Statement: "select 1", MaxRows: 10})
 	if err != nil {
 		t.Fatalf("completed-before-cancel execution must not fail: %v", err)
 	}
@@ -1161,7 +1203,7 @@ func TestExecute_CredentialEngineMismatch_Rejected(t *testing.T) {
 	cred.Engine = "postgresql"
 	repo.credentials[9001] = cred
 
-	_, err := svc.Execute(context.Background(), 7, 9001, model.QueryExecuteRequest{Statement: "select 1", MaxRows: 10})
+	_, err := svc.Execute(context.Background(), userExecutionIdentity(7), 9001, model.QueryExecuteRequest{Statement: "select 1", MaxRows: 10})
 	if !errors.Is(err, ErrQueryNotAllowed) {
 		t.Fatalf("engine mismatch error = %v, want ErrQueryNotAllowed", err)
 	}
@@ -1177,7 +1219,7 @@ func TestExecute_DSNHostMismatch_Rejected(t *testing.T) {
 	// wrong database. The DSN host must match the selected target's host.
 	resolver.dsn = "rouser:secret@tcp(other-db.internal:3306)/sandbox"
 
-	_, err := svc.Execute(context.Background(), 7, 9001, model.QueryExecuteRequest{Statement: "select 1", MaxRows: 10})
+	_, err := svc.Execute(context.Background(), userExecutionIdentity(7), 9001, model.QueryExecuteRequest{Statement: "select 1", MaxRows: 10})
 	if !errors.Is(err, ErrQueryNotAllowed) {
 		t.Fatalf("DSN host mismatch error = %v, want ErrQueryNotAllowed", err)
 	}
@@ -1191,7 +1233,7 @@ func TestExecute_DSNPortMismatch_Rejected(t *testing.T) {
 	svc, _, resolver, executor := executionTestScaffold(t)
 	resolver.dsn = "rouser:secret@tcp(db.internal:3307)/sandbox"
 
-	_, err := svc.Execute(context.Background(), 7, 9001, model.QueryExecuteRequest{Statement: "select 1", MaxRows: 10})
+	_, err := svc.Execute(context.Background(), userExecutionIdentity(7), 9001, model.QueryExecuteRequest{Statement: "select 1", MaxRows: 10})
 	if !errors.Is(err, ErrQueryNotAllowed) {
 		t.Fatalf("DSN port mismatch error = %v, want ErrQueryNotAllowed", err)
 	}
@@ -1206,7 +1248,7 @@ func TestExecute_DSNMissingPort_Rejected(t *testing.T) {
 	// No port in the DSN address -> fail closed (Phase 37 targets always have a port).
 	resolver.dsn = "rouser:secret@tcp(db.internal)/sandbox"
 
-	_, err := svc.Execute(context.Background(), 7, 9001, model.QueryExecuteRequest{Statement: "select 1", MaxRows: 10})
+	_, err := svc.Execute(context.Background(), userExecutionIdentity(7), 9001, model.QueryExecuteRequest{Statement: "select 1", MaxRows: 10})
 	if !errors.Is(err, ErrQueryNotAllowed) {
 		t.Fatalf("DSN missing port error = %v, want ErrQueryNotAllowed", err)
 	}
@@ -1220,7 +1262,7 @@ func TestExecute_DSNNonTCP_Rejected(t *testing.T) {
 	svc, _, resolver, executor := executionTestScaffold(t)
 	resolver.dsn = "rouser:secret@unix(/tmp/mysql.sock)/sandbox"
 
-	_, err := svc.Execute(context.Background(), 7, 9001, model.QueryExecuteRequest{Statement: "select 1", MaxRows: 10})
+	_, err := svc.Execute(context.Background(), userExecutionIdentity(7), 9001, model.QueryExecuteRequest{Statement: "select 1", MaxRows: 10})
 	if !errors.Is(err, ErrQueryNotAllowed) {
 		t.Fatalf("non-tcp DSN error = %v, want ErrQueryNotAllowed", err)
 	}
@@ -1234,7 +1276,7 @@ func TestExecute_DSNMatching_SucceedsAndDSNNeverLeaks(t *testing.T) {
 	svc, repo, resolver, executor := executionTestScaffold(t)
 	// The scaffold DSN already binds to db.internal:3306; assert the matching
 	// path still succeeds and the DSN/password never appears in recorded history.
-	resp, err := svc.Execute(context.Background(), 7, 9001, model.QueryExecuteRequest{Statement: "select 1 as value", MaxRows: 10})
+	resp, err := svc.Execute(context.Background(), userExecutionIdentity(7), 9001, model.QueryExecuteRequest{Statement: "select 1 as value", MaxRows: 10})
 	if err != nil {
 		t.Fatalf("matching DSN Execute error: %v", err)
 	}
@@ -1280,7 +1322,7 @@ func TestCredentialResolver_NotCalledWhenCredentialRefInvalid(t *testing.T) {
 		nil, &fakeDisclosureService{},
 	)
 
-	_, err := svc.Execute(context.Background(), 1, 9001, model.QueryExecuteRequest{Statement: "select 1", MaxRows: 10})
+	_, err := svc.Execute(context.Background(), userExecutionIdentity(1), 9001, model.QueryExecuteRequest{Statement: "select 1", MaxRows: 10})
 	if !errors.Is(err, ErrQueryNotAllowed) {
 		t.Fatalf("error = %v, want ErrQueryNotAllowed", err)
 	}
@@ -1737,7 +1779,7 @@ func TestExecute_AuditHistoryFailureCannotProduceSuccess(t *testing.T) {
 	// response must NOT be a success. This is the same guarantee as Phase 37
 	// but extended to per-page recording.
 	repo.pairErr = errors.New("history db down")
-	resp, err := svc.Execute(context.Background(), 7, 9001, model.QueryExecuteRequest{Statement: "select 1", MaxRows: 10})
+	resp, err := svc.Execute(context.Background(), userExecutionIdentity(7), 9001, model.QueryExecuteRequest{Statement: "select 1", MaxRows: 10})
 	if !errors.Is(err, ErrQueryBackendFailure) {
 		t.Fatalf("error = %v, want ErrQueryBackendFailure (audit/history failure must not produce success)", err)
 	}
@@ -1758,7 +1800,7 @@ func TestExecute_PagedRequestDefaultsMaxRowsToGuardDefault(t *testing.T) {
 	}
 
 	// When the first page executes.
-	resp, err := svc.Execute(context.Background(), 7, 9001, req)
+	resp, err := svc.Execute(context.Background(), userExecutionIdentity(7), 9001, req)
 
 	// Then the omitted maxRows falls back to the guard's DefaultMaxRows total
 	// release cap, not the page size.
@@ -1791,7 +1833,7 @@ func TestExecute_PagedRequestCannotExceedHardMaxRows(t *testing.T) {
 	}
 
 	// When page one executes.
-	if _, err := svc.Execute(context.Background(), 7, 9001, page(1)); err != nil {
+	if _, err := svc.Execute(context.Background(), userExecutionIdentity(7), 9001, page(1)); err != nil {
 		t.Fatalf("page 1 Execute: %v", err)
 	}
 
@@ -1801,7 +1843,7 @@ func TestExecute_PagedRequestCannotExceedHardMaxRows(t *testing.T) {
 	}
 
 	// And a page beyond the clamped cap is rejected without touching the executor.
-	if _, err := svc.Execute(context.Background(), 7, 9001, page(51)); !errors.Is(err, ErrQueryValidationFailed) {
+	if _, err := svc.Execute(context.Background(), userExecutionIdentity(7), 9001, page(51)); !errors.Is(err, ErrQueryValidationFailed) {
 		t.Fatalf("beyond-cap page error = %v, want ErrQueryValidationFailed", err)
 	}
 	if executor.queryCalls != 1 {
@@ -1825,7 +1867,7 @@ func TestExecute_PagedResponseReportsEffectivePageWindow(t *testing.T) {
 	}
 
 	// When the page executes.
-	resp, err := svc.Execute(context.Background(), 7, 9001, req)
+	resp, err := svc.Execute(context.Background(), userExecutionIdentity(7), 9001, req)
 
 	// Then the AST window and the reported pageSize both reflect the real
 	// effective window, so the metadata never overstates what was released.
@@ -1856,7 +1898,7 @@ func TestExecute_PagedNegativeMaxRowsIsLimitValidationError(t *testing.T) {
 	}
 
 	// When the page executes.
-	_, err := svc.Execute(context.Background(), 7, 9001, req)
+	_, err := svc.Execute(context.Background(), userExecutionIdentity(7), 9001, req)
 
 	// Then the rejection reuses the existing limit validation, not the
 	// pagination-window validation.
@@ -1910,7 +1952,7 @@ func TestExecute_PagedResultTooLargeRejectsWithoutPartialPage(t *testing.T) {
 	}
 
 	// When the page executes.
-	resp, err := svc.Execute(context.Background(), 7, 9001, req)
+	resp, err := svc.Execute(context.Background(), userExecutionIdentity(7), 9001, req)
 
 	// Then the attempt is a controlled rejection with the fixed safe message.
 	if !errors.Is(err, ErrQueryValidationFailed) {
@@ -1979,10 +2021,10 @@ func TestExecute_PagedSecondPageRunsFreshAccessAndDisclosure(t *testing.T) {
 	}
 
 	// When page one and then page two execute.
-	if _, err := svc.Execute(context.Background(), 7, 9001, page(1)); err != nil {
+	if _, err := svc.Execute(context.Background(), userExecutionIdentity(7), 9001, page(1)); err != nil {
 		t.Fatalf("page 1 Execute: %v", err)
 	}
-	resp, err := svc.Execute(context.Background(), 7, 9001, page(2))
+	resp, err := svc.Execute(context.Background(), userExecutionIdentity(7), 9001, page(2))
 
 	// Then every page re-enters access and disclosure before its own guarded query.
 	if err != nil {
@@ -2027,7 +2069,7 @@ func TestExecute_PagedSecondPageRechecksChangedPolicy(t *testing.T) {
 			},
 		}
 	}
-	if _, err := svc.Execute(context.Background(), 7, 9001, page(1)); err != nil {
+	if _, err := svc.Execute(context.Background(), userExecutionIdentity(7), 9001, page(1)); err != nil {
 		t.Fatalf("page 1 Execute: %v", err)
 	}
 	credential := repo.credentials[9001]
@@ -2035,7 +2077,7 @@ func TestExecute_PagedSecondPageRechecksChangedPolicy(t *testing.T) {
 	repo.credentials[9001] = credential
 
 	// When page two executes after policy revocation.
-	_, err := svc.Execute(context.Background(), 7, 9001, page(2))
+	_, err := svc.Execute(context.Background(), userExecutionIdentity(7), 9001, page(2))
 
 	// Then the fresh access check blocks it before disclosure or execution.
 	if !errors.Is(err, ErrQueryNotAllowed) {
@@ -2081,7 +2123,7 @@ func TestExecute_PagedSuccessRequiresHistoryAndAudit(t *testing.T) {
 			}
 
 			// When the governed page executes.
-			resp, err := svc.Execute(context.Background(), 7, 9001, req)
+			resp, err := svc.Execute(context.Background(), userExecutionIdentity(7), 9001, req)
 
 			// Then it cannot report an unaudited success.
 			if !errors.Is(err, ErrQueryBackendFailure) {
@@ -2109,7 +2151,7 @@ func TestExecute_PagedMetadataStatementsRemainSingleResponses(t *testing.T) {
 			}
 
 			// When Execute falls back to the normal guard.
-			resp, err := svc.Execute(context.Background(), 7, 9001, req)
+			resp, err := svc.Execute(context.Background(), userExecutionIdentity(7), 9001, req)
 
 			// Then the response is the existing metadata shape, without paging.
 			if err != nil {
@@ -2130,7 +2172,7 @@ func TestExecute_ControlledErrorsNoSQLDSNCredentialsActorIDOffset(t *testing.T) 
 	svc, repo, _, _ := executionTestScaffold(t)
 	// Phase 38S: error messages must not leak SQL, DSN, credentials, actor ID,
 	// or offset. This is the same Phase 37 guarantee extended to pagination.
-	_, err := svc.Execute(context.Background(), 7, 9001, model.QueryExecuteRequest{Statement: "delete from t", MaxRows: 10})
+	_, err := svc.Execute(context.Background(), userExecutionIdentity(7), 9001, model.QueryExecuteRequest{Statement: "delete from t", MaxRows: 10})
 	if !errors.Is(err, ErrQueryValidationFailed) {
 		t.Fatalf("error = %v, want ErrQueryValidationFailed", err)
 	}

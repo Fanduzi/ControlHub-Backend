@@ -72,8 +72,8 @@ func TestNavigateRelatedRecords_Success(t *testing.T) {
 	if !stub.navCalled {
 		t.Fatal("NavigateRelatedRecords was not called")
 	}
-	if stub.gotActor != 42 {
-		t.Fatalf("actor = %d, want 42 (from token)", stub.gotActor)
+	if stub.gotIdentity.ID != 42 {
+		t.Fatalf("actor = %d, want 42 (from token)", stub.gotIdentity.ID)
 	}
 	if stub.gotTargetID != 9001 {
 		t.Fatalf("targetID = %d, want 9001", stub.gotTargetID)
@@ -382,8 +382,8 @@ func TestNavigateRelatedRecords_ActorFromToken(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200; body=%s", rec.Code, rec.Body.String())
 	}
-	if stub.gotActor != 42 {
-		t.Fatalf("actor = %d, want 42 (from token, not body)", stub.gotActor)
+	if stub.gotIdentity.ID != 42 {
+		t.Fatalf("actor = %d, want 42 (from token, not body)", stub.gotIdentity.ID)
 	}
 }
 

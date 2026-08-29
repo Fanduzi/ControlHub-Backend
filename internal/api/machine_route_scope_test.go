@@ -1,7 +1,7 @@
 // Package api provides HTTP handlers and routing for the ControlHub REST API.
 // input: context, errors, net/http, net/http/httptest, strings, testing, internal/model, internal/service
-// output: table-driven machine route/scope and controlled-error contract tests
-// pos: Router-level regression boundary for independent machine authentication
+// output: table-driven machine route/scope, truthful execute identity, user-only sibling-route, and controlled-error contract tests
+// pos: Router-level regression boundary for independent machine authentication and ordinary governed execution
 // note: if this file changes, update this header and module README.md.
 package api
 
@@ -89,6 +89,14 @@ func TestMachineRouteScopeMatrix(t *testing.T) {
 		{"environment topology read", http.MethodGet, "/environments/not-an-id/topology", model.MachineScopeRelationsRead, http.StatusBadRequest, "validation_failed", false},
 		{"audit read", http.MethodGet, "/resources/not-an-id/audit-events", model.MachineScopeAuditRead, http.StatusBadRequest, "validation_failed", false},
 		{"shared named views", http.MethodGet, "/inventory/views", model.MachineScopeNamedViewsRead, http.StatusOK, "", true},
+		{"governed select execute", http.MethodPost, "/query-targets/22/execute", model.MachineScopeGovernedSelect, http.StatusBadRequest, "validation_failed", false},
+		{"execution history stays user only", http.MethodGet, "/query-targets/22/executions", model.MachineScopeGovernedSelect, http.StatusForbidden, "machine_scope_denied", false},
+		{"related records stay user only", http.MethodPost, "/query-targets/22/related-records", model.MachineScopeGovernedSelect, http.StatusForbidden, "machine_scope_denied", false},
+		{"explain stays user only", http.MethodPost, "/query-targets/22/explain", model.MachineScopeGovernedSelect, http.StatusForbidden, "machine_scope_denied", false},
+		{"schema stays user only", http.MethodGet, "/query-targets/22/schema/databases", model.MachineScopeGovernedSelect, http.StatusForbidden, "machine_scope_denied", false},
+		{"credential stays user only", http.MethodGet, "/query-targets/22/credential", model.MachineScopeGovernedSelect, http.StatusForbidden, "machine_scope_denied", false},
+		{"saved statements stay user only", http.MethodGet, "/query-targets/22/saved-statements", model.MachineScopeGovernedSelect, http.StatusForbidden, "machine_scope_denied", false},
+		{"saved execution stays user only", http.MethodPost, "/query-targets/22/saved-statements/7/execute", model.MachineScopeGovernedSelect, http.StatusForbidden, "machine_scope_denied", false},
 		{"missing route scope", http.MethodGet, "/resources/not-an-id", model.MachineScopeAuditRead, http.StatusForbidden, "machine_scope_denied", false},
 		{"inventory mutation denied", http.MethodPatch, "/resources/1", model.MachineScopeInventoryRead, http.StatusForbidden, "machine_scope_denied", false},
 		{"unlisted admin route denied", http.MethodGet, "/admin/machine-principals", model.MachineScopeInventoryRead, http.StatusForbidden, "machine_scope_denied", false},
@@ -102,6 +110,8 @@ func TestMachineRouteScopeMatrix(t *testing.T) {
 			server.deps.MachinePrincipalService = machine
 			server.deps.MachineCredentialService = machine
 			server.deps.NamedInventoryViewService = views
+			server.deps.QueryExecutionService = &stubQueryExec{}
+			server.deps.QueryExplainService = &stubExplainAPI{}
 			req := httptest.NewRequest(tc.method, tc.path, nil)
 			req.Header.Set("Authorization", "Bearer chmp_route-test.secret")
 			rec := httptest.NewRecorder()
@@ -118,6 +128,28 @@ func TestMachineRouteScopeMatrix(t *testing.T) {
 				t.Fatalf("ListShared called = %t, want %t", views.shared, tc.wantShared)
 			}
 		})
+	}
+}
+
+func TestMachineExecutePassesPrincipalIdentityNotCredential(t *testing.T) {
+	machine := &scopeMatrixMachineService{granted: model.MachineScopeGovernedSelect}
+	stub := &stubQueryExec{executeResp: model.QueryExecuteResponse{Status: model.QueryExecutionSuccess}}
+	server := NewTestServer()
+	server.deps.MachineCredentialService = machine
+	server.deps.QueryExecutionService = stub
+	req := httptest.NewRequest(http.MethodPost, "/query-targets/22/execute", strings.NewReader(`{"statement":"select 1"}`))
+	req.Header.Set("Authorization", "Bearer chmp_route-test.secret")
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+
+	NewRouter(server.deps).ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", rec.Code, rec.Body.String())
+	}
+	want := model.QueryExecutionIdentity{Kind: model.QueryExecutionActorMachine, ID: 91}
+	if stub.gotIdentity != want {
+		t.Fatalf("identity = %+v, want %+v (credential id 92 must not become evidence identity)", stub.gotIdentity, want)
 	}
 }
 

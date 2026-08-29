@@ -10,7 +10,7 @@ Domain structs, taxonomy constants, validation methods, and dictionary definitio
 | health_observation.go | HealthObservation value and exact fresh/stale/never boundary calculation |
 | resource_effective_value.go | Effective CI value and observed/manual provenance response contracts |
 | relation.go | ResourceRelation struct, RelationType type |
-| audit.go | AuditEvent plus server-owned AuditChange field-diff contract |
+| audit.go | AuditEvent with at-most-one user/machine actor plus server-owned AuditChange field-diff contract |
 | auth.go | UserCredential (incl. IsActive + AuthorizationVersion), LoginRequest, LoginResponse structs |
 | settings.go | Environment, Owner, Role structs |
 | pagination.go | PageInfo, ResourceListQuery with search, owner, and label filters; ResourceLabelFilter; AuditListQuery including actor/resource search; pagination helpers/constants |
@@ -23,13 +23,13 @@ Domain structs, taxonomy constants, validation methods, and dictionary definitio
 | taxonomy.go | All enum constants (8 resource types, 7 relation types, 5 lifecycle statuses, 4 health statuses), dictionary slices, Validate() methods. Database Proxy technology subtypes and Control Plane ha_monitor; ambiguous ha is rejected. |
 | query_target.go | QueryTarget read-model types, query capability/readiness/safety enums, QueryTargetSafetyStateDictionary + Validate |
 | query_schema.go | Query schema response types, including TableDefinitionResponse |
-| query_execution.go | Query execution request/response/history types, execution status enum, QueryEnvironmentPolicy enum + Validate, ValidateCredentialRef, QueryCredentialMetadata, ErrInvalidCredentialMetadata, Phase 38S governed-result-paging: QueryExecutePaginationRequest/Response, ValidatePagination |
+| query_execution.go | Query execution request/response/history types, validated user-or-machine QueryExecutionIdentity, truthful actor projection, execution status enum, credential policy/ref validation, and governed result paging |
 | query_credential.go | Phase 38A query credential metadata request/response/runtime-status types + Validate (metadata only; never DSN/password) |
 | query_disclosure.go | Phase 38Q governed result-disclosure policy: ResultDisclosureMode enum + Validate, ResultDisclosurePolicy, ResultDisclosurePolicyUpsertRequest + Validate, ResultDisclosurePolicyListQuery |
 | query_saved_statement.go | Phase 38W governed saved statements: immutable scopes, typed parameter definitions, request validation, template-execution request/limits, and list response types |
 | resource_test.go | Validation and dictionary completeness tests |
 | health_observation_test.go | Freshness time-boundary contract tests |
-| query_execution_test.go | Environment-policy, credential_ref fail-closed validator tests, Phase 38S governed-result-paging contract tests (ValidatePagination, JSON omitempty) |
+| query_execution_test.go | User/machine execution-identity, environment-policy, credential_ref, and governed-result-paging validation tests |
 | query_credential_test.go | Runtime-status and upsert-request validation tests (fail-closed enum, all-environments confirmation) |
 | query_disclosure_test.go | Disclosure-mode and upsert-request validation tests (fail-closed mode, identifier syntax/length) |
 | query_saved_statement_test.go | Saved-statement scope, create, and update request validation tests (fail-closed scope, name bounds/control chars, statement size) |
