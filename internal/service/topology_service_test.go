@@ -1,8 +1,8 @@
 // Package service provides tests for the resource topology projection.
 // input: internal/model, internal/service
-// output: topology service test suite
-// pos: TDD tests for TopologyService.BuildTopology
-// note: if this file changes, update header and README.md
+// output: topology service test suite, including bounded relation reads and sentinel truncation
+// pos: TDD tests for TopologyService.BuildTopology response semantics and repository budgets
+// note: if this file changes, update this header and module README.md.
 package service
 
 import (
@@ -25,10 +25,11 @@ const (
 
 // fakeTopologyRepo implements TopologyRepository for testing.
 type fakeTopologyRepo struct {
-	resources    map[uint64]model.Resource
-	hidden       map[uint64]bool
-	relations    []model.ResourceRelation
-	candidateIDs []uint64
+	resources          map[uint64]model.Resource
+	hidden             map[uint64]bool
+	relations          []model.ResourceRelation
+	candidateIDs       []uint64
+	topologyReadLimits []int
 }
 
 func (f *fakeTopologyRepo) GetResource(id uint64) (*model.Resource, error) {
@@ -55,6 +56,37 @@ func (f *fakeTopologyRepo) ListRelationsByResourceIDs(ids []uint64) ([]model.Res
 		}
 	}
 	return result, nil
+}
+
+func (f *fakeTopologyRepo) ListTopologyRelationsByResourceIDs(ids []uint64, direction model.TopologyDirection, relationType model.RelationType, limit int) ([]model.ResourceRelation, error) {
+	f.topologyReadLimits = append(f.topologyReadLimits, limit)
+	items, err := f.ListRelationsByResourceIDs(ids)
+	if err != nil {
+		return nil, err
+	}
+	idSet := make(map[uint64]bool, len(ids))
+	for _, id := range ids {
+		idSet[id] = true
+	}
+	filtered := items[:0]
+	for _, item := range items {
+		if relationType != "" && item.RelationType != relationType {
+			continue
+		}
+		if direction == model.TopologyDirectionUpstream && !idSet[item.ToResourceID] {
+			continue
+		}
+		if direction == model.TopologyDirectionDownstream && !idSet[item.FromResourceID] {
+			continue
+		}
+		filtered = append(filtered, item)
+	}
+	items = filtered
+	sortTopologyRelations(items)
+	if len(items) > limit {
+		items = items[:limit]
+	}
+	return items, nil
 }
 
 func (f *fakeTopologyRepo) ListTopologyCandidates(environmentID uint64) ([]model.Resource, error) {
@@ -359,6 +391,62 @@ func TestBuildTopology_EdgeCap(t *testing.T) {
 	}
 	if !resp.Truncated {
 		t.Fatal("truncated = false, want true")
+	}
+	if len(repo.topologyReadLimits) != 1 || repo.topologyReadLimits[0] != TopologyEdgeCap+1 {
+		t.Fatalf("topology relation limits = %v, want [%d]", repo.topologyReadLimits, TopologyEdgeCap+1)
+	}
+}
+
+func TestBuildTopology_RelationReadUsesRemainingEdgeBudget(t *testing.T) {
+	repo := &fakeTopologyRepo{
+		resources: map[uint64]model.Resource{
+			1: {ID: 1, ResourceType: model.ResourceTypeHost, Name: "root", DisplayName: "Root"},
+			2: {ID: 2, ResourceType: model.ResourceTypeHost, Name: "two", DisplayName: "Two"},
+			3: {ID: 3, ResourceType: model.ResourceTypeHost, Name: "three", DisplayName: "Three"},
+			4: {ID: 4, ResourceType: model.ResourceTypeHost, Name: "four", DisplayName: "Four"},
+		},
+		relations: []model.ResourceRelation{
+			{ID: 1, FromResourceID: 1, ToResourceID: 2, RelationType: model.RelationTypeDependsOn},
+			{ID: 2, FromResourceID: 1, ToResourceID: 3, RelationType: model.RelationTypeDependsOn},
+			{ID: 3, FromResourceID: 1, ToResourceID: 4, RelationType: model.RelationTypeDependsOn},
+		},
+	}
+
+	resp, err := NewTopologyService(repo).BuildTopology(model.TopologyQuery{RootID: 1, Depth: 2, Direction: model.TopologyDirectionBoth})
+	if err != nil {
+		t.Fatalf("build topology: %v", err)
+	}
+	if resp.Truncated {
+		t.Fatal("truncated = true, want false")
+	}
+	if len(repo.topologyReadLimits) != 2 || repo.topologyReadLimits[0] != TopologyEdgeCap+1 || repo.topologyReadLimits[1] != TopologyEdgeCap-3+1 {
+		t.Fatalf("topology relation limits = %v, want [%d %d]", repo.topologyReadLimits, TopologyEdgeCap+1, TopologyEdgeCap-3+1)
+	}
+}
+
+func TestBuildTopology_HighFanOutPreservesRelationTypeFilterBeforeSentinel(t *testing.T) {
+	repo := buildParallelEdgeRepo(TopologyEdgeCap + 1)
+	for i := range repo.relations {
+		repo.relations[i].RelationType = model.RelationTypeMemberOf
+	}
+	repo.relations = append(repo.relations, model.ResourceRelation{
+		ID:             TopologyEdgeCap + 2,
+		FromResourceID: 1,
+		ToResourceID:   2,
+		RelationType:   model.RelationTypeRunsOn,
+	})
+
+	resp, err := NewTopologyService(repo).BuildTopology(model.TopologyQuery{
+		RootID: 1, Depth: 1, Direction: model.TopologyDirectionBoth, RelationType: model.RelationTypeRunsOn,
+	})
+	if err != nil {
+		t.Fatalf("build topology: %v", err)
+	}
+	if len(resp.Edges) != 1 || resp.Edges[0].ID != TopologyEdgeCap+2 {
+		t.Fatalf("edges = %+v, want filtered runs_on edge", resp.Edges)
+	}
+	if resp.Truncated {
+		t.Fatal("truncated = true, want false")
 	}
 }
 

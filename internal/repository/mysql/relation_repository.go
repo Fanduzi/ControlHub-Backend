@@ -1,7 +1,7 @@
 // Package mysql provides MySQL-backed repository implementations.
-// input: database/sql, internal/model, and effective-health resource reads
-// output: relation CRUD with stable endpoint locks plus relation/member projections, topology candidates, and derived health
-// pos: MySQL data access and shared resource-row lock discipline for relations, topology resource lookup, and workspace candidate reads
+// input: database/sql, internal/model, topology relation row budgets, and effective-health resource reads
+// output: relation CRUD with stable endpoint locks plus relation/member projections, bounded topology reads/candidates, and derived health
+// pos: MySQL data access and shared resource-row lock discipline for relations, bounded topology traversal, and workspace candidate reads
 // note: if this file changes, update this header and module README.md.
 package mysql
 
@@ -407,6 +407,78 @@ func (r *RelationRepository) ListRelationsByResourceIDs(ids []uint64) ([]model.R
 	order by created_at desc`,
 		strings.Join(placeholders, ", "),
 		strings.Join(placeholders, ", "),
+	)
+
+	rows, err := r.db.QueryContext(context.Background(), query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	items := make([]model.ResourceRelation, 0)
+	for rows.Next() {
+		var item model.ResourceRelation
+		if err := rows.Scan(
+			&item.ID,
+			&item.FromResourceID,
+			&item.ToResourceID,
+			&item.RelationType,
+			&item.CreatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, item)
+	}
+
+	return items, rows.Err()
+}
+
+func (r *RelationRepository) ListTopologyRelationsByResourceIDs(ids []uint64, direction model.TopologyDirection, relationType model.RelationType, limit int) ([]model.ResourceRelation, error) {
+	if len(ids) == 0 || limit <= 0 {
+		return []model.ResourceRelation{}, nil
+	}
+
+	placeholders := make([]string, len(ids))
+	args := make([]any, 0, len(ids)*2+2)
+	for i := range ids {
+		placeholders[i] = "?"
+	}
+
+	idsPlaceholder := strings.Join(placeholders, ", ")
+	var predicate string
+	switch direction {
+	case model.TopologyDirectionUpstream:
+		predicate = "to_resource_id in (" + idsPlaceholder + ")"
+		for _, id := range ids {
+			args = append(args, id)
+		}
+	case model.TopologyDirectionDownstream:
+		predicate = "from_resource_id in (" + idsPlaceholder + ")"
+		for _, id := range ids {
+			args = append(args, id)
+		}
+	default:
+		predicate = "from_resource_id in (" + idsPlaceholder + ") or to_resource_id in (" + idsPlaceholder + ")"
+		for _, id := range ids {
+			args = append(args, id)
+		}
+		for _, id := range ids {
+			args = append(args, id)
+		}
+	}
+	if relationType != "" {
+		predicate = "(" + predicate + ") and relation_type = ?"
+		args = append(args, relationType)
+	}
+	args = append(args, limit)
+
+	query := fmt.Sprintf(`
+	select id, from_resource_id, to_resource_id, relation_type, created_at
+	from resource_relations
+	where %s
+	order by relation_type, from_resource_id, to_resource_id, id
+	limit ?`,
+		predicate,
 	)
 
 	rows, err := r.db.QueryContext(context.Background(), query, args...)

@@ -27,7 +27,7 @@ HTTP handlers, chi routing, CORS middleware, and fake-repo test infrastructure.
 | named_inventory_view_handler.go | User personal/shared named-view CRUD plus machine-only `ListShared` reads |
 | legacy_hash_handler.go | Admin-only GET /admin/legacy-hash-count — non-identity-bearing legacy password hash count |
 | json_body.go | Shared strict JSON body decoding with unknown-field and multiple-value rejection |
-| test_server.go | Fake repositories, including injectable collector-ingestion results and propagation capture, and NewTestServer() with a default admin actor for handler tests |
+| test_server.go | Fake repositories, including bounded deterministic topology relation reads, injectable collector-ingestion results and propagation capture, and NewTestServer() with a default admin actor for handler tests |
 | health_handler_test.go | Health endpoint tests |
 | resource_handler_test.go | Resource and profile endpoint tests, including list/detail completeness projection, strict rejection of client completeness, governed identity, explicit conflicts, immutable origin, create-with-profile atomicity, minimum manual identity, and all typed-profile identities at the HTTP seam |
 | profile_handler_test.go | PUT full-replacement and PATCH partial-merge tests: strict JSON decoding, field validation, no-op empty PATCH, Domain Name normalization, and Database Proxy role contract |

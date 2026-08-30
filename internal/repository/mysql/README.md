@@ -7,7 +7,8 @@ Data access layer implementing service-layer repository interfaces with raw SQL 
 |------|---------------|
 | resource_repository.go | Resource CRUD, governed identity and one-query batched typed-profile reads, latest-per-observer health evidence, effective-health derivation, per-source observed/effective values, read-only validated bulk previews, atomic audited identity/manual-override/bulk mutations, and User/collector atomic ingestion confirmation |
 | bulk_resource_mutation_test.go | SQL-level bulk coverage for transaction commit/rollback, externalId persistence, locked archived-CI rejection, current resource/governed-identity lock queries, normal update validation parity, and audit-failure rollback |
-| relation_repository.go | Relation queries plus atomic create/delete serialized by stable endpoint resource-row locks, effective-health relation/member projections, topology resource lookup, and environment candidate starts |
+| relation_repository.go | Relation queries plus atomic create/delete serialized by stable endpoint resource-row locks, effective-health relation/member projections, deterministically bounded topology relation reads/resource lookup, and environment candidate starts |
+| relation_repository_topology_test.go | SQL-level regression coverage for topology ordering and caller-owned row limits |
 | audit_repository.go | Audit event queries (global and by resource), including nullable user/machine actor projection, target-resource environment filtering, principal-name search, pagination, and JSON field changes |
 | user_repository.go | User credential lookup by email/id; Authorization Version mutators (role/active/password); UpgradePasswordHash for legacy-to-Argon2id migration; CountLegacyHashUsers for operator visibility |
 | dictionary_repository.go | Dictionary queries — DB-backed (environments, owners, roles) and static (resource types, relation types, lifecycle/health statuses) |
@@ -41,6 +42,7 @@ Data access layer implementing service-layer repository interfaces with raw SQL 
 - `ResourceRepository.ConfirmBulkResourceMutation` — stable-order resource locking, normal update revalidation, in-transaction re-preview/fingerprint verification, typed field and explicit label mutation, and per-CI field audit in one commit
 - Repository structs satisfy service-layer interfaces
 - `ResourceRepository.PutObservedValues`, `GetEffectiveValues`, `SetManualOverrideWithAudit`, `ClearManualOverrideWithAudit`, `PreviewIngestion`, `ConfirmIngestion`, and `ConfirmCollectorIngestion`
+- `RelationRepository.ListTopologyRelationsByResourceIDs` applies topology direction/type predicates, deterministic relation/from/to/ID ordering, and the service's remaining-edge-plus-sentinel row limit before scanning
 - `RelationRepository.ListTopologyCandidates` reuses resource reads to return environment-scoped Service, Database Cluster, Database Proxy, and abnormal CI starts for the topology workspace
 
 Inventory audit writes are fail-closed. Resource identity, typed-profile, and

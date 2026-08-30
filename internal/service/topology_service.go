@@ -1,7 +1,7 @@
 // Package service provides business logic for resource topology projection.
-// input: internal/model (TopologyQuery, TopologyResponse, TopologyNode, TopologyEdge, TopologyGroup)
-// output: NewTopologyService, TopologyService.BuildTopology, TopologyRepository interface
-// pos: Business logic for building topology read model from resources and relations
+// input: internal/model topology contracts and repository-bounded relation reads
+// output: NewTopologyService, TopologyService.BuildTopology, TopologyRepository interface with relation budgets
+// pos: Business logic for building capped topology read models without unbounded relation materialization
 // note: if this file changes, update this header and module README.md.
 package service
 
@@ -25,7 +25,7 @@ const (
 
 type TopologyRepository interface {
 	GetResource(id uint64) (*model.Resource, error)
-	ListRelationsByResourceIDs(ids []uint64) ([]model.ResourceRelation, error)
+	ListTopologyRelationsByResourceIDs(ids []uint64, direction model.TopologyDirection, relationType model.RelationType, limit int) ([]model.ResourceRelation, error)
 	ListTopologyCandidates(environmentID uint64) ([]model.Resource, error)
 }
 
@@ -71,9 +71,14 @@ func (s *TopologyService) BuildTopology(query model.TopologyQuery) (*model.Topol
 			break
 		}
 
-		relations, err := s.repo.ListRelationsByResourceIDs(frontier)
+		remainingEdges := TopologyEdgeCap - len(edgeSet)
+		relations, err := s.repo.ListTopologyRelationsByResourceIDs(frontier, query.Direction, query.RelationType, remainingEdges+1)
 		if err != nil {
 			return nil, err
+		}
+		if len(relations) > remainingEdges {
+			truncated = true
+			relations = relations[:remainingEdges]
 		}
 		sortTopologyRelations(relations)
 

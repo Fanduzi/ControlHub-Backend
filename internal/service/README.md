@@ -14,8 +14,8 @@ Business logic layer with interface-based repository dependencies. Each service 
 | relation_service.go | Shared relation read/write entry point; validates server-owned rules before fail-closed audited persistence |
 | relation_rules.go | Single relationship matrix authority plus source-specific discovery response |
 | completeness.go | Pure seven-group, server-derived resource completeness projection using typed-profile minima and matrix-valid structural endpoints; Domain Name has no structural-edge requirement |
-| topology_service.go | Environment-scoped topology workspace and rooted graph traversal with default depth 2, deterministic node/edge caps, and candidate starts |
-| topology_service_test.go | Topology traversal tests for depth, direction, cycles, caps, environment scope, and candidate starts |
+| topology_service.go | Environment-scoped topology workspace and rooted graph traversal with default depth 2, deterministic node/edge caps, remaining-edge-bounded relation reads, and candidate starts |
+| topology_service_test.go | Topology traversal tests for depth, direction, cycles, caps, bounded high-fan-out/remaining-budget reads, environment scope, and candidate starts |
 | topology_semantics_test.go | Topology semantic classification tests for roles, layers, replication metadata, and problem summaries |
 | ingestion_preview.go | Strict bounded CSV/JSON parsing, exact-identity ingestion classification, additive observed-field diffs, drift fingerprinting, collector scan-conflict sentinel, validation helpers, and repository-backed User/collector confirmation delegation |
 | ingestion_preview_test.go | Parser equivalence/guard, pure preview precedence, immutable-type conflict, additive observed diff, fingerprint, manual-override exclusion, and collector metadata delegation tests |
@@ -71,7 +71,7 @@ Business logic layer with interface-based repository dependencies. Each service 
 - `ValidateResourceUpdate` — normal update validation against an already-read current resource, reused by locked bulk mutations
 - `PreviewBulkResourceMutation` — pure preview of ordered targets against current snapshots; `ResourceService` delegates persisted preview/confirm reads to its resource repository
 - `BulkResourceMutationRequest`, `BulkResourceMutationTarget`, `ResourceMutationSnapshot`, `LabelOperations`, `BulkResourcePreview` — bulk mutation preview contract values
-- `TopologyService.BuildTopology` — builds rooted or environment-start topology responses with node/edge caps and `truncated`
+- `TopologyService.BuildTopology` — builds rooted or environment-start topology responses with node/edge caps and `truncated`; rooted traversal requests at most the remaining edge budget plus one sentinel relation per hop
 - `ParseIngestion` and `PreviewIngestion` provide the controlled issue #83 parsing and preview seam; immutable CI-type mismatches are conflicts and observed diffs contain only submitted fields; `ResourceService.PreviewIngestion`, `ConfirmIngestion`, and `ConfirmCollectorIngestion` delegate parsed rows and reviewed fingerprints to repository-owned paths, with collector principal and normalized scan metadata only on the collector seam
 - `CollectorIngestionMetadata`, `model.CollectorScanResult`, `ValidateCollectorIngestionMetadata`, `ErrCollectorIngestionMetadataInvalid`, and `ErrCollectorScanConflict` define the bounded collector-confirmation and retry contract without exposing MySQL error types
 - `ValidateIngestionRows`, `ValidateIngestionRelationship`, `ErrIngestionConflict`, and `ErrIngestionFingerprintMismatch` support repository confirmation without duplicating service-owned validation rules

@@ -1,7 +1,7 @@
 // Package api provides HTTP handlers and routing for the ControlHub REST API.
-// input: internal/api, internal/model, internal/service, net/http
-// output: TestServer struct, NewTestServer with fake audit environment, batch-profile, relation, health, effective-value, bulk preview/confirm, topology, and injectable User/collector ingestion results
-// pos: Test infrastructure — fake repositories for typed profiles, completeness relations, health observations, effective values, bulk mutation review, topology candidates, User/collector ingestion confirmation, and a pre-wired handler router
+// input: internal/api, internal/model, internal/service, net/http, and topology row budgets
+// output: TestServer struct, NewTestServer with fake audit environment, batch-profile, relation, health, effective-value, bulk preview/confirm, bounded topology, and injectable User/collector ingestion results
+// pos: Test infrastructure — fake repositories for typed profiles, completeness relations, health observations, effective values, bulk mutation review, bounded topology reads/candidates, User/collector ingestion confirmation, and a pre-wired handler router
 // note: if this file changes, update this header and module README.md.
 package api
 
@@ -917,6 +917,31 @@ func (f *fakeTopologyRepo) ListRelationsByResourceIDs(ids []uint64) ([]model.Res
 		}
 	}
 	return result, nil
+}
+
+func (f *fakeTopologyRepo) ListTopologyRelationsByResourceIDs(ids []uint64, direction model.TopologyDirection, relationType model.RelationType, limit int) ([]model.ResourceRelation, error) {
+	items, err := f.ListRelationsByResourceIDs(ids)
+	if err != nil {
+		return nil, err
+	}
+	filtered := items[:0]
+	for _, item := range items {
+		if relationType != "" && item.RelationType != relationType {
+			continue
+		}
+		if direction == model.TopologyDirectionUpstream && !containsUint64(ids, item.ToResourceID) {
+			continue
+		}
+		if direction == model.TopologyDirectionDownstream && !containsUint64(ids, item.FromResourceID) {
+			continue
+		}
+		filtered = append(filtered, item)
+	}
+	items = filtered
+	if len(items) > limit {
+		items = items[:limit]
+	}
+	return items, nil
 }
 
 func (f *fakeTopologyRepo) ListTopologyCandidates(environmentID uint64) ([]model.Resource, error) {
