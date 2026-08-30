@@ -25,7 +25,7 @@ Domain structs, taxonomy constants, validation methods, and dictionary definitio
 | taxonomy.go | All enum constants (8 resource types, 7 relation types, 5 lifecycle statuses, 4 health statuses), dictionary slices, Validate() methods. Database Proxy technology subtypes and Control Plane ha_monitor; ambiguous ha is rejected. |
 | query_target.go | QueryTarget read-model types, query capability/readiness/safety enums, QueryTargetSafetyStateDictionary + Validate |
 | query_schema.go | Query schema response types, including TableDefinitionResponse |
-| query_execution.go | Query execution request/response/history types, internal full statement and dedicated public statement response, validated user-or-machine QueryExecutionIdentity, truthful actor projection, execution status enum, credential policy/ref validation, and governed result paging |
+| query_execution.go | Query execution request/response/history types, internal full-statement availability, public restore eligibility and dedicated statement response, validated user-or-machine QueryExecutionIdentity, truthful actor projection, execution status enum, credential policy/ref validation, and governed result paging |
 | query_credential.go | Phase 38A query credential metadata request/response/runtime-status types + Validate (metadata only; never DSN/password) |
 | query_disclosure.go | Phase 38Q governed result-disclosure policy: ResultDisclosureMode enum + Validate, ResultDisclosurePolicy, ResultDisclosurePolicyUpsertRequest + Validate, ResultDisclosurePolicyListQuery |
 | query_saved_statement.go | Phase 38W governed saved statements: immutable scopes, typed parameter definitions, request validation, template-execution request/limits, and list response types |
@@ -50,7 +50,7 @@ Domain structs, taxonomy constants, validation methods, and dictionary definitio
 - `ResultDisclosureMode.Validate()`, `ResultDisclosurePolicyUpsertRequest.Validate()` (Phase 38Q governed result-disclosure policy)
 - `QuerySavedStatementScope.Validate()`, typed parameter definitions, `QuerySavedStatementCreateRequest.Validate()`, `QuerySavedStatementUpdateRequest.Validate()`, `QuerySavedStatementExecuteRequest.Validate()` + `MaxQuerySavedStatementExecuteValuesSize` (Phase 38W governed saved statements)
 - `QueryWorkspaceWorksheet`, `QueryWorkspace`, and `QueryWorkspacePutRequest.Validate()` for bounded opaque worksheet persistence without query guarding or target lookup
-- `QueryExecutionRecord.FullStatement` as internal-only persistence data and `QueryExecutionStatementResponse` as the dedicated public owner-reuse shape
+- `QueryExecutionRecord.FullStatement` / `HasFullStatement` as internal-only persistence data, server-computed public `CanRestore`, and `QueryExecutionStatementResponse` as the dedicated owner-reuse shape
 - `NamedInventoryView`, personal/shared scopes, state/request types, and validation for reusable inventory presentation state
 - `MachinePrincipal`, `MachineCredential`, safe `MachinePrincipalListItem`/`MachineCredentialLifecycle` projections, the seven closed `MachineScope` values, and bounded expiry normalization
 - `CollectorScan`, `CollectorScanLedgerEntry`, `CollectorCIState`, `CollectorPresence`, and `ApplyCollectorScan()` for capped complete-scan Missing transitions, truthful per-principal reads, and retry matching

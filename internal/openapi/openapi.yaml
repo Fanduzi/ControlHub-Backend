@@ -1,6 +1,6 @@
 # input: public HTTP routes, model JSON shapes, and operator access policy
-# output: served OpenAPI 3.1 contract including machine credentials, scoped reads/collector routes, resource-list filters and read-only per-principal collector presence, ingestion, and bulk mutation review/confirmation
-# pos: canonical machine-readable API boundary, including independent user/machine authentication, reserved collector route scopes, collector Missing projection, and inventory audit diffs
+# output: served OpenAPI 3.1 contract including machine credentials, scoped reads/collector routes, history restore eligibility, resource-list filters and read-only per-principal collector presence, ingestion, and bulk mutation review/confirmation
+# pos: canonical machine-readable API boundary, including independent user/machine authentication, server-computed history restoration, reserved collector route scopes, collector Missing projection, and inventory audit diffs
 # note: if this file changes, update header and internal/openapi/README.md
 
 openapi: 3.1.0
@@ -1188,6 +1188,7 @@ paths:
                         engine: mysql
                         statementDigest: "select id, name from resources where resource_type = ? limit ?"
                         statementPreview: "select id, name from resources where resource_type = 'service' limit 20"
+                        canRestore: true
                         status: success
                         rowCount: 1
                         durationMs: 18
@@ -1206,6 +1207,7 @@ paths:
                         engine: mysql
                         statementDigest: "select id, name from resources where resource_type = ? limit ?"
                         statementPreview: "select id, name from resources where resource_type = 'service' limit 20"
+                        canRestore: true
                         status: success
                         rowCount: 5
                         durationMs: 42
@@ -7107,7 +7109,7 @@ components:
             unknown label for their kind.
     QueryExecutionRecord:
       type: object
-      required: [id, targetResourceId, actor, engine, statementDigest, statementPreview, status, rowCount, durationMs, errorCode, errorMessage, createdAt]
+      required: [id, targetResourceId, actor, engine, statementDigest, statementPreview, canRestore, status, rowCount, durationMs, errorCode, errorMessage, createdAt]
       properties:
         id:
           type: integer
@@ -7124,6 +7126,12 @@ components:
           description: Literal-masked statement shape (never raw parameter values).
         statementPreview:
           type: string
+        canRestore:
+          type: boolean
+          description: >
+            Server-computed true only for the authenticated User's own successful
+            execution when its private full statement is available through the
+            owner-only statement endpoint.
         status:
           type: string
           enum: [success, rejected, failed, timeout]

@@ -1,7 +1,7 @@
 // Package service provides tests for the Phase 37/38S query execution service.
 // input: context, errors, fmt, strings, testing, time, internal/model
-// output: TestExecute_* including successful-User full SQL, owner-only statement retrieval, machine identity terminal outcomes, readiness/credential tests, and repository/resolver/executor/clock fakes
-// pos: Unit boundary for identity-aware governed execution, private statement access, atomic terminal evidence, paging, cancellation durability, credential fail-closed behavior, and disclosure error mapping
+// output: TestExecute_* including successful-User full SQL, owner-only statement retrieval/history restore eligibility, machine identity terminal outcomes, readiness/credential tests, and repository/resolver/executor/clock fakes
+// pos: Unit boundary for identity-aware governed execution, private statement access and restore projection, atomic terminal evidence, paging, cancellation durability, credential fail-closed behavior, and disclosure error mapping
 // note: if this file changes, update header and README.md
 package service
 
@@ -1490,6 +1490,36 @@ func TestListHistory_AdminSeesAllActors(t *testing.T) {
 	}
 	if result.PageInfo == nil {
 		t.Fatal("offset mode pageInfo = nil, want non-nil")
+	}
+}
+
+func TestListHistory_CanRestoreOnlyOwnSuccessfulStatement(t *testing.T) {
+	target := mysqlTarget("Staging")
+	target.ResourceID = 22
+	records := []model.QueryExecutionRecord{
+		{ID: 1, TargetResourceID: 22, ActorUserID: 1, Actor: model.QueryExecutionActor{Kind: model.QueryExecutionActorUser}, Status: model.QueryExecutionSuccess, HasFullStatement: true},
+		{ID: 2, TargetResourceID: 22, ActorUserID: 7, Actor: model.QueryExecutionActor{Kind: model.QueryExecutionActorUser}, Status: model.QueryExecutionSuccess, HasFullStatement: true},
+		{ID: 3, TargetResourceID: 22, ActorUserID: 1, Actor: model.QueryExecutionActor{Kind: model.QueryExecutionActorUser}, Status: model.QueryExecutionSuccess},
+		{ID: 4, TargetResourceID: 22, ActorUserID: 1, Actor: model.QueryExecutionActor{Kind: model.QueryExecutionActorUser}, Status: model.QueryExecutionFailed, HasFullStatement: true},
+		{ID: 5, TargetResourceID: 22, ActorMachinePrincipalID: 9, Actor: model.QueryExecutionActor{Kind: model.QueryExecutionActorMachine}, Status: model.QueryExecutionSuccess, HasFullStatement: true},
+	}
+
+	for _, q := range []model.QueryExecutionListQuery{{PageSize: 20}, {Page: 1, PageSize: 20}} {
+		repo := &fakeExecRepo{insertedAttempts: records}
+		svc := NewQueryExecutionService(fakeTargetRepo{targets: []model.QueryTarget{target}}, repo, &fakeResolver{}, &fakeExecutor{}, NewQueryGuard(QueryGuardConfig{DefaultMaxRows: 100, HardMaxRows: 500}), &fakeClock{t: time.Date(2026, 6, 22, 8, 0, 0, 0, time.UTC)}, nil, &fakeDisclosureService{})
+		result, err := svc.ListHistory(context.Background(), 1, "admin", 22, q)
+		if err != nil {
+			t.Fatalf("ListHistory(%+v): %v", q, err)
+		}
+		if len(result.Items) != len(records) {
+			t.Fatalf("ListHistory(%+v) items = %d, want %d", q, len(result.Items), len(records))
+		}
+		for _, item := range result.Items {
+			want := item.ID == 1
+			if item.CanRestore != want {
+				t.Fatalf("ListHistory(%+v) item %d canRestore = %v, want %v", q, item.ID, item.CanRestore, want)
+			}
+		}
 	}
 }
 

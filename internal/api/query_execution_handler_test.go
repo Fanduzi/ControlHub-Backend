@@ -1,7 +1,7 @@
 // Package api provides tests for the query execution handlers.
 // input: bytes, context, encoding/json, fmt, net/http, net/http/httptest, strings, testing, time, chi, internal/model, internal/service
-// output: TestQueryExecution_* (execute identity, controlled errors, fresh auth, history, and owner-only full-statement detail)
-// pos: HTTP identity, auth, and error-mapping regression coverage for governed execution and User-only query siblings
+// output: TestQueryExecution_* (execute identity, controlled errors, fresh auth, history restore eligibility, and owner-only full-statement detail)
+// pos: HTTP identity, auth, history projection, and error-mapping regression coverage for governed execution and User-only query siblings
 // note: if this file changes, update header and README.md
 package api
 
@@ -385,7 +385,7 @@ func TestQueryExecution_ListHistory(t *testing.T) {
 		{
 			ID: 1, TargetResourceID: 22, ActorUserID: 42,
 			Actor:  model.QueryExecutionActor{DisplayName: "ControlHub Admin"},
-			Status: model.QueryExecutionSuccess, RowCount: 1, CreatedAt: qeTestNow,
+			Status: model.QueryExecutionSuccess, RowCount: 1, CreatedAt: qeTestNow, CanRestore: true,
 		},
 		{
 			ID: 2, TargetResourceID: 22, ActorUserID: 42,
@@ -427,6 +427,9 @@ func TestQueryExecution_ListHistory(t *testing.T) {
 	}
 	if !strings.Contains(body, `"displayName":"ControlHub Admin"`) {
 		t.Fatalf("history missing actor.displayName: %s", body)
+	}
+	if !strings.Contains(body, `"canRestore":true`) || !strings.Contains(body, `"canRestore":false`) {
+		t.Fatalf("history must publish server-computed restore eligibility for every row: %s", body)
 	}
 }
 

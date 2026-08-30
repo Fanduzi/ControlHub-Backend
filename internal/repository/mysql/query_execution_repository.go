@@ -1,7 +1,7 @@
 // Package mysql provides MySQL-backed repository implementations.
 // input: database/sql, context, errors, expvar, fmt, log, strconv, internal/model
-// output: NewQueryExecutionRepository, identity-aware atomic InsertExecutionWithAudit with successful-user-only full SQL, owner-only statement lookup, user/machine history, credential metadata/audit operations, QueryEvidencePersistenceFailures accessor
-// pos: MySQL persistence boundary for exactly-one-actor query history, successful-user-only private reusable statements, and at-most-one-actor audit evidence without credential data
+// output: NewQueryExecutionRepository, identity-aware atomic InsertExecutionWithAudit with successful-user-only full SQL, owner-only statement lookup, user/machine history with private-statement availability, credential metadata/audit operations, QueryEvidencePersistenceFailures accessor
+// pos: MySQL persistence boundary for exactly-one-actor query history, non-disclosing reusable-statement availability, owner-only private statements, and at-most-one-actor audit evidence without credential data
 // note: if this file changes, update header and README.md
 package mysql
 
@@ -360,7 +360,7 @@ func (r *QueryExecutionRepository) ListExecutions(ctx context.Context, q model.Q
 		args = append(args, payload.CreatedAt, payload.CreatedAt, cursorID)
 	}
 
-	listSQL := `SELECT qe.id, qe.target_resource_id, qe.actor_user_id, qe.actor_machine_principal_id, qe.engine, qe.statement_digest, qe.statement_preview,
+	listSQL := `SELECT qe.id, qe.target_resource_id, qe.actor_user_id, qe.actor_machine_principal_id, qe.engine, qe.statement_digest, qe.statement_preview, qe.full_statement IS NOT NULL,
 		 qe.status, qe.row_count, qe.duration_ms, qe.error_code, qe.error_message, qe.created_at,
 		 u.display_name AS user_display_name, mp.name AS machine_name
 		 FROM query_executions qe
@@ -397,7 +397,7 @@ func (r *QueryExecutionRepository) ListExecutions(ctx context.Context, q model.Q
 		)
 		if err := rows.Scan(
 			&rec.ID, &rec.TargetResourceID, &actorUserID, &actorMachineID, &rec.Engine,
-			&rec.StatementDigest, &rec.StatementPreview, &status,
+			&rec.StatementDigest, &rec.StatementPreview, &rec.HasFullStatement, &status,
 			&rec.RowCount, &rec.DurationMs, &rec.ErrorCode, &rec.ErrorMessage, &rec.CreatedAt,
 			&userDisplayName, &machineName,
 		); err != nil {

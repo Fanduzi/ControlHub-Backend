@@ -1,7 +1,7 @@
 // Package mysql provides tests for atomic query-evidence persistence.
 // input: bytes, context, database/sql, errors, log, strings, testing, time, sqlmock, internal/model
-// output: machine identity atomic pair/rollback/history tests plus dimensionless persistence-failure counter and fixed safe log tests
-// pos: Proves truthful actor persistence/projection, pair atomicity, and value-free failure telemetry
+// output: machine identity atomic pair/rollback/history and private-statement-availability tests plus dimensionless persistence-failure counter and fixed safe log tests
+// pos: Proves truthful actor/statement-availability projection, pair atomicity, and value-free failure telemetry
 // note: if this file changes, update header and README.md
 package mysql
 
@@ -90,13 +90,13 @@ func TestListExecutionsProjectsMachinePrincipalIdentity(t *testing.T) {
 	defer db.Close()
 
 	createdAt := time.Date(2026, 8, 30, 6, 0, 0, 0, time.UTC)
-	mock.ExpectQuery(`SELECT qe\.id, qe\.target_resource_id, qe\.actor_user_id, qe\.actor_machine_principal_id.*LEFT JOIN machine_principals mp ON mp\.id = qe\.actor_machine_principal_id`).
+	mock.ExpectQuery(`SELECT qe\.id, qe\.target_resource_id, qe\.actor_user_id, qe\.actor_machine_principal_id.*qe\.full_statement IS NOT NULL.*LEFT JOIN machine_principals mp ON mp\.id = qe\.actor_machine_principal_id`).
 		WithArgs(uint64(22), 20).
 		WillReturnRows(sqlmock.NewRows([]string{
 			"id", "target_resource_id", "actor_user_id", "actor_machine_principal_id", "engine",
-			"statement_digest", "statement_preview", "status", "row_count", "duration_ms",
+			"statement_digest", "statement_preview", "has_full_statement", "status", "row_count", "duration_ms",
 			"error_code", "error_message", "created_at", "user_display_name", "machine_name",
-		}).AddRow(101, 22, nil, 91, "mysql", "digest", "preview", "success", 1, 7, "", "", createdAt, nil, "inventory-agent"))
+		}).AddRow(101, 22, nil, 91, "mysql", "digest", "preview", false, "success", 1, 7, "", "", createdAt, nil, "inventory-agent"))
 
 	items, _, err := NewQueryExecutionRepository(db).ListExecutions(context.Background(), model.QueryExecutionListQuery{
 		TargetResourceID: 22,
@@ -115,6 +115,9 @@ func TestListExecutionsProjectsMachinePrincipalIdentity(t *testing.T) {
 	}
 	if item.Actor.Kind != model.QueryExecutionActorMachine || item.Actor.DisplayName != "inventory-agent" {
 		t.Fatalf("history actor = %+v, want machine inventory-agent", item.Actor)
+	}
+	if item.HasFullStatement {
+		t.Fatal("machine history must not project a private statement as available")
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatalf("SQL expectations: %v", err)

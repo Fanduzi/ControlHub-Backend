@@ -1,7 +1,7 @@
 // Package service provides business logic for the Phase 37/38S read-only query sandbox.
 // input: context, database/sql, errors, fmt, net, strconv, strings, time, go-sql-driver/mysql, internal/model
-// output: QueryExecutionService, validated user/machine Execute identity, owner-only successful statement retrieval, repository/resolver/executor/clock interfaces, sentinel errors, ListHistory, validateDSNBinding
-// pos: Orchestrates ordinary user/machine governed execution plus user-only template/navigation and private statement retrieval through one atomic identity-aware evidence implementation while preserving cancellation and disclosure behavior
+// output: QueryExecutionService, validated user/machine Execute identity, owner-only successful statement retrieval and history restore eligibility, repository/resolver/executor/clock interfaces, sentinel errors, ListHistory, validateDSNBinding
+// pos: Orchestrates ordinary user/machine governed execution plus user-only template/navigation and private statement retrieval/restore projection through one atomic identity-aware evidence implementation while preserving cancellation and disclosure behavior
 // note: if this file changes, update this header and module README.md.
 package service
 
@@ -466,11 +466,7 @@ func (s *QueryExecutionService) listHistoryCursor(ctx context.Context, actorUser
 		return nil, err
 	}
 
-	for i := range items {
-		if items[i].Actor.DisplayName == "" {
-			items[i].Actor.DisplayName = model.UnknownHistoryActorDisplayName
-		}
-	}
+	projectHistoryItems(items, actorUserID)
 
 	var nextCursor *string
 	if len(items) > originalPageSize {
@@ -510,17 +506,25 @@ func (s *QueryExecutionService) listHistoryOffset(ctx context.Context, actorUser
 		return nil, err
 	}
 
-	for i := range items {
-		if items[i].Actor.DisplayName == "" {
-			items[i].Actor.DisplayName = model.UnknownHistoryActorDisplayName
-		}
-	}
+	projectHistoryItems(items, actorUserID)
 
 	pageInfo := model.NewPageInfo(page, pageSize, total)
 	return &model.QueryExecutionCursorPage{
 		Items:    items,
 		PageInfo: &pageInfo,
 	}, nil
+}
+
+func projectHistoryItems(items []model.QueryExecutionRecord, actorUserID uint64) {
+	for i := range items {
+		if items[i].Actor.DisplayName == "" {
+			items[i].Actor.DisplayName = model.UnknownHistoryActorDisplayName
+		}
+		items[i].CanRestore = items[i].ActorUserID == actorUserID &&
+			items[i].ActorMachinePrincipalID == 0 &&
+			items[i].Status == model.QueryExecutionSuccess &&
+			items[i].HasFullStatement
+	}
 }
 
 func (s *QueryExecutionService) findTarget(ctx context.Context, targetID uint64) (model.QueryTarget, error) {

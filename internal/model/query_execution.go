@@ -1,7 +1,7 @@
 // Package model provides domain entities for the resource management system.
 // input: errors, fmt, math, time packages
-// output: QueryExecution* and QueryResult* types, internal full statement and public statement response, validated user-or-machine execution identity, pagination/status/error contracts, query credential policy/ref validators
-// pos: Query sandbox execution requests, responses, history records, and owner-reusable statement response
+// output: QueryExecution* and QueryResult* types, internal full-statement availability and public restore eligibility/statement response, validated user-or-machine execution identity, pagination/status/error contracts, query credential policy/ref validators
+// pos: Query sandbox execution requests, responses, history records with server-computed restore eligibility, and owner-reusable statement response
 // note: if this file changes, update header and README.md
 package model
 
@@ -142,6 +142,8 @@ type QueryExecutionRecord struct {
 	StatementDigest         string               `json:"statementDigest"`
 	StatementPreview        string               `json:"statementPreview"`
 	FullStatement           string               `json:"-"`
+	HasFullStatement        bool                 `json:"-"`
+	CanRestore              bool                 `json:"canRestore"`
 	Status                  QueryExecutionStatus `json:"status"`
 	RowCount                int                  `json:"rowCount"`
 	DurationMs              int64                `json:"durationMs"`
