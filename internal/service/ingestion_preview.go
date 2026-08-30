@@ -1,7 +1,7 @@
 // Package service provides controlled CI ingestion parsing, preview reconciliation, and confirm service delegation.
 // input: stdlib CSV/JSON/SHA-256 utilities, context, and internal/model identity/relation types
-// output: ParseIngestion, PreviewIngestion, User/collector confirmation delegation, immutable-type conflicts, additive observed diffs, and validation contracts
-// pos: Issue #83 ingestion checkpoint plus issue #87 collector-confirmation seam before repository persistence
+// output: ParseIngestion, PreviewIngestion, User/collector confirmation delegation, controlled scan conflicts, additive observed diffs, and validation contracts
+// pos: Shared issue #83 ingestion contract and issue #87 collector-confirmation service seam
 // note: if this file changes, update this header and module README.md.
 package service
 
@@ -33,6 +33,7 @@ const (
 var (
 	ErrIngestionConflict                 = errors.New("ingestion conflict")
 	ErrIngestionFingerprintMismatch      = errors.New("ingestion fingerprint mismatch")
+	ErrCollectorScanConflict             = errors.New("collector scan conflict")
 	ErrCollectorIngestionMetadataInvalid = errors.New("collector ingestion metadata is invalid")
 )
 

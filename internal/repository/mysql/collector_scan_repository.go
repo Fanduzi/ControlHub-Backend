@@ -1,6 +1,6 @@
 // Package mysql provides MySQL-backed repository implementations.
 // input: context, database/sql, errors, fmt, slices, MySQL driver errors, and collector scan models
-// output: caller-transaction collector ledger plus idempotent per-principal/per-CI state application
+// output: locked retry lookup plus caller-transaction collector ledger and idempotent per-principal/per-CI state application
 // pos: Durable idempotency and lifecycle-state boundary for completed collector scans
 // note: if this file changes, update this header and module README.md.
 package mysql
@@ -29,21 +29,37 @@ func (e *CollectorScanConflictError) Error() string {
 // ApplyCollectorScan records one terminal scan and applies its CI state changes once.
 // The caller owns commit and rollback; exact retries return the prior ledger ID without state SQL.
 func ApplyCollectorScan(ctx context.Context, tx *sql.Tx, entry model.CollectorScanLedgerEntry, seenResourceIDs []uint64) (uint64, error) {
-	if tx == nil {
-		return 0, fmt.Errorf("transaction is required")
-	}
-	ledgerID, inserted, err := insertCollectorScanLedger(ctx, tx, entry)
-	if err != nil || !inserted {
+	ledgerID, claimed, err := ClaimCollectorScan(ctx, tx, entry)
+	if err != nil || !claimed {
 		return ledgerID, err
+	}
+	if err := ApplyCollectorScanStates(ctx, tx, entry, seenResourceIDs); err != nil {
+		return 0, err
+	}
+	return ledgerID, nil
+}
+
+// ClaimCollectorScan serializes one scan ID before its ingestion writes.
+func ClaimCollectorScan(ctx context.Context, tx *sql.Tx, entry model.CollectorScanLedgerEntry) (uint64, bool, error) {
+	if tx == nil {
+		return 0, false, fmt.Errorf("transaction is required")
+	}
+	return insertCollectorScanLedger(ctx, tx, entry)
+}
+
+// ApplyCollectorScanStates applies a successfully claimed scan after its ingestion writes.
+func ApplyCollectorScanStates(ctx context.Context, tx *sql.Tx, entry model.CollectorScanLedgerEntry, seenResourceIDs []uint64) error {
+	if tx == nil {
+		return fmt.Errorf("transaction is required")
 	}
 	if err := applyCollectorScanStates(ctx, tx, entry.MachinePrincipalID, model.CollectorScan{
 		ID:          entry.CollectorScanID,
 		Result:      entry.Result,
 		CompletedAt: entry.CompletedAt,
 	}, seenResourceIDs); err != nil {
-		return 0, err
+		return err
 	}
-	return ledgerID, nil
+	return nil
 }
 
 func insertCollectorScanLedger(ctx context.Context, tx *sql.Tx, entry model.CollectorScanLedgerEntry) (uint64, bool, error) {
@@ -66,6 +82,17 @@ func insertCollectorScanLedger(ctx context.Context, tx *sql.Tx, entry model.Coll
 }
 
 func compareCollectorScanRetry(ctx context.Context, tx *sql.Tx, entry model.CollectorScanLedgerEntry) (uint64, error) {
+	id, found, err := findCollectorScanRetry(ctx, tx, entry)
+	if err != nil {
+		return 0, err
+	}
+	if !found {
+		return 0, errors.New("collector scan ledger entry disappeared during retry")
+	}
+	return id, nil
+}
+
+func findCollectorScanRetry(ctx context.Context, tx *sql.Tx, entry model.CollectorScanLedgerEntry) (uint64, bool, error) {
 	var (
 		id          uint64
 		payloadHash []byte
@@ -74,20 +101,23 @@ func compareCollectorScanRetry(ctx context.Context, tx *sql.Tx, entry model.Coll
 	if err := tx.QueryRowContext(ctx, `select id, payload_hash, result from collector_scan_ledger
 		where machine_principal_id = ? and collector_scan_id = ? for update`, entry.MachinePrincipalID, entry.CollectorScanID).
 		Scan(&id, &payloadHash, &result); err != nil {
-		return 0, fmt.Errorf("read existing collector scan ledger: %w", err)
+		if errors.Is(err, sql.ErrNoRows) {
+			return 0, false, nil
+		}
+		return 0, false, fmt.Errorf("read existing collector scan ledger: %w", err)
 	}
 	if len(payloadHash) != len(entry.PayloadHash) {
-		return 0, fmt.Errorf("existing collector scan payload hash has length %d", len(payloadHash))
+		return 0, true, fmt.Errorf("existing collector scan payload hash has length %d", len(payloadHash))
 	}
 	var storedHash [32]byte
 	copy(storedHash[:], payloadHash)
 	if !entry.MatchesRetry(storedHash, model.CollectorScanResult(result)) {
-		return 0, &CollectorScanConflictError{
+		return 0, true, &CollectorScanConflictError{
 			MachinePrincipalID: entry.MachinePrincipalID,
 			CollectorScanID:    entry.CollectorScanID,
 		}
 	}
-	return id, nil
+	return id, true, nil
 }
 
 func applyCollectorScanStates(ctx context.Context, tx *sql.Tx, machinePrincipalID uint64, scan model.CollectorScan, seenResourceIDs []uint64) error {

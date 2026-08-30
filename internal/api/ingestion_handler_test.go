@@ -1,7 +1,7 @@
 // Package api provides HTTP handlers and routing for the ControlHub REST API.
 // input: net/http/httptest multipart requests and the API test server
-// output: ingestion preview and confirm HTTP contract tests
-// pos: Verifies the admin-only ingestion upload boundary and controlled error mapping
+// output: ingestion preview, User/collector confirm, and collector scan-conflict HTTP contract tests
+// pos: Verifies the ingestion upload boundary, scan metadata, and controlled error mapping
 // note: if this file changes, update this header and module README.md.
 package api
 
@@ -109,6 +109,34 @@ func TestCollectorConfirmPropagatesNormalizedScanMetadata(t *testing.T) {
 	}
 	if got, want := server.resourceRepo.collectorMetadata, (service.CollectorIngestionMetadata{ScanID: "scan-123", ScanResult: model.CollectorScanResultComplete}); got != want {
 		t.Fatalf("collector metadata = %+v, want %+v", got, want)
+	}
+}
+
+func TestCollectorConfirmConflictMapsTo409(t *testing.T) {
+	server := NewTestServer()
+	server.deps.MachineCredentialService = &scopeMatrixMachineService{granted: model.MachineScopeInventoryIngest}
+	server.resourceRepo.collectorConfirmErr = service.ErrCollectorScanConflict
+	payload := `[{"environmentId":1,"ciType":"host","name":"ingested-host"}]`
+	rows, err := service.ParseIngestion("json", []byte(payload))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	response := ingestRequestWithFields(t, NewRouter(server.deps), "/admin/ingestions/confirm", payload, []ingestionFormField{
+		{"format", "json"},
+		{"fingerprint", service.PreviewIngestion(rows, nil).Fingerprint},
+		{"collectorScanId", "scan-conflict"},
+		{"collectorScanResult", "complete"},
+	}, "Bearer chmp_route-test.secret")
+	if response.Code != http.StatusConflict {
+		t.Fatalf("status = %d, want 409: %s", response.Code, response.Body.String())
+	}
+	var got errorResponse
+	if err := json.NewDecoder(response.Body).Decode(&got); err != nil {
+		t.Fatal(err)
+	}
+	if got.Error != "collector_scan_conflict" {
+		t.Fatalf("error = %q, want collector_scan_conflict", got.Error)
 	}
 }
 

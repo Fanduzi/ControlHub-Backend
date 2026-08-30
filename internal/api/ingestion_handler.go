@@ -1,6 +1,6 @@
 // Package api provides HTTP handlers and routing for the ControlHub REST API.
 // input: multipart uploads, authenticated User/machine context, internal/model scan values, and internal/service ingestion seams
-// output: admin User and verified collector ingestion preview/confirmation responses
+// output: admin User and verified collector ingestion preview/confirmation responses with controlled stale/scan-conflict mappings
 // pos: Bounded HTTP transport for issue #83 CSV/JSON ingestion and issue #87 collector scan metadata
 // note: if this file changes, update this header and module README.md.
 package api
@@ -59,6 +59,10 @@ func handleConfirmIngestion(resourceService *service.ResourceService) http.Handl
 		}
 		if errors.Is(err, service.ErrIngestionFingerprintMismatch) {
 			writeJSON(w, http.StatusConflict, ingestionConfirmError{"ingestion_preview_stale", "ingestion preview is stale; preview again", preview})
+			return
+		}
+		if errors.Is(err, service.ErrCollectorScanConflict) {
+			writeJSON(w, http.StatusConflict, ingestionConfirmError{"collector_scan_conflict", "collector scan ID was already used with different content", preview})
 			return
 		}
 		if err != nil {

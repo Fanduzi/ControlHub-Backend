@@ -1,12 +1,13 @@
 // Package mysql provides MySQL-backed repository implementations.
-// input: database/sql, time, internal/model, internal/service
-// output: resource CRUD, governed identity and batched typed-profile reads, rich inventory filtering, health observations/effective health, observed/effective values, validated previews, audited versioned manual overrides, atomic bulk mutation, and additive atomic ingestion confirmation
-// pos: MySQL resource persistence, identity and typed-profile projections, current health evidence, effective values, inventory search, and shared stable resource-row lock authority for bulk/ingestion transactions and relations
+// input: crypto/sha256, database/sql, time, internal/model, internal/service
+// output: resource CRUD, governed identity and batched typed-profile reads, rich inventory filtering, health observations/effective health, observed/effective values, validated previews, audited versioned manual overrides, atomic bulk mutation, and User/collector atomic ingestion confirmation
+// pos: MySQL resource persistence, identity and typed-profile projections, current health evidence, effective values, inventory search, and shared resource/scan transaction authority
 // note: if this file changes, update this header and module README.md.
 package mysql
 
 import (
 	"context"
+	"crypto/sha256"
 	"database/sql"
 	"encoding/json"
 	"errors"
@@ -1300,6 +1301,49 @@ func (r *ResourceRepository) ConfirmIngestion(ctx context.Context, rows []servic
 	if err := service.ValidateIngestionRows(rows); err != nil {
 		return nil, err
 	}
+	return r.confirmIngestion(ctx, rows, reviewedFingerprint, actorUserID, 0, nil)
+}
+
+func (r *ResourceRepository) ConfirmCollectorIngestion(ctx context.Context, principalID uint64, rows []service.IngestionRow, reviewedFingerprint string, metadata service.CollectorIngestionMetadata) (*service.IngestionPreview, error) {
+	if principalID == 0 {
+		return nil, errors.New("collector principal is required")
+	}
+	if strings.TrimSpace(reviewedFingerprint) == "" {
+		return nil, fmt.Errorf("%w: reviewed fingerprint is required", service.ErrValidationFailed)
+	}
+	if err := service.ValidateCollectorIngestionMetadata(metadata); err != nil {
+		return nil, err
+	}
+	if err := service.ValidateIngestionRows(rows); err != nil {
+		return nil, err
+	}
+	payloadHash, err := collectorIngestionPayloadHash(rows, reviewedFingerprint)
+	if err != nil {
+		return nil, err
+	}
+	entry := &model.CollectorScanLedgerEntry{
+		MachinePrincipalID: principalID,
+		CollectorScanID:    metadata.ScanID,
+		PayloadHash:        payloadHash,
+		Result:             metadata.ScanResult,
+		CompletedAt:        time.Now().UTC(),
+	}
+	return r.confirmIngestion(ctx, rows, reviewedFingerprint, 0, principalID, entry)
+}
+
+func collectorIngestionPayloadHash(rows []service.IngestionRow, reviewedFingerprint string) ([32]byte, error) {
+	payload, err := json.Marshal(rows)
+	if err != nil {
+		return [32]byte{}, fmt.Errorf("marshal collector ingestion rows: %w", err)
+	}
+	input := make([]byte, 0, len(reviewedFingerprint)+1+len(payload))
+	input = append(input, reviewedFingerprint...)
+	input = append(input, 0)
+	input = append(input, payload...)
+	return sha256.Sum256(input), nil
+}
+
+func (r *ResourceRepository) confirmIngestion(ctx context.Context, rows []service.IngestionRow, reviewedFingerprint string, actorUserID, actorMachinePrincipalID uint64, collectorEntry *model.CollectorScanLedgerEntry) (*service.IngestionPreview, error) {
 	ids, err := findIngestionCandidateIDs(ctx, r.db, rows)
 	if err != nil {
 		return nil, err
@@ -1310,6 +1354,19 @@ func (r *ResourceRepository) ConfirmIngestion(ctx context.Context, rows []servic
 		return nil, fmt.Errorf("begin ingestion confirmation transaction: %w", err)
 	}
 	defer tx.Rollback()
+	if collectorEntry != nil {
+		if _, claimed, err := ClaimCollectorScan(ctx, tx, *collectorEntry); err != nil {
+			return nil, mapCollectorScanError(err)
+		} else if !claimed {
+			snapshots, err := loadIngestionSnapshots(ctx, tx, candidateIDs, false)
+			if err != nil {
+				return nil, err
+			}
+			preview := service.PreviewIngestion(rows, snapshots)
+			preview.Fingerprint = reviewedFingerprint
+			return &preview, nil
+		}
+	}
 
 	lockIDs := append([]uint64(nil), candidateIDs...)
 	for _, row := range rows {
@@ -1333,11 +1390,16 @@ func (r *ResourceRepository) ConfirmIngestion(ctx context.Context, rows []servic
 	}
 
 	auditChanges := map[uint64][]model.AuditChange{}
+	seenResourceIDs := make([]uint64, 0, len(rows))
 	for i, row := range rows {
 		previewRow := preview.Rows[i]
 		resourceID := previewRow.MatchedID
 		if previewRow.Action == service.PreviewCreate {
-			resourceID, err = createResourceTx(ctx, tx, ingestionCreateInput(row, actorUserID), row.Profile)
+			input := ingestionCreateInput(row, actorUserID)
+			if collectorEntry != nil {
+				input = collectorIngestionCreateInput(row)
+			}
+			resourceID, err = createResourceTx(ctx, tx, input, row.Profile)
 			if err != nil {
 				return &preview, err
 			}
@@ -1357,14 +1419,48 @@ func (r *ResourceRepository) ConfirmIngestion(ctx context.Context, rows []servic
 		if err := applyIngestionRelations(ctx, tx, actorUserID, resourceID, row, previewRow.Diff, auditChanges); err != nil {
 			return &preview, err
 		}
+		seenResourceIDs = append(seenResourceIDs, resourceID)
 	}
-	if err := insertIngestionAudits(ctx, tx, actorUserID, auditChanges); err != nil {
-		return &preview, err
+	if collectorEntry == nil {
+		if err := insertIngestionAudits(ctx, tx, actorUserID, auditChanges); err != nil {
+			return &preview, err
+		}
+	} else {
+		if err := insertCollectorIngestionAudits(ctx, tx, actorMachinePrincipalID, auditChanges); err != nil {
+			return &preview, err
+		}
+		if err := ApplyCollectorScanStates(ctx, tx, *collectorEntry, seenResourceIDs); err != nil {
+			return &preview, mapCollectorScanError(err)
+		}
 	}
 	if err := tx.Commit(); err != nil {
 		return &preview, fmt.Errorf("commit ingestion confirmation transaction: %w", err)
 	}
 	return &preview, nil
+}
+
+func mapCollectorScanError(err error) error {
+	var conflict *CollectorScanConflictError
+	if errors.As(err, &conflict) {
+		return fmt.Errorf("%w: %v", service.ErrCollectorScanConflict, conflict)
+	}
+	return err
+}
+
+func collectorIngestionCreateInput(row service.IngestionRow) model.ResourceCreateInput {
+	return model.ResourceCreateInput{
+		ResourceType:        row.CIType,
+		Name:                row.Name,
+		DisplayName:         row.DisplayName,
+		EnvironmentID:       row.EnvironmentID,
+		LifecycleStatus:     model.LifecycleStatusRunning,
+		HealthStatus:        model.HealthStatusUnknown,
+		Origin:              model.ResourceOriginDiscovered,
+		Source:              string(model.ResourceOriginDiscovered),
+		Aliases:             row.Aliases,
+		ExternalIdentifiers: row.ExternalIdentifiers,
+		Labels:              map[string]string{},
+	}
 }
 
 func ingestionCreateInput(row service.IngestionRow, actorUserID uint64) model.ResourceCreateInput {
@@ -1590,6 +1686,25 @@ func insertIngestionAudits(ctx context.Context, tx *sql.Tx, actorUserID uint64, 
 		}
 		if err := insertInventoryAuditTx(ctx, tx, actorUserID, id, "inventory.ingestion.confirmed", changes); err != nil {
 			return err
+		}
+	}
+	return nil
+}
+
+func insertCollectorIngestionAudits(ctx context.Context, tx *sql.Tx, actorMachinePrincipalID uint64, changesByResource map[uint64][]model.AuditChange) error {
+	for _, id := range sortedAuditIDs(changesByResource) {
+		changes := changesByResource[id]
+		if len(changes) == 0 {
+			continue
+		}
+		changesJSON, err := json.Marshal(changes)
+		if err != nil {
+			return fmt.Errorf("marshal inventory audit changes: %w", err)
+		}
+		if _, err := tx.ExecContext(ctx, `insert into audit_events
+			(actor_user_id, actor_machine_principal_id, target_resource_id, event_type, result, changes)
+			values (NULL, ?, ?, 'inventory.ingestion.confirmed', 'success', ?)`, actorMachinePrincipalID, id, changesJSON); err != nil {
+			return fmt.Errorf("insert inventory audit event: %w", err)
 		}
 	}
 	return nil

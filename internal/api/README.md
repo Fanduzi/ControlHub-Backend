@@ -6,7 +6,7 @@ HTTP handlers, chi routing, CORS middleware, and fake-repo test infrastructure.
 | File | Responsibility |
 |------|---------------|
 | router.go | Route registration, including user-or-machine scoped inventory/dictionary/named-view/topology reads, reserved collector-scoped ingestion/health routes with an admin User alternative, user-only ordinary mutations, Operator Access Boundary middleware, Dependencies, CORS, and bounded auth-audit wiring; `chmp_` credentials never fall back to User auth |
-| ingestion_handler.go | Bounded strict multipart CSV/JSON ingestion preview plus User confirmation or verified collector confirmation with required scan metadata |
+| ingestion_handler.go | Bounded strict multipart CSV/JSON ingestion preview plus User confirmation or verified collector confirmation with required scan metadata and controlled retry conflict mapping |
 | health_handler.go | GET /health endpoint |
 | resource_handler.go | Resource list/detail identity, health, and server-derived completeness fields; explicit identity conflicts, machine observations attributed to the verified stable principal name, non-audited observation ingestion, and PATCH changes through atomic inventory audit |
 | profile_handler.go | PUT/PATCH/DELETE /resources/{id}/profile handlers with strict decoding and token-derived atomic inventory audit |
@@ -26,7 +26,7 @@ HTTP handlers, chi routing, CORS middleware, and fake-repo test infrastructure.
 | named_inventory_view_handler.go | User personal/shared named-view CRUD plus machine-only `ListShared` reads |
 | legacy_hash_handler.go | Admin-only GET /admin/legacy-hash-count — non-identity-bearing legacy password hash count |
 | json_body.go | Shared strict JSON body decoding with unknown-field and multiple-value rejection |
-| test_server.go | Fake repositories, including collector-ingestion propagation capture, and NewTestServer() with a default admin actor for handler tests |
+| test_server.go | Fake repositories, including injectable collector-ingestion results and propagation capture, and NewTestServer() with a default admin actor for handler tests |
 | health_handler_test.go | Health endpoint tests |
 | resource_handler_test.go | Resource and profile endpoint tests, including list/detail completeness projection, strict rejection of client completeness, governed identity, explicit conflicts, immutable origin, create-with-profile atomicity, minimum manual identity, and all typed-profile identities at the HTTP seam |
 | profile_handler_test.go | PUT full-replacement and PATCH partial-merge tests: strict JSON decoding, field validation, no-op empty PATCH, Domain Name normalization, and Database Proxy role contract |
@@ -42,7 +42,7 @@ HTTP handlers, chi routing, CORS middleware, and fake-repo test infrastructure.
 | query_saved_statement_handler_test.go | Saved statement handler tests |
 | query_saved_statement_execution_handler_test.go | Template-execution handler tests (strict request decoding, controlled field errors, `query_result_disclosure_blocked`) |
 | named_inventory_view_handler_test.go | Named inventory view router tests, including authentication for every CRUD route, shared-management metadata, strict JSON, and controlled errors |
-| ingestion_handler_test.go | Admin multipart ingestion preview/User-confirm compatibility plus collector scan-metadata validation and propagation tests |
+| ingestion_handler_test.go | Admin multipart ingestion preview/User-confirm compatibility plus collector scan-metadata validation, propagation, and 409 conflict tests |
 | machine_route_scope_test.go | Closed table-driven machine read/collector route-scope matrix, verified machine health observer attribution, collector denial of ordinary patch/archive, truthful machine execute identity, user-only sibling query routes, and secret-safe controlled error tests |
 | operator_access_boundary_test.go | Anonymous, editor, and admin router authorization matrix driven by the shared operatoraccess policy, including 38R conditional saved statements (personal by owner — editor or admin — and shared templates admin-only) |
 | ops_handler.go | Admin-only operational metrics handlers: `handleAuthAuditMetrics` (auth audit persistence failures + untrusted-Bearer suppression) and `handleQueryEvidenceMetrics` (Issue #34 — exactly `queryEvidencePersistenceFailures`, read through the service layer) |
@@ -61,7 +61,7 @@ HTTP handlers, chi routing, CORS middleware, and fake-repo test infrastructure.
 | POST | /admin/machine-credentials/{credentialId}/rotate or /revoke | Admin user credential lifecycle administration |
 | POST | /resources/{id}/health-observations | `health:write` machine scope or admin User; machine observations replace the request observer with `machine:<verified principal name>`, while User observations retain their submitted observer |
 | POST | /admin/ingestions/preview | `inventory:ingest` machine scope or admin User; bounded CSV/JSON upload preview with no writes and exact-match create/update/conflict fingerprint |
-| POST | /admin/ingestions/confirm | `inventory:ingest` machine scope or admin User; User keeps `format`, `file`, and `fingerprint`, while verified collectors additionally require bounded `collectorScanId` and `collectorScanResult` (`complete`, `incomplete`, or `failed`) |
+| POST | /admin/ingestions/confirm | `inventory:ingest` machine scope or admin User; User keeps `format`, `file`, and `fingerprint`, while verified collectors additionally require bounded `collectorScanId` and `collectorScanResult` (`complete`, `incomplete`, or `failed`); changed reuse returns 409 `collector_scan_conflict` |
 
 `GET /resources` supports inventory `q` search, exact `ownerId`, and repeatable exact `label=key:value` filters; repeated labels combine with AND.
 | GET | /resources/{id}/relation-rules | Discover server-owned outgoing relation and target constraints |

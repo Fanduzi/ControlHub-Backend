@@ -5,7 +5,7 @@ Data access layer implementing service-layer repository interfaces with raw SQL 
 ## Files
 | File | Responsibility |
 |------|---------------|
-| resource_repository.go | Resource CRUD, governed identity and one-query batched typed-profile reads, latest-per-observer health evidence, effective-health derivation, per-source observed/effective values, read-only validated bulk previews, atomic audited identity/manual-override/bulk mutations, and additive issue #83 atomic ingestion confirmation |
+| resource_repository.go | Resource CRUD, governed identity and one-query batched typed-profile reads, latest-per-observer health evidence, effective-health derivation, per-source observed/effective values, read-only validated bulk previews, atomic audited identity/manual-override/bulk mutations, and User/collector atomic ingestion confirmation |
 | bulk_resource_mutation_test.go | SQL-level bulk coverage for transaction commit/rollback, externalId persistence, locked archived-CI rejection, current resource/governed-identity lock queries, normal update validation parity, and audit-failure rollback |
 | relation_repository.go | Relation queries plus atomic create/delete serialized by stable endpoint resource-row locks, effective-health relation/member projections, topology resource lookup, and environment candidate starts |
 | audit_repository.go | Audit event queries (global and by resource), including nullable user/machine actor projection, target-resource environment filtering, principal-name search, pagination, and JSON field changes |
@@ -18,7 +18,7 @@ Data access layer implementing service-layer repository interfaces with raw SQL 
 | named_inventory_view_repository.go | Personal/shared named inventory view CRUD, owner-visible listing, and an actor-free shared-only read seam for future machine principals |
 | machine_principal_repository.go | Single-query safe lifecycle aggregation plus atomic machine-principal create/credential rotate/revoke with admin audit, hash lookup, and idempotent state-bounded last-used updates |
 | machine_principal_repository_test.go | SQL lifecycle, hash-only arguments, safe audit payload, and rollback coverage with sqlmock |
-| collector_scan_repository.go | Caller-transaction completed-scan ledger insert-or-compare plus deterministic per-principal/per-CI state application |
+| collector_scan_repository.go | Locked exact/conflicting retry lookup plus caller-transaction completed-scan ledger and deterministic per-principal/per-CI state application |
 | collector_scan_repository_test.go | SQL ledger, rediscovery, third-omission, non-complete no-op, deterministic-order, and caller-owned rollback coverage with sqlmock |
 | auth_audit_emitter.go | MySQL-backed AuthAuditEmitter — fail-open INSERT for auth/authz audit events; AuthAuditPersistenceFailures fixed-category counter |
 
@@ -28,15 +28,14 @@ Data access layer implementing service-layer repository interfaces with raw SQL 
 - `NewQueryExecutionRepository(db)`, `NewQueryTargetRepository(db)`, `NewQueryDisclosureRepository(db)`, `NewQuerySavedStatementRepository(db)` — constructor functions
 - `NewNamedInventoryViewRepository(db)` — named inventory view persistence constructor
 - `NewMachinePrincipalRepository(db)` — machine-principal lifecycle and credential-authentication persistence constructor
-- `InsertCollectorScanLedger(ctx, tx, entry)` — caller-owned transaction primitive returning the durable ledger ID for inserts and exact retries; differing retries return `CollectorScanConflictError`
-- `ApplyCollectorScanStates(ctx, tx, machinePrincipalID, ledgerID, scan, seenResourceIDs)` — caller-owned transaction primitive that locks one principal's existing states in resource-ID order, applies the pure collector transition, and inserts new seen states deterministically
+- `ClaimCollectorScan(ctx, tx, entry)` and `ApplyCollectorScanStates(ctx, tx, entry, seenResourceIDs)` — two-phase caller-owned primitive that serializes retry identity before ingestion, then applies per-principal CI states after ingestion; `ApplyCollectorScan` composes both for callers without intervening writes
 - `QueryDisclosureReader`, `QueryDisclosureWriter` — narrow service-owned interfaces for disclosure policy access
 - `QuerySavedStatementReader`, `QuerySavedStatementWriter` — narrow service-owned interfaces for saved statement access, including atomic parameter-definition replacement
 - `QueryEvidencePersistenceFailures` — dimensionless expvar counter for atomic Execution Evidence Pair persistence failures (Issue #34), readable through the repository's `QueryEvidencePersistenceFailures()` accessor for the service layer
 - `QueryExecutionRepository.InsertExecutionWithAudit` — repository-owned atomic Execution Evidence Pair: one transaction commits the execution-history row and its fixed per-caller audit event (service passes `query.executed` for execution and `related_record_navigation` for navigation, Issue #36); on any failure both roll back, the counter increments once, and one fixed safe log line is emitted
 - `ResourceRepository.ConfirmBulkResourceMutation` — stable-order resource locking, normal update revalidation, in-transaction re-preview/fingerprint verification, typed field and explicit label mutation, and per-CI field audit in one commit
 - Repository structs satisfy service-layer interfaces
-- `ResourceRepository.PutObservedValues`, `GetEffectiveValues`, `SetManualOverrideWithAudit`, `ClearManualOverrideWithAudit`, `PreviewIngestion`, and `ConfirmIngestion`
+- `ResourceRepository.PutObservedValues`, `GetEffectiveValues`, `SetManualOverrideWithAudit`, `ClearManualOverrideWithAudit`, `PreviewIngestion`, `ConfirmIngestion`, and `ConfirmCollectorIngestion`
 - `RelationRepository.ListTopologyCandidates` reuses resource reads to return environment-scoped Service, Database Cluster, Database Proxy, and abnormal CI starts for the topology workspace
 
 Inventory audit writes are fail-closed. Resource identity, typed-profile, and
@@ -56,13 +55,20 @@ Ordinary relation create/delete uses the same stable endpoint locks, so relation
 drift cannot interleave with the confirmation snapshot. Omitted observations
 and sibling sources are preserved. No-op reconfirmation emits no audit row.
 
+`ConfirmCollectorIngestion` reuses that confirmation transaction. New CIs use
+`origin=discovered` with unknown owner `0`; audit rows set only
+`actor_machine_principal_id`. The same transaction applies the collector scan
+ledger/state after all ingestion and audit writes, so any failure rolls back
+the entire confirmation. Exact receipt retries are read-only; changed payload,
+fingerprint, or result reuse returns the controlled collector conflict.
+
 `resource_health_observations` stores one current row per resource/observer.
 Older evidence cannot replace a newer timestamp. Effective-health filters use
 the same conservative Go calculation as list/detail reads; this path scans the
 matched inventory set until scale justifies a dedicated indexed read model.
 
 ## Dependencies
-- Upstream: `internal/model` (domain types), `database/sql`
+- Upstream: `internal/model` (domain types), `internal/service` (repository contracts), `database/sql`
 - Downstream: MySQL 8.0+ (schema defined in migrations/)
 
 ## Update Rule
