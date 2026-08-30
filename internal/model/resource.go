@@ -1,7 +1,7 @@
 // Package model provides domain entities for the resource management system.
 // input: errors, time packages
-// output: Resource struct with governed identity, health evidence, and read-only Completeness, plus ResourceProfileResponse, ResourceType and identity types
-// pos: Core inventory entity and read-model contract
+// output: Resource struct with governed identity, health evidence, read-only Completeness and per-principal collector presence, plus ResourceProfileResponse, ResourceType and identity types
+// pos: Core inventory entity and operator read-model contract
 // note: if this file changes, update this header and module README.md.
 package model
 
@@ -67,6 +67,7 @@ type Resource struct {
 	Origin               ResourceOrigin               `json:"origin"`
 	Aliases              []string                     `json:"aliases"`
 	ExternalIdentifiers  []ResourceExternalIdentifier `json:"externalIdentifiers"`
+	CollectorPresence    []CollectorPresence          `json:"collectorPresence,omitempty"`
 	// Source and ExternalID keep internal callers compiling during the API
 	// transition; new clients use Origin and ExternalIdentifiers.
 	Source                     string                      `json:"source,omitempty"`

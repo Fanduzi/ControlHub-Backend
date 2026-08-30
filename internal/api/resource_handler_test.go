@@ -1,7 +1,7 @@
 // Package api provides HTTP handlers and routing for the ControlHub REST API.
 // input: internal/api, internal/model, net/http, net/http/httptest, encoding/json
-// output: Governed identity/profile tests plus list/detail completeness, rich inventory filtering, health reads, effective-value provenance, versioned override tests, and admin bulk preview/confirm handler coverage
-// pos: Validates governed identity, typed profiles, server-derived completeness, search filters, Issue 81 health evidence, Issue 78 override conflicts, and bulk review/confirm behavior at the HTTP seam
+// output: Governed identity/profile tests plus list/detail completeness and collector-presence projection, rich inventory filtering, health reads, effective-value provenance, versioned override tests, and admin bulk preview/confirm handler coverage
+// pos: Validates governed identity, typed profiles, server-derived completeness/collector presence, search filters, Issue 81 health evidence, Issue 78 override conflicts, and bulk review/confirm behavior at the HTTP seam
 // note: if this file changes, update this header and module README.md.
 package api
 
@@ -32,6 +32,39 @@ type paginatedResourceResponse struct {
 type apiErrorResponse struct {
 	Error   string `json:"error"`
 	Message string `json:"message"`
+}
+
+func TestResourceListAndDetailExposeCollectorPresence(t *testing.T) {
+	server := NewTestServer()
+	missingSince := time.Date(2026, 8, 30, 12, 0, 0, 0, time.UTC)
+	resource := server.resourceRepo.resources[1]
+	resource.CollectorPresence = []model.CollectorPresence{{
+		Status: model.CollectorPresenceStatusMissing, Source: "collector",
+		MachinePrincipalID: 87, MachinePrincipalName: "prod-discovery", MissingSince: &missingSince,
+	}}
+	server.resourceRepo.resources[1] = resource
+
+	for _, path := range []string{"/resources?page=1&pageSize=20", "/resources/1"} {
+		rec := httptest.NewRecorder()
+		server.Router.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, path, nil))
+		if rec.Code != http.StatusOK {
+			t.Fatalf("GET %s status = %d: %s", path, rec.Code, rec.Body.String())
+		}
+		var raw struct {
+			Items    []model.Resource `json:"items"`
+			Resource model.Resource   `json:"resource"`
+		}
+		if err := json.NewDecoder(rec.Body).Decode(&raw); err != nil {
+			t.Fatalf("decode GET %s: %v", path, err)
+		}
+		got := raw.Resource
+		if len(raw.Items) != 0 {
+			got = raw.Items[0]
+		}
+		if len(got.CollectorPresence) != 1 || got.CollectorPresence[0].Status != model.CollectorPresenceStatusMissing || got.CollectorPresence[0].Source != "collector" || got.CollectorPresence[0].MachinePrincipalID != 87 || got.CollectorPresence[0].MachinePrincipalName != "prod-discovery" || got.CollectorPresence[0].MissingSince == nil || !got.CollectorPresence[0].MissingSince.Equal(missingSince) {
+			t.Fatalf("GET %s collectorPresence = %+v", path, got.CollectorPresence)
+		}
+	}
 }
 
 func TestResourceEffectiveValuesAndVersionedOverride(t *testing.T) {

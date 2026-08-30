@@ -1,7 +1,7 @@
 // Package service provides tests for controlled CI ingestion parsing and preview reconciliation.
 // input: internal/service ingestion APIs, internal/model, testing
-// output: TestParseIngestion*, TestPreviewIngestion*, and TestConfirmCollectorIngestion* parser, preview, and collector-confirmation cases
-// pos: Validates strict parsing, pure exact-identity preview behavior, and normalized collector metadata delegation
+// output: TestParseIngestion*, TestPreviewIngestion*, and TestConfirmCollectorIngestion* parser, format-independent empty fingerprint, preview, and collector-confirmation cases
+// pos: Validates strict parsing, pure exact-identity preview behavior, and empty terminal collector metadata delegation
 // note: if this file changes, update header and README.md
 package service
 
@@ -20,9 +20,11 @@ type collectorIngestionTestRepo struct {
 	*fakeResourceWriteRepo
 	principalID uint64
 	metadata    CollectorIngestionMetadata
+	calls       int
 }
 
 func (r *collectorIngestionTestRepo) ConfirmCollectorIngestion(_ context.Context, principalID uint64, rows []IngestionRow, fingerprint string, metadata CollectorIngestionMetadata) (*IngestionPreview, error) {
+	r.calls++
 	r.principalID = principalID
 	r.metadata = metadata
 	preview := PreviewIngestion(rows, nil)
@@ -30,6 +32,21 @@ func (r *collectorIngestionTestRepo) ConfirmCollectorIngestion(_ context.Context
 		return &preview, ErrIngestionFingerprintMismatch
 	}
 	return &preview, nil
+}
+
+func TestConfirmCollectorIngestionAcceptsEmptyTerminalScans(t *testing.T) {
+	repo := &collectorIngestionTestRepo{fakeResourceWriteRepo: &fakeResourceWriteRepo{resources: map[uint64]model.Resource{}}}
+	svc := newResourceServiceForTest(repo)
+	fingerprint := PreviewIngestion(nil, nil).Fingerprint
+
+	for _, result := range []model.CollectorScanResult{model.CollectorScanResultComplete, model.CollectorScanResultIncomplete, model.CollectorScanResultFailed} {
+		if _, err := svc.ConfirmCollectorIngestion(t.Context(), 9, nil, fingerprint, CollectorIngestionMetadata{ScanID: "empty-" + string(result), ScanResult: result}); err != nil {
+			t.Fatalf("%s empty scan: %v", result, err)
+		}
+	}
+	if repo.calls != 3 {
+		t.Fatalf("repository calls = %d, want all terminal scans", repo.calls)
+	}
 }
 
 func TestParseIngestionCSVJSONEquivalent(t *testing.T) {
@@ -54,6 +71,20 @@ func TestParseIngestionCSVJSONEquivalent(t *testing.T) {
 	}
 	if got, want := mustJSON(t, csvRows), mustJSON(t, jsonRows); !bytes.Equal(got, want) {
 		t.Fatalf("CSV != JSON\n%s\n%s", got, want)
+	}
+}
+
+func TestParseEmptyCollectorScanFingerprintIsFormatIndependent(t *testing.T) {
+	jsonRows, err := ParseIngestion("json", []byte(`[]`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	csvRows, err := ParseIngestion("csv", []byte("environmentId,ciType,name\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := PreviewIngestion(csvRows, nil).Fingerprint, PreviewIngestion(jsonRows, nil).Fingerprint; got != want {
+		t.Fatalf("empty CSV/JSON fingerprints differ: %s != %s", got, want)
 	}
 }
 

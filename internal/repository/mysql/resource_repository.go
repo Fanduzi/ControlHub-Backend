@@ -1,7 +1,7 @@
 // Package mysql provides MySQL-backed repository implementations.
 // input: crypto/sha256, database/sql, time, internal/model, internal/service
-// output: resource CRUD, governed identity and batched typed-profile reads, rich inventory filtering, health observations/effective health, observed/effective values, validated previews, audited versioned manual overrides, atomic bulk mutation, and User/collector atomic ingestion confirmation
-// pos: MySQL resource persistence, identity and typed-profile projections, current health evidence, effective values, inventory search, and shared resource/scan transaction authority
+// output: resource CRUD, governed identity and batched typed-profile/collector-presence reads, rich inventory filtering, health observations/effective health, observed/effective values, validated previews, audited versioned manual overrides, atomic bulk mutation, and User/collector atomic ingestion confirmation including empty terminal receipts
+// pos: MySQL resource persistence, identity/typed-profile/collector-presence projections, current health evidence, effective values, inventory search, and shared resource/scan transaction authority
 // note: if this file changes, update this header and module README.md.
 package mysql
 
@@ -568,6 +568,9 @@ from resources r ` + where + " order by r.name"
 			items = filtered[offset:end]
 		}
 	}
+	if err := r.attachCollectorPresence(ctx, items); err != nil {
+		return nil, 0, err
+	}
 	r.attachDatabaseOperationalSummaries(ctx, items)
 
 	return items, total, nil
@@ -595,7 +598,15 @@ func buildInClause(n int) string {
 }
 
 func (r *ResourceRepository) GetResource(id uint64) (*model.Resource, error) {
-	return r.getResource(context.Background(), id)
+	resource, err := r.getResource(context.Background(), id)
+	if err != nil {
+		return nil, err
+	}
+	items := []model.Resource{*resource}
+	if err := r.attachCollectorPresence(context.Background(), items); err != nil {
+		return nil, err
+	}
+	return &items[0], nil
 }
 
 func (r *ResourceRepository) getResource(ctx context.Context, id uint64) (*model.Resource, error) {
@@ -683,6 +694,49 @@ func (r *ResourceRepository) getResource(ctx context.Context, id uint64) (*model
 	}
 
 	return &item, nil
+}
+
+func (r *ResourceRepository) attachCollectorPresence(ctx context.Context, resources []model.Resource) error {
+	if len(resources) == 0 {
+		return nil
+	}
+	args := make([]any, len(resources))
+	byID := make(map[uint64]int, len(resources))
+	for i := range resources {
+		args[i] = resources[i].ID
+		byID[resources[i].ID] = i
+	}
+	rows, err := r.db.QueryContext(ctx, `select s.resource_id, s.machine_principal_id, coalesce(p.name, ''), s.missing_since
+		from collector_ci_scan_states s
+		left join machine_principals p on p.id = s.machine_principal_id
+		where s.resource_id in (`+buildInClause(len(resources))+`)
+		order by s.resource_id, s.machine_principal_id`, args...)
+	if err != nil {
+		return fmt.Errorf("load collector presence: %w", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var resourceID uint64
+		var presence model.CollectorPresence
+		var missingSince sql.NullTime
+		if err := rows.Scan(&resourceID, &presence.MachinePrincipalID, &presence.MachinePrincipalName, &missingSince); err != nil {
+			return fmt.Errorf("scan collector presence: %w", err)
+		}
+		presence.Status = model.CollectorPresenceStatusPresent
+		presence.Source = "collector"
+		if missingSince.Valid {
+			presence.Status = model.CollectorPresenceStatusMissing
+			missing := missingSince.Time
+			presence.MissingSince = &missing
+		}
+		if i, ok := byID[resourceID]; ok {
+			resources[i].CollectorPresence = append(resources[i].CollectorPresence, presence)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("read collector presence: %w", err)
+	}
+	return nil
 }
 
 func (r *ResourceRepository) GetResourceProfile(id uint64) (*model.ResourceProfileResponse, error) {
@@ -1314,7 +1368,7 @@ func (r *ResourceRepository) ConfirmCollectorIngestion(ctx context.Context, prin
 	if err := service.ValidateCollectorIngestionMetadata(metadata); err != nil {
 		return nil, err
 	}
-	if err := service.ValidateIngestionRows(rows); err != nil {
+	if err := service.ValidateCollectorIngestionRows(rows); err != nil {
 		return nil, err
 	}
 	payloadHash, err := collectorIngestionPayloadHash(rows, reviewedFingerprint)

@@ -5,10 +5,10 @@ Embeds and validates the OpenAPI contract served by the API documentation route.
 ## Files
 | File | Responsibility |
 |------|---------------|
-| openapi.yaml | Source OpenAPI contract for user and opaque machine security, query workspace GET/PUT, owner-only successful execution statements, scoped machine reads/reserved collector ingestion and health routes/ordinary governed execution, truthful evidence actors, admin lifecycle, resource-list search filters, named inventory views, bulk mutation and strict ingestion preview/confirmation, governed typed-profile identity, health observations, topology workspace reads, relationship-rule discovery, audit pagination/search/environment filtering and field diffs, metrics, and controlled errors |
+| openapi.yaml | Source OpenAPI contract for user and opaque machine security, query workspace GET/PUT, owner-only successful execution statements, scoped machine reads/reserved collector ingestion and health routes/ordinary governed execution, truthful evidence actors and read-only per-principal collector presence, admin lifecycle, resource-list search filters, named inventory views, bulk mutation and strict ingestion preview/confirmation, governed typed-profile identity, health observations, topology workspace reads, relationship-rule discovery, audit pagination/search/environment filtering and field diffs, metrics, and controlled errors |
 | audit_environment_contract_test.go | Audit environment-filter parameter contract regression test |
 | embed.go | Embeds the YAML for serving and tests |
-| openapi_test.go | Validates schema, strict ingestion multipart, bulk mutation, topology, pagination, executions, and the closed controlled-error enum |
+| openapi_test.go | Validates schema, read-only collector presence, strict ingestion multipart, bulk mutation, topology, pagination, executions, and the closed controlled-error enum |
 | machine_principal_contract_test.go | Validates machine security, closed read/query/collector scopes, truthful execution/audit actors, sibling-route mapping, admin routes, codes, and one-time-secret schemas |
 | operator_access_boundary_test.go | Proves every protected operation documents the status codes its operatoraccess class requires |
 | openapi_schema_helpers_test.go | Shared schema/parameter shape assertion helpers |
@@ -30,7 +30,7 @@ Embeds and validates the OpenAPI contract served by the API documentation route.
 - `POST /admin/ingestions/preview` and `/confirm` use a strict multipart `format` (`csv` or `json`) plus one bounded `file`; confirm additionally requires the reviewed 64-hex fingerprint and returns a fresh preview in controlled 409 conflict/drift responses.
 - `ErrorResponse.error`: closed Controlled Error Code enum (Issue #53). Adding a code is a contract change. The published set is backend `writeJSONError` literals plus Console BFF snake_case codes.
 - `AuditEvent.changes`: optional server-owned add/update/remove field evidence with before/after values; absent on legacy and non-inventory events.
-- `Resource` always exposes read-only completeness, effective status, freshness, observed time, observer, and nullable manual override; POST observations are operational and PATCH null clears the audited override.
+- `Resource` exposes read-only completeness and optional sorted per-principal `collectorPresence` with present/Missing status, collector source, principal ID/name, and stable nullable `missingSince`; effective status, freshness, observed time, observer, and nullable manual override remain server-owned.
 - `GET /resources/{id}/relation-rules`: source-specific relation types, target resource types, and same-environment constraints consumed by the console; writes revalidate the same server matrix.
 - `GET /resources/{id}/topology` and `GET /environments/{id}/topology`: authenticated topology reads with default depth 2, optional environment-scoped root selection, output caps, and required `truncated`.
 - `GET /audit-events?q=...&environmentId=...`: optional search and positive target-resource environment filtering, combined with the existing filters; targetless events do not match an environment.

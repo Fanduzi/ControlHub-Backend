@@ -5,9 +5,9 @@ Domain structs, taxonomy constants, validation methods, and dictionary definitio
 ## Files
 | File | Responsibility |
 |------|---------------|
-| collector_scan.go | Completed-scan ledger values, exact retry matching, and pure capped per-CI omission/Missing transitions |
+| collector_scan.go | Completed-scan ledger values, exact retry matching, pure capped per-CI omission/Missing transitions, and per-principal operator presence projections |
 | collector_scan_test.go | COMPLETE-only omission, idempotency, rediscovery, and conflicting-retry regression tests |
-| resource.go | Resource governed identity, immutable origin, aliases, external identifiers, effective health evidence, list/detail-only read-only Completeness, profile response, and ResourceType |
+| resource.go | Resource governed identity, immutable origin, aliases, external identifiers, effective health evidence, list/detail-only read-only Completeness and collector presence, profile response, and ResourceType |
 | resource_write.go | Resource create/update inputs, including managed identity collections and nullable manual health override |
 | health_observation.go | HealthObservation value and exact fresh/stale/never boundary calculation |
 | resource_effective_value.go | Effective CI value and observed/manual provenance response contracts |
@@ -53,7 +53,7 @@ Domain structs, taxonomy constants, validation methods, and dictionary definitio
 - `QueryExecutionRecord.FullStatement` as internal-only persistence data and `QueryExecutionStatementResponse` as the dedicated public owner-reuse shape
 - `NamedInventoryView`, personal/shared scopes, state/request types, and validation for reusable inventory presentation state
 - `MachinePrincipal`, `MachineCredential`, safe `MachinePrincipalListItem`/`MachineCredentialLifecycle` projections, the seven closed `MachineScope` values, and bounded expiry normalization
-- `CollectorScan`, `CollectorScanLedgerEntry`, `CollectorCIState`, and `ApplyCollectorScan()` for capped complete-scan Missing transitions and retry matching
+- `CollectorScan`, `CollectorScanLedgerEntry`, `CollectorCIState`, `CollectorPresence`, and `ApplyCollectorScan()` for capped complete-scan Missing transitions, truthful per-principal reads, and retry matching
 - `ValidatePagination()`, `QueryExecutePaginationRequest`, `QueryExecutePaginationResponse`, `AllowedPageSizes` (Phase 38S governed query-result paging)
 
 ## Phase 38S governed query-result paging

@@ -1,7 +1,7 @@
 // Package service provides controlled CI ingestion parsing, preview reconciliation, and confirm service delegation.
 // input: stdlib CSV/JSON/SHA-256 utilities, context, and internal/model identity/relation types
-// output: ParseIngestion, PreviewIngestion, User/collector confirmation delegation, controlled scan conflicts, additive observed diffs, and validation contracts
-// pos: Shared issue #83 ingestion contract and issue #87 collector-confirmation service seam
+// output: ParseIngestion, PreviewIngestion, User/collector confirmation delegation including empty terminal collector receipts, controlled scan conflicts, additive observed diffs, and validation contracts
+// pos: Shared issue #83 ingestion contract and issue #87 terminal collector-confirmation service seam
 // note: if this file changes, update this header and module README.md.
 package service
 
@@ -165,7 +165,7 @@ func (s *ResourceService) ConfirmCollectorIngestion(ctx context.Context, princip
 	if strings.TrimSpace(reviewedFingerprint) == "" {
 		return nil, fmt.Errorf("%w: reviewed fingerprint is required", ErrValidationFailed)
 	}
-	if err := ValidateIngestionRows(rows); err != nil {
+	if err := ValidateCollectorIngestionRows(rows); err != nil {
 		return nil, fmt.Errorf("%w: %v", ErrValidationFailed, err)
 	}
 	repo, ok := s.repo.(collectorIngestionConfirmRepository)
@@ -205,6 +205,13 @@ func ValidateIngestionRows(rows []IngestionRow) error {
 	return nil
 }
 
+func ValidateCollectorIngestionRows(rows []IngestionRow) error {
+	if len(rows) == 0 {
+		return nil
+	}
+	return ValidateIngestionRows(rows)
+}
+
 func ValidateIngestionRelationship(from, to model.Resource, relationType model.RelationType) error {
 	return validateRelationshipRule(from, to, relationType)
 }
@@ -234,8 +241,11 @@ func ParseIngestion(format string, payload []byte) ([]IngestionRow, error) {
 	if err != nil {
 		return nil, err
 	}
-	if len(rows) == 0 || len(rows) > MaxIngestionRows {
-		return nil, fmt.Errorf("ingestion row count must be between 1 and %d", MaxIngestionRows)
+	if rows == nil {
+		rows = []IngestionRow{}
+	}
+	if len(rows) > MaxIngestionRows {
+		return nil, fmt.Errorf("ingestion row count must not exceed %d", MaxIngestionRows)
 	}
 	seen := map[string]int{}
 	for i := range rows {

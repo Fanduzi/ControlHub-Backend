@@ -1,7 +1,7 @@
 // Package api provides HTTP handlers and routing for the ControlHub REST API.
 // input: net/http/httptest multipart requests and the API test server
-// output: ingestion preview, User/collector confirm, and collector scan-conflict HTTP contract tests
-// pos: Verifies the ingestion upload boundary, scan metadata, and controlled error mapping
+// output: ingestion preview, User/collector confirm including empty terminal scans, and collector scan-conflict HTTP contract tests
+// pos: Verifies the ingestion upload boundary, terminal scan metadata, and controlled error mapping
 // note: if this file changes, update this header and module README.md.
 package api
 
@@ -109,6 +109,31 @@ func TestCollectorConfirmPropagatesNormalizedScanMetadata(t *testing.T) {
 	}
 	if got, want := server.resourceRepo.collectorMetadata, (service.CollectorIngestionMetadata{ScanID: "scan-123", ScanResult: model.CollectorScanResultComplete}); got != want {
 		t.Fatalf("collector metadata = %+v, want %+v", got, want)
+	}
+}
+
+func TestCollectorConfirmAcceptsEmptyTerminalScans(t *testing.T) {
+	fingerprint := service.PreviewIngestion([]service.IngestionRow{}, nil).Fingerprint
+	for _, result := range []model.CollectorScanResult{model.CollectorScanResultComplete, model.CollectorScanResultIncomplete, model.CollectorScanResultFailed} {
+		t.Run(string(result), func(t *testing.T) {
+			server := NewTestServer()
+			server.deps.MachineCredentialService = &scopeMatrixMachineService{granted: model.MachineScopeInventoryIngest}
+			response := ingestRequestWithFields(t, NewRouter(server.deps), "/admin/ingestions/confirm", `[]`, []ingestionFormField{
+				{"format", "json"},
+				{"fingerprint", fingerprint},
+				{"collectorScanId", "empty-" + string(result)},
+				{"collectorScanResult", string(result)},
+			}, "Bearer chmp_route-test.secret")
+			if response.Code != http.StatusOK {
+				t.Fatalf("status = %d, want 200: %s", response.Code, response.Body.String())
+			}
+		})
+	}
+
+	server := NewTestServer()
+	response := ingestRequest(t, server.Router, "/admin/ingestions/confirm", "json", `[]`, fingerprint)
+	if response.Code != http.StatusBadRequest {
+		t.Fatalf("User empty confirm status = %d, want 400: %s", response.Code, response.Body.String())
 	}
 }
 

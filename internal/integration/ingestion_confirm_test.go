@@ -2,8 +2,8 @@
 
 // Package integration runs real-MySQL ingestion confirmation tests.
 // input: database/sql, errors, testing, internal/model, internal/repository/mysql, internal/service
-// output: TestIngestionConfirmation* and TestCollectorIngestionConfirmation* atomic persistence proofs
-// pos: Proves User and collector confirmation semantics against disposable MySQL
+// output: TestIngestionConfirmation* and TestCollectorIngestionConfirmation* atomic persistence, empty terminal scan, retry, recovery, read-projection, and no-archive proofs
+// pos: Proves User and collector confirmation plus operator-visible Missing semantics against disposable MySQL
 // note: if this file changes, update this header and module README.md.
 package integration
 
@@ -200,20 +200,33 @@ func TestCollectorIngestionConfirmationMissingLifecycleNeverArchives(t *testing.
 	repo := mysql.NewResourceRepository(db)
 	svc := service.NewResourceService(repo, mysql.NewRelationRepository(db))
 	principalID := collectorPrincipal + 1
+	secondaryPrincipalID := principalID + 100
+	if _, err := db.ExecContext(ctx, `insert into machine_principals (id, name, created_by_user_id, created_at) values (?, ?, ?, now(6)), (?, ?, ?, now(6))`, principalID, "lifecycle-collector", ingestionActor, secondaryPrincipalID, "secondary-collector", ingestionActor); err != nil {
+		t.Fatalf("seed collector principal: %v", err)
+	}
 	missingRow := service.IngestionRow{EnvironmentID: envProd, CIType: model.ResourceTypeHost, Name: "collector-missing-lifecycle", DisplayName: "Collector Missing Lifecycle"}
-	presentRow := service.IngestionRow{EnvironmentID: envProd, CIType: model.ResourceTypeHost, Name: "collector-present-lifecycle", DisplayName: "Collector Present Lifecycle"}
+	emptyRows := []service.IngestionRow{}
 
-	confirmCollectorScan(t, ctx, repo, svc, principalID, "lifecycle-initial", model.CollectorScanResultComplete, []service.IngestionRow{missingRow, presentRow})
+	confirmCollectorScan(t, ctx, repo, svc, principalID, "lifecycle-initial", model.CollectorScanResultComplete, []service.IngestionRow{missingRow})
 	missingID := resourceIDByName(t, db, missingRow.Name)
-	confirmCollectorScan(t, ctx, repo, svc, principalID, "lifecycle-incomplete", model.CollectorScanResultIncomplete, []service.IngestionRow{presentRow})
+	confirmCollectorScan(t, ctx, repo, svc, secondaryPrincipalID, "secondary-initial", model.CollectorScanResultComplete, []service.IngestionRow{missingRow})
+	confirmCollectorScan(t, ctx, repo, svc, principalID, "lifecycle-incomplete", model.CollectorScanResultIncomplete, emptyRows)
 	assertCollectorState(t, db, principalID, missingID, 0, false, "lifecycle-initial")
-	confirmCollectorScan(t, ctx, repo, svc, principalID, "lifecycle-failed", model.CollectorScanResultFailed, []service.IngestionRow{presentRow})
+	confirmCollectorScan(t, ctx, repo, svc, principalID, "lifecycle-failed", model.CollectorScanResultFailed, emptyRows)
 	assertCollectorState(t, db, principalID, missingID, 0, false, "lifecycle-initial")
 
 	for omission := 1; omission <= 3; omission++ {
 		scanID := fmt.Sprintf("lifecycle-complete-omission-%d", omission)
-		confirmCollectorScan(t, ctx, repo, svc, principalID, scanID, model.CollectorScanResultComplete, []service.IngestionRow{presentRow})
+		confirmCollectorScan(t, ctx, repo, svc, principalID, scanID, model.CollectorScanResultComplete, emptyRows)
 		assertCollectorState(t, db, principalID, missingID, omission, omission == 3, "lifecycle-initial")
+		if omission == 2 {
+			confirmCollectorScan(t, ctx, repo, svc, principalID, scanID, model.CollectorScanResultComplete, emptyRows)
+			assertCollectorState(t, db, principalID, missingID, omission, false, "lifecycle-initial")
+		}
+	}
+	var stableMissingSince time.Time
+	if err := db.QueryRowContext(ctx, `select missing_since from collector_ci_scan_states where machine_principal_id = ? and resource_id = ?`, principalID, missingID).Scan(&stableMissingSince); err != nil {
+		t.Fatalf("read stable missing time: %v", err)
 	}
 	resource, err := repo.GetResource(missingID)
 	if err != nil {
@@ -222,8 +235,30 @@ func TestCollectorIngestionConfirmationMissingLifecycleNeverArchives(t *testing.
 	if resource.ArchivedAt != nil {
 		t.Fatal("Missing resource was automatically archived")
 	}
+	assertCollectorPresence(t, resource, principalID, "lifecycle-collector", model.CollectorPresenceStatusMissing, &stableMissingSince)
+	assertCollectorPresence(t, resource, secondaryPrincipalID, "secondary-collector", model.CollectorPresenceStatusPresent, nil)
+	items, _, err := repo.ListResources(ctx, model.ResourceListQuery{Page: 1, PageSize: 100})
+	if err != nil {
+		t.Fatalf("list resources: %v", err)
+	}
+	found := false
+	for i := range items {
+		if items[i].ID == missingID {
+			found = true
+			assertCollectorPresence(t, &items[i], principalID, "lifecycle-collector", model.CollectorPresenceStatusMissing, &stableMissingSince)
+		}
+	}
+	if !found {
+		t.Fatalf("missing resource %d absent from active list", missingID)
+	}
+	confirmCollectorScan(t, ctx, repo, svc, principalID, "lifecycle-complete-omission-3", model.CollectorScanResultComplete, emptyRows)
+	resource, err = repo.GetResource(missingID)
+	if err != nil {
+		t.Fatalf("get missing resource after retry: %v", err)
+	}
+	assertCollectorPresence(t, resource, principalID, "lifecycle-collector", model.CollectorPresenceStatusMissing, &stableMissingSince)
 
-	confirmCollectorScan(t, ctx, repo, svc, principalID, "lifecycle-recovered", model.CollectorScanResultComplete, []service.IngestionRow{missingRow, presentRow})
+	confirmCollectorScan(t, ctx, repo, svc, principalID, "lifecycle-recovered", model.CollectorScanResultComplete, []service.IngestionRow{missingRow})
 	assertCollectorState(t, db, principalID, missingID, 0, false, "lifecycle-recovered")
 	if got := resourceIDByName(t, db, missingRow.Name); got != missingID {
 		t.Fatalf("recovered resource ID = %d, want stable ID %d", got, missingID)
@@ -232,6 +267,8 @@ func TestCollectorIngestionConfirmationMissingLifecycleNeverArchives(t *testing.
 	if err != nil || resource.ArchivedAt != nil {
 		t.Fatalf("recovered resource archived/deleted: resource=%+v err=%v", resource, err)
 	}
+	assertCollectorPresence(t, resource, principalID, "lifecycle-collector", model.CollectorPresenceStatusPresent, nil)
+	assertCollectorPresence(t, resource, secondaryPrincipalID, "secondary-collector", model.CollectorPresenceStatusPresent, nil)
 }
 
 func TestCollectorIngestionConfirmationFingerprintAndLedgerFailureRollback(t *testing.T) {
@@ -287,12 +324,36 @@ func TestCollectorIngestionConfirmationFingerprintAndLedgerFailureRollback(t *te
 
 func confirmCollectorScan(t *testing.T, ctx context.Context, repo *mysql.ResourceRepository, svc *service.ResourceService, principalID uint64, scanID string, result model.CollectorScanResult, rows []service.IngestionRow) {
 	t.Helper()
-	preview, err := repo.PreviewIngestion(ctx, rows)
-	if err != nil {
-		t.Fatalf("preview %s: %v", scanID, err)
+	preview := service.PreviewIngestion(rows, nil)
+	if len(rows) != 0 {
+		storedPreview, err := repo.PreviewIngestion(ctx, rows)
+		if err != nil {
+			t.Fatalf("preview %s: %v", scanID, err)
+		}
+		preview = *storedPreview
 	}
 	if _, err := svc.ConfirmCollectorIngestion(ctx, principalID, rows, preview.Fingerprint, service.CollectorIngestionMetadata{ScanID: scanID, ScanResult: result}); err != nil {
 		t.Fatalf("confirm %s: %v", scanID, err)
+	}
+}
+
+func assertCollectorPresence(t *testing.T, resource *model.Resource, principalID uint64, principalName string, status model.CollectorPresenceStatus, missingSince *time.Time) {
+	t.Helper()
+	var got *model.CollectorPresence
+	for i := range resource.CollectorPresence {
+		if resource.CollectorPresence[i].MachinePrincipalID == principalID {
+			got = &resource.CollectorPresence[i]
+			break
+		}
+	}
+	if got == nil {
+		t.Fatalf("collector presence = %+v, want principal %d", resource.CollectorPresence, principalID)
+	}
+	if got.Status != status || got.Source != "collector" || got.MachinePrincipalName != principalName {
+		t.Fatalf("collector presence = %+v, want status/source/principal %q/collector/%d/%q", got, status, principalID, principalName)
+	}
+	if (got.MissingSince == nil) != (missingSince == nil) || got.MissingSince != nil && !got.MissingSince.Equal(*missingSince) {
+		t.Fatalf("collector missingSince = %v, want %v", got.MissingSince, missingSince)
 	}
 }
 

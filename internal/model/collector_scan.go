@@ -1,7 +1,7 @@
 // Package model provides domain entities for the resource management system.
 // input: fmt and time
-// output: collector scan ledger values and pure per-CI lifecycle transitions
-// pos: Domain contract for complete-scan omission and retry semantics
+// output: collector scan ledger values, per-principal read projections, and pure per-CI lifecycle transitions
+// pos: Domain contract for complete-scan omission, retry semantics, and operator-visible collector presence
 // note: if this file changes, update this header and module README.md.
 package model
 
@@ -18,6 +18,21 @@ const (
 	CollectorScanResultFailed     CollectorScanResult = "failed"
 	MaxCompleteScanOmissions                          = uint8(3)
 )
+
+type CollectorPresenceStatus string
+
+const (
+	CollectorPresenceStatusPresent CollectorPresenceStatus = "present"
+	CollectorPresenceStatusMissing CollectorPresenceStatus = "missing"
+)
+
+type CollectorPresence struct {
+	Status               CollectorPresenceStatus `json:"status"`
+	Source               string                  `json:"source"`
+	MachinePrincipalID   uint64                  `json:"machinePrincipalId"`
+	MachinePrincipalName string                  `json:"machinePrincipalName"`
+	MissingSince         *time.Time              `json:"missingSince"`
+}
 
 type CollectorScan struct {
 	ID          string

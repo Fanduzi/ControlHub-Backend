@@ -1,7 +1,7 @@
 // Package openapi_test verifies the embedded OpenAPI contract.
 // input: embedded OpenAPI YAML, kin-openapi parser, internal/model
-// output: OpenAPI schema, resource completeness, health observation, effective-value override, ingestion multipart, bulk mutation, topology, pagination, execution, machine auth, and closed error-enum tests
-// pos: Prevents documented API contracts from drifting from router behavior
+// output: OpenAPI schema, resource completeness/collector presence, health observation, effective-value override, ingestion multipart, bulk mutation, topology, pagination, execution, machine auth, and closed error-enum tests
+// pos: Prevents documented API and read-only collector-presence contracts from drifting from router behavior
 // note: if this file changes, update this header and module README.md.
 package openapi_test
 
@@ -176,6 +176,35 @@ func TestOpenAPIResourceCompletenessContract(t *testing.T) {
 		if schema.Properties[field] == nil || !slices.Contains(schema.Required, field) {
 			t.Fatalf("Completeness.%s must be documented and required", field)
 		}
+	}
+}
+
+func TestOpenAPICollectorPresenceContract(t *testing.T) {
+	loader := openapi3.NewLoader()
+	doc, err := loader.LoadFromData(openapi.YAML)
+	if err != nil {
+		t.Fatalf("failed to parse openapi.yaml: %v", err)
+	}
+
+	resource := doc.Components.Schemas["Resource"].Value
+	presence := resource.Properties["collectorPresence"]
+	if presence == nil || presence.Value == nil || !presence.Value.ReadOnly || presence.Value.Items == nil || presence.Value.Items.Ref != "#/components/schemas/CollectorPresence" {
+		t.Fatalf("Resource.collectorPresence = %#v, want read-only CollectorPresence array", presence)
+	}
+	schema := doc.Components.Schemas["CollectorPresence"].Value
+	if schema == nil || !schema.ReadOnly {
+		t.Fatal("CollectorPresence must be read-only")
+	}
+	for _, field := range []string{"status", "source", "machinePrincipalId", "machinePrincipalName", "missingSince"} {
+		if schema.Properties[field] == nil || !slices.Contains(schema.Required, field) {
+			t.Fatalf("CollectorPresence.%s must be documented and required", field)
+		}
+	}
+	if status := schema.Properties["status"].Value; status == nil || !slices.Equal(status.Enum, []any{"present", "missing"}) {
+		t.Fatalf("CollectorPresence.status enum = %v, want present/missing", status.Enum)
+	}
+	if missingSince := schema.Properties["missingSince"].Value; missingSince == nil || !missingSince.Nullable {
+		t.Fatal("CollectorPresence.missingSince must be nullable")
 	}
 }
 

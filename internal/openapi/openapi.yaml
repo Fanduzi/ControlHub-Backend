@@ -1,6 +1,6 @@
 # input: public HTTP routes, model JSON shapes, and operator access policy
-# output: served OpenAPI 3.1 contract including machine credentials, scoped reads/collector routes, resource-list filters, ingestion, and bulk mutation review/confirmation
-# pos: canonical machine-readable API boundary, including independent user/machine authentication, reserved collector route scopes, and inventory audit diffs
+# output: served OpenAPI 3.1 contract including machine credentials, scoped reads/collector routes, resource-list filters and read-only per-principal collector presence, ingestion, and bulk mutation review/confirmation
+# pos: canonical machine-readable API boundary, including independent user/machine authentication, reserved collector route scopes, collector Missing projection, and inventory audit diffs
 # note: if this file changes, update header and internal/openapi/README.md
 
 openapi: 3.1.0
@@ -5604,6 +5604,30 @@ components:
       properties:
         resource:
           $ref: "#/components/schemas/Resource"
+    CollectorPresence:
+      type: object
+      readOnly: true
+      additionalProperties: false
+      required: [status, source, machinePrincipalId, machinePrincipalName, missingSince]
+      properties:
+        status:
+          type: string
+          enum: [present, missing]
+          description: Missing only after this collector omits the CI from three consecutive complete scans.
+        source:
+          type: string
+          enum: [collector]
+        machinePrincipalId:
+          type: integer
+          format: int64
+          minimum: 1
+        machinePrincipalName:
+          type: string
+        missingSince:
+          type: string
+          format: date-time
+          nullable: true
+          description: Stable time this collector first marked the CI missing; null while present.
     Resource:
       type: object
       required:
@@ -5662,6 +5686,12 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/ResourceExternalIdentifier"
+        collectorPresence:
+          type: array
+          readOnly: true
+          description: Per-machine-principal collector presence; omitted when no collector has observed the CI.
+          items:
+            $ref: "#/components/schemas/CollectorPresence"
         healthFreshness:
           type: string
           enum: [fresh, stale, never]
