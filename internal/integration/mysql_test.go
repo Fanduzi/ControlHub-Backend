@@ -2,7 +2,7 @@
 
 // Package integration provides real-MySQL schema proofs for goose migrations.
 // input: database/sql, Testcontainers database, and schema migrations
-// output: migration-27 schema, collector/user/machine constraints and indexes, seed, and no-FK proofs
+// output: migration-28 schema, collector/user/machine constraints and indexes, seed, and no-FK proofs
 // pos: real-MySQL clean-migration schema contract coverage
 // note: if this file changes, update this header and module README.md.
 package integration
@@ -140,8 +140,8 @@ func assertSchemaChainBaseline(t *testing.T, db *sql.DB) {
 	if err != nil {
 		t.Fatalf("query max version: %v", err)
 	}
-	if maxVersion != 27 {
-		t.Fatalf("migration version = %d, want 27", maxVersion)
+	if maxVersion != 28 {
+		t.Fatalf("migration version = %d, want 28", maxVersion)
 	}
 
 	expectedTables := []string{

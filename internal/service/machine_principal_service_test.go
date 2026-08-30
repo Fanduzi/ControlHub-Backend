@@ -1,6 +1,6 @@
 // Package service implements business logic for resource management.
-// input: context, crypto/sha256, errors, reflect, testing, time, internal/model
-// output: machine-principal lifecycle and authentication service contract tests
+// input: context, crypto/sha256, database/sql, errors, reflect, testing, time, internal/model
+// output: machine-principal lifecycle, not-found mapping, and authentication service contract tests
 // pos: Service security-boundary regression coverage with a repository fake
 // note: if this file changes, update this header and module README.md.
 package service
@@ -8,6 +8,7 @@ package service
 import (
 	"context"
 	"crypto/sha256"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"reflect"
@@ -159,6 +160,18 @@ func TestMachinePrincipalServiceRotateIssuesOverlappingCredential(t *testing.T) 
 	}
 }
 
+func TestMachinePrincipalServiceRotateMapsMissingCredential(t *testing.T) {
+	repo := &fakeMachinePrincipalRepository{rotateErr: sql.ErrNoRows}
+	svc := NewMachinePrincipalService(repo)
+
+	_, err := svc.Rotate(t.Context(), AuthenticatedUser{ID: 7, Role: "admin"}, 23, model.MachineCredentialRotateRequest{
+		Scopes: []model.MachineScope{model.MachineScopeAuditRead},
+	})
+	if !errors.Is(err, ErrMachineCredentialNotFound) {
+		t.Fatalf("Rotate missing credential error = %v, want not found", err)
+	}
+}
+
 func TestMachinePrincipalServiceRotationOverlapsUntilOldCredentialRevoked(t *testing.T) {
 	now := time.Date(2026, 8, 31, 12, 0, 0, 0, time.UTC)
 	repo := &fakeMachinePrincipalRepository{}
@@ -226,6 +239,7 @@ type fakeMachinePrincipalRepository struct {
 	created     MachineCredentialInsert
 	rotateCalls int
 	rotated     MachineCredentialInsert
+	rotateErr   error
 	revokeCalls int
 	credentials map[string]MachineCredentialAuthentication
 	used        []uint64
@@ -250,6 +264,9 @@ func (f *fakeMachinePrincipalRepository) Create(_ context.Context, actorID uint6
 func (f *fakeMachinePrincipalRepository) Rotate(_ context.Context, _ uint64, oldCredentialID uint64, credential MachineCredentialInsert) (model.MachinePrincipal, model.MachineCredential, error) {
 	f.rotateCalls++
 	f.rotated = credential
+	if f.rotateErr != nil {
+		return model.MachinePrincipal{}, model.MachineCredential{}, f.rotateErr
+	}
 	principal := model.MachinePrincipal{ID: 10, Name: "inventory agent"}
 	stored := model.MachineCredential{
 		ID: 21, MachinePrincipalID: 10, LookupID: credential.LookupID, Scopes: credential.Scopes,

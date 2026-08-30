@@ -2,7 +2,7 @@
 
 // Package integration provides real-MySQL coverage for the operator access boundary.
 // input: context, encoding/json, fmt, net/http, net/http/httptest, strings, testing, time, internal/api, internal/model, internal/repository/mysql, internal/service, internal/testsupport/operatoraccess
-// output: TestOperatorAccessBoundary integration case, including health observation ingestion
+// output: TestOperatorAccessBoundary integration case, including health observation and bounded multipart ingestion
 // pos: Proves the operator access matrix on real MySQL with self-contained resource and query-target fixtures
 // note: if this file changes, update this header and module README.md.
 package integration
@@ -297,6 +297,19 @@ func boundaryBody(op operatoraccess.Operation) string {
 // the recorded status and body. Token is empty for anonymous requests.
 func doBoundaryRequest(t *testing.T, router http.Handler, method, path, body, token string) (int, string) {
 	t.Helper()
+	if strings.HasPrefix(path, "/admin/ingestions/") {
+		const payload = `[{"environmentId":1,"ciType":"host","name":"boundary-ingestion"}]`
+		fields := map[string]string{"format": "json"}
+		if strings.HasSuffix(path, "/confirm") {
+			rows, err := service.ParseIngestion("json", []byte(payload))
+			if err != nil {
+				t.Fatal(err)
+			}
+			fields["fingerprint"] = service.PreviewIngestion(rows, nil).Fingerprint
+		}
+		rec := collectorIngestionMultipart(t, router, path, token, payload, fields)
+		return rec.Code, rec.Body.String()
+	}
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(method, path, strings.NewReader(body))
 	if body != "" {

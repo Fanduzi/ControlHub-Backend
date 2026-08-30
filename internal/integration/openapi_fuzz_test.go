@@ -2,7 +2,7 @@
 
 // Package integration provides MySQL-backed integration tests.
 // input: disposable MySQL, fully wired API router, net/http/httptest, Schemathesis CLI
-// output: OpenAPI fuzz integration coverage for every served operation
+// output: OpenAPI fuzz integration coverage for every served operation, including machine-principal lifecycle routes
 // pos: Verifies the production dependency graph and served contract with authenticated generated requests
 // note: if this file changes, update header and README.md
 package integration
@@ -83,6 +83,7 @@ func TestOpenAPIFuzz(t *testing.T) {
 		),
 	)
 	queryCredentialSvc := service.NewQueryCredentialService(queryTargetRepo, queryExecutionRepo, credentialResolver)
+	machinePrincipalSvc := service.NewMachinePrincipalService(mysql.NewMachinePrincipalRepository(db))
 
 	accessResolver := service.NewTargetAccessResolver(queryTargetRepo, queryExecutionRepo, credentialResolver)
 	queryExplainSvc := service.NewQueryExplainService(
@@ -130,6 +131,8 @@ func TestOpenAPIFuzz(t *testing.T) {
 			queryTargetRepo,
 		),
 		NamedInventoryViewService: service.NewNamedInventoryViewService(mysql.NewNamedInventoryViewRepository(db)),
+		MachinePrincipalService:   machinePrincipalSvc,
+		MachineCredentialService:  machinePrincipalSvc,
 		QueryExecutionAuth: api.QueryExecutionAuthConfig{
 			Clock: time.Now,
 		},
@@ -144,6 +147,18 @@ func TestOpenAPIFuzz(t *testing.T) {
 		router.ServeHTTP(recorder, httptest.NewRequest(method, path, nil))
 		if recorder.Code == http.StatusNotFound {
 			t.Fatalf("fuzz router omitted %s %s", method, path)
+		}
+	}
+	for _, route := range []struct{ method, path string }{
+		{http.MethodGet, "/admin/machine-principals"},
+		{http.MethodPost, "/admin/machine-principals"},
+		{http.MethodPost, "/admin/machine-credentials/1/rotate"},
+		{http.MethodPost, "/admin/machine-credentials/1/revoke"},
+	} {
+		recorder := httptest.NewRecorder()
+		router.ServeHTTP(recorder, httptest.NewRequest(route.method, route.path, nil))
+		if recorder.Code == http.StatusNotFound {
+			t.Fatalf("fuzz router omitted %s %s", route.method, route.path)
 		}
 	}
 

@@ -84,6 +84,9 @@ func (s *MachinePrincipalService) Rotate(ctx context.Context, actor Authenticate
 		LookupID: material.LookupID, SecretHash: material.Hash, Scopes: scopes,
 		ExpiresAt: expiresAt, CreatedAt: now, RotatedFromCredentialID: &oldCredentialID,
 	})
+	if errors.Is(err, sql.ErrNoRows) {
+		return model.MachineCredentialIssue{}, ErrMachineCredentialNotFound
+	}
 	if err != nil {
 		return model.MachineCredentialIssue{}, err
 	}

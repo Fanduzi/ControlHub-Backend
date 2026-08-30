@@ -52,8 +52,8 @@ Business logic layer with interface-based repository dependencies. Each service 
 | named_inventory_view_service.go | NamedInventoryViewService — owner-only personal CRUD, admin-only shared mutation, user-visible listing, and shared-only read seam |
 | machine_credential.go | `crypto/rand` opaque credential generation, stable lookup-ID parsing, and SHA-256 lookup hashing |
 | machine_credential_test.go | Pure opaque-token format, entropy-size, parsing, and hash regression tests |
-| machine_principal_service.go | Admin-only safe lifecycle list/create/rotate/revoke and scoped expiry/revoke-aware machine authentication with last-used updates |
-| machine_principal_service_test.go | Safe list, one-time secret, scope, expiry, reload/revoke, overlap, and admin-boundary service tests |
+| machine_principal_service.go | Admin-only safe lifecycle list/create/rotate/revoke, missing-credential mapping, and scoped expiry/revoke-aware machine authentication with last-used updates |
+| machine_principal_service_test.go | Safe list, one-time secret, scope, expiry, reload/revoke, overlap, missing-credential mapping, and admin-boundary service tests |
 | auth_service_test.go | Auth service tests (login, versioned verify, invalidation causes, generic errors) |
 | memory_user_store.go | In-memory UserCredentialRepository for unit/handler tests |
 | dictionary_service_test.go | Dictionary service tests |

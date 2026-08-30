@@ -1,6 +1,6 @@
 // Package openapi_test verifies the embedded OpenAPI contract.
 // input: context, fmt, testing, kin-openapi parser, internal/openapi
-// output: machine credential scheme, scoped read/collector routes, governed execution evidence, controlled-code, and secret-boundary tests
+// output: machine credential scheme, scoped read/collector routes, governed execution evidence, controlled-code, and response-only secret-boundary tests
 // pos: Prevents machine HTTP authorization, collector capability, evidence identity, and one-time secret documentation drift
 // note: if this file changes, update this header and module README.md.
 package openapi_test
@@ -93,6 +93,9 @@ func TestOpenAPIMachineCredentialContract(t *testing.T) {
 	issue := doc.Components.Schemas["MachineCredentialIssue"]
 	if issue == nil || issue.Value == nil || issue.Value.Properties["secret"] == nil {
 		t.Fatal("MachineCredentialIssue must document the one-time secret")
+	}
+	if secret := issue.Value.Properties["secret"].Value; secret == nil || !secret.ReadOnly || secret.WriteOnly {
+		t.Fatal("MachineCredentialIssue.secret must be response-only")
 	}
 
 	audit := doc.Components.Schemas["AuditEvent"].Value

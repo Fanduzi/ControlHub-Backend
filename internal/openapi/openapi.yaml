@@ -6575,7 +6575,7 @@ components:
           $ref: "#/components/schemas/MachineCredential"
         secret:
           type: string
-          writeOnly: true
+          readOnly: true
           description: One-time plaintext returned only by create and rotate
     MachinePrincipalListResponse:
       type: object

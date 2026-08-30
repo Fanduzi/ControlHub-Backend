@@ -9,7 +9,7 @@ Embeds and validates the OpenAPI contract served by the API documentation route.
 | audit_environment_contract_test.go | Audit environment-filter parameter contract regression test |
 | embed.go | Embeds the YAML for serving and tests |
 | openapi_test.go | Validates schema, bounded key/key:value resource label filters, bounded read-only collector presence, reachable empty collector preview and conditional terminal-confirm multipart metadata, bulk mutation, topology, pagination, executions, and the closed controlled-error enum |
-| machine_principal_contract_test.go | Validates machine security, closed read/query/collector scopes, truthful execution/audit actors, sibling-route mapping, admin routes, codes, and one-time-secret schemas |
+| machine_principal_contract_test.go | Validates machine security, closed read/query/collector scopes, truthful execution/audit actors, sibling-route mapping, admin routes, codes, and response-only one-time-secret schemas |
 | operator_access_boundary_test.go | Proves every protected operation documents the status codes its operatoraccess class requires |
 | openapi_schema_helpers_test.go | Shared schema/parameter shape assertion helpers |
 | query_workspace_statement_contract_test.go | Workspace/statement routes and schemas, controlled codes, execution-list non-disclosure, and required boolean restore eligibility contract |

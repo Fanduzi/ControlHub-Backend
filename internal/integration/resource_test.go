@@ -3,8 +3,8 @@
 // Package integration provides real-MySQL coverage for repository, API, and
 // migration behavior against disposable Testcontainers databases.
 // input: database/sql, testing, time, internal/model, internal/repository/mysql, internal/service
-// output: TestResource* and TestResourceService* integration cases, including label-presence filtering, relationship rules, batched profile query counts, and observation-derived cluster rollups
-// pos: Proves resource CRUD, filtering, profile batching, relationship rules, effective-health rollups, and create-with-profile atomicity against real MySQL
+// output: TestResource* and TestResourceService* integration cases, including label-presence filtering, relationship rules, batched profile query counts, and isolated observation-derived cluster rollups
+// pos: Proves resource CRUD, filtering, profile batching, relationship rules, effective-health rollups, seed-safe test isolation, and create-with-profile atomicity against real MySQL
 // note: if this file changes, update this header and module README.md.
 package integration
 
@@ -358,12 +358,25 @@ func TestResourceRepository_ObservationDerivedClusterOperationalSummary(t *testi
 	ctx := context.Background()
 
 	var clusterID, memberID uint64
+	var originalManualHealth sql.NullString
 	if err := db.QueryRow(`select id from resources where name = 'analytics-ch-cluster-prod'`).Scan(&clusterID); err != nil {
 		t.Fatalf("find cluster: %v", err)
 	}
-	if err := db.QueryRow(`select id from resources where name = 'analytics-ch-node-01-prod'`).Scan(&memberID); err != nil {
+	if err := db.QueryRow(`select id, health_status from resources where name = 'analytics-ch-node-01-prod'`).Scan(&memberID, &originalManualHealth); err != nil {
 		t.Fatalf("find member: %v", err)
 	}
+	t.Cleanup(func() {
+		if _, err := db.Exec(`delete from resource_health_observations where resource_id = ? and observer = 'cluster-rollup-test'`, memberID); err != nil {
+			t.Errorf("clean cluster rollup observation: %v", err)
+		}
+		var restored any
+		if originalManualHealth.Valid {
+			restored = originalManualHealth.String
+		}
+		if _, err := db.Exec(`update resources set health_status = ? where id = ?`, restored, memberID); err != nil {
+			t.Errorf("restore cluster rollup manual health: %v", err)
+		}
+	})
 	if _, err := db.Exec(`update resources set health_status = null where id = ?`, memberID); err != nil {
 		t.Fatalf("clear manual override: %v", err)
 	}
