@@ -1,6 +1,6 @@
 // Package openapi_test verifies the embedded OpenAPI contract.
 // input: embedded OpenAPI YAML, kin-openapi parser, internal/model
-// output: OpenAPI schema, bounded key/key:value resource labels, resource completeness/collector presence, health observation, effective-value override, collector empty-preview/confirm multipart, bulk mutation, topology, pagination, execution, machine auth, and closed error-enum tests
+// output: OpenAPI schema, bounded key/key:value resource labels, resource completeness/bounded collector presence, health observation, effective-value override, collector empty-preview/confirm multipart, bulk mutation, topology, pagination, execution, machine auth, and closed error-enum tests
 // pos: Prevents documented API, reachable collector ingestion, and read-only collector-presence contracts from drifting from router behavior
 // note: if this file changes, update this header and module README.md.
 package openapi_test
@@ -238,6 +238,14 @@ func TestOpenAPICollectorPresenceContract(t *testing.T) {
 	}
 	if missingSince := schema.Properties["missingSince"].Value; missingSince == nil || !missingSince.Nullable {
 		t.Fatal("CollectorPresence.missingSince must be nullable")
+	}
+	truncated := resource.Properties["collectorPresenceTruncated"]
+	if truncated == nil || truncated.Value == nil || truncated.Value.Type == nil || !truncated.Value.Type.Is("boolean") || !truncated.Value.ReadOnly || !slices.Contains(resource.Required, "collectorPresenceTruncated") {
+		t.Fatalf("Resource.collectorPresenceTruncated = %#v, want required read-only boolean", truncated)
+	}
+	errorCodes := doc.Components.Schemas["ErrorResponse"].Value.Properties["error"].Value.Enum
+	if !slices.Contains(errorCodes, any("collector_state_limit")) {
+		t.Fatal("ErrorResponse.error must include collector_state_limit")
 	}
 }
 
@@ -621,6 +629,7 @@ func TestOpenAPIErrorResponseErrorIsClosedControlledErrorCodeEnum(t *testing.T) 
 
 	want := []string{
 		"bulk_resource_mutation_conflict",
+		"collector_state_limit",
 		"disclosure_policy_conflict",
 		"disclosure_policy_not_found",
 		"environment_not_found",

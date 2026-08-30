@@ -53,7 +53,7 @@ Domain structs, taxonomy constants, validation methods, and dictionary definitio
 - `QueryExecutionRecord.FullStatement` / `HasFullStatement` as internal-only persistence data, server-computed public `CanRestore`, and `QueryExecutionStatementResponse` as the dedicated owner-reuse shape
 - `NamedInventoryView`, personal/shared scopes, state/request types, and validation for reusable inventory presentation state
 - `MachinePrincipal`, `MachineCredential`, safe `MachinePrincipalListItem`/`MachineCredentialLifecycle` projections, the seven closed `MachineScope` values, and bounded expiry normalization
-- `CollectorScan`, `CollectorScanLedgerEntry`, `CollectorCIState`, `CollectorPresence`, and `ApplyCollectorScan()` for capped complete-scan Missing transitions, truthful per-principal reads, and retry matching
+- `CollectorScan`, `CollectorScanLedgerEntry`, `CollectorCIState`, `CollectorPresence`, `Resource.CollectorPresenceTruncated`, and `ApplyCollectorScan()` for capped complete-scan Missing transitions, truthful bounded per-principal reads, and retry matching
 - `ValidatePagination()`, `QueryExecutePaginationRequest`, `QueryExecutePaginationResponse`, `AllowedPageSizes` (Phase 38S governed query-result paging)
 
 ## Phase 38S governed query-result paging

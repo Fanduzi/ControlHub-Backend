@@ -1,6 +1,6 @@
 // Package mysql tests collector scan ledger persistence.
-// input: context, crypto/sha256, database/sql, errors, testing, time, sqlmock, and collector scan models
-// output: caller-owned transaction, ledger idempotency/conflict, and collector CI state transition coverage
+// input: context, crypto/sha256, database/sql, errors, fmt, testing, time, sqlmock, collector scan models, and the ingestion ceiling
+// output: caller-owned transaction, ledger idempotency/conflict, bounded state admission, presence truncation, and collector CI state transition coverage
 // pos: Focused SQL contract for the idempotent collector ledger/state transaction boundary
 // note: if this file changes, update this header and module README.md.
 package mysql
@@ -9,6 +9,7 @@ import (
 	"crypto/sha256"
 	"database/sql"
 	"errors"
+	"fmt"
 	"testing"
 	"time"
 
@@ -16,7 +17,80 @@ import (
 	drivermysql "github.com/go-sql-driver/mysql"
 
 	"github.com/fan/controlhub/internal/model"
+	"github.com/fan/controlhub/internal/service"
 )
+
+func TestApplyCollectorScanStatesRejectsExistingStateBeyondSupportedCeiling(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock.New: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = db.Close()
+	})
+
+	rows := sqlmock.NewRows([]string{"resource_id", "consecutive_complete_scan_omissions", "last_seen_collector_scan_id", "last_completed_collector_scan_id", "missing_since"})
+	for resourceID := 1; resourceID <= service.MaxIngestionRows+1; resourceID++ {
+		rows.AddRow(resourceID, 0, "scan-old", "scan-old", nil)
+	}
+	mock.ExpectBegin()
+	mock.ExpectQuery("select resource_id, consecutive_complete_scan_omissions").
+		WithArgs(uint64(7), service.MaxIngestionRows+1).
+		WillReturnRows(rows)
+	mock.ExpectRollback()
+	tx, err := db.BeginTx(t.Context(), nil)
+	if err != nil {
+		t.Fatalf("BeginTx: %v", err)
+	}
+
+	err = ApplyCollectorScanStates(t.Context(), tx, model.CollectorScanLedgerEntry{
+		MachinePrincipalID: 7,
+		CollectorScanID:    "scan-new",
+		Result:             model.CollectorScanResultComplete,
+		CompletedAt:        time.Date(2026, 8, 30, 12, 0, 0, 0, time.UTC),
+	}, nil)
+	var limitErr *CollectorStateLimitError
+	if !errors.As(err, &limitErr) {
+		t.Fatalf("error = %v, want CollectorStateLimitError", err)
+	}
+	if err := tx.Rollback(); err != nil {
+		t.Fatalf("Rollback: %v", err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("unmet expectations: %v", err)
+	}
+}
+
+func TestAttachCollectorPresenceBoundsEachResourceAndReportsTruncation(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock.New: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = db.Close()
+	})
+
+	rows := sqlmock.NewRows([]string{"resource_id", "machine_principal_id", "name", "missing_since"})
+	for principalID := 1; principalID <= service.MaxIngestionRows+1; principalID++ {
+		rows.AddRow(9, principalID, fmt.Sprintf("collector-%03d", principalID), nil)
+	}
+	mock.ExpectQuery("row_number\\(\\) over").
+		WithArgs(uint64(9), service.MaxIngestionRows+1).
+		WillReturnRows(rows)
+	resources := []model.Resource{{ID: 9}}
+	if err := NewResourceRepository(db).attachCollectorPresence(t.Context(), resources); err != nil {
+		t.Fatalf("attachCollectorPresence: %v", err)
+	}
+	if len(resources[0].CollectorPresence) != service.MaxIngestionRows || !resources[0].CollectorPresenceTruncated {
+		t.Fatalf("collector presence count/truncated = %d/%t, want %d/true", len(resources[0].CollectorPresence), resources[0].CollectorPresenceTruncated, service.MaxIngestionRows)
+	}
+	if resources[0].CollectorPresence[0].MachinePrincipalID != 1 || resources[0].CollectorPresence[service.MaxIngestionRows-1].MachinePrincipalID != service.MaxIngestionRows {
+		t.Fatalf("collector presence bounds = %d..%d", resources[0].CollectorPresence[0].MachinePrincipalID, resources[0].CollectorPresence[service.MaxIngestionRows-1].MachinePrincipalID)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("unmet expectations: %v", err)
+	}
+}
 
 func TestApplyCollectorScanExactRetryDoesNotRewindNewerState(t *testing.T) {
 	db, mock, err := sqlmock.New()
@@ -45,7 +119,7 @@ func TestApplyCollectorScanExactRetryDoesNotRewindNewerState(t *testing.T) {
 		WithArgs(uint64(7), "scan-a", entryA.PayloadHash[:], "complete", entryA.CompletedAt).
 		WillReturnResult(sqlmock.NewResult(41, 1))
 	mock.ExpectQuery("select resource_id, consecutive_complete_scan_omissions, last_seen_collector_scan_id, last_completed_collector_scan_id, missing_since").
-		WithArgs(uint64(7)).
+		WithArgs(uint64(7), service.MaxIngestionRows+1).
 		WillReturnRows(sqlmock.NewRows([]string{"resource_id", "consecutive_complete_scan_omissions", "last_seen_collector_scan_id", "last_completed_collector_scan_id", "missing_since"}))
 	mock.ExpectExec("insert into collector_ci_scan_states").
 		WithArgs(uint64(7), uint64(11), uint8(0), "scan-a", "scan-a", nil).
@@ -57,7 +131,7 @@ func TestApplyCollectorScanExactRetryDoesNotRewindNewerState(t *testing.T) {
 		WithArgs(uint64(7), "scan-b", entryB.PayloadHash[:], "complete", entryB.CompletedAt).
 		WillReturnResult(sqlmock.NewResult(42, 1))
 	mock.ExpectQuery("select resource_id, consecutive_complete_scan_omissions, last_seen_collector_scan_id, last_completed_collector_scan_id, missing_since").
-		WithArgs(uint64(7)).
+		WithArgs(uint64(7), service.MaxIngestionRows+1).
 		WillReturnRows(sqlmock.NewRows([]string{"resource_id", "consecutive_complete_scan_omissions", "last_seen_collector_scan_id", "last_completed_collector_scan_id", "missing_since"}).
 			AddRow(11, 0, "scan-a", "scan-a", nil))
 	mock.ExpectExec("update collector_ci_scan_states").
@@ -124,7 +198,7 @@ func TestApplyCollectorScanReturnsInsertedIDInCallerTransaction(t *testing.T) {
 		WithArgs(uint64(7), "scan-1", entry.PayloadHash[:], "complete", completedAt).
 		WillReturnResult(sqlmock.NewResult(41, 1))
 	mock.ExpectQuery("select resource_id, consecutive_complete_scan_omissions, last_seen_collector_scan_id, last_completed_collector_scan_id, missing_since").
-		WithArgs(uint64(7)).
+		WithArgs(uint64(7), service.MaxIngestionRows+1).
 		WillReturnRows(sqlmock.NewRows([]string{"resource_id", "consecutive_complete_scan_omissions", "last_seen_collector_scan_id", "last_completed_collector_scan_id", "missing_since"}))
 	mock.ExpectCommit()
 	tx, err := db.BeginTx(t.Context(), nil)
@@ -286,7 +360,7 @@ func TestApplyCollectorScanStatesRediscoveryClearsMissingState(t *testing.T) {
 		WithArgs(uint64(7), "scan-new", entry.PayloadHash[:], "complete", completedAt).
 		WillReturnResult(sqlmock.NewResult(41, 1))
 	mock.ExpectQuery("select resource_id, consecutive_complete_scan_omissions, last_seen_collector_scan_id, last_completed_collector_scan_id, missing_since").
-		WithArgs(uint64(7)).
+		WithArgs(uint64(7), service.MaxIngestionRows+1).
 		WillReturnRows(sqlmock.NewRows([]string{"resource_id", "consecutive_complete_scan_omissions", "last_seen_collector_scan_id", "last_completed_collector_scan_id", "missing_since"}).
 			AddRow(11, 3, "scan-old", "scan-old", missingSince))
 	mock.ExpectExec("update collector_ci_scan_states").
@@ -330,7 +404,7 @@ func TestApplyCollectorScanStatesThirdCompleteOmissionBecomesMissing(t *testing.
 		WithArgs(uint64(7), "scan-3", entry.PayloadHash[:], "complete", completedAt).
 		WillReturnResult(sqlmock.NewResult(41, 1))
 	mock.ExpectQuery("select resource_id, consecutive_complete_scan_omissions, last_seen_collector_scan_id, last_completed_collector_scan_id, missing_since").
-		WithArgs(uint64(7)).
+		WithArgs(uint64(7), service.MaxIngestionRows+1).
 		WillReturnRows(sqlmock.NewRows([]string{"resource_id", "consecutive_complete_scan_omissions", "last_seen_collector_scan_id", "last_completed_collector_scan_id", "missing_since"}).
 			AddRow(11, 2, "scan-seen", "scan-2", nil))
 	mock.ExpectExec("update collector_ci_scan_states").
@@ -376,7 +450,7 @@ func TestApplyCollectorScanStatesUnseenIncompleteAndFailedDoNotChangeState(t *te
 				WithArgs(uint64(7), "scan-new", entry.PayloadHash[:], string(result), completedAt).
 				WillReturnResult(sqlmock.NewResult(41, 1))
 			mock.ExpectQuery("select resource_id, consecutive_complete_scan_omissions, last_seen_collector_scan_id, last_completed_collector_scan_id, missing_since").
-				WithArgs(uint64(7)).
+				WithArgs(uint64(7), service.MaxIngestionRows+1).
 				WillReturnRows(sqlmock.NewRows([]string{"resource_id", "consecutive_complete_scan_omissions", "last_seen_collector_scan_id", "last_completed_collector_scan_id", "missing_since"}).
 					AddRow(11, 2, "scan-seen", "scan-2", nil))
 			mock.ExpectCommit()
@@ -419,7 +493,7 @@ func TestApplyCollectorScanStatesDeduplicatesAndSortsBeforeInsertError(t *testin
 		WithArgs(uint64(7), "scan-new", entry.PayloadHash[:], "complete", completedAt).
 		WillReturnResult(sqlmock.NewResult(41, 1))
 	mock.ExpectQuery("select resource_id, consecutive_complete_scan_omissions, last_seen_collector_scan_id, last_completed_collector_scan_id, missing_since").
-		WithArgs(uint64(7)).
+		WithArgs(uint64(7), service.MaxIngestionRows+1).
 		WillReturnRows(sqlmock.NewRows([]string{"resource_id", "consecutive_complete_scan_omissions", "last_seen_collector_scan_id", "last_completed_collector_scan_id", "missing_since"}))
 	mock.ExpectExec("insert into collector_ci_scan_states").
 		WithArgs(uint64(7), uint64(3), uint8(0), "scan-new", "scan-new", nil).

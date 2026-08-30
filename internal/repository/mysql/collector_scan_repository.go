@@ -1,6 +1,6 @@
 // Package mysql provides MySQL-backed repository implementations.
-// input: context, database/sql, errors, fmt, slices, MySQL driver errors, and collector scan models
-// output: locked retry lookup plus caller-transaction collector ledger and idempotent per-principal/per-CI state application
+// input: context, database/sql, errors, fmt, slices, MySQL driver errors, collector scan models, and the ingestion row ceiling
+// output: locked retry lookup plus bounded caller-transaction collector ledger and idempotent per-principal/per-CI state application
 // pos: Durable idempotency and lifecycle-state boundary for completed collector scans
 // note: if this file changes, update this header and module README.md.
 package mysql
@@ -15,7 +15,16 @@ import (
 	drivermysql "github.com/go-sql-driver/mysql"
 
 	"github.com/fan/controlhub/internal/model"
+	"github.com/fan/controlhub/internal/service"
 )
+
+const maxCollectorStateEntries = service.MaxIngestionRows
+
+type CollectorStateLimitError struct{ MachinePrincipalID uint64 }
+
+func (e *CollectorStateLimitError) Error() string {
+	return fmt.Sprintf("collector principal %d exceeds the supported %d CI state entries", e.MachinePrincipalID, maxCollectorStateEntries)
+}
 
 type CollectorScanConflictError struct {
 	MachinePrincipalID uint64
@@ -139,7 +148,7 @@ func applyCollectorScanStates(ctx context.Context, tx *sql.Tx, machinePrincipalI
 
 	rows, err := tx.QueryContext(ctx, `select resource_id, consecutive_complete_scan_omissions,
 		last_seen_collector_scan_id, last_completed_collector_scan_id, missing_since
-		from collector_ci_scan_states where machine_principal_id = ? order by resource_id for update`, machinePrincipalID)
+		from collector_ci_scan_states where machine_principal_id = ? order by resource_id limit ? for update`, machinePrincipalID, maxCollectorStateEntries+1)
 	if err != nil {
 		return fmt.Errorf("lock collector CI states: %w", err)
 	}
@@ -164,6 +173,9 @@ func applyCollectorScanStates(ctx context.Context, tx *sql.Tx, machinePrincipalI
 	if err := rows.Err(); err != nil {
 		return fmt.Errorf("read collector CI states: %w", err)
 	}
+	if len(states) > maxCollectorStateEntries {
+		return &CollectorStateLimitError{MachinePrincipalID: machinePrincipalID}
+	}
 
 	seen := make(map[uint64]bool, len(seenResourceIDs))
 	for _, resourceID := range seenResourceIDs {
@@ -172,6 +184,17 @@ func applyCollectorScanStates(ctx context.Context, tx *sql.Tx, machinePrincipalI
 	existing := make(map[uint64]bool, len(states))
 	for _, state := range states {
 		existing[state.ResourceID] = true
+	}
+	stateCount := len(existing)
+	for _, resourceID := range seenResourceIDs {
+		if !existing[resourceID] {
+			stateCount++
+		}
+	}
+	if stateCount > maxCollectorStateEntries {
+		return &CollectorStateLimitError{MachinePrincipalID: machinePrincipalID}
+	}
+	for _, state := range states {
 		next, err := model.ApplyCollectorScan(state, scan, seen[state.ResourceID])
 		if err != nil {
 			return fmt.Errorf("apply collector scan to resource %d: %w", state.ResourceID, err)

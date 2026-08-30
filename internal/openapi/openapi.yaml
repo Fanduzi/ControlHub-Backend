@@ -2753,7 +2753,9 @@ paths:
         batch commit is possible. Machine Credential confirmations additionally
         require collectorScanId and collectorScanResult; complete, incomplete,
         and failed terminal scans may confirm the empty file returned by the
-        collector preview flow.
+        collector preview flow. A collector principal may retain at most 500
+        CI states; 409 collector_state_limit requires an operator to reconcile
+        obsolete state or issue a new principal before retrying.
       operationId: confirmIngestion
       security:
         - bearerAuth: []
@@ -2812,7 +2814,7 @@ paths:
               schema:
                 $ref: "#/components/schemas/ErrorResponse"
         "409":
-          description: Conflicts exist or the reviewed fingerprint is stale; preview again
+          description: Conflicts exist, the reviewed fingerprint is stale, or the collector principal reached its 500-state ceiling
           content:
             application/json:
               schema:
@@ -2971,6 +2973,7 @@ paths:
                     healthObservedAt: "2026-04-11T19:58:00Z"
                     healthObserver: prometheus
                     manualHealthOverride: null
+                    collectorPresenceTruncated: false
                     labels:
                       team: order
                     createdAt: "2026-04-11T20:00:00Z"
@@ -5666,6 +5669,7 @@ components:
         - healthObservedAt
         - healthObserver
         - manualHealthOverride
+        - collectorPresenceTruncated
       properties:
         id:
           type: integer
@@ -5708,9 +5712,14 @@ components:
         collectorPresence:
           type: array
           readOnly: true
-          description: Per-machine-principal collector presence; omitted when no collector has observed the CI.
+          maxItems: 500
+          description: First 500 per-machine-principal collector attributions in stable principal-ID order; omitted when none.
           items:
             $ref: "#/components/schemas/CollectorPresence"
+        collectorPresenceTruncated:
+          type: boolean
+          readOnly: true
+          description: True when collectorPresence omits additional principal attributions beyond its 500-entry bound.
         healthFreshness:
           type: string
           enum: [fresh, stale, never]
@@ -6632,6 +6641,7 @@ components:
             snake_case codes.
           enum:
             - bulk_resource_mutation_conflict
+            - collector_state_limit
             - disclosure_policy_conflict
             - disclosure_policy_not_found
             - environment_not_found

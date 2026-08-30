@@ -1,6 +1,6 @@
 // Package mysql provides MySQL-backed repository implementations.
 // input: crypto/sha256, database/sql, time, internal/model, internal/service
-// output: resource CRUD, governed identity and batched typed-profile/collector-presence reads, exact/presence label filtering, health observations/effective health, observed/effective values, validated previews, audited versioned manual overrides, atomic bulk mutation, and User/collector atomic ingestion confirmation including empty terminal receipts
+// output: resource CRUD, governed identity and bounded batched typed-profile/collector-presence reads, exact/presence label filtering, health observations/effective health, observed/effective values, validated previews, audited versioned manual overrides, atomic bulk mutation, and state-capped User/collector atomic ingestion confirmation including empty terminal receipts
 // pos: MySQL resource persistence, identity/typed-profile/collector-presence projections, current health evidence, effective values, inventory search, and shared resource/scan transaction authority
 // note: if this file changes, update this header and module README.md.
 package mysql
@@ -711,11 +711,14 @@ func (r *ResourceRepository) attachCollectorPresence(ctx context.Context, resour
 		args[i] = resources[i].ID
 		byID[resources[i].ID] = i
 	}
-	rows, err := r.db.QueryContext(ctx, `select s.resource_id, s.machine_principal_id, coalesce(p.name, ''), s.missing_since
+	args = append(args, maxCollectorStateEntries+1)
+	rows, err := r.db.QueryContext(ctx, `select resource_id, machine_principal_id, name, missing_since from (
+		select s.resource_id, s.machine_principal_id, coalesce(p.name, '') name, s.missing_since,
+			row_number() over (partition by s.resource_id order by s.machine_principal_id) presence_rank
 		from collector_ci_scan_states s
 		left join machine_principals p on p.id = s.machine_principal_id
 		where s.resource_id in (`+buildInClause(len(resources))+`)
-		order by s.resource_id, s.machine_principal_id`, args...)
+	) ranked where presence_rank <= ? order by resource_id, machine_principal_id`, args...)
 	if err != nil {
 		return fmt.Errorf("load collector presence: %w", err)
 	}
@@ -735,6 +738,10 @@ func (r *ResourceRepository) attachCollectorPresence(ctx context.Context, resour
 			presence.MissingSince = &missing
 		}
 		if i, ok := byID[resourceID]; ok {
+			if len(resources[i].CollectorPresence) == maxCollectorStateEntries {
+				resources[i].CollectorPresenceTruncated = true
+				continue
+			}
 			resources[i].CollectorPresence = append(resources[i].CollectorPresence, presence)
 		}
 	}
@@ -1502,6 +1509,10 @@ func mapCollectorScanError(err error) error {
 	var conflict *CollectorScanConflictError
 	if errors.As(err, &conflict) {
 		return fmt.Errorf("%w: %v", service.ErrCollectorScanConflict, conflict)
+	}
+	var limit *CollectorStateLimitError
+	if errors.As(err, &limit) {
+		return fmt.Errorf("%w: %v", service.ErrCollectorStateLimit, limit)
 	}
 	return err
 }

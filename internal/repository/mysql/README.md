@@ -23,8 +23,8 @@ Data access layer implementing service-layer repository interfaces with raw SQL 
 | named_inventory_view_repository.go | Personal/shared named inventory view CRUD, owner-visible listing, and an actor-free shared-only read seam for future machine principals |
 | machine_principal_repository.go | Single-query safe lifecycle aggregation plus atomic machine-principal create/credential rotate/revoke with admin audit, hash lookup, and idempotent state-bounded last-used updates |
 | machine_principal_repository_test.go | SQL lifecycle, hash-only arguments, safe audit payload, and rollback coverage with sqlmock |
-| collector_scan_repository.go | Locked exact/conflicting retry lookup plus caller-transaction completed-scan ledger and deterministic per-principal/per-CI state application |
-| collector_scan_repository_test.go | SQL ledger, rediscovery, third-omission, non-complete no-op, deterministic-order, and caller-owned rollback coverage with sqlmock |
+| collector_scan_repository.go | Locked exact/conflicting retry lookup plus caller-transaction completed-scan ledger and deterministic state application capped at the 500-entry complete-scan contract |
+| collector_scan_repository_test.go | SQL ledger, state ceiling, bounded presence, rediscovery, third-omission, non-complete no-op, deterministic-order, and caller-owned rollback coverage with sqlmock |
 | auth_audit_emitter.go | MySQL-backed AuthAuditEmitter — fail-open INSERT for auth/authz audit events; AuthAuditPersistenceFailures fixed-category counter |
 
 ## Exports
@@ -33,7 +33,7 @@ Data access layer implementing service-layer repository interfaces with raw SQL 
 - `NewQueryExecutionRepository(db)`, `NewQueryTargetRepository(db)`, `NewQueryDisclosureRepository(db)`, `NewQuerySavedStatementRepository(db)`, `NewQueryWorkspaceRepository(db)` — constructor functions
 - `NewNamedInventoryViewRepository(db)` — named inventory view persistence constructor
 - `NewMachinePrincipalRepository(db)` — machine-principal lifecycle and credential-authentication persistence constructor
-- `ClaimCollectorScan(ctx, tx, entry)` and `ApplyCollectorScanStates(ctx, tx, entry, seenResourceIDs)` — two-phase caller-owned primitive that serializes retry identity before ingestion, then applies per-principal CI states after ingestion; `ApplyCollectorScan` composes both for callers without intervening writes
+- `ClaimCollectorScan(ctx, tx, entry)` and `ApplyCollectorScanStates(ctx, tx, entry, seenResourceIDs)` — two-phase caller-owned primitive that serializes retry identity before ingestion, then applies at most 500 per-principal CI states after ingestion; `ApplyCollectorScan` composes both for callers without intervening writes
 - `QueryDisclosureReader`, `QueryDisclosureWriter` — narrow service-owned interfaces for disclosure policy access
 - `QuerySavedStatementReader`, `QuerySavedStatementWriter` — narrow service-owned interfaces for saved statement access, including atomic parameter-definition replacement
 - `QueryEvidencePersistenceFailures` — dimensionless expvar counter for atomic Execution Evidence Pair persistence failures (Issue #34), readable through the repository's `QueryEvidencePersistenceFailures()` accessor for the service layer
@@ -43,7 +43,7 @@ Data access layer implementing service-layer repository interfaces with raw SQL 
 - `QueryWorkspaceRepository.Get` / `Put` and service-parity `ErrQueryWorkspaceConflict` — missing-as-version-zero aggregate reads plus single-statement optimistic concurrency writes
 - `ResourceRepository.ConfirmBulkResourceMutation` — stable-order resource locking, normal update revalidation, in-transaction re-preview/fingerprint verification, typed field and explicit label mutation, and per-CI field audit in one commit
 - Repository structs satisfy service-layer interfaces
-- `ResourceRepository.PutObservedValues`, `GetEffectiveValues`, `SetManualOverrideWithAudit`, `ClearManualOverrideWithAudit`, `PreviewIngestion`, `ConfirmIngestion`, and `ConfirmCollectorIngestion`; resource list/detail reads project sorted per-principal collector present/Missing state and stable `missingSince`
+- `ResourceRepository.PutObservedValues`, `GetEffectiveValues`, `SetManualOverrideWithAudit`, `ClearManualOverrideWithAudit`, `PreviewIngestion`, `ConfirmIngestion`, and `ConfirmCollectorIngestion`; resource list/detail reads project the first 500 sorted per-principal collector present/Missing states, stable `missingSince`, and explicit truncation
 - `RelationRepository.ListTopologyRelationsByResourceIDs` applies topology direction/type predicates, deterministic relation/from/to/ID ordering, and the service's remaining-edge-plus-sentinel row limit before scanning
 - `RelationRepository.ListTopologyCandidates` reuses resource reads to return environment-scoped Service, Database Cluster, Database Proxy, and abnormal CI starts for the topology workspace
 
@@ -70,6 +70,14 @@ and sibling sources are preserved. No-op reconfirmation emits no audit row.
 ledger/state after all ingestion and audit writes, so any failure rolls back
 the entire confirmation. Exact receipt retries are read-only; changed payload,
 fingerprint, or result reuse returns the controlled collector conflict.
+
+Each collector principal may retain 500 CI state entries, matching the maximum
+complete scan size. Existing entries continue to age or recover at the ceiling;
+adding another returns controlled 409 `collector_state_limit` and rolls back the
+whole confirmation. Operators must first export/reconcile and delete only an
+intentionally retired attribution, or issue a new principal, then retry. Reads
+never hide overflow: they return 500 stable principal IDs per resource and set
+`collectorPresenceTruncated=true` when more exist.
 
 `resource_health_observations` stores one current row per resource/observer.
 Older evidence cannot replace a newer timestamp. Effective-health filters use

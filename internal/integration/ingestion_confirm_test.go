@@ -2,8 +2,8 @@
 
 // Package integration runs real-MySQL ingestion confirmation tests.
 // input: HTTP multipart/router utilities, database/sql, errors, testing, internal/api/model/repository/mysql/service
-// output: TestIngestionConfirmation* and TestCollectorIngestionConfirmation* real-HTTP empty preview/confirm, atomic persistence, retry, recovery, read-projection, and no-archive proofs
-// pos: Proves reachable collector HTTP confirmation and operator-visible Missing semantics against disposable MySQL
+// output: TestIngestionConfirmation* and TestCollectorIngestionConfirmation* real-HTTP empty preview/confirm, bounded state admission, atomic persistence, retry, recovery, read-projection, and no-archive proofs
+// pos: Proves reachable collector HTTP confirmation, bounded state rollback, and operator-visible Missing semantics against disposable MySQL
 // note: if this file changes, update this header and module README.md.
 package integration
 
@@ -109,6 +109,40 @@ func collectorIngestionMultipart(t *testing.T, handler http.Handler, path, token
 	req.Header.Set("Content-Type", form.FormDataContentType())
 	handler.ServeHTTP(rec, req)
 	return rec
+}
+
+func TestCollectorIngestionConfirmationStateCeilingRollsBack(t *testing.T) {
+	db := setupTestDB(t)
+	ctx := context.Background()
+	const principalID uint64 = 870099
+	for i := 0; i < service.MaxIngestionRows; i++ {
+		if _, err := db.ExecContext(ctx, `insert into collector_ci_scan_states
+			(machine_principal_id, resource_id, consecutive_complete_scan_omissions,
+			 last_seen_collector_scan_id, last_completed_collector_scan_id, missing_since)
+			values (?, ?, 0, 'seed', 'seed', null)`, principalID, 9_000_000+i); err != nil {
+			t.Fatalf("seed collector state %d: %v", i, err)
+		}
+	}
+	repo := mysql.NewResourceRepository(db)
+	svc := service.NewResourceService(repo, mysql.NewRelationRepository(db))
+	rows := []service.IngestionRow{{EnvironmentID: envProd, CIType: model.ResourceTypeHost, Name: "collector-state-overflow"}}
+	preview, err := repo.PreviewIngestion(ctx, rows)
+	if err != nil {
+		t.Fatalf("preview: %v", err)
+	}
+	beforeLedger := tableRowCount(t, db, "collector_scan_ledger")
+	_, err = svc.ConfirmCollectorIngestion(ctx, principalID, rows, preview.Fingerprint, service.CollectorIngestionMetadata{
+		ScanID: "collector-state-overflow", ScanResult: model.CollectorScanResultComplete,
+	})
+	if !errors.Is(err, service.ErrCollectorStateLimit) {
+		t.Fatalf("confirm error = %v, want collector state limit", err)
+	}
+	if got := resourceIDByName(t, db, rows[0].Name); got != 0 {
+		t.Fatalf("state-limit rollback persisted resource %d", got)
+	}
+	if got := tableRowCount(t, db, "collector_scan_ledger"); got != beforeLedger {
+		t.Fatalf("state-limit rollback ledger rows = %d, want %d", got, beforeLedger)
+	}
 }
 
 func TestCollectorIngestionConfirmationCompletePersistsMachineOwnedScan(t *testing.T) {

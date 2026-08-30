@@ -1,6 +1,6 @@
 // Package api provides HTTP handlers and routing for the ControlHub REST API.
 // input: net/http/httptest multipart requests and the API test server
-// output: ingestion preview, collector empty CSV/JSON preview-to-confirm flow, User/collector confirm, and collector scan-conflict HTTP contract tests
+// output: ingestion preview, collector empty CSV/JSON preview-to-confirm flow, User/collector confirm, and collector scan-conflict/state-limit HTTP contract tests
 // pos: Verifies the ingestion upload boundary, collector-only empty fingerprint reachability, terminal scan metadata, and controlled error mapping
 // note: if this file changes, update this header and module README.md.
 package api
@@ -210,6 +210,34 @@ func TestCollectorConfirmConflictMapsTo409(t *testing.T) {
 	}
 	if got.Error != "collector_scan_conflict" {
 		t.Fatalf("error = %q, want collector_scan_conflict", got.Error)
+	}
+}
+
+func TestCollectorStateLimitMapsToControlled409(t *testing.T) {
+	server := NewTestServer()
+	server.deps.MachineCredentialService = &scopeMatrixMachineService{granted: model.MachineScopeInventoryIngest}
+	server.resourceRepo.collectorConfirmErr = service.ErrCollectorStateLimit
+	payload := `[{"environmentId":1,"ciType":"host","name":"ingested-host"}]`
+	rows, err := service.ParseIngestion("json", []byte(payload))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	response := ingestRequestWithFields(t, NewRouter(server.deps), "/admin/ingestions/confirm", payload, []ingestionFormField{
+		{"format", "json"},
+		{"fingerprint", service.PreviewIngestion(rows, nil).Fingerprint},
+		{"collectorScanId", "scan-at-capacity"},
+		{"collectorScanResult", "complete"},
+	}, "Bearer chmp_route-test.secret")
+	if response.Code != http.StatusConflict {
+		t.Fatalf("status = %d, want 409: %s", response.Code, response.Body.String())
+	}
+	var got errorResponse
+	if err := json.NewDecoder(response.Body).Decode(&got); err != nil {
+		t.Fatal(err)
+	}
+	if got.Error != "collector_state_limit" {
+		t.Fatalf("error = %q, want collector_state_limit", got.Error)
 	}
 }
 
