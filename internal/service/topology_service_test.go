@@ -1,7 +1,7 @@
 // Package service provides tests for the resource topology projection.
 // input: internal/model, internal/service
-// output: topology service test suite, including bounded relation reads and sentinel truncation
-// pos: TDD tests for TopologyService.BuildTopology response semantics and repository budgets
+// output: topology service test suite, including bounded relation/candidate reads and sentinel truncation
+// pos: TDD tests for TopologyService.BuildTopology response semantics and caller-owned repository budgets
 // note: if this file changes, update this header and module README.md.
 package service
 
@@ -30,6 +30,7 @@ type fakeTopologyRepo struct {
 	relations          []model.ResourceRelation
 	candidateIDs       []uint64
 	topologyReadLimits []int
+	candidateLimits    []int
 }
 
 func (f *fakeTopologyRepo) GetResource(id uint64) (*model.Resource, error) {
@@ -89,14 +90,20 @@ func (f *fakeTopologyRepo) ListTopologyRelationsByResourceIDs(ids []uint64, dire
 	return items, nil
 }
 
-func (f *fakeTopologyRepo) ListTopologyCandidates(environmentID uint64) ([]model.Resource, error) {
+func (f *fakeTopologyRepo) ListTopologyCandidates(environmentID uint64, limit int) ([]model.Resource, error) {
+	f.candidateLimits = append(f.candidateLimits, limit)
 	var result []model.Resource
+	seen := map[uint64]bool{}
 	for _, id := range f.candidateIDs {
 		r, ok := f.resources[id]
-		if !ok || f.hidden[id] || r.EnvironmentID != environmentID {
+		if !ok || f.hidden[id] || r.EnvironmentID != environmentID || seen[id] {
 			continue
 		}
+		seen[id] = true
 		result = append(result, r)
+		if len(result) == limit {
+			break
+		}
 	}
 	return result, nil
 }
@@ -592,6 +599,9 @@ func TestBuildTopology_NoRootDedupesAndCapsCandidates(t *testing.T) {
 	}
 	if !resp.Truncated {
 		t.Fatal("truncated = false, want true")
+	}
+	if len(repo.candidateLimits) != 1 || repo.candidateLimits[0] != TopologyNodeCap+1 {
+		t.Fatalf("candidate limits = %v, want [%d]", repo.candidateLimits, TopologyNodeCap+1)
 	}
 	if ids := nodeIDs(resp); ids[uint64(TopologyNodeCap+1)] {
 		t.Fatalf("node beyond cap included: %v", ids)

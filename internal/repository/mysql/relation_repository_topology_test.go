@@ -1,7 +1,7 @@
 // Package mysql provides bounded topology relation repository tests.
 // input: testing, time, sqlmock, and internal/model
-// output: deterministic bounded topology relation read regression coverage
-// pos: Verifies the topology-only relation query applies its caller-owned row budget before scanning
+// output: deterministic bounded topology relation and candidate read regression coverage
+// pos: Verifies topology-only queries apply caller-owned row budgets before scanning
 // note: if this file changes, update this header and module README.md.
 package mysql
 
@@ -33,6 +33,29 @@ func TestRelationRepositoryListTopologyRelationsByResourceIDsUsesDeterministicLi
 	}
 	if len(items) != 1 || items[0].ID != 11 {
 		t.Fatalf("items = %+v, want relation 11", items)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestRelationRepositoryListTopologyCandidatesUsesDeterministicLimit(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock.New: %v", err)
+	}
+	defer db.Close()
+
+	mock.ExpectQuery(`(?s)select r\.id,.*from resources r\s+where r\.environment_id = \? and r\.archived_at is null.*order by.*r\.name, r\.id\s+limit \?`).
+		WithArgs(uint64(9), sqlmock.AnyArg(), 201).
+		WillReturnRows(sqlmock.NewRows([]string{"id"}))
+
+	items, err := NewRelationRepository(db).ListTopologyCandidates(9, 201)
+	if err != nil {
+		t.Fatalf("list topology candidates: %v", err)
+	}
+	if len(items) != 0 {
+		t.Fatalf("items = %+v, want none", items)
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatal(err)

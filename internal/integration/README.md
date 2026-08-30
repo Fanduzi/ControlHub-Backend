@@ -18,7 +18,7 @@ MySQL-backed integration tests run against disposable Testcontainers databases.
 | resource_identity_migration_test.go | Fail-loud v21 migration preflight for duplicate legacy external IDs before schema mutation |
 | query_workspace_migration_test.go | Real-MySQL migration-28 downgrade guard: workspace rows and any non-null full SQL survive a refused rollback, while empty storage permits downgrade |
 | query_workspace_statement_api_test.go | Real-MySQL + HTTP workspace OCC and owner-only successful statement access matrix, including other/admin/machine/failed/legacy denial and list/audit non-disclosure |
-| topology_test.go | Topology traversal plus real-MySQL topology candidate repository behavior |
+| topology_test.go | Topology traversal plus real-MySQL effective-health candidate selection, deterministic cap-plus-sentinel reads, and overflow propagation |
 | auth_authorization_version_test.go | Verifies Authorization Version credential invalidation and governed-query freshness against current database state |
 | operator_access_boundary_test.go | Proves the complete Operator Access Boundary matrix against current database state using the shared operatoraccess policy; concrete resource and query-target example paths bind to a self-contained database_instance fixture so the matrix never depends on mutable canonical seed IDs |
 | named_inventory_view_test.go | Proves personal/shared authorization and lossless filters/sort/columns JSON round-trip without result or page snapshots against real MySQL |

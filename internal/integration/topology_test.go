@@ -2,8 +2,8 @@
 
 // Package integration verifies topology behavior against disposable MySQL.
 // input: internal/model, internal/repository/mysql, internal/service, Testcontainers-backed MySQL
-// output: topology service and repository integration tests
-// pos: Proves topology traversal and workspace candidates against real MySQL
+// output: topology service and bounded repository integration tests, including candidate overflow
+// pos: Proves topology traversal and cap-plus-sentinel workspace candidates against real MySQL
 // note: if this file changes, update this header and module README.md.
 
 package integration
@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/fan/controlhub/internal/model"
 	"github.com/fan/controlhub/internal/repository/mysql"
@@ -110,10 +111,22 @@ func TestRelationRepositoryListTopologyCandidates(t *testing.T) {
 	cluster := createTopologyCandidateResource(t, resRepo, ctx, "topo-candidate-cluster", model.ResourceTypeDatabaseCluster, "mysql", envProd, model.HealthStatusHealthy)
 	proxy := createTopologyCandidateResource(t, resRepo, ctx, "topo-candidate-proxy", model.ResourceTypeDatabaseProxy, "proxysql", envProd, model.HealthStatusHealthy)
 	warningHost := createTopologyCandidateResource(t, resRepo, ctx, "topo-candidate-warning-host", model.ResourceTypeHost, "vm", envProd, model.HealthStatusWarning)
+	observedWarningHost := createTopologyCandidateResource(t, resRepo, ctx, "topo-candidate-observed-warning-host", model.ResourceTypeHost, "vm", envProd, model.HealthStatusHealthy)
+	if err := resRepo.UpsertHealthObservation(ctx, observedWarningHost.ID, model.HealthObservation{
+		Status: model.HealthStatusWarning, ObservedAt: time.Now(), Observer: "topology-test",
+	}); err != nil {
+		t.Fatalf("observe warning host: %v", err)
+	}
+	staleWarningHost := createTopologyCandidateResource(t, resRepo, ctx, "topo-candidate-stale-warning-host", model.ResourceTypeHost, "vm", envProd, model.HealthStatusHealthy)
+	if err := resRepo.UpsertHealthObservation(ctx, staleWarningHost.ID, model.HealthObservation{
+		Status: model.HealthStatusWarning, ObservedAt: time.Now().Add(-model.DefaultHealthFreshnessThreshold - time.Minute), Observer: "topology-test",
+	}); err != nil {
+		t.Fatalf("observe stale warning host: %v", err)
+	}
 	healthyHost := createTopologyCandidateResource(t, resRepo, ctx, "topo-candidate-healthy-host", model.ResourceTypeHost, "vm", envProd, model.HealthStatusHealthy)
 	otherEnvService := createTopologyCandidateResource(t, resRepo, ctx, "topo-candidate-other-env-service", model.ResourceTypeService, "api", 2, model.HealthStatusHealthy)
 
-	items, err := relRepo.ListTopologyCandidates(envProd)
+	items, err := relRepo.ListTopologyCandidates(envProd, service.TopologyNodeCap+1)
 	if err != nil {
 		t.Fatalf("list topology candidates: %v", err)
 	}
@@ -122,15 +135,58 @@ func TestRelationRepositoryListTopologyCandidates(t *testing.T) {
 	for _, item := range items {
 		got[item.ID] = true
 	}
-	for _, id := range []uint64{serviceRes.ID, cluster.ID, proxy.ID, warningHost.ID} {
+	for _, id := range []uint64{serviceRes.ID, cluster.ID, proxy.ID, warningHost.ID, observedWarningHost.ID} {
 		if !got[id] {
 			t.Fatalf("missing candidate %d in %v", id, got)
 		}
 	}
-	for _, id := range []uint64{healthyHost.ID, otherEnvService.ID} {
+	for _, id := range []uint64{healthyHost.ID, staleWarningHost.ID, otherEnvService.ID} {
 		if got[id] {
 			t.Fatalf("unexpected candidate %d in %v", id, got)
 		}
+	}
+}
+
+func TestTopologyCandidatesHighCardinalityUsesSentinel(t *testing.T) {
+	db := setupTestDB(t)
+	resRepo := mysql.NewResourceRepository(db)
+	relRepo := mysql.NewRelationRepository(db)
+	ctx := context.Background()
+
+	for i := 0; i <= service.TopologyNodeCap; i++ {
+		createTopologyCandidateResource(t, resRepo, ctx, fmt.Sprintf("topo-bounded-%03d", i), model.ResourceTypeService, "api", envProd, model.HealthStatusHealthy)
+	}
+
+	items, err := relRepo.ListTopologyCandidates(envProd, service.TopologyNodeCap+1)
+	if err != nil {
+		t.Fatalf("list bounded topology candidates: %v", err)
+	}
+	if len(items) != service.TopologyNodeCap+1 {
+		t.Fatalf("candidates = %d, want sentinel size %d", len(items), service.TopologyNodeCap+1)
+	}
+	typed := func(item model.Resource) bool {
+		return item.ResourceType == model.ResourceTypeService || item.ResourceType == model.ResourceTypeDatabaseCluster || item.ResourceType == model.ResourceTypeDatabaseProxy
+	}
+	for i := 1; i < len(items); i++ {
+		if !typed(items[i-1]) && typed(items[i]) {
+			t.Fatalf("typed candidate %q followed abnormal-only candidates", items[i].Name)
+		}
+		if typed(items[i-1]) == typed(items[i]) && (items[i-1].Name > items[i].Name || items[i-1].Name == items[i].Name && items[i-1].ID > items[i].ID) {
+			t.Fatalf("candidate order is not deterministic at %q then %q", items[i-1].Name, items[i].Name)
+		}
+	}
+
+	resp, err := service.NewTopologyService(relRepo).BuildTopology(model.TopologyQuery{
+		EnvironmentID: envProd, Direction: model.TopologyDirectionBoth,
+	})
+	if err != nil {
+		t.Fatalf("build environment topology: %v", err)
+	}
+	if len(resp.Nodes) != service.TopologyNodeCap {
+		t.Fatalf("nodes = %d, want cap %d", len(resp.Nodes), service.TopologyNodeCap)
+	}
+	if !resp.Truncated {
+		t.Fatal("truncated = false, want sentinel overflow to propagate")
 	}
 }
 

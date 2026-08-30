@@ -1,7 +1,7 @@
 // Package service provides business logic for resource topology projection.
-// input: internal/model topology contracts and repository-bounded relation reads
-// output: NewTopologyService, TopologyService.BuildTopology, TopologyRepository interface with relation budgets
-// pos: Business logic for building capped topology read models without unbounded relation materialization
+// input: internal/model topology contracts and repository-bounded relation/candidate reads
+// output: NewTopologyService, TopologyService.BuildTopology, TopologyRepository interface with caller-owned budgets
+// pos: Business logic for capped rooted and workspace topology read models without unbounded materialization
 // note: if this file changes, update this header and module README.md.
 package service
 
@@ -26,7 +26,7 @@ const (
 type TopologyRepository interface {
 	GetResource(id uint64) (*model.Resource, error)
 	ListTopologyRelationsByResourceIDs(ids []uint64, direction model.TopologyDirection, relationType model.RelationType, limit int) ([]model.ResourceRelation, error)
-	ListTopologyCandidates(environmentID uint64) ([]model.Resource, error)
+	ListTopologyCandidates(environmentID uint64, limit int) ([]model.Resource, error)
 }
 
 type TopologyService struct {
@@ -169,14 +169,14 @@ func (s *TopologyService) BuildTopology(query model.TopologyQuery) (*model.Topol
 }
 
 func (s *TopologyService) buildTopologyCandidates(query model.TopologyQuery) (*model.TopologyResponse, error) {
-	candidates, err := s.repo.ListTopologyCandidates(query.EnvironmentID)
+	candidates, err := s.repo.ListTopologyCandidates(query.EnvironmentID, TopologyNodeCap+1)
 	if err != nil {
 		return nil, err
 	}
 
 	nodeSet := map[uint64]*model.Resource{}
 	distance := map[uint64]int{}
-	truncated := false
+	truncated := len(candidates) > TopologyNodeCap
 	for i := range candidates {
 		res := candidates[i]
 		if res.IsArchived() || !isTopologyCandidate(&res) {

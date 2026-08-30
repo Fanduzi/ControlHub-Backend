@@ -1,13 +1,14 @@
 // Package mysql provides MySQL-backed repository implementations.
-// input: database/sql, internal/model, topology relation row budgets, and effective-health resource reads
-// output: relation CRUD with stable endpoint locks plus relation/member projections, bounded topology reads/candidates, and derived health
-// pos: MySQL data access and shared resource-row lock discipline for relations, bounded topology traversal, and workspace candidate reads
+// input: database/sql, internal/model, topology row budgets, and effective-health evidence
+// output: relation CRUD with stable endpoint locks plus relation/member projections and bounded topology relations/candidates
+// pos: MySQL data access and shared resource-row lock discipline for bounded rooted and workspace topology reads
 // note: if this file changes, update this header and module README.md.
 package mysql
 
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -505,25 +506,69 @@ func (r *RelationRepository) ListTopologyRelationsByResourceIDs(ids []uint64, di
 	return items, rows.Err()
 }
 
-func (r *RelationRepository) ListTopologyCandidates(environmentID uint64) ([]model.Resource, error) {
+func (r *RelationRepository) ListTopologyCandidates(environmentID uint64, limit int) ([]model.Resource, error) {
+	if limit <= 0 {
+		return []model.Resource{}, nil
+	}
+
 	resourceRepo := NewResourceRepository(r.db)
-	query := model.ResourceListQuery{
-		ResourceTypes:  []string{string(model.ResourceTypeService), string(model.ResourceTypeDatabaseCluster), string(model.ResourceTypeDatabaseProxy)},
-		EnvironmentIDs: []uint64{environmentID},
-		Page:           1,
-		PageSize:       model.MaxPageSize,
-	}
-	typed, _, err := resourceRepo.ListResources(context.Background(), query)
+	rows, err := r.db.QueryContext(context.Background(), `
+		select r.id, r.resource_type, r.resource_subtype, r.name, r.display_name,
+			r.environment_id, r.owner_id, r.lifecycle_status, r.health_status, r.labels
+		from resources r
+		where r.environment_id = ? and r.archived_at is null and (
+			r.resource_type in ('service', 'database_cluster', 'database_proxy')
+			or r.health_status in ('warning', 'critical')
+			or exists (
+				select 1 from resource_health_observations rho
+				where rho.resource_id = r.id
+					and rho.health_status in ('warning', 'critical')
+					and rho.observed_at >= ?
+			)
+		)
+		order by case when r.resource_type in ('service', 'database_cluster', 'database_proxy') then 0 else 1 end,
+			r.name, r.id
+		limit ?`, environmentID, time.Now().UTC().Add(-model.DefaultHealthFreshnessThreshold), limit)
 	if err != nil {
 		return nil, err
 	}
+	defer rows.Close()
 
-	query.ResourceTypes = nil
-	query.HealthStatuses = []string{string(model.HealthStatusWarning), string(model.HealthStatusCritical)}
-	abnormal, _, err := resourceRepo.ListResources(context.Background(), query)
-	if err != nil {
+	items := make([]model.Resource, 0)
+	for rows.Next() {
+		var item model.Resource
+		var manualHealth sql.NullString
+		var rawLabels string
+		if err := rows.Scan(
+			&item.ID,
+			&item.ResourceType,
+			&item.ResourceSubtype,
+			&item.Name,
+			&item.DisplayName,
+			&item.EnvironmentID,
+			&item.OwnerID,
+			&item.LifecycleStatus,
+			&manualHealth,
+			&rawLabels,
+		); err != nil {
+			return nil, err
+		}
+		setManualHealthOverride(&item, manualHealth)
+		if rawLabels == "" || rawLabels == "null" {
+			item.Labels = map[string]string{}
+		} else if err := json.Unmarshal([]byte(rawLabels), &item.Labels); err != nil {
+			return nil, err
+		}
+		item.ProfileSummary = resourceRepo.buildProfileSummary(context.Background(), item.ID, item.ResourceType)
+		items = append(items, item)
+	}
+	if err := rows.Err(); err != nil {
 		return nil, err
 	}
+	rows.Close()
 
-	return append(typed, abnormal...), nil
+	if err := resourceRepo.attachHealthObservations(context.Background(), items); err != nil {
+		return nil, err
+	}
+	return items, nil
 }

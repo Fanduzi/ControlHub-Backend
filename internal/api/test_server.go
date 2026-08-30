@@ -10,6 +10,7 @@ import (
 	"database/sql"
 	"fmt"
 	"net/http"
+	"sort"
 	"strings"
 	"time"
 
@@ -944,13 +945,34 @@ func (f *fakeTopologyRepo) ListTopologyRelationsByResourceIDs(ids []uint64, dire
 	return items, nil
 }
 
-func (f *fakeTopologyRepo) ListTopologyCandidates(environmentID uint64) ([]model.Resource, error) {
+func (f *fakeTopologyRepo) ListTopologyCandidates(environmentID uint64, limit int) ([]model.Resource, error) {
 	result := make([]model.Resource, 0)
 	for _, resource := range f.resources.resources {
 		if resource.EnvironmentID != environmentID {
 			continue
 		}
+		if resource.ResourceType != model.ResourceTypeService &&
+			resource.ResourceType != model.ResourceTypeDatabaseCluster &&
+			resource.ResourceType != model.ResourceTypeDatabaseProxy &&
+			resource.HealthStatus != string(model.HealthStatusWarning) &&
+			resource.HealthStatus != string(model.HealthStatusCritical) {
+			continue
+		}
 		result = append(result, resource)
+	}
+	sort.Slice(result, func(i, j int) bool {
+		iTyped := result[i].ResourceType == model.ResourceTypeService || result[i].ResourceType == model.ResourceTypeDatabaseCluster || result[i].ResourceType == model.ResourceTypeDatabaseProxy
+		jTyped := result[j].ResourceType == model.ResourceTypeService || result[j].ResourceType == model.ResourceTypeDatabaseCluster || result[j].ResourceType == model.ResourceTypeDatabaseProxy
+		if iTyped != jTyped {
+			return iTyped
+		}
+		if result[i].Name != result[j].Name {
+			return result[i].Name < result[j].Name
+		}
+		return result[i].ID < result[j].ID
+	})
+	if len(result) > limit {
+		result = result[:limit]
 	}
 	return result, nil
 }
