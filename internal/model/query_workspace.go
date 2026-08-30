@@ -1,6 +1,6 @@
 // Package model provides domain entities for the resource management system.
-// input: encoding/json, fmt, strings, time, unicode/utf8, MaxSavedStatementSize
-// output: bounded QueryWorkspaceWorksheet, QueryWorkspace, and QueryWorkspacePutRequest contracts
+// input: encoding/json, fmt, strings, time, unicode/utf8, MaxSavedStatementSize, shared metadata control-character validation
+// output: bounded QueryWorkspaceWorksheet, QueryWorkspace, and metadata-control-safe QueryWorkspacePutRequest contracts
 // pos: Opaque one-row-per-owner query worksheet aggregate without target resolution or SQL guarding
 // note: if this file changes, update this header and module README.md.
 package model
@@ -52,6 +52,9 @@ func (r QueryWorkspacePutRequest) Validate() error {
 		if strings.TrimSpace(worksheet.ID) == "" || utf8.RuneCountInString(worksheet.ID) > MaxQueryWorkspaceWorksheetIDLength {
 			return fmt.Errorf("worksheet id must contain 1 to %d characters", MaxQueryWorkspaceWorksheetIDLength)
 		}
+		if err := validateNoControlCharacters("worksheet id", worksheet.ID); err != nil {
+			return err
+		}
 		if _, exists := seen[worksheet.ID]; exists {
 			return fmt.Errorf("worksheet ids must be unique")
 		}
@@ -59,14 +62,22 @@ func (r QueryWorkspacePutRequest) Validate() error {
 		if strings.TrimSpace(worksheet.Name) == "" || utf8.RuneCountInString(worksheet.Name) > MaxQueryWorkspaceWorksheetNameLength {
 			return fmt.Errorf("worksheet name must contain 1 to %d characters", MaxQueryWorkspaceWorksheetNameLength)
 		}
+		if err := validateNoControlCharacters("worksheet name", worksheet.Name); err != nil {
+			return err
+		}
 		if worksheet.TargetResourceID == 0 {
 			return fmt.Errorf("worksheet targetResourceId must be positive")
 		}
 		if len(worksheet.Statement) > MaxSavedStatementSize {
 			return fmt.Errorf("worksheet statement exceeds %d bytes", MaxSavedStatementSize)
 		}
-		if worksheet.ActiveDatabase != nil && (strings.TrimSpace(*worksheet.ActiveDatabase) == "" || utf8.RuneCountInString(*worksheet.ActiveDatabase) > MaxQueryWorkspaceDatabaseNameLength) {
-			return fmt.Errorf("worksheet activeDatabase must contain 1 to %d characters", MaxQueryWorkspaceDatabaseNameLength)
+		if worksheet.ActiveDatabase != nil {
+			if strings.TrimSpace(*worksheet.ActiveDatabase) == "" || utf8.RuneCountInString(*worksheet.ActiveDatabase) > MaxQueryWorkspaceDatabaseNameLength {
+				return fmt.Errorf("worksheet activeDatabase must contain 1 to %d characters", MaxQueryWorkspaceDatabaseNameLength)
+			}
+			if err := validateNoControlCharacters("worksheet activeDatabase", *worksheet.ActiveDatabase); err != nil {
+				return err
+			}
 		}
 	}
 	raw, err := json.Marshal(r.Worksheets)

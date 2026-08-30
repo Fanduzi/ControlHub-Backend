@@ -1,6 +1,6 @@
 // Package model provides tests for query-workspace validation.
 // input: encoding/json, strings, testing
-// output: bounded aggregate, opaque SQL preservation, and execution-statement JSON contract tests
+// output: bounded/control-free metadata, opaque SQL preservation, and execution-statement JSON contract tests
 // pos: Regression coverage for query workspace and reusable execution statement models
 // note: if this file changes, update this header and module README.md.
 package model
@@ -14,7 +14,7 @@ import (
 func TestQueryWorkspacePutRequestAcceptsOpaqueStatementsUnchanged(t *testing.T) {
 	t.Parallel()
 	database := "orders db"
-	statements := []string{"", "select", "not sql at all", "DELETE FROM orders", "\n\t SELECT  *\nFROM orders \t"}
+	statements := []string{"", "select", "not sql at all", "DELETE FROM orders", "\n\t SELECT  *\nFROM orders \t", "SELECT\x00invalid"}
 	worksheets := make([]QueryWorkspaceWorksheet, len(statements))
 	for i, statement := range statements {
 		worksheets[i] = QueryWorkspaceWorksheet{
@@ -48,12 +48,15 @@ func TestQueryWorkspacePutRequestRejectsInvalidAggregateShape(t *testing.T) {
 		{name: "too many worksheets", worksheets: make([]QueryWorkspaceWorksheet, MaxQueryWorkspaceWorksheets+1)},
 		{name: "empty id", worksheets: []QueryWorkspaceWorksheet{{Name: valid.Name, TargetResourceID: valid.TargetResourceID}}},
 		{name: "long id", worksheets: []QueryWorkspaceWorksheet{{ID: strings.Repeat("i", MaxQueryWorkspaceWorksheetIDLength+1), Name: valid.Name, TargetResourceID: valid.TargetResourceID}}},
+		{name: "id control character", worksheets: []QueryWorkspaceWorksheet{{ID: "worksheet\n2", Name: valid.Name, TargetResourceID: valid.TargetResourceID}}},
 		{name: "empty name", worksheets: []QueryWorkspaceWorksheet{{ID: valid.ID, TargetResourceID: valid.TargetResourceID}}},
 		{name: "long name", worksheets: []QueryWorkspaceWorksheet{{ID: valid.ID, Name: strings.Repeat("n", MaxQueryWorkspaceWorksheetNameLength+1), TargetResourceID: valid.TargetResourceID}}},
+		{name: "name control character", worksheets: []QueryWorkspaceWorksheet{{ID: valid.ID, Name: "Worksheet\t2", TargetResourceID: valid.TargetResourceID}}},
 		{name: "zero target", worksheets: []QueryWorkspaceWorksheet{{ID: valid.ID, Name: valid.Name}}},
 		{name: "long statement", worksheets: []QueryWorkspaceWorksheet{{ID: valid.ID, Name: valid.Name, TargetResourceID: valid.TargetResourceID, Statement: strings.Repeat("s", MaxSavedStatementSize+1)}}},
 		{name: "empty active database", worksheets: []QueryWorkspaceWorksheet{{ID: valid.ID, Name: valid.Name, TargetResourceID: valid.TargetResourceID, ActiveDatabase: new(string)}}},
 		{name: "long active database", worksheets: []QueryWorkspaceWorksheet{{ID: valid.ID, Name: valid.Name, TargetResourceID: valid.TargetResourceID, ActiveDatabase: stringPointer(strings.Repeat("d", MaxQueryWorkspaceDatabaseNameLength+1))}}},
+		{name: "active database control character", worksheets: []QueryWorkspaceWorksheet{{ID: valid.ID, Name: valid.Name, TargetResourceID: valid.TargetResourceID, ActiveDatabase: stringPointer("orders\narchive")}}},
 		{name: "duplicate ids", worksheets: []QueryWorkspaceWorksheet{valid, valid}},
 	}
 	for _, tt := range tests {

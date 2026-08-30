@@ -29,7 +29,7 @@ Domain structs, taxonomy constants, validation methods, and dictionary definitio
 | query_credential.go | Phase 38A query credential metadata request/response/runtime-status types + Validate (metadata only; never DSN/password) |
 | query_disclosure.go | Phase 38Q governed result-disclosure policy: ResultDisclosureMode enum + Validate, ResultDisclosurePolicy, ResultDisclosurePolicyUpsertRequest + Validate, ResultDisclosurePolicyListQuery |
 | query_saved_statement.go | Phase 38W governed saved statements: immutable scopes, typed parameter definitions, request validation, template-execution request/limits, and list response types |
-| query_workspace.go | Bounded one-row-per-owner worksheet aggregate with optimistic version requests and opaque statement preservation |
+| query_workspace.go | Bounded one-row-per-owner worksheet aggregate with optimistic version requests, control-free metadata, and opaque statement preservation |
 | query_workspace_test.go | Workspace bounds/opaque-SQL tests and full-statement history JSON omission coverage |
 | resource_test.go | Validation and dictionary completeness tests |
 | health_observation_test.go | Freshness time-boundary contract tests |

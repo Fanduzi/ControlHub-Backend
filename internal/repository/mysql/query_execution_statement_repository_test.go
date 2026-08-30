@@ -1,6 +1,6 @@
 // Package mysql provides tests for private full-statement execution persistence and retrieval.
 // input: context, database/sql, errors, testing, sqlmock, internal/model
-// output: full-statement insert arguments, owner-only success retrieval, and mismatch denial tests
+// output: successful-user-only full-statement insert arguments, owner-only retrieval, and mismatch denial tests
 // pos: SQL privacy boundary for reusable successful user execution statements
 // note: if this file changes, update this header and module README.md.
 package mysql
@@ -48,6 +48,36 @@ func TestInsertExecutionWithAuditWritesFullStatementButNotAudit(t *testing.T) {
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatalf("SQL expectations: %v", err)
+	}
+}
+
+func TestExecutionRecordArgsDropsFullStatementOutsideSuccessfulUserExecutions(t *testing.T) {
+	tests := []struct {
+		name   string
+		record model.QueryExecutionRecord
+	}{
+		{name: "machine", record: model.QueryExecutionRecord{ActorMachinePrincipalID: 9, Status: model.QueryExecutionSuccess}},
+		{name: "failed", record: model.QueryExecutionRecord{ActorUserID: 7, Status: model.QueryExecutionFailed}},
+		{name: "rejected", record: model.QueryExecutionRecord{ActorUserID: 7, Status: model.QueryExecutionRejected}},
+		{name: "timeout", record: model.QueryExecutionRecord{ActorUserID: 7, Status: model.QueryExecutionTimeout}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			secret := "SELECT private_" + tt.name
+			tt.record.FullStatement = secret
+			args, err := executionRecordArgs(tt.record)
+			if err != nil {
+				t.Fatalf("executionRecordArgs: %v", err)
+			}
+			if args[6] != nil {
+				t.Fatalf("full_statement arg = %q, want nil", args[6])
+			}
+			for _, arg := range args {
+				if arg == secret {
+					t.Fatal("execution insert args contain private full statement")
+				}
+			}
+		})
 	}
 }
 

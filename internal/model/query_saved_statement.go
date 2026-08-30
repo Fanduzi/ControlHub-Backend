@@ -1,6 +1,6 @@
 // Package model provides domain entities for the resource management system.
 // input: encoding/json, fmt, regexp, time, unicode/utf8 packages
-// output: QuerySavedStatementScope, QuerySavedStatementParameterType, QuerySavedStatementParameterDefinition, QuerySavedStatement, QuerySavedStatementCreateRequest, QuerySavedStatementUpdateRequest, QuerySavedStatementExecuteRequest, QuerySavedStatementListQuery, QuerySavedStatementListResponse
+// output: QuerySavedStatement* contracts and shared metadata control-character validation
 // pos: Governed saved statements for target-scoped query library
 // note: if this file changes, update header and README.md
 package model
@@ -192,9 +192,13 @@ func validateSavedStatementName(name string) error {
 	if utf8.RuneCountInString(name) > MaxSavedStatementNameLength {
 		return fmt.Errorf("name exceeds %d characters", MaxSavedStatementNameLength)
 	}
-	for _, r := range name {
+	return validateNoControlCharacters("name", name)
+}
+
+func validateNoControlCharacters(field, value string) error {
+	for _, r := range value {
 		if r < 32 {
-			return fmt.Errorf("name contains control characters")
+			return fmt.Errorf("%s contains control characters", field)
 		}
 	}
 	return nil

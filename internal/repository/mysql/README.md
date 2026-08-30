@@ -11,8 +11,8 @@ Data access layer implementing service-layer repository interfaces with raw SQL 
 | audit_repository.go | Audit event queries (global and by resource), including nullable user/machine actor projection, target-resource environment filtering, principal-name search, pagination, and JSON field changes |
 | user_repository.go | User credential lookup by email/id; Authorization Version mutators (role/active/password); UpgradePasswordHash for legacy-to-Argon2id migration; CountLegacyHashUsers for operator visibility |
 | dictionary_repository.go | Dictionary queries — DB-backed (environments, owners, roles) and static (resource types, relation types, lifecycle/health statuses) |
-| query_execution_repository.go | Query credential metadata plus atomic identity-aware `InsertExecutionWithAudit`; full statements are nullable/private, absent from list/audit projections, and readable only for an exact owner/user/success match |
-| query_execution_statement_repository_test.go | Exact full-statement insert args, audit omission, owner-only success retrieval predicates, and denial-as-no-row coverage |
+| query_execution_repository.go | Query credential metadata plus atomic identity-aware `InsertExecutionWithAudit`; full statements persist only for successful user executions, stay absent from list/audit projections, and are readable only for an exact owner/user/success match |
+| query_execution_statement_repository_test.go | Successful-user full-statement insert args, machine/non-success NULL binding, audit omission, owner-only retrieval predicates, and denial-as-no-row coverage |
 | query_workspace_repository.go | One JSON aggregate row per owner with missing-as-version-zero reads and optimistic insert/update conflict handling |
 | query_workspace_repository_test.go | Missing/owner-scoped reads, invalid/deleted target preservation, exact SQL args, duplicate conflict, and OCC race coverage |
 | query_target_repository.go | Read-only query target read model — joins database_instance resources with profiles, environments, owners, and cluster membership |

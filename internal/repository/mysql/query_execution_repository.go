@@ -1,7 +1,7 @@
 // Package mysql provides MySQL-backed repository implementations.
 // input: database/sql, context, errors, expvar, fmt, log, strconv, internal/model
-// output: NewQueryExecutionRepository, identity-aware atomic InsertExecutionWithAudit, owner-only successful full-statement lookup, user/machine execution history, credential metadata/audit operations, QueryEvidencePersistenceFailures accessor
-// pos: MySQL persistence boundary for exactly-one-actor query history, private reusable statements, and at-most-one-actor audit evidence without credential data
+// output: NewQueryExecutionRepository, identity-aware atomic InsertExecutionWithAudit with successful-user-only full SQL, owner-only statement lookup, user/machine history, credential metadata/audit operations, QueryEvidencePersistenceFailures accessor
+// pos: MySQL persistence boundary for exactly-one-actor query history, successful-user-only private reusable statements, and at-most-one-actor audit evidence without credential data
 // note: if this file changes, update header and README.md
 package mysql
 
@@ -205,6 +205,8 @@ func (r *QueryExecutionRepository) DeleteCredentialByResourceID(ctx context.Cont
 }
 
 // executionRecordArgs converts a record into the insertExecutionSQL parameters.
+// Full SQL is bound only for successful user executions; every machine or
+// non-success outcome binds NULL without rejecting its metadata evidence.
 // When rec.CreatedAt is zero a nil placeholder lets the database default apply.
 func executionRecordArgs(rec model.QueryExecutionRecord) ([]any, error) {
 	actorUserID, actorMachinePrincipalID, err := executionActorArgs(rec)
@@ -216,7 +218,7 @@ func executionRecordArgs(rec model.QueryExecutionRecord) ([]any, error) {
 		createdAt = rec.CreatedAt.UTC()
 	}
 	var fullStatement any
-	if rec.FullStatement != "" {
+	if rec.ActorUserID != 0 && rec.ActorMachinePrincipalID == 0 && rec.Status == model.QueryExecutionSuccess && rec.FullStatement != "" {
 		fullStatement = rec.FullStatement
 	}
 	return []any{
