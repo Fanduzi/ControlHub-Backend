@@ -1,7 +1,7 @@
 // Package mysql provides MySQL-backed repository implementations.
-// input: database/sql, internal/model, topology row budgets, and effective-health evidence
-// output: relation CRUD with stable endpoint locks plus relation/member projections and bounded topology relations/candidates
-// pos: MySQL data access and shared resource-row lock discipline for bounded rooted and workspace topology reads
+// input: database/sql, internal/model, topology row budgets, and multi-observer effective-health evidence
+// output: relation CRUD with stable endpoint locks plus bounded topology relations/candidates and one-row health projections
+// pos: MySQL data access for bounded rooted/workspace topology reads and candidate-specific effective health
 // note: if this file changes, update this header and module README.md.
 package mysql
 
@@ -511,6 +511,7 @@ func (r *RelationRepository) ListTopologyCandidates(environmentID uint64, limit 
 		return []model.Resource{}, nil
 	}
 
+	now := time.Now().UTC()
 	resourceRepo := NewResourceRepository(r.db)
 	rows, err := r.db.QueryContext(context.Background(), `
 		select r.id, r.resource_type, r.resource_subtype, r.name, r.display_name,
@@ -528,7 +529,7 @@ func (r *RelationRepository) ListTopologyCandidates(environmentID uint64, limit 
 		)
 		order by case when r.resource_type in ('service', 'database_cluster', 'database_proxy') then 0 else 1 end,
 			r.name, r.id
-		limit ?`, environmentID, time.Now().UTC().Add(-model.DefaultHealthFreshnessThreshold), limit)
+		limit ?`, environmentID, now.Add(-model.DefaultHealthFreshnessThreshold), limit)
 	if err != nil {
 		return nil, err
 	}
@@ -567,8 +568,80 @@ func (r *RelationRepository) ListTopologyCandidates(environmentID uint64, limit 
 	}
 	rows.Close()
 
-	if err := resourceRepo.attachHealthObservations(context.Background(), items); err != nil {
+	if err := r.attachTopologyCandidateHealth(items, now); err != nil {
 		return nil, err
 	}
 	return items, nil
+}
+
+func (r *RelationRepository) attachTopologyCandidateHealth(items []model.Resource, now time.Time) error {
+	if len(items) == 0 {
+		return nil
+	}
+
+	args := make([]any, 0, len(items)+1)
+	args = append(args, now.Add(-model.DefaultHealthFreshnessThreshold))
+	for i := range items {
+		args = append(args, items[i].ID)
+	}
+	rows, err := r.db.QueryContext(context.Background(), `
+		select resource_id, health_status, observed_at, observer
+		from (
+			select resource_id, health_status, observed_at, observer,
+				row_number() over (
+					partition by resource_id
+					order by is_fresh desc,
+						case when is_fresh then health_rank else 0 end desc,
+						observed_at desc,
+						observer
+				) observation_rank
+			from (
+				select resource_id, health_status, observed_at, observer,
+					observed_at >= ? is_fresh,
+					case health_status
+						when 'critical' then 3
+						when 'warning' then 2
+						when 'unknown' then 1
+						else 0
+					end health_rank
+				from resource_health_observations
+				where resource_id in (`+buildInClause(len(items))+`)
+			) candidate_observations
+		) ranked_observations
+		where observation_rank = 1`, args...)
+	if err != nil {
+		return fmt.Errorf("list topology candidate health: %w", err)
+	}
+	defer rows.Close()
+
+	selected := make(map[uint64]model.HealthObservation, len(items))
+	for rows.Next() {
+		var resourceID uint64
+		var observation model.HealthObservation
+		if err := rows.Scan(&resourceID, &observation.Status, &observation.ObservedAt, &observation.Observer); err != nil {
+			return fmt.Errorf("scan topology candidate health: %w", err)
+		}
+		selected[resourceID] = observation
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("list topology candidate health: %w", err)
+	}
+
+	for i := range items {
+		var observations []model.HealthObservation
+		if observation, ok := selected[items[i].ID]; ok {
+			observations = []model.HealthObservation{observation}
+		}
+		status, freshness, observedAt, observer := model.ResolveHealth(
+			now,
+			model.DefaultHealthFreshnessThreshold,
+			items[i].ManualHealthOverride,
+			observations,
+		)
+		items[i].HealthStatus = string(status)
+		items[i].HealthFreshness = freshness
+		items[i].HealthObservedAt = observedAt
+		items[i].HealthObserver = observer
+	}
+	return nil
 }

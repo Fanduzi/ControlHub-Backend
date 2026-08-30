@@ -2,8 +2,8 @@
 
 // Package integration verifies topology behavior against disposable MySQL.
 // input: internal/model, internal/repository/mysql, internal/service, Testcontainers-backed MySQL
-// output: topology service and bounded repository integration tests, including candidate overflow
-// pos: Proves topology traversal and cap-plus-sentinel workspace candidates against real MySQL
+// output: topology service and bounded repository integration tests, including candidate overflow and effective health
+// pos: Proves topology traversal, cap-plus-sentinel candidates, and bounded multi-observer health semantics against real MySQL
 // note: if this file changes, update this header and module README.md.
 
 package integration
@@ -187,6 +187,63 @@ func TestTopologyCandidatesHighCardinalityUsesSentinel(t *testing.T) {
 	}
 	if !resp.Truncated {
 		t.Fatal("truncated = false, want sentinel overflow to propagate")
+	}
+}
+
+func TestTopologyCandidateHealthProjection(t *testing.T) {
+	db := setupTestDB(t)
+	resRepo := mysql.NewResourceRepository(db)
+	relRepo := mysql.NewRelationRepository(db)
+	ctx := context.Background()
+	now := time.Now().UTC().Truncate(time.Microsecond)
+
+	freshWorst := createTopologyCandidateResource(t, resRepo, ctx, "000-topo-health-fresh-worst", model.ResourceTypeService, "api", envProd, model.HealthStatusHealthy)
+	criticalAt := now.Add(-2 * time.Hour)
+	for _, observation := range []model.HealthObservation{
+		{Status: model.HealthStatusHealthy, ObservedAt: now.Add(-time.Hour), Observer: "newer-healthy"},
+		{Status: model.HealthStatusCritical, ObservedAt: criticalAt, Observer: "z-critical"},
+		{Status: model.HealthStatusCritical, ObservedAt: criticalAt, Observer: "a-critical"},
+	} {
+		if err := resRepo.UpsertHealthObservation(ctx, freshWorst.ID, observation); err != nil {
+			t.Fatalf("observe fresh worst candidate: %v", err)
+		}
+	}
+
+	staleNewest := createTopologyCandidateResource(t, resRepo, ctx, "000-topo-health-stale-newest", model.ResourceTypeService, "api", envProd, model.HealthStatusHealthy)
+	newestStaleAt := now.Add(-model.DefaultHealthFreshnessThreshold - time.Hour)
+	for _, observation := range []model.HealthObservation{
+		{Status: model.HealthStatusCritical, ObservedAt: newestStaleAt.Add(-time.Hour), Observer: "older-stale"},
+		{Status: model.HealthStatusWarning, ObservedAt: newestStaleAt, Observer: "newer-stale"},
+	} {
+		if err := resRepo.UpsertHealthObservation(ctx, staleNewest.ID, observation); err != nil {
+			t.Fatalf("observe stale candidate: %v", err)
+		}
+	}
+
+	manualOverride := createTopologyCandidateResource(t, resRepo, ctx, "000-topo-health-manual-override", model.ResourceTypeService, "api", envProd, model.HealthStatusCritical)
+	if err := resRepo.UpsertHealthObservation(ctx, manualOverride.ID, model.HealthObservation{
+		Status: model.HealthStatusWarning, ObservedAt: now, Observer: "fresh-warning",
+	}); err != nil {
+		t.Fatalf("observe manual override candidate: %v", err)
+	}
+
+	items, err := relRepo.ListTopologyCandidates(envProd, service.TopologyNodeCap+1)
+	if err != nil {
+		t.Fatalf("list topology candidates: %v", err)
+	}
+	byID := make(map[uint64]model.Resource, len(items))
+	for _, item := range items {
+		byID[item.ID] = item
+	}
+
+	if item := byID[freshWorst.ID]; item.HealthStatus != string(model.HealthStatusCritical) || item.HealthObserver != "a-critical" || item.HealthObservedAt == nil || !item.HealthObservedAt.Equal(criticalAt) {
+		t.Fatalf("fresh worst = (%q, %q, %v), want critical/a-critical/%v", item.HealthStatus, item.HealthObserver, item.HealthObservedAt, criticalAt)
+	}
+	if item := byID[staleNewest.ID]; item.HealthStatus != string(model.HealthStatusUnknown) || item.HealthFreshness != model.HealthFreshnessStale || item.HealthObserver != "newer-stale" || item.HealthObservedAt == nil || !item.HealthObservedAt.Equal(newestStaleAt) {
+		t.Fatalf("stale newest = (%q, %q, %q, %v)", item.HealthStatus, item.HealthFreshness, item.HealthObserver, item.HealthObservedAt)
+	}
+	if item := byID[manualOverride.ID]; item.HealthStatus != string(model.HealthStatusCritical) || item.HealthObserver != "fresh-warning" {
+		t.Fatalf("manual override = (%q, %q), want critical/fresh-warning", item.HealthStatus, item.HealthObserver)
 	}
 }
 

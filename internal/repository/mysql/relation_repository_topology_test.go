@@ -1,11 +1,13 @@
 // Package mysql provides bounded topology relation repository tests.
-// input: testing, time, sqlmock, and internal/model
-// output: deterministic bounded topology relation and candidate read regression coverage
-// pos: Verifies topology-only queries apply caller-owned row budgets before scanning
+// input: database/sql/driver, testing, time, sqlmock, and internal/model
+// output: deterministic bounded topology relation, candidate, and one-observation-per-candidate regression coverage
+// pos: Verifies topology-only queries apply caller-owned row budgets and bounded health projection before scanning
 // note: if this file changes, update this header and module README.md.
 package mysql
 
 import (
+	"database/sql/driver"
+	"fmt"
 	"testing"
 	"time"
 
@@ -56,6 +58,46 @@ func TestRelationRepositoryListTopologyCandidatesUsesDeterministicLimit(t *testi
 	}
 	if len(items) != 0 {
 		t.Fatalf("items = %+v, want none", items)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestRelationRepositoryListTopologyCandidatesReadsOneObservationPerCandidate(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock.New: %v", err)
+	}
+	defer db.Close()
+
+	candidates := sqlmock.NewRows([]string{"id", "resource_type", "resource_subtype", "name", "display_name", "environment_id", "owner_id", "lifecycle_status", "health_status", "labels"})
+	selectedHealth := sqlmock.NewRows([]string{"resource_id", "health_status", "observed_at", "observer"})
+	observedAt := time.Date(2026, time.August, 30, 1, 0, 0, 0, time.UTC)
+	for i := 1; i <= 201; i++ {
+		id := uint64(i)
+		name := fmt.Sprintf("candidate-%03d", i)
+		candidates.AddRow(id, "domain_name", "dns", name, name, 9, 1, "running", "critical", "{}")
+		selectedHealth.AddRow(id, "healthy", observedAt, "observer")
+	}
+	mock.ExpectQuery(`(?s)select r\.id,.*from resources r.*limit \?`).
+		WithArgs(uint64(9), sqlmock.AnyArg(), 201).
+		WillReturnRows(candidates)
+	healthArgs := make([]driver.Value, 0, 202)
+	healthArgs = append(healthArgs, sqlmock.AnyArg())
+	for i := 1; i <= 201; i++ {
+		healthArgs = append(healthArgs, uint64(i))
+	}
+	mock.ExpectQuery(`(?s)row_number\(\) over \(\s*partition by resource_id.*observer.*where observation_rank = 1`).
+		WithArgs(healthArgs...).
+		WillReturnRows(selectedHealth)
+
+	items, err := NewRelationRepository(db).ListTopologyCandidates(9, 201)
+	if err != nil {
+		t.Fatalf("list topology candidates: %v", err)
+	}
+	if len(items) != 201 {
+		t.Fatalf("items = %d, want 201", len(items))
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatal(err)
