@@ -1,7 +1,7 @@
 // Package service provides controlled CI ingestion parsing, preview reconciliation, and confirm service delegation.
 // input: stdlib CSV/JSON/SHA-256 utilities, context, and internal/model identity/relation types
-// output: ParseIngestion, PreviewIngestion, User/collector confirmation delegation including empty terminal collector receipts, controlled scan conflicts, additive observed diffs, and validation contracts
-// pos: Shared issue #83 ingestion contract and issue #87 terminal collector-confirmation service seam
+// output: ParseIngestion, ordinary and collector preview seams, User/collector confirmation delegation including empty terminal collector receipts, controlled scan conflicts, additive observed diffs, and validation contracts
+// pos: Shared issue #83 ingestion contract and issue #87 reachable collector preview/confirmation service protocol
 // note: if this file changes, update this header and module README.md.
 package service
 
@@ -134,6 +134,17 @@ func (s *ResourceService) PreviewIngestion(ctx context.Context, rows []Ingestion
 		return nil, errors.New("ingestion preview repository is required")
 	}
 	return repo.PreviewIngestion(ctx, rows)
+}
+
+func (s *ResourceService) PreviewCollectorIngestion(ctx context.Context, rows []IngestionRow) (*IngestionPreview, error) {
+	if err := ValidateCollectorIngestionRows(rows); err != nil {
+		return nil, fmt.Errorf("%w: %v", ErrValidationFailed, err)
+	}
+	if len(rows) == 0 {
+		preview := PreviewIngestion(rows, nil)
+		return &preview, nil
+	}
+	return s.PreviewIngestion(ctx, rows)
 }
 
 func (s *ResourceService) ConfirmIngestion(ctx context.Context, actorUserID uint64, rows []IngestionRow, reviewedFingerprint string) (*IngestionPreview, error) {

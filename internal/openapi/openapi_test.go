@@ -1,7 +1,7 @@
 // Package openapi_test verifies the embedded OpenAPI contract.
 // input: embedded OpenAPI YAML, kin-openapi parser, internal/model
-// output: OpenAPI schema, resource completeness/collector presence, health observation, effective-value override, ingestion multipart, bulk mutation, topology, pagination, execution, machine auth, and closed error-enum tests
-// pos: Prevents documented API and read-only collector-presence contracts from drifting from router behavior
+// output: OpenAPI schema, resource completeness/collector presence, health observation, effective-value override, collector empty-preview/confirm multipart, bulk mutation, topology, pagination, execution, machine auth, and closed error-enum tests
+// pos: Prevents documented API, reachable collector ingestion, and read-only collector-presence contracts from drifting from router behavior
 // note: if this file changes, update this header and module README.md.
 package openapi_test
 
@@ -60,6 +60,19 @@ func TestOpenAPIIngestionContract(t *testing.T) {
 	confirm := doc.Paths.Value("/admin/ingestions/confirm").Post
 	if confirm.Responses.Value("409") == nil {
 		t.Fatal("POST /admin/ingestions/confirm must document stale/conflict 409")
+	}
+	previewDescription := strings.ToLower(doc.Paths.Value("/admin/ingestions/preview").Post.Description)
+	if !strings.Contains(previewDescription, "empty") || !strings.Contains(previewDescription, "machine credential") || !strings.Contains(previewDescription, "fingerprint") {
+		t.Fatal("collector preview must document the empty-scan fingerprint flow")
+	}
+	confirmSchema := confirm.RequestBody.Value.Content["multipart/form-data"].Schema.Value
+	for _, field := range []string{"collectorScanId", "collectorScanResult"} {
+		if confirmSchema.Properties[field] == nil {
+			t.Fatalf("collector confirm must document multipart %s", field)
+		}
+	}
+	if got := confirmSchema.Properties["collectorScanResult"].Value.Enum; !slices.Equal(got, []any{"complete", "incomplete", "failed"}) {
+		t.Fatalf("collectorScanResult enum = %v", got)
 	}
 }
 

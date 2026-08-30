@@ -1,21 +1,27 @@
 //go:build integration
 
 // Package integration runs real-MySQL ingestion confirmation tests.
-// input: database/sql, errors, testing, internal/model, internal/repository/mysql, internal/service
-// output: TestIngestionConfirmation* and TestCollectorIngestionConfirmation* atomic persistence, empty terminal scan, retry, recovery, read-projection, and no-archive proofs
-// pos: Proves User and collector confirmation plus operator-visible Missing semantics against disposable MySQL
+// input: HTTP multipart/router utilities, database/sql, errors, testing, internal/api/model/repository/mysql/service
+// output: TestIngestionConfirmation* and TestCollectorIngestionConfirmation* real-HTTP empty preview/confirm, atomic persistence, retry, recovery, read-projection, and no-archive proofs
+// pos: Proves reachable collector HTTP confirmation and operator-visible Missing semantics against disposable MySQL
 // note: if this file changes, update this header and module README.md.
 package integration
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"mime/multipart"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/fan/controlhub/internal/api"
 	"github.com/fan/controlhub/internal/model"
 	"github.com/fan/controlhub/internal/repository/mysql"
 	"github.com/fan/controlhub/internal/service"
@@ -24,6 +30,86 @@ import (
 const ingestionActor uint64 = 1
 
 const collectorPrincipal uint64 = 870001
+
+func TestCollectorEmptyPreviewConfirmHTTPAgainstMySQL(t *testing.T) {
+	db := setupTestDB(t)
+	resourceRepo := mysql.NewResourceRepository(db)
+	resourceService := service.NewResourceService(resourceRepo, mysql.NewRelationRepository(db))
+	machineService := service.NewMachinePrincipalService(mysql.NewMachinePrincipalRepository(db))
+	issued, err := machineService.Create(t.Context(), service.AuthenticatedUser{ID: ingestionActor, Role: "admin"}, model.MachinePrincipalCreateRequest{
+		Name: "empty-scan-http-collector", Scopes: []model.MachineScope{model.MachineScopeInventoryIngest},
+	})
+	if err != nil {
+		t.Fatalf("create collector credential: %v", err)
+	}
+	router := api.NewRouter(api.Dependencies{ResourceService: resourceService, MachineCredentialService: machineService})
+
+	var canonicalFingerprint string
+	for _, tc := range []struct {
+		name, format, payload string
+	}{
+		{"json", "json", `[]`},
+		{"csv", "csv", "environmentId,ciType,name\n"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			previewRec := collectorIngestionMultipart(t, router, "/admin/ingestions/preview", issued.Secret, tc.payload, map[string]string{"format": tc.format})
+			if previewRec.Code != http.StatusOK {
+				t.Fatalf("preview status = %d: %s", previewRec.Code, previewRec.Body.String())
+			}
+			var preview service.IngestionPreview
+			if err := json.NewDecoder(previewRec.Body).Decode(&preview); err != nil {
+				t.Fatalf("decode preview: %v", err)
+			}
+			if canonicalFingerprint == "" {
+				canonicalFingerprint = preview.Fingerprint
+			} else if preview.Fingerprint != canonicalFingerprint {
+				t.Fatalf("fingerprint = %s, want %s", preview.Fingerprint, canonicalFingerprint)
+			}
+			scanID := "empty-http-" + tc.name
+			confirmRec := collectorIngestionMultipart(t, router, "/admin/ingestions/confirm", issued.Secret, tc.payload, map[string]string{
+				"format": tc.format, "fingerprint": preview.Fingerprint,
+				"collectorScanId": scanID, "collectorScanResult": "complete",
+			})
+			if confirmRec.Code != http.StatusOK {
+				t.Fatalf("confirm status = %d: %s", confirmRec.Code, confirmRec.Body.String())
+			}
+			var count int
+			if err := db.QueryRowContext(t.Context(), `select count(*) from collector_scan_ledger where machine_principal_id = ? and collector_scan_id = ? and result = 'complete'`, issued.Principal.ID, scanID).Scan(&count); err != nil {
+				t.Fatalf("read collector ledger: %v", err)
+			}
+			if count != 1 {
+				t.Fatalf("collector ledger rows = %d, want 1", count)
+			}
+		})
+	}
+}
+
+func collectorIngestionMultipart(t *testing.T, handler http.Handler, path, token, payload string, fields map[string]string) *httptest.ResponseRecorder {
+	t.Helper()
+	var body bytes.Buffer
+	form := multipart.NewWriter(&body)
+	for name, value := range fields {
+		if err := form.WriteField(name, value); err != nil {
+			t.Fatal(err)
+		}
+	}
+	file, err := form.CreateFormFile("file", "ingestion")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := file.Write([]byte(payload)); err != nil {
+		t.Fatal(err)
+	}
+	if err := form.Close(); err != nil {
+		t.Fatal(err)
+	}
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, path, &body)
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Content-Type", form.FormDataContentType())
+	handler.ServeHTTP(rec, req)
+	return rec
+}
 
 func TestCollectorIngestionConfirmationCompletePersistsMachineOwnedScan(t *testing.T) {
 	db := setupTestDB(t)
@@ -207,20 +293,20 @@ func TestCollectorIngestionConfirmationMissingLifecycleNeverArchives(t *testing.
 	missingRow := service.IngestionRow{EnvironmentID: envProd, CIType: model.ResourceTypeHost, Name: "collector-missing-lifecycle", DisplayName: "Collector Missing Lifecycle"}
 	emptyRows := []service.IngestionRow{}
 
-	confirmCollectorScan(t, ctx, repo, svc, principalID, "lifecycle-initial", model.CollectorScanResultComplete, []service.IngestionRow{missingRow})
+	confirmCollectorScan(t, ctx, svc, principalID, "lifecycle-initial", model.CollectorScanResultComplete, []service.IngestionRow{missingRow})
 	missingID := resourceIDByName(t, db, missingRow.Name)
-	confirmCollectorScan(t, ctx, repo, svc, secondaryPrincipalID, "secondary-initial", model.CollectorScanResultComplete, []service.IngestionRow{missingRow})
-	confirmCollectorScan(t, ctx, repo, svc, principalID, "lifecycle-incomplete", model.CollectorScanResultIncomplete, emptyRows)
+	confirmCollectorScan(t, ctx, svc, secondaryPrincipalID, "secondary-initial", model.CollectorScanResultComplete, []service.IngestionRow{missingRow})
+	confirmCollectorScan(t, ctx, svc, principalID, "lifecycle-incomplete", model.CollectorScanResultIncomplete, emptyRows)
 	assertCollectorState(t, db, principalID, missingID, 0, false, "lifecycle-initial")
-	confirmCollectorScan(t, ctx, repo, svc, principalID, "lifecycle-failed", model.CollectorScanResultFailed, emptyRows)
+	confirmCollectorScan(t, ctx, svc, principalID, "lifecycle-failed", model.CollectorScanResultFailed, emptyRows)
 	assertCollectorState(t, db, principalID, missingID, 0, false, "lifecycle-initial")
 
 	for omission := 1; omission <= 3; omission++ {
 		scanID := fmt.Sprintf("lifecycle-complete-omission-%d", omission)
-		confirmCollectorScan(t, ctx, repo, svc, principalID, scanID, model.CollectorScanResultComplete, emptyRows)
+		confirmCollectorScan(t, ctx, svc, principalID, scanID, model.CollectorScanResultComplete, emptyRows)
 		assertCollectorState(t, db, principalID, missingID, omission, omission == 3, "lifecycle-initial")
 		if omission == 2 {
-			confirmCollectorScan(t, ctx, repo, svc, principalID, scanID, model.CollectorScanResultComplete, emptyRows)
+			confirmCollectorScan(t, ctx, svc, principalID, scanID, model.CollectorScanResultComplete, emptyRows)
 			assertCollectorState(t, db, principalID, missingID, omission, false, "lifecycle-initial")
 		}
 	}
@@ -251,14 +337,14 @@ func TestCollectorIngestionConfirmationMissingLifecycleNeverArchives(t *testing.
 	if !found {
 		t.Fatalf("missing resource %d absent from active list", missingID)
 	}
-	confirmCollectorScan(t, ctx, repo, svc, principalID, "lifecycle-complete-omission-3", model.CollectorScanResultComplete, emptyRows)
+	confirmCollectorScan(t, ctx, svc, principalID, "lifecycle-complete-omission-3", model.CollectorScanResultComplete, emptyRows)
 	resource, err = repo.GetResource(missingID)
 	if err != nil {
 		t.Fatalf("get missing resource after retry: %v", err)
 	}
 	assertCollectorPresence(t, resource, principalID, "lifecycle-collector", model.CollectorPresenceStatusMissing, &stableMissingSince)
 
-	confirmCollectorScan(t, ctx, repo, svc, principalID, "lifecycle-recovered", model.CollectorScanResultComplete, []service.IngestionRow{missingRow})
+	confirmCollectorScan(t, ctx, svc, principalID, "lifecycle-recovered", model.CollectorScanResultComplete, []service.IngestionRow{missingRow})
 	assertCollectorState(t, db, principalID, missingID, 0, false, "lifecycle-recovered")
 	if got := resourceIDByName(t, db, missingRow.Name); got != missingID {
 		t.Fatalf("recovered resource ID = %d, want stable ID %d", got, missingID)
@@ -322,15 +408,11 @@ func TestCollectorIngestionConfirmationFingerprintAndLedgerFailureRollback(t *te
 	}
 }
 
-func confirmCollectorScan(t *testing.T, ctx context.Context, repo *mysql.ResourceRepository, svc *service.ResourceService, principalID uint64, scanID string, result model.CollectorScanResult, rows []service.IngestionRow) {
+func confirmCollectorScan(t *testing.T, ctx context.Context, svc *service.ResourceService, principalID uint64, scanID string, result model.CollectorScanResult, rows []service.IngestionRow) {
 	t.Helper()
-	preview := service.PreviewIngestion(rows, nil)
-	if len(rows) != 0 {
-		storedPreview, err := repo.PreviewIngestion(ctx, rows)
-		if err != nil {
-			t.Fatalf("preview %s: %v", scanID, err)
-		}
-		preview = *storedPreview
+	preview, err := svc.PreviewCollectorIngestion(ctx, rows)
+	if err != nil {
+		t.Fatalf("preview %s: %v", scanID, err)
 	}
 	if _, err := svc.ConfirmCollectorIngestion(ctx, principalID, rows, preview.Fingerprint, service.CollectorIngestionMetadata{ScanID: scanID, ScanResult: result}); err != nil {
 		t.Fatalf("confirm %s: %v", scanID, err)

@@ -1,7 +1,7 @@
 // Package api provides HTTP handlers and routing for the ControlHub REST API.
 // input: net/http/httptest multipart requests and the API test server
-// output: ingestion preview, User/collector confirm including empty terminal scans, and collector scan-conflict HTTP contract tests
-// pos: Verifies the ingestion upload boundary, terminal scan metadata, and controlled error mapping
+// output: ingestion preview, collector empty CSV/JSON preview-to-confirm flow, User/collector confirm, and collector scan-conflict HTTP contract tests
+// pos: Verifies the ingestion upload boundary, collector-only empty fingerprint reachability, terminal scan metadata, and controlled error mapping
 // note: if this file changes, update this header and module README.md.
 package api
 
@@ -134,6 +134,54 @@ func TestCollectorConfirmAcceptsEmptyTerminalScans(t *testing.T) {
 	response := ingestRequest(t, server.Router, "/admin/ingestions/confirm", "json", `[]`, fingerprint)
 	if response.Code != http.StatusBadRequest {
 		t.Fatalf("User empty confirm status = %d, want 400: %s", response.Code, response.Body.String())
+	}
+}
+
+func TestCollectorEmptyPreviewFingerprintReachesConfirm(t *testing.T) {
+	var canonicalFingerprint string
+	for _, tc := range []struct {
+		name, format, payload string
+	}{
+		{"json", "json", `[]`},
+		{"csv", "csv", "environmentId,ciType,name\n"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			server := NewTestServer()
+			server.deps.MachineCredentialService = &scopeMatrixMachineService{granted: model.MachineScopeInventoryIngest}
+			router := NewRouter(server.deps)
+			previewResponse := ingestRequestWithFields(t, router, "/admin/ingestions/preview", tc.payload, []ingestionFormField{{"format", tc.format}}, "Bearer chmp_route-test.secret")
+			if previewResponse.Code != http.StatusOK {
+				t.Fatalf("preview status = %d, want 200: %s", previewResponse.Code, previewResponse.Body.String())
+			}
+			var preview service.IngestionPreview
+			if err := json.NewDecoder(previewResponse.Body).Decode(&preview); err != nil {
+				t.Fatalf("decode preview: %v", err)
+			}
+			if preview.Fingerprint == "" || !preview.Confirmable || len(preview.Rows) != 0 {
+				t.Fatalf("empty preview = %+v", preview)
+			}
+			if canonicalFingerprint == "" {
+				canonicalFingerprint = preview.Fingerprint
+			} else if preview.Fingerprint != canonicalFingerprint {
+				t.Fatalf("fingerprint = %s, want canonical %s", preview.Fingerprint, canonicalFingerprint)
+			}
+
+			confirmResponse := ingestRequestWithFields(t, router, "/admin/ingestions/confirm", tc.payload, []ingestionFormField{
+				{"format", tc.format},
+				{"fingerprint", preview.Fingerprint},
+				{"collectorScanId", "empty-preview-" + tc.name},
+				{"collectorScanResult", "complete"},
+			}, "Bearer chmp_route-test.secret")
+			if confirmResponse.Code != http.StatusOK {
+				t.Fatalf("confirm status = %d, want 200: %s", confirmResponse.Code, confirmResponse.Body.String())
+			}
+		})
+	}
+
+	server := NewTestServer()
+	ordinary := ingestRequest(t, server.Router, "/admin/ingestions/preview", "json", `[]`, "")
+	if ordinary.Code != http.StatusBadRequest {
+		t.Fatalf("ordinary empty preview status = %d, want 400: %s", ordinary.Code, ordinary.Body.String())
 	}
 }
 

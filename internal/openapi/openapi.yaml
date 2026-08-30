@@ -1,6 +1,6 @@
 # input: public HTTP routes, model JSON shapes, and operator access policy
-# output: served OpenAPI 3.1 contract including machine credentials, scoped reads/collector routes, history restore eligibility, resource-list filters and read-only per-principal collector presence, ingestion, and bulk mutation review/confirmation
-# pos: canonical machine-readable API boundary, including independent user/machine authentication, server-computed history restoration, reserved collector route scopes, collector Missing projection, and inventory audit diffs
+# output: served OpenAPI 3.1 contract including machine credentials, scoped reads/collector routes, history restore eligibility, collector empty-preview/terminal-confirm metadata, resource-list filters and read-only per-principal collector presence, ingestion, and bulk mutation review/confirmation
+# pos: canonical machine-readable API boundary, including independent user/machine authentication, server-computed history restoration, reachable collector preview/confirm protocol, collector Missing projection, and inventory audit diffs
 # note: if this file changes, update header and internal/openapi/README.md
 
 openapi: 3.1.0
@@ -2693,6 +2693,9 @@ paths:
         JSON-valued columns. The raw file is limited to 500 rows, 64 KiB per
         row, and 32,768,000 bytes. Matching is exact External CI Identifier,
         Alias, then Environment+CI Type+Name; fuzzy matching is never used.
+        An inventory:ingest Machine Credential may preview an empty JSON array
+        or header-only CSV to obtain the canonical fingerprint required for a
+        terminal collector confirmation; admin User previews remain non-empty.
       operationId: previewIngestion
       security:
         - bearerAuth: []
@@ -2747,7 +2750,10 @@ paths:
         and preview fingerprint. The server reparses the upload, rechecks exact
         identities inside its transaction, and returns 409 with a fresh preview
         if the input, inventory, or conflict state has drifted. No partial
-        batch commit is possible.
+        batch commit is possible. Machine Credential confirmations additionally
+        require collectorScanId and collectorScanResult; complete, incomplete,
+        and failed terminal scans may confirm the empty file returned by the
+        collector preview flow.
       operationId: confirmIngestion
       security:
         - bearerAuth: []
@@ -2771,6 +2777,15 @@ paths:
                 fingerprint:
                   type: string
                   pattern: "^[a-f0-9]{64}$"
+                collectorScanId:
+                  type: string
+                  minLength: 1
+                  maxLength: 255
+                  description: Required for Machine Credential confirmations and forbidden for User confirmations.
+                collectorScanResult:
+                  type: string
+                  enum: [complete, incomplete, failed]
+                  description: Required terminal result for Machine Credential confirmations and forbidden for User confirmations.
       responses:
         "200":
           description: Atomically confirmed ingestion result

@@ -1,7 +1,7 @@
 // Package service provides tests for controlled CI ingestion parsing and preview reconciliation.
 // input: internal/service ingestion APIs, internal/model, testing
-// output: TestParseIngestion*, TestPreviewIngestion*, and TestConfirmCollectorIngestion* parser, format-independent empty fingerprint, preview, and collector-confirmation cases
-// pos: Validates strict parsing, pure exact-identity preview behavior, and empty terminal collector metadata delegation
+// output: TestParseIngestion*, TestPreviewIngestion*, and TestConfirmCollectorIngestion* parser, collector-only empty preview, format-independent fingerprint, and confirmation cases
+// pos: Validates strict parsing, pure exact-identity preview behavior, and reachable empty terminal collector delegation without widening ordinary preview
 // note: if this file changes, update header and README.md
 package service
 
@@ -18,9 +18,16 @@ import (
 
 type collectorIngestionTestRepo struct {
 	*fakeResourceWriteRepo
-	principalID uint64
-	metadata    CollectorIngestionMetadata
-	calls       int
+	principalID  uint64
+	metadata     CollectorIngestionMetadata
+	calls        int
+	previewCalls int
+}
+
+func (r *collectorIngestionTestRepo) PreviewIngestion(_ context.Context, rows []IngestionRow) (*IngestionPreview, error) {
+	r.previewCalls++
+	preview := PreviewIngestion(rows, nil)
+	return &preview, nil
 }
 
 func (r *collectorIngestionTestRepo) ConfirmCollectorIngestion(_ context.Context, principalID uint64, rows []IngestionRow, fingerprint string, metadata CollectorIngestionMetadata) (*IngestionPreview, error) {
@@ -46,6 +53,24 @@ func TestConfirmCollectorIngestionAcceptsEmptyTerminalScans(t *testing.T) {
 	}
 	if repo.calls != 3 {
 		t.Fatalf("repository calls = %d, want all terminal scans", repo.calls)
+	}
+}
+
+func TestPreviewCollectorIngestionAcceptsEmptyWithoutOpeningOrdinaryPreview(t *testing.T) {
+	repo := &collectorIngestionTestRepo{fakeResourceWriteRepo: &fakeResourceWriteRepo{resources: map[uint64]model.Resource{}}}
+	svc := newResourceServiceForTest(repo)
+	preview, err := svc.PreviewCollectorIngestion(t.Context(), []IngestionRow{})
+	if err != nil {
+		t.Fatalf("collector empty preview: %v", err)
+	}
+	if !preview.Confirmable || preview.Fingerprint == "" || len(preview.Rows) != 0 {
+		t.Fatalf("collector empty preview = %+v", preview)
+	}
+	if repo.previewCalls != 0 {
+		t.Fatalf("empty preview repository calls = %d, want 0", repo.previewCalls)
+	}
+	if _, err := svc.PreviewIngestion(t.Context(), []IngestionRow{}); !errors.Is(err, ErrValidationFailed) {
+		t.Fatalf("ordinary empty preview error = %v, want validation failure", err)
 	}
 }
 
