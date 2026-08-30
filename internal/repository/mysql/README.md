@@ -5,7 +5,7 @@ Data access layer implementing service-layer repository interfaces with raw SQL 
 ## Files
 | File | Responsibility |
 |------|---------------|
-| resource_repository.go | Resource CRUD, governed identity and batched typed-profile/per-principal collector-presence reads, latest-per-observer health evidence, effective-health derivation, per-source observed/effective values, read-only validated bulk previews, atomic audited identity/manual-override/bulk mutations, and User/collector atomic ingestion confirmation including empty terminal receipts |
+| resource_repository.go | Resource CRUD, governed identity and batched typed-profile/per-principal collector-presence reads, key-presence/exact-value label filters, latest-per-observer health evidence, effective-health derivation, per-source observed/effective values, read-only validated bulk previews, atomic audited identity/manual-override/bulk mutations, and User/collector atomic ingestion confirmation including empty terminal receipts |
 | bulk_resource_mutation_test.go | SQL-level bulk coverage for transaction commit/rollback, externalId persistence, locked archived-CI rejection, current resource/governed-identity lock queries, normal update validation parity, and audit-failure rollback |
 | relation_repository.go | Relation queries plus atomic create/delete serialized by stable endpoint resource-row locks, effective-health relation/member projections, deterministically bounded topology relation reads/resource lookup, and environment candidate starts |
 | relation_repository_topology_test.go | SQL-level regression coverage for topology ordering and caller-owned row limits |

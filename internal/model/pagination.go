@@ -1,6 +1,6 @@
 // Package model provides domain entities for the resource management system.
 // input: no external dependencies
-// output: PageInfo, ResourceListQuery with owner/label filters, ResourceLabelFilter, AuditListQuery (including target environment filtering), pagination constants, ComputeTotalPages, NormalizePagination
+// output: PageInfo, ResourceListQuery with owner and key/key:value label filters, ResourceLabelFilter, AuditListQuery (including target environment filtering), pagination constants, ComputeTotalPages, NormalizePagination
 // pos: Shared pagination and filtering types for all list endpoints
 // note: if this file changes, update header and README.md
 package model
@@ -54,7 +54,8 @@ type ResourceListQuery struct {
 	PageSize         int
 }
 
-// ResourceLabelFilter exactly matches a single label key/value; repeated filters combine with AND.
+// ResourceLabelFilter matches a key's presence when Value is empty and otherwise
+// matches the exact key/value pair; repeated filters combine with AND.
 type ResourceLabelFilter struct {
 	Key   string
 	Value string

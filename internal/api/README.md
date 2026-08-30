@@ -8,7 +8,7 @@ HTTP handlers, chi routing, CORS middleware, and fake-repo test infrastructure.
 | router.go | Route registration, including user-or-machine scoped inventory/dictionary/named-view/topology reads, reserved collector-scoped ingestion/health routes with an admin User alternative, user-only ordinary mutations, Operator Access Boundary middleware, Dependencies, CORS, and bounded auth-audit wiring; `chmp_` credentials never fall back to User auth |
 | ingestion_handler.go | Bounded strict multipart CSV/JSON ingestion: non-empty admin User preview, verified collector preview including canonical empty fingerprints, and terminal confirmation with required scan metadata and controlled retry conflict mapping |
 | health_handler.go | GET /health endpoint |
-| resource_handler.go | Resource list/detail identity, health, and server-derived completeness fields; explicit identity conflicts, machine observations attributed to the verified stable principal name, non-audited observation ingestion, and PATCH changes through atomic inventory audit |
+| resource_handler.go | Resource list/detail identity, bounded key/key:value label filtering, health, and server-derived completeness fields; explicit identity conflicts, machine observations attributed to the verified stable principal name, non-audited observation ingestion, and PATCH changes through atomic inventory audit |
 | profile_handler.go | PUT/PATCH/DELETE /resources/{id}/profile handlers with strict decoding and token-derived atomic inventory audit |
 | relation_handler.go | Resource relation reads, source-specific rule discovery, and token-derived atomic audited create/delete handlers |
 | topology_handler.go | Resource-rooted and environment-scoped topology workspace read handlers |
@@ -65,9 +65,9 @@ HTTP handlers, chi routing, CORS middleware, and fake-repo test infrastructure.
 | POST | /admin/ingestions/preview | `inventory:ingest` machine scope or admin User; bounded CSV/JSON upload preview with no writes and exact-match fingerprint; only a verified machine may preview an empty JSON array or header-only CSV for terminal scan confirmation |
 | POST | /admin/ingestions/confirm | `inventory:ingest` machine scope or admin User; User keeps `format`, non-empty `file`, and `fingerprint`, while verified collectors additionally require bounded `collectorScanId` and terminal `collectorScanResult` (`complete`, `incomplete`, or `failed`) and may confirm an empty discovered-CI set; changed reuse returns 409 `collector_scan_conflict` |
 
-`GET /resources` supports inventory `q` search, exact `ownerId`, and repeatable exact `label=key:value` filters; repeated labels combine with AND.
+`GET /resources` supports inventory `q` search, exact `ownerId`, and repeatable bounded `label=key` presence or `label=key:value` exact filters; repeated labels combine with AND.
 | GET | /resources/{id}/relation-rules | Discover server-owned outgoing relation and target constraints |
-| GET | /resources | List resources with stable pagination and existing filters plus free-text `q`, exact `ownerId`, and repeatable AND-combined `label=key:value` filters |
+| GET | /resources | List resources with stable pagination and existing filters plus free-text `q`, exact `ownerId`, and repeatable AND-combined `label=key` presence or `label=key:value` exact filters |
 | GET | /inventory/views | List the actor's personal views and all shared views |
 | POST | /inventory/views | Create a personal view, or an admin-only shared view |
 | PUT | /inventory/views/{viewId} | Rename/replace an owned personal view or admin-managed shared view |

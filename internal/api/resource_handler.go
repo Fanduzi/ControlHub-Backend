@@ -1,6 +1,6 @@
 // Package api provides HTTP handlers and routing for the ControlHub REST API.
 // input: net/http, encoding/json, verified user-or-machine context, internal/service, internal/model
-// output: resource list/detail, rich inventory filtering, audited writes, principal-bound machine health observations, effective-value reads, versioned override set/clear, and admin bulk preview/confirm handlers
+// output: resource list/detail, bounded key/key:value inventory filtering, audited writes, principal-bound machine health observations, effective-value reads, versioned override set/clear, and admin bulk preview/confirm handlers
 // pos: HTTP boundary for inventory search, trustworthy operational health attribution, effective-value provenance, audited manual overrides, and bulk mutation review
 // note: if this file changes, update this header and module README.md.
 package api
@@ -12,12 +12,15 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/go-chi/chi/v5"
 
 	"github.com/fan/controlhub/internal/model"
 	"github.com/fan/controlhub/internal/service"
 )
+
+const maxResourceLabelFilterLength = 128
 
 type errorResponse struct {
 	Error   string `json:"error"`
@@ -334,9 +337,12 @@ func parseResourceListQuery(r *http.Request) (model.ResourceListQuery, error) {
 	}
 	labels := make([]model.ResourceLabelFilter, 0, len(q["label"]))
 	for _, raw := range q["label"] {
+		if raw == "" || utf8.RuneCountInString(raw) > maxResourceLabelFilterLength {
+			return model.ResourceListQuery{}, fmt.Errorf("label must contain 1 to %d characters", maxResourceLabelFilterLength)
+		}
 		key, value, ok := strings.Cut(raw, ":")
-		if !ok || key == "" || value == "" {
-			return model.ResourceListQuery{}, errors.New("label must use key:value format")
+		if key == "" || (ok && value == "") {
+			return model.ResourceListQuery{}, errors.New("label must use key or key:value format")
 		}
 		labels = append(labels, model.ResourceLabelFilter{Key: key, Value: value})
 	}

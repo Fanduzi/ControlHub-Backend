@@ -3,7 +3,7 @@
 // Package integration provides real-MySQL coverage for repository, API, and
 // migration behavior against disposable Testcontainers databases.
 // input: database/sql, testing, time, internal/model, internal/repository/mysql, internal/service
-// output: TestResource* and TestResourceService* integration cases, including relationship rules, batched profile query counts, and observation-derived cluster rollups
+// output: TestResource* and TestResourceService* integration cases, including label-presence filtering, relationship rules, batched profile query counts, and observation-derived cluster rollups
 // pos: Proves resource CRUD, filtering, profile batching, relationship rules, effective-health rollups, and create-with-profile atomicity against real MySQL
 // note: if this file changes, update this header and module README.md.
 package integration
@@ -412,7 +412,7 @@ func TestResourceRepository_RichSearchAndStructuredFilters(t *testing.T) {
 	}
 
 	target := create(model.ResourceTypeHost, "inventory-search-host-"+suffix,
-		map[string]string{"team": "inventory-team-" + suffix, "tier": "inventory-tier-" + suffix},
+		map[string]string{"team": "inventory-team-" + suffix, "tier": "inventory-tier-" + suffix, "presence-" + suffix: "yes"},
 		[]string{"inventory-alias-" + suffix},
 		[]model.ResourceExternalIdentifier{{System: "cmdb", Value: "inventory-external-" + suffix}})
 	create(model.ResourceTypeHost, "inventory-search-label-decoy-"+suffix,
@@ -467,6 +467,22 @@ func TestResourceRepository_RichSearchAndStructuredFilters(t *testing.T) {
 	}
 	if total != 1 || len(items) != 1 || items[0].ID != target.ID {
 		t.Fatalf("structured search returned %d items, total %d; want only resource %d", len(items), total, target.ID)
+	}
+
+	// WHY: a presence filter must compose with exact filters without broadening
+	// the repeated-label AND contract used by saved inventory views.
+	items, total, err = repo.ListResources(ctx, model.ResourceListQuery{
+		LabelFilters: []model.ResourceLabelFilter{
+			{Key: "presence-" + suffix},
+			{Key: "tier", Value: "inventory-tier-" + suffix},
+		},
+		Page: 1, PageSize: 100,
+	})
+	if err != nil {
+		t.Fatalf("label presence search: %v", err)
+	}
+	if total != 1 || len(items) != 1 || items[0].ID != target.ID {
+		t.Fatalf("label presence search returned %d items, total %d; want only resource %d", len(items), total, target.ID)
 	}
 
 	for _, query := range []string{"inventory-team-" + suffix, "inventory-tier-" + suffix} {

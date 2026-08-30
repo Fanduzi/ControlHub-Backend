@@ -1,6 +1,6 @@
 // Package api provides HTTP handlers and routing for the ControlHub REST API.
 // input: internal/api, internal/model, net/http, net/http/httptest, encoding/json
-// output: Governed identity/profile tests plus list/detail completeness and collector-presence projection, rich inventory filtering, health reads, effective-value provenance, versioned override tests, and admin bulk preview/confirm handler coverage
+// output: Governed identity/profile tests plus list/detail completeness and collector-presence projection, bounded key/key:value inventory filtering, health reads, effective-value provenance, versioned override tests, and admin bulk preview/confirm handler coverage
 // pos: Validates governed identity, typed profiles, server-derived completeness/collector presence, search filters, Issue 81 health evidence, Issue 78 override conflicts, and bulk review/confirm behavior at the HTTP seam
 // note: if this file changes, update this header and module README.md.
 package api
@@ -852,7 +852,7 @@ func TestListResources(t *testing.T) {
 }
 
 func TestParseResourceListQuerySearchContract(t *testing.T) {
-	req := httptest.NewRequest(http.MethodGet, "/resources?q=mysql&ownerId=42&label=team:platform&label=tier:critical", nil)
+	req := httptest.NewRequest(http.MethodGet, "/resources?q=mysql&ownerId=42&label=team&label=tier:critical", nil)
 	query, err := parseResourceListQuery(req)
 	if err != nil {
 		t.Fatalf("parse valid query: %v", err)
@@ -860,12 +860,14 @@ func TestParseResourceListQuerySearchContract(t *testing.T) {
 	if query.Query != "mysql" || query.OwnerID == nil || *query.OwnerID != 42 {
 		t.Fatalf("query = %#v, want q mysql and ownerId 42", query)
 	}
-	wantLabels := []model.ResourceLabelFilter{{Key: "team", Value: "platform"}, {Key: "tier", Value: "critical"}}
+	// WHY: saved inventory views emit both presence and exact label tokens, and
+	// neither form may be silently rejected or dropped at the API boundary.
+	wantLabels := []model.ResourceLabelFilter{{Key: "team"}, {Key: "tier", Value: "critical"}}
 	if !reflect.DeepEqual(query.LabelFilters, wantLabels) {
 		t.Fatalf("labels = %#v, want %#v", query.LabelFilters, wantLabels)
 	}
 
-	for _, raw := range []string{"ownerId=0", "ownerId=nope", "label=team", "label=:platform", "label=team:"} {
+	for _, raw := range []string{"ownerId=0", "ownerId=nope", "label=:platform", "label=team:", "label=" + strings.Repeat("x", 129)} {
 		t.Run(raw, func(t *testing.T) {
 			req := httptest.NewRequest(http.MethodGet, "/resources?"+raw, nil)
 			if _, err := parseResourceListQuery(req); err == nil {

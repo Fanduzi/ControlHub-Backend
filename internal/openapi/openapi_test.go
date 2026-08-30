@@ -1,6 +1,6 @@
 // Package openapi_test verifies the embedded OpenAPI contract.
 // input: embedded OpenAPI YAML, kin-openapi parser, internal/model
-// output: OpenAPI schema, resource completeness/collector presence, health observation, effective-value override, collector empty-preview/confirm multipart, bulk mutation, topology, pagination, execution, machine auth, and closed error-enum tests
+// output: OpenAPI schema, bounded key/key:value resource labels, resource completeness/collector presence, health observation, effective-value override, collector empty-preview/confirm multipart, bulk mutation, topology, pagination, execution, machine auth, and closed error-enum tests
 // pos: Prevents documented API, reachable collector ingestion, and read-only collector-presence contracts from drifting from router behavior
 // note: if this file changes, update this header and module README.md.
 package openapi_test
@@ -28,6 +28,26 @@ func TestOpenAPIYAMLIsValid(t *testing.T) {
 
 	if err := doc.Validate(context.Background()); err != nil {
 		t.Fatalf("openapi.yaml validation failed: %v", err)
+	}
+}
+
+func TestOpenAPIResourceLabelFilterContract(t *testing.T) {
+	loader := openapi3.NewLoader()
+	doc, err := loader.LoadFromData(openapi.YAML)
+	if err != nil {
+		t.Fatalf("failed to parse openapi.yaml: %v", err)
+	}
+
+	schema := findOperationParamSchema(t, doc, "/resources", "get", "label")
+	if schema.Items == nil || schema.Items.Value == nil {
+		t.Fatal("GET /resources label must be an array")
+	}
+	item := schema.Items.Value
+	if item.Pattern != `^[^:]+(?::.+)?$` {
+		t.Fatalf("label pattern = %q, want key or key:value", item.Pattern)
+	}
+	if item.MaxLength == nil || *item.MaxLength != 128 {
+		t.Fatalf("label maxLength = %v, want 128", item.MaxLength)
 	}
 }
 

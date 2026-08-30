@@ -15,7 +15,7 @@ Domain structs, taxonomy constants, validation methods, and dictionary definitio
 | audit.go | AuditEvent with at-most-one user/machine actor plus server-owned AuditChange field-diff contract |
 | auth.go | UserCredential (incl. IsActive + AuthorizationVersion), LoginRequest, LoginResponse structs |
 | settings.go | Environment, Owner, Role structs |
-| pagination.go | PageInfo, ResourceListQuery with search, owner, and label filters; ResourceLabelFilter; AuditListQuery including actor/resource search; pagination helpers/constants |
+| pagination.go | PageInfo, ResourceListQuery with search, owner, and key-presence/exact-value label filters; ResourceLabelFilter; AuditListQuery including actor/resource search; pagination helpers/constants |
 | named_inventory_view.go | Minimal validated named-view contract containing inventory filters, sort, and columns without result/page snapshots |
 | named_inventory_view_test.go | Positive-ID and reusable-state validation regression tests |
 | machine_principal.go | Independent machine-principal metadata, safe admin credential-lifecycle list records, five read/query scopes plus reserved collector-only `inventory:ingest` and `health:write` scopes, and 30/90-day expiry rules |

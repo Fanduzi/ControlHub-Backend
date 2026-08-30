@@ -2899,12 +2899,14 @@ paths:
             type: array
             items:
               type: string
-              pattern: "^[^:]+:.+$"
+              maxLength: 128
+              pattern: "^[^:]+(?::.+)?$"
           style: form
           explode: true
           description: >-
-            Exact label filter in key:value form. Repeat for logical AND
-            (for example, ?label=team:platform&label=tier:critical).
+            Label key-presence filter in key form or exact filter in key:value
+            form, bounded to 128 characters. Repeat for logical AND (for
+            example, ?label=team&label=tier:critical).
         - in: query
           name: page
           schema:

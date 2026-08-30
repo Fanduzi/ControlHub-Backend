@@ -1,6 +1,6 @@
 // Package mysql provides MySQL-backed repository implementations.
 // input: crypto/sha256, database/sql, time, internal/model, internal/service
-// output: resource CRUD, governed identity and batched typed-profile/collector-presence reads, rich inventory filtering, health observations/effective health, observed/effective values, validated previews, audited versioned manual overrides, atomic bulk mutation, and User/collector atomic ingestion confirmation including empty terminal receipts
+// output: resource CRUD, governed identity and batched typed-profile/collector-presence reads, exact/presence label filtering, health observations/effective health, observed/effective values, validated previews, audited versioned manual overrides, atomic bulk mutation, and User/collector atomic ingestion confirmation including empty terminal receipts
 // pos: MySQL resource persistence, identity/typed-profile/collector-presence projections, current health evidence, effective values, inventory search, and shared resource/scan transaction authority
 // note: if this file changes, update this header and module README.md.
 package mysql
@@ -420,6 +420,11 @@ func (r *ResourceRepository) ListResources(ctx context.Context, q model.Resource
 		args = append(args, *q.OwnerID)
 	}
 	for _, label := range q.LabelFilters {
+		if label.Value == "" {
+			conds = append(conds, "json_contains(json_keys(r.labels), json_quote(?))")
+			args = append(args, label.Key)
+			continue
+		}
 		conds = append(conds, "json_contains(r.labels, json_object(?, ?))")
 		args = append(args, label.Key, label.Value)
 	}
