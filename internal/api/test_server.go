@@ -1,6 +1,6 @@
 // Package api provides HTTP handlers and routing for the ControlHub REST API.
 // input: internal/api, internal/model, internal/service, net/http, and topology row budgets
-// output: TestServer struct, NewTestServer with fake audit environment, batch-profile, relation, health, effective-value, bulk preview/confirm, bounded topology, and injectable User/collector ingestion results
+// output: TestServer struct, NewTestServer with fake audit actor/environment, batch-profile, relation, health, effective-value, bulk preview/confirm, bounded topology, and injectable User/collector ingestion results
 // pos: Test infrastructure — fake repositories for typed profiles, completeness relations, health observations, effective values, bulk mutation review, bounded topology reads/candidates, User/collector ingestion confirmation, and a pre-wired handler router
 // note: if this file changes, update this header and module README.md.
 package api
@@ -985,8 +985,8 @@ func (fakeAuditRepo) ListAuditEvents(_ context.Context, q model.AuditListQuery) 
 	actor1 := uint64(1)
 	actor2 := uint64(2)
 	all := []model.AuditEvent{
-		{ID: 1, ActorUserID: &actor1, TargetResourceID: &targetResourceID, EventType: "resource.updated", Result: "success", Changes: []model.AuditChange{{Field: "ownerId", Operation: model.AuditChangeUpdate, Before: float64(1), After: float64(2)}}, CreatedAt: time.Date(2026, 4, 11, 21, 0, 0, 0, time.UTC)},
-		{ID: 2, ActorUserID: &actor2, TargetResourceID: nil, EventType: "resource.created", Result: "failure", CreatedAt: time.Date(2026, 4, 11, 22, 0, 0, 0, time.UTC)},
+		{ID: 1, ActorUserID: &actor1, Actor: &model.QueryExecutionActor{Kind: model.QueryExecutionActorUser, DisplayName: "ControlHub Admin"}, TargetResourceID: &targetResourceID, EventType: "resource.updated", Result: "success", Changes: []model.AuditChange{{Field: "ownerId", Operation: model.AuditChangeUpdate, Before: float64(1), After: float64(2)}}, CreatedAt: time.Date(2026, 4, 11, 21, 0, 0, 0, time.UTC)},
+		{ID: 2, ActorUserID: &actor2, Actor: &model.QueryExecutionActor{Kind: model.QueryExecutionActorUser, DisplayName: "ControlHub Editor"}, TargetResourceID: nil, EventType: "resource.created", Result: "failure", CreatedAt: time.Date(2026, 4, 11, 22, 0, 0, 0, time.UTC)},
 	}
 
 	filtered := make([]model.AuditEvent, 0)
@@ -1022,7 +1022,7 @@ func (fakeAuditRepo) ListAuditEvents(_ context.Context, q model.AuditListQuery) 
 
 func (fakeAuditRepo) ListByResourceID(resourceID uint64) ([]model.AuditEvent, error) {
 	actor := uint64(1)
-	return []model.AuditEvent{{ID: 1, ActorUserID: &actor, TargetResourceID: &resourceID, EventType: "resource.updated", Result: "success", Changes: []model.AuditChange{{Field: "ownerId", Operation: model.AuditChangeUpdate, Before: float64(1), After: float64(2)}}, CreatedAt: time.Date(2026, 4, 11, 21, 0, 0, 0, time.UTC)}}, nil
+	return []model.AuditEvent{{ID: 1, ActorUserID: &actor, Actor: &model.QueryExecutionActor{Kind: model.QueryExecutionActorUser, DisplayName: "ControlHub Admin"}, TargetResourceID: &resourceID, EventType: "resource.updated", Result: "success", Changes: []model.AuditChange{{Field: "ownerId", Operation: model.AuditChangeUpdate, Before: float64(1), After: float64(2)}}, CreatedAt: time.Date(2026, 4, 11, 21, 0, 0, 0, time.UTC)}}, nil
 }
 
 // fakeQueryTargetRow pairs a raw query target with the environment id used for

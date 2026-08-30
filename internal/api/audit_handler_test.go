@@ -1,6 +1,6 @@
 // Package api provides HTTP handlers and routing for the ControlHub REST API.
 // input: internal/api, internal/model, net/http, net/http/httptest, encoding/json
-// output: TestParseAuditListQuery*, TestListAuditEvents*, TestListResourceAuditEvents_Unchanged including environment filtering
+// output: TestParseAuditListQuery*, TestListAuditEvents* including actor projection, TestListResourceAuditEvents_Unchanged including environment filtering
 // pos: Validates audit event listing with pagination, filtering, and search
 // note: if this file changes, update header and README.md
 package api
@@ -82,6 +82,9 @@ func TestListAuditEvents_DefaultPagination(t *testing.T) {
 	}
 	if len(resp.Items) != 2 {
 		t.Fatalf("expected 2 items, got %d", len(resp.Items))
+	}
+	if resp.Items[0].Actor == nil || resp.Items[0].Actor.DisplayName != "ControlHub Admin" {
+		t.Fatalf("actor = %#v, want ControlHub Admin", resp.Items[0].Actor)
 	}
 }
 

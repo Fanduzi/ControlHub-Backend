@@ -12,7 +12,7 @@ HTTP handlers, chi routing, CORS middleware, and fake-repo test infrastructure.
 | profile_handler.go | PUT/PATCH/DELETE /resources/{id}/profile handlers with strict decoding and token-derived atomic inventory audit |
 | relation_handler.go | Resource relation reads, source-specific rule discovery, and token-derived atomic audited create/delete handlers |
 | topology_handler.go | Resource-rooted and environment-scoped topology workspace read handlers |
-| audit_handler.go | Audit event list handlers (global and per-resource), including pagination, target-resource/environment filters, search, and inventory field changes |
+| audit_handler.go | Audit event list handlers (global and per-resource), including privacy-safe actor labels, pagination, target-resource/environment filters, search, and inventory field changes |
 | auth_handler.go | POST /auth/login handler |
 | auth_middleware.go | User Bearer, role, Authorization Version, and query-freshness middleware; machine-prefixed credentials are rejected without User/session fallback |
 | machine_credential_middleware.go | Independent opaque machine authentication and the shared user-or-machine scope guard |
@@ -27,13 +27,13 @@ HTTP handlers, chi routing, CORS middleware, and fake-repo test infrastructure.
 | named_inventory_view_handler.go | User personal/shared named-view CRUD plus machine-only `ListShared` reads |
 | legacy_hash_handler.go | Admin-only GET /admin/legacy-hash-count — non-identity-bearing legacy password hash count |
 | json_body.go | Shared strict JSON body decoding with unknown-field and multiple-value rejection |
-| test_server.go | Fake repositories, including bounded deterministic topology relation/candidate reads, injectable collector-ingestion results and propagation capture, and NewTestServer() with a default admin actor for handler tests |
+| test_server.go | Fake repositories, including audit actor projections, bounded deterministic topology relation/candidate reads, injectable collector-ingestion results and propagation capture, and NewTestServer() with a default admin actor for handler tests |
 | health_handler_test.go | Health endpoint tests |
 | resource_handler_test.go | Resource and profile endpoint tests, including list/detail completeness and bounded per-principal collector-presence projection, strict rejection of client completeness, governed identity, explicit conflicts, immutable origin, create-with-profile atomicity, minimum manual identity, and all typed-profile identities at the HTTP seam |
 | profile_handler_test.go | PUT full-replacement and PATCH partial-merge tests: strict JSON decoding, field validation, no-op empty PATCH, Domain Name normalization, and Database Proxy role contract |
 | relation_handler_test.go | Relation endpoint tests |
 | topology_handler_test.go | Topology endpoint tests, including default depth, deeper traversals, and environment workspace starts |
-| audit_handler_test.go | Audit list contract tests, including field-level before/after changes |
+| audit_handler_test.go | Audit list contract tests, including privacy-safe actor labels and field-level before/after changes |
 | auth_handler_test.go | Auth endpoint tests |
 | dictionary_handler_test.go | Dictionary endpoint tests |
 | query_credential_handler_test.go | Credential metadata handler tests |

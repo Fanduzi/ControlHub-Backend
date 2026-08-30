@@ -12,7 +12,7 @@ Domain structs, taxonomy constants, validation methods, and dictionary definitio
 | health_observation.go | HealthObservation value and exact fresh/stale/never boundary calculation |
 | resource_effective_value.go | Effective CI value and observed/manual provenance response contracts |
 | relation.go | ResourceRelation struct, RelationType type |
-| audit.go | AuditEvent with at-most-one user/machine actor plus server-owned AuditChange field-diff contract |
+| audit.go | AuditEvent with at-most-one user/machine identity, privacy-safe actor projection, and server-owned AuditChange field-diff contract |
 | auth.go | UserCredential (incl. IsActive + AuthorizationVersion), LoginRequest, LoginResponse structs |
 | settings.go | Environment, Owner, Role structs |
 | pagination.go | PageInfo, ResourceListQuery with search, owner, and key-presence/exact-value label filters; ResourceLabelFilter; AuditListQuery including actor/resource search; pagination helpers/constants |
@@ -41,7 +41,7 @@ Domain structs, taxonomy constants, validation methods, and dictionary definitio
 ## Exports
 - All domain structs (Resource, ResourceRelation, Completeness, AuditEvent, etc.)
 - `HealthObservation`, `HealthFreshness`, and `HealthObservation.FreshnessAt()`
-- `AuditChange`, `AuditChangeOperation`, and add/update/remove constants for extensible inventory evidence; `AuditListQuery` carries optional target-resource environment filtering
+- `AuditChange`, `AuditChangeOperation`, and add/update/remove constants for extensible inventory evidence; `AuditEvent.Actor` is the privacy-safe user/machine label and `AuditListQuery` carries optional target-resource environment filtering
 - `EffectiveValue` and `ValueProvenance` for effective CI projections
 - Type constants and validation methods, including `ResourceOrigin`
 - `ResourceTypeDictionary()`, `RelationTypeDictionary()`, `LifecycleStatusDictionary()`, `HealthStatusDictionary()`

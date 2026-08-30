@@ -1,6 +1,6 @@
 // Package openapi_test verifies the embedded OpenAPI contract.
 // input: embedded OpenAPI YAML, kin-openapi parser, internal/model
-// output: OpenAPI schema, bounded key/key:value resource labels, resource completeness/bounded collector presence, health observation, effective-value override, collector empty-preview/confirm multipart, bulk mutation, topology, pagination, execution, machine auth, and closed error-enum tests
+// output: OpenAPI schema, audit actor projection, bounded key/key:value resource labels, resource completeness/bounded collector presence, health observation, effective-value override, collector empty-preview/confirm multipart, bulk mutation, topology, pagination, execution, machine auth, and closed error-enum tests
 // pos: Prevents documented API, reachable collector ingestion, and read-only collector-presence contracts from drifting from router behavior
 // note: if this file changes, update this header and module README.md.
 package openapi_test
@@ -548,6 +548,17 @@ func TestOpenAPIAuditEventActorUserIdNullable(t *testing.T) {
 	}
 	if !prop.Value.Nullable {
 		t.Fatal("actorUserId must be nullable in AuditEvent schema")
+	}
+
+	if !slices.Contains(schema.Required, "actor") {
+		t.Fatalf("actor must be required in AuditEvent schema; required = %v", schema.Required)
+	}
+	actor := schema.Properties["actor"]
+	if actor == nil || actor.Value == nil {
+		t.Fatal("actor property not found in AuditEvent schema")
+	}
+	if !actor.Value.Nullable {
+		t.Fatal("actor must be nullable for unauthenticated audit events")
 	}
 }
 

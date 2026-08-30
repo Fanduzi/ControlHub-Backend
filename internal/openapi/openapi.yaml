@@ -3968,6 +3968,9 @@ paths:
                 items:
                   - id: 6000000000000000001
                     actorUserId: 3000000000000000001
+                    actor:
+                      kind: user
+                      displayName: ControlHub Admin
                     targetResourceId: 4000000000000000001
                     eventType: resource.updated
                     result: success
@@ -6016,7 +6019,7 @@ components:
           description: New field value; omitted for removals.
     AuditEvent:
       type: object
-      required: [id, eventType, result, createdAt]
+      required: [id, actor, eventType, result, createdAt]
       properties:
         id:
           type: integer
@@ -6030,6 +6033,11 @@ components:
           format: int64
           nullable: true
           description: Verified Machine Principal ID; mutually exclusive with actorUserId.
+        actor:
+          nullable: true
+          description: Privacy-safe verified actor label, or null when no identity was authenticated.
+          allOf:
+            - $ref: "#/components/schemas/QueryExecutionActor"
         targetResourceId:
           type: integer
           format: int64
@@ -7131,9 +7139,10 @@ components:
         displayName:
           type: string
           description: >
-            Privacy-safe User or Machine Principal label for history. Never an
-            email, raw numeric ID, or credential. Missing actors use a fixed
-            unknown label for their kind.
+            Privacy-safe User or Machine Principal label for read models. Audit
+            events may use the verified User email when the display name is blank;
+            raw numeric IDs and credentials are never labels. Missing actors use
+            a fixed unknown label for their kind.
     QueryExecutionRecord:
       type: object
       required: [id, targetResourceId, actor, engine, statementDigest, statementPreview, canRestore, status, rowCount, durationMs, errorCode, errorMessage, createdAt]

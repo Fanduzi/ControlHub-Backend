@@ -1,6 +1,6 @@
 // Package model provides domain entities for the resource management system.
 // input: time package
-// output: AuditEvent with at-most-one user/machine actor, AuditChange, AuditChangeOperation
+// output: AuditEvent with at-most-one user/machine identity plus privacy-safe actor projection, AuditChange, AuditChangeOperation
 // pos: Append-only event record and field-diff contract for governed changes
 // note: if this file changes, update header and README.md
 package model
@@ -28,12 +28,13 @@ type AuditChange struct {
 // outcomes. ActorUserID and ActorMachinePrincipalID are mutually exclusive;
 // both are nil for unauthenticated events where no verified identity exists.
 type AuditEvent struct {
-	ID                      uint64        `json:"id"`
-	ActorUserID             *uint64       `json:"actorUserId"`
-	ActorMachinePrincipalID *uint64       `json:"actorMachinePrincipalId"`
-	TargetResourceID        *uint64       `json:"targetResourceId"`
-	EventType               string        `json:"eventType"`
-	Result                  string        `json:"result"`
-	Changes                 []AuditChange `json:"changes,omitempty"`
-	CreatedAt               time.Time     `json:"createdAt"`
+	ID                      uint64               `json:"id"`
+	ActorUserID             *uint64              `json:"actorUserId"`
+	ActorMachinePrincipalID *uint64              `json:"actorMachinePrincipalId"`
+	Actor                   *QueryExecutionActor `json:"actor"`
+	TargetResourceID        *uint64              `json:"targetResourceId"`
+	EventType               string               `json:"eventType"`
+	Result                  string               `json:"result"`
+	Changes                 []AuditChange        `json:"changes,omitempty"`
+	CreatedAt               time.Time            `json:"createdAt"`
 }

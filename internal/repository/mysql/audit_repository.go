@@ -1,6 +1,6 @@
 // Package mysql provides MySQL-backed repository implementations.
 // input: database/sql, internal/model
-// output: NewAuditRepository, user/machine-aware AuditRepository list and resource-environment projections
+// output: NewAuditRepository, user/machine-aware AuditRepository lists with actor labels and resource-environment projections
 // pos: MySQL audit_events pagination, filtering, scan, and user/machine/resource search
 // note: if this file changes, update header and README.md
 package mysql
@@ -74,7 +74,7 @@ func (r *AuditRepository) ListAuditEvents(ctx context.Context, q model.AuditList
 
 	offset := (q.Page - 1) * q.PageSize
 	dataQuery := `select audit_events.id, audit_events.actor_user_id, audit_events.actor_machine_principal_id, audit_events.target_resource_id,
-		audit_events.event_type, audit_events.result, audit_events.changes, audit_events.created_at
+		audit_events.event_type, audit_events.result, audit_events.changes, audit_events.created_at, u.display_name, u.email, mp.name
 	from ` + from + " " + where + ` order by audit_events.created_at desc limit ? offset ?`
 
 	dataArgs := append(args, q.PageSize, offset)
@@ -89,10 +89,13 @@ func (r *AuditRepository) ListAuditEvents(ctx context.Context, q model.AuditList
 
 func (r *AuditRepository) ListByResourceID(resourceID uint64) ([]model.AuditEvent, error) {
 	query := `
-	select id, actor_user_id, actor_machine_principal_id, target_resource_id, event_type, result, changes, created_at
+	select audit_events.id, audit_events.actor_user_id, audit_events.actor_machine_principal_id, audit_events.target_resource_id,
+		audit_events.event_type, audit_events.result, audit_events.changes, audit_events.created_at, u.display_name, u.email, mp.name
 	from audit_events
-	where target_resource_id = ?
-	order by created_at desc`
+	left join users u on u.id = audit_events.actor_user_id
+	left join machine_principals mp on mp.id = audit_events.actor_machine_principal_id
+	where audit_events.target_resource_id = ?
+	order by audit_events.created_at desc`
 
 	rows, err := r.db.QueryContext(context.Background(), query, resourceID)
 	if err != nil {
@@ -152,6 +155,9 @@ func scanAuditEventsRows(rows *sql.Rows, total int) ([]model.AuditEvent, int, er
 		var actorUserID nullableUint64
 		var actorMachinePrincipalID nullableUint64
 		var rawChanges sql.NullString
+		var userDisplayName sql.NullString
+		var userEmail sql.NullString
+		var machinePrincipalName sql.NullString
 		if err := rows.Scan(
 			&item.ID,
 			&actorUserID,
@@ -161,6 +167,9 @@ func scanAuditEventsRows(rows *sql.Rows, total int) ([]model.AuditEvent, int, er
 			&item.Result,
 			&rawChanges,
 			&item.CreatedAt,
+			&userDisplayName,
+			&userEmail,
+			&machinePrincipalName,
 		); err != nil {
 			return nil, 0, err
 		}
@@ -174,6 +183,23 @@ func scanAuditEventsRows(rows *sql.Rows, total int) ([]model.AuditEvent, int, er
 		}
 		if item.ActorUserID != nil && item.ActorMachinePrincipalID != nil {
 			return nil, 0, fmt.Errorf("scan audit event: multiple actor identities")
+		}
+		if item.ActorUserID != nil {
+			displayName := strings.TrimSpace(userDisplayName.String)
+			if displayName == "" {
+				displayName = strings.TrimSpace(userEmail.String)
+			}
+			if displayName == "" {
+				displayName = model.UnknownHistoryActorDisplayName
+			}
+			item.Actor = &model.QueryExecutionActor{Kind: model.QueryExecutionActorUser, DisplayName: displayName}
+		}
+		if item.ActorMachinePrincipalID != nil {
+			displayName := strings.TrimSpace(machinePrincipalName.String)
+			if displayName == "" {
+				displayName = model.UnknownHistoryMachineActorDisplayName
+			}
+			item.Actor = &model.QueryExecutionActor{Kind: model.QueryExecutionActorMachine, DisplayName: displayName}
 		}
 		if targetResourceID.Valid {
 			targetID := targetResourceID.Uint64

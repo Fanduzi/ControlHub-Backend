@@ -115,8 +115,8 @@ type QueryExecuteResponse struct {
 	Pagination       *QueryExecutePaginationResponse `json:"pagination,omitempty"`
 }
 
-// QueryExecutionActor is the privacy-safe actor projection for history rows.
-// Only displayName is public; email and raw numeric user IDs stay internal.
+// QueryExecutionActor is the privacy-safe actor projection for read models.
+// DisplayName is a server-selected label; raw IDs and credentials stay internal.
 type QueryExecutionActor struct {
 	Kind        QueryExecutionActorKind `json:"kind"`
 	DisplayName string                  `json:"displayName"`

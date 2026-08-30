@@ -27,10 +27,10 @@ func TestListAuditEvents_SearchAndScanMachinePrincipal(t *testing.T) {
 	mock.ExpectQuery(`select count\(\*\) `+searchPredicate).
 		WithArgs("%agent%", "%agent%", "%agent%", "%agent%", "%agent%").
 		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(1))
-	mock.ExpectQuery(`select audit_events\.id, audit_events\.actor_user_id, audit_events\.actor_machine_principal_id, audit_events\.target_resource_id, audit_events\.event_type, audit_events\.result, audit_events\.changes, audit_events\.created_at `+searchPredicate+` order by`).
+	mock.ExpectQuery(`select audit_events\.id, audit_events\.actor_user_id, audit_events\.actor_machine_principal_id, audit_events\.target_resource_id, audit_events\.event_type, audit_events\.result, audit_events\.changes, audit_events\.created_at, u\.display_name, u\.email, mp\.name `+searchPredicate+` order by`).
 		WithArgs("%agent%", "%agent%", "%agent%", "%agent%", "%agent%", 20, 0).
-		WillReturnRows(sqlmock.NewRows([]string{"id", "actor_user_id", "actor_machine_principal_id", "target_resource_id", "event_type", "result", "changes", "created_at"}).
-			AddRow(1, nil, 91, 22, "query.executed", "success", nil, time.Date(2026, 8, 30, 6, 0, 0, 0, time.UTC)))
+		WillReturnRows(sqlmock.NewRows([]string{"id", "actor_user_id", "actor_machine_principal_id", "target_resource_id", "event_type", "result", "changes", "created_at", "user_display_name", "user_email", "machine_name"}).
+			AddRow(1, nil, 91, 22, "query.executed", "success", nil, time.Date(2026, 8, 30, 6, 0, 0, 0, time.UTC), nil, nil, "Agent 91"))
 
 	items, total, err := NewAuditRepository(db).ListAuditEvents(context.Background(), model.AuditListQuery{
 		Query:    "agent",
@@ -45,6 +45,9 @@ func TestListAuditEvents_SearchAndScanMachinePrincipal(t *testing.T) {
 	}
 	if items[0].ActorUserID != nil || items[0].ActorMachinePrincipalID == nil || *items[0].ActorMachinePrincipalID != 91 {
 		t.Fatalf("audit identity = user:%v machine:%v, want machine principal 91 only", items[0].ActorUserID, items[0].ActorMachinePrincipalID)
+	}
+	if items[0].Actor == nil || items[0].Actor.Kind != model.QueryExecutionActorMachine || items[0].Actor.DisplayName != "Agent 91" {
+		t.Fatalf("audit actor = %#v, want machine Agent 91", items[0].Actor)
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatalf("SQL expectations: %v", err)
@@ -62,10 +65,10 @@ func TestListAuditEvents_FilterByTargetEnvironment(t *testing.T) {
 	mock.ExpectQuery(`select count\(\*\) `+predicate).
 		WithArgs(uint64(22), uint64(7), "resource.updated", "success").
 		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(1))
-	mock.ExpectQuery(`select audit_events\.id, audit_events\.actor_user_id, audit_events\.actor_machine_principal_id, audit_events\.target_resource_id, audit_events\.event_type, audit_events\.result, audit_events\.changes, audit_events\.created_at `+predicate+` order by`).
+	mock.ExpectQuery(`select audit_events\.id, audit_events\.actor_user_id, audit_events\.actor_machine_principal_id, audit_events\.target_resource_id, audit_events\.event_type, audit_events\.result, audit_events\.changes, audit_events\.created_at, u\.display_name, u\.email, mp\.name `+predicate+` order by`).
 		WithArgs(uint64(22), uint64(7), "resource.updated", "success", 20, 0).
-		WillReturnRows(sqlmock.NewRows([]string{"id", "actor_user_id", "actor_machine_principal_id", "target_resource_id", "event_type", "result", "changes", "created_at"}).
-			AddRow(1, 1, nil, 22, "resource.updated", "success", nil, time.Date(2026, 8, 30, 6, 0, 0, 0, time.UTC)))
+		WillReturnRows(sqlmock.NewRows([]string{"id", "actor_user_id", "actor_machine_principal_id", "target_resource_id", "event_type", "result", "changes", "created_at", "user_display_name", "user_email", "machine_name"}).
+			AddRow(1, 1, nil, 22, "resource.updated", "success", nil, time.Date(2026, 8, 30, 6, 0, 0, 0, time.UTC), "", "admin@example.com", nil))
 
 	targetResourceID, environmentID := uint64(22), uint64(7)
 	items, total, err := NewAuditRepository(db).ListAuditEvents(context.Background(), model.AuditListQuery{
@@ -81,6 +84,9 @@ func TestListAuditEvents_FilterByTargetEnvironment(t *testing.T) {
 	}
 	if len(items) != 1 || total != 1 {
 		t.Fatalf("items=%d total=%d, want one matching event without duplicates", len(items), total)
+	}
+	if items[0].Actor == nil || items[0].Actor.Kind != model.QueryExecutionActorUser || items[0].Actor.DisplayName != "admin@example.com" {
+		t.Fatalf("audit actor = %#v, want user email fallback", items[0].Actor)
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatalf("SQL expectations: %v", err)
