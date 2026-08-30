@@ -2,7 +2,7 @@
 
 // Package integration provides real-MySQL machine-principal lifecycle proofs.
 // input: bytes, context, database/sql, encoding/json, errors, fmt, log, strings, testing, time, internal/model, internal/repository/mysql, internal/service
-// output: one-time secret, hash-only persistence, audit absence, expiry, revoke, overlap, last-used, scope, and rollback tests
+// output: one-time secret, hash-only persistence, audit absence, expiry, revoke, overlap, last-used, all-seven-scope, and rollback tests
 // pos: Real-MySQL security-boundary coverage for machine principals at schema version 25
 // note: if this file changes, update this header and module README.md.
 package integration
@@ -113,6 +113,31 @@ func TestMachinePrincipalCredentialLifecycle(t *testing.T) {
 		}
 	}
 	assertMachinePrincipalAuditActors(t, db, admin.ID)
+}
+
+func TestMachinePrincipalCredentialPersistsAllSevenScopes(t *testing.T) {
+	db := setupTestDB(t)
+	svc := service.NewMachinePrincipalService(mysql.NewMachinePrincipalRepository(db))
+	scopes := []model.MachineScope{
+		model.MachineScopeInventoryRead,
+		model.MachineScopeRelationsRead,
+		model.MachineScopeGovernedSelect,
+		model.MachineScopeAuditRead,
+		model.MachineScopeNamedViewsRead,
+		model.MachineScopeInventoryIngest,
+		model.MachineScopeHealthWrite,
+	}
+	issued, err := svc.Create(context.Background(), service.AuthenticatedUser{ID: 860001, Role: "admin"}, model.MachinePrincipalCreateRequest{
+		Name: "all-seven-scope-agent", Scopes: scopes,
+	})
+	if err != nil {
+		t.Fatalf("create all-seven-scope credential: %v", err)
+	}
+	for _, scope := range scopes {
+		if _, err := svc.Authenticate(context.Background(), issued.Secret, scope); err != nil {
+			t.Fatalf("authenticate persisted scope %q: %v", scope, err)
+		}
+	}
 }
 
 func TestMachinePrincipalCreateRollsBackWhenAuditFails(t *testing.T) {
