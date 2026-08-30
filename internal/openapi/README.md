@@ -5,13 +5,14 @@ Embeds and validates the OpenAPI contract served by the API documentation route.
 ## Files
 | File | Responsibility |
 |------|---------------|
-| openapi.yaml | Source OpenAPI contract for user and opaque machine security, scoped machine reads/reserved collector ingestion and health routes/ordinary governed execution, truthful evidence actors, admin lifecycle, resource-list search filters, named inventory views, bulk mutation and strict ingestion preview/confirmation, governed typed-profile identity, health observations, topology workspace reads, relationship-rule discovery, audit pagination/search/environment filtering and field diffs, metrics, and controlled errors |
+| openapi.yaml | Source OpenAPI contract for user and opaque machine security, query workspace GET/PUT, owner-only successful execution statements, scoped machine reads/reserved collector ingestion and health routes/ordinary governed execution, truthful evidence actors, admin lifecycle, resource-list search filters, named inventory views, bulk mutation and strict ingestion preview/confirmation, governed typed-profile identity, health observations, topology workspace reads, relationship-rule discovery, audit pagination/search/environment filtering and field diffs, metrics, and controlled errors |
 | audit_environment_contract_test.go | Audit environment-filter parameter contract regression test |
 | embed.go | Embeds the YAML for serving and tests |
 | openapi_test.go | Validates schema, strict ingestion multipart, bulk mutation, topology, pagination, executions, and the closed controlled-error enum |
 | machine_principal_contract_test.go | Validates machine security, closed read/query/collector scopes, truthful execution/audit actors, sibling-route mapping, admin routes, codes, and one-time-secret schemas |
 | operator_access_boundary_test.go | Proves every protected operation documents the status codes its operatoraccess class requires |
 | openapi_schema_helpers_test.go | Shared schema/parameter shape assertion helpers |
+| query_workspace_statement_contract_test.go | Workspace/statement routes and schemas, controlled codes, and execution-list non-disclosure contract |
 
 ## Exports
 - `YAML` - embedded OpenAPI specification bytes
@@ -23,6 +24,7 @@ Embeds and validates the OpenAPI contract served by the API documentation route.
 - `machineCredential`: independent opaque Bearer scheme; the closed route matrix grants inventory, relation/topology, query-target discovery, audit, shared-only Named View reads, reserved `inventory:ingest`/`health:write` collector routes, and only ordinary `POST /query-targets/{id}/execute` for `governed-select`; sibling query routes and ordinary mutations remain user-only.
 - Machine credential plaintext appears only in `MachineCredentialIssue` create/rotate responses; admin list lifecycle metadata includes only credential ID and created/expires/revoked/last-used timestamps, never lookup IDs or other auth material.
 - Query execution history and audit schemas expose the machine principal identity independently from user identity; they never expose the authenticating credential ID or secret.
+- `GET/PUT /query-workspace` is the User-only singular aggregate contract; `GET /query-targets/{id}/executions/{executionId}/statement` is fresh-User owner-only and never widens execution-list or audit schemas.
 - `GET /ops/auth-audit-metrics` response schema: fixed admin-only shape with exactly `authAuditPersistenceFailures` and `authAuditSuppressedRejections` counters; carries no identity, request, or credential material
 - `GET /ops/query-evidence-metrics` response schema (Issue #34): fixed admin-only shape with exactly `queryEvidencePersistenceFailures`; carries no identity, target, statement, value, credential, DSN, request, or raw error material
 - `POST /admin/ingestions/preview` and `/confirm` use a strict multipart `format` (`csv` or `json`) plus one bounded `file`; confirm additionally requires the reviewed 64-hex fingerprint and returns a fresh preview in controlled 409 conflict/drift responses.

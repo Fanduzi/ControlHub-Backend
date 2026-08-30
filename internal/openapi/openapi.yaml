@@ -1001,6 +1001,97 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/ErrorResponse"
+  /query-workspace:
+    get:
+      summary: Get the authenticated user's query workspace
+      operationId: getQueryWorkspace
+      description: >
+        Returns the one query-workspace aggregate owned by the authenticated
+        User. A missing aggregate is represented as version 0 with an empty
+        worksheets array. Roles do not grant cross-user access and Machine
+        Credentials are not accepted.
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Current owner workspace or the version-zero empty aggregate
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/QueryWorkspace"
+        "401":
+          description: Missing or invalid User Bearer token
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "403":
+          description: Machine Credentials cannot access User workspaces
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "500":
+          description: Unexpected server failure
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+    put:
+      summary: Replace the authenticated user's query workspace
+      operationId: putQueryWorkspace
+      description: >
+        Replaces the complete owner aggregate using expectedVersion optimistic
+        concurrency. Worksheet statements are opaque drafts: this operation
+        does not parse SQL or resolve target resources.
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/QueryWorkspacePutRequest"
+      responses:
+        "200":
+          description: Persisted aggregate with its new version
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/QueryWorkspace"
+        "400":
+          description: Invalid, unknown, duplicate, multiple, or oversized JSON payload
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "401":
+          description: Missing or invalid User Bearer token
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "403":
+          description: Machine Credentials cannot access User workspaces
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "409":
+          description: expectedVersion does not match the current aggregate version
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              example:
+                error: query_workspace_conflict
+                message: query workspace version conflict
+        "500":
+          description: Unexpected server failure
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
   /query-targets/{id}/executions:
     get:
       summary: List execution history for a query target
@@ -1171,6 +1262,74 @@ paths:
                   value:
                     error: query_target_not_found
                     message: "query target does not exist"
+  /query-targets/{id}/executions/{executionId}/statement:
+    get:
+      summary: Get one owned successful execution's full statement
+      operationId: getQueryExecutionStatement
+      description: >
+        Returns full SQL only for the fresh authenticated User who owns the
+        exact successful execution on the exact target. Other users, admins
+        reading another user, Machine executions, failed/rejected/timeout
+        executions, and legacy rows without a stored statement all return the
+        same not-found response. Full SQL is never added to execution lists or
+        audit events.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+            format: int64
+            minimum: 1
+        - name: executionId
+          in: path
+          required: true
+          schema:
+            type: integer
+            format: int64
+            minimum: 1
+      responses:
+        "200":
+          description: Full statement for the owned successful execution
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/QueryExecutionStatementResponse"
+        "400":
+          description: Invalid target or execution identifier
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "401":
+          description: Missing, invalid, or stale User Bearer token
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "403":
+          description: Machine Credentials cannot access private User statements
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "404":
+          description: Execution statement not found under the exact owner and target predicates
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              example:
+                error: query_execution_not_found
+                message: query execution not found
+        "500":
+          description: Unexpected server failure
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
   /query-targets/{id}/schema/databases:
     get:
       summary: List databases for a query target
@@ -6445,11 +6604,13 @@ components:
             - payload_too_large
             - profile_not_supported
             - query_backend_error
+            - query_execution_not_found
             - query_explain_not_supported
             - query_not_allowed
             - query_result_disclosure_blocked
             - query_target_not_found
             - query_timeout
+            - query_workspace_conflict
             - relation_conflict
             - relation_not_found
             - relationship_map_not_supported
@@ -6834,6 +6995,72 @@ components:
           items:
             type: string
           description: Referenced columns in schema ordinal order
+    QueryWorkspaceWorksheet:
+      type: object
+      additionalProperties: false
+      required: [id, name, targetResourceId, statement, activeDatabase]
+      properties:
+        id:
+          type: string
+          minLength: 1
+          maxLength: 128
+        name:
+          type: string
+          minLength: 1
+          maxLength: 120
+        targetResourceId:
+          type: integer
+          format: int64
+          minimum: 1
+        statement:
+          type: string
+          maxLength: 65536
+          description: Opaque worksheet draft; this boundary does not parse or guard SQL.
+        activeDatabase:
+          oneOf:
+            - type: string
+              minLength: 1
+              maxLength: 128
+            - enum: [null]
+    QueryWorkspace:
+      type: object
+      additionalProperties: false
+      required: [worksheets, version, updatedAt]
+      properties:
+        worksheets:
+          type: array
+          maxItems: 32
+          items:
+            $ref: "#/components/schemas/QueryWorkspaceWorksheet"
+        version:
+          type: integer
+          format: int64
+          minimum: 0
+        updatedAt:
+          type: string
+          format: date-time
+    QueryWorkspacePutRequest:
+      type: object
+      additionalProperties: false
+      required: [expectedVersion, worksheets]
+      properties:
+        expectedVersion:
+          type: integer
+          format: int64
+          minimum: 0
+        worksheets:
+          type: array
+          maxItems: 32
+          items:
+            $ref: "#/components/schemas/QueryWorkspaceWorksheet"
+    QueryExecutionStatementResponse:
+      type: object
+      additionalProperties: false
+      required: [statement]
+      properties:
+        statement:
+          type: string
+          description: Full SQL for this owner-only successful execution.
     QueryExecutionActor:
       type: object
       required: [kind, displayName]

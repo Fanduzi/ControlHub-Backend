@@ -1,8 +1,8 @@
 // Package main provides tests for the ControlHub application entry point
 // wiring.
 // input: buildDependencies, internal/config
-// output: TestBuildDependencies_WiresResourceAndProfileServices
-// pos: Proves production DI wires ResourceService and ProfileService for the resource and profile endpoints
+// output: TestBuildDependencies_WiresResourceAndProfileServices and query workspace/statement dependency assertions
+// pos: Proves production DI wires resource/profile plus query workspace and private statement endpoints
 // note: if this file changes, update header and README.md
 package main
 
@@ -25,5 +25,11 @@ func TestBuildDependencies_WiresResourceAndProfileServices(t *testing.T) {
 	}
 	if deps.ProfileService == nil {
 		t.Fatal("ProfileService is nil")
+	}
+	if deps.QueryWorkspaceService == nil {
+		t.Fatal("QueryWorkspaceService is nil")
+	}
+	if deps.QueryExecutionStatementService == nil {
+		t.Fatal("QueryExecutionStatementService is nil")
 	}
 }

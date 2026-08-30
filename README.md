@@ -306,8 +306,11 @@ Dependency flow (strict, one-directional): `cmd/server` → `api` → `service` 
 | GET | /relation-types | List relation type dictionary items |
 | GET | /lifecycle-statuses | List lifecycle status dictionary items |
 | GET | /health-statuses | List health status dictionary items |
+| GET | /query-workspace | Read the authenticated User's worksheet aggregate; missing state returns version 0 and an empty list |
+| PUT | /query-workspace | Replace the authenticated User's worksheet aggregate with optimistic concurrency control |
 | GET | /query-targets/{id}/schema/table-definition | Get MySQL table definition (base tables only) |
 | POST | /query-targets/{id}/execute | Execute a governed read-only statement, with optional result paging for SELECT |
+| GET | /query-targets/{id}/executions/{executionId}/statement | Read a successful execution's full statement as its owning fresh authenticated User |
 | POST | /query-targets/{id}/saved-statements/{statementId}/execute | Execute a saved statement (governed template execution) through the existing governed chain |
 | GET | /ops/query-evidence-metrics | Admin-only query-evidence persistence-failure counter for atomic Execution Evidence Pair writes (Issue #34) |
 | GET | /openapi.yaml | Raw OpenAPI 3.1.0 spec |

@@ -1,12 +1,13 @@
 // Package service provides business logic for the Phase 37/38S read-only query sandbox.
-// input: context, errors, fmt, net, strconv, strings, time, go-sql-driver/mysql, internal/model
-// output: QueryExecutionService, validated user/machine Execute identity, repository/resolver/executor/clock interfaces, sentinel errors, ListHistory, validateDSNBinding
-// pos: Orchestrates ordinary user/machine governed execution plus user-only template/navigation paths through one atomic identity-aware evidence implementation while preserving cancellation and disclosure behavior
+// input: context, database/sql, errors, fmt, net, strconv, strings, time, go-sql-driver/mysql, internal/model
+// output: QueryExecutionService, validated user/machine Execute identity, owner-only successful statement retrieval, repository/resolver/executor/clock interfaces, sentinel errors, ListHistory, validateDSNBinding
+// pos: Orchestrates ordinary user/machine governed execution plus user-only template/navigation and private statement retrieval through one atomic identity-aware evidence implementation while preserving cancellation and disclosure behavior
 // note: if this file changes, update this header and module README.md.
 package service
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"net"
@@ -22,11 +23,12 @@ import (
 // Sentinel errors mapped by the handler to controlled HTTP responses. No guard,
 // policy, credential, or target-database validation issue should map to 500.
 var (
-	ErrQueryValidationFailed = errors.New("query validation failed")
-	ErrQueryNotAllowed       = errors.New("query not allowed")
-	ErrQueryTargetNotFound   = errors.New("query target not found")
-	ErrQueryTimeout          = errors.New("query timed out")
-	ErrQueryBackendFailure   = errors.New("query backend error")
+	ErrQueryValidationFailed  = errors.New("query validation failed")
+	ErrQueryNotAllowed        = errors.New("query not allowed")
+	ErrQueryTargetNotFound    = errors.New("query target not found")
+	ErrQueryExecutionNotFound = errors.New("query execution not found")
+	ErrQueryTimeout           = errors.New("query timed out")
+	ErrQueryBackendFailure    = errors.New("query backend error")
 )
 
 // ErrQueryResultTooLarge is returned by the executor when a result set exceeds
@@ -94,6 +96,10 @@ type QueryExecutionRepository interface {
 	InsertAuditEvent(ctx context.Context, actorUserID uint64, targetResourceID uint64, eventType string, result string) error
 	InsertExecutionWithAudit(ctx context.Context, rec model.QueryExecutionRecord, eventType, result string) (uint64, error)
 	QueryEvidencePersistenceFailures() int64
+}
+
+type queryExecutionStatementReader interface {
+	GetSuccessfulExecutionStatement(ctx context.Context, executionID, targetResourceID, actorUserID uint64) (model.QueryExecutionStatementResponse, error)
 }
 
 // QueryCredentialResolver resolves a validated credential_ref to a DSN. It must
@@ -416,6 +422,18 @@ func (s *QueryExecutionService) ListHistory(ctx context.Context, actorUserID uin
 		return s.listHistoryOffset(ctx, actorUserID, actorRole, targetID, q)
 	}
 	return s.listHistoryCursor(ctx, actorUserID, actorRole, targetID, q, queryHash)
+}
+
+func (s *QueryExecutionService) GetExecutionStatement(ctx context.Context, actorUserID, targetID, executionID uint64) (model.QueryExecutionStatementResponse, error) {
+	reader, ok := s.executions.(queryExecutionStatementReader)
+	if !ok {
+		return model.QueryExecutionStatementResponse{}, errors.New("query execution statement reader is required")
+	}
+	response, err := reader.GetSuccessfulExecutionStatement(ctx, executionID, targetID, actorUserID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return model.QueryExecutionStatementResponse{}, ErrQueryExecutionNotFound
+	}
+	return response, err
 }
 
 func (s *QueryExecutionService) listHistoryCursor(ctx context.Context, actorUserID uint64, actorRole string, targetID uint64, q model.QueryExecutionListQuery, queryHash string) (*model.QueryExecutionCursorPage, error) {
@@ -842,6 +860,9 @@ func (s *QueryExecutionService) buildRecord(target model.QueryTarget, identity m
 	if guarded != nil {
 		rec.StatementDigest = guarded.StatementDigest
 		rec.StatementPreview = guarded.StatementPreview
+		if identity.Kind == model.QueryExecutionActorUser && status == model.QueryExecutionSuccess {
+			rec.FullStatement = guarded.OriginalStatement
+		}
 	}
 	return rec
 }

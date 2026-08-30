@@ -19,7 +19,8 @@ HTTP handlers, chi routing, CORS middleware, and fake-repo test infrastructure.
 | machine_principal_handler.go | Admin-only machine principal create/list and credential rotate/revoke handlers |
 | dictionary_handler.go | Dictionary list handlers (environments, owners, roles, resource-types, relation-types, lifecycle-statuses, health-statuses) |
 | query_schema_handler.go | handleGetTableDefinition for MySQL table-definition requests |
-| query_execution_handler.go | User-or-machine POST ordinary execute plus user-only saved-statement execution, related-record navigation, and execution-history handlers; machine identity is passed without synthesizing a User; execute/related disclosure blocks publish `query_result_disclosure_blocked` |
+| query_execution_handler.go | User-or-machine POST ordinary execute plus fresh-User saved-statement execution, related-record navigation, execution history, and exact owner-only successful statement detail handlers |
+| query_workspace_handler.go | User-only singular query workspace GET/strict bounded PUT with controlled OCC conflict mapping |
 | query_credential_handler.go | Phase 38A credential metadata handlers (GET/PUT/DELETE) |
 | query_disclosure_handler.go | Phase 38Q disclosure policy CRUD/list handlers (handler-admin) |
 | query_saved_statement_handler.go | Phase 38W saved statement CRUD handlers with strict typed parameter declaration decoding |
@@ -37,7 +38,8 @@ HTTP handlers, chi routing, CORS middleware, and fake-repo test infrastructure.
 | dictionary_handler_test.go | Dictionary endpoint tests |
 | query_credential_handler_test.go | Credential metadata handler tests |
 | query_disclosure_handler_test.go | Disclosure policy handler tests, including list `query_result_disclosure_blocked` |
-| query_execution_handler_test.go | Query execution handler tests, including authenticated execution identity and Preflight/Apply-path `query_result_disclosure_blocked` vs `query_not_allowed` |
+| query_execution_handler_test.go | Query execution handler tests, including authenticated execution identity, owner-only fresh statement detail, and controlled error mapping |
+| query_workspace_handler_test.go | Authenticated owner GET/PUT, strict JSON/size, validation, and OCC mapping tests |
 | navigate_related_records_handler_test.go | Related-record navigation handler tests, including Preflight and Apply-path disclosure vs not-allowed Controlled Error Codes |
 | query_saved_statement_handler_test.go | Saved statement handler tests |
 | query_saved_statement_execution_handler_test.go | Template-execution handler tests (strict request decoding, controlled field errors, `query_result_disclosure_blocked`) |
@@ -94,6 +96,8 @@ remain `query_not_allowed`.
 | PUT | /query-targets/{id}/saved-statements/{statementId} | Update a saved statement |
 | DELETE | /query-targets/{id}/saved-statements/{statementId} | Delete a saved statement |
 | POST | /query-targets/{id}/saved-statements/{statementId}/execute | Execute a saved statement (governed template execution) |
+| GET, PUT | /query-workspace | Read or OCC-replace the authenticated User's singular worksheet aggregate |
+| GET | /query-targets/{id}/executions/{executionId}/statement | Read one fresh User's exact owned successful statement |
 
 ## Exports
 - `Dependencies` struct — all service dependencies

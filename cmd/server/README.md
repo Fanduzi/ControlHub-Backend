@@ -5,7 +5,8 @@ Application bootstrap and manual dependency injection.
 ## Files
 | File | Responsibility |
 |------|---------------|
-| main.go | Load config (rejects removed QUERY_EXECUTION_TOKEN_MAX_AGE), validate JWT_SECRET before opening the DB, wire resource/relation read projections plus independent machine principal/credential services into api.Dependencies, start HTTP server |
+| main.go | Load config, validate JWT_SECRET, wire resource/relation plus query workspace/private statement and machine services into api.Dependencies, start HTTP server |
+| main_test.go | Production dependency assertions for resource/profile and query workspace/private statement routes |
 | shutdown.go | Graceful drain seam: serve until SIGTERM/SIGINT, stop new traffic and drain in-flight handlers for at most a fixed ten seconds (Issue #37) |
 
 ## Modules Wired
@@ -22,7 +23,8 @@ Application bootstrap and manual dependency injection.
 | Dictionary | EnvironmentService, OwnerService, RoleService, ResourceTypeService, RelationTypeService, LifecycleStatusService, HealthStatusService | DictionaryRepository | — |
 | Query Target | QueryTargetService | QueryTargetRepository | — |
 | Query Credential | QueryCredentialService | QueryTargetRepository, QueryExecutionRepository | 38A |
-| Query Execution | QueryExecutionService | QueryTargetRepository, QueryExecutionRepository, QuerySavedStatementRepository (template execution) | 38W |
+| Query Execution | QueryExecutionService | QueryTargetRepository, QueryExecutionRepository, QuerySavedStatementRepository (template execution and owner-only successful statement retrieval) | 38W + frontend #41 |
+| Query Workspace | QueryWorkspaceService | QueryWorkspaceRepository | frontend #39 |
 | Query Schema | QuerySchemaService | QueryExecutionRepository | 38I |
 | Query Explain | QueryExplainService | (none — reuses access resolver + audit repo) | 38N |
 | Query Disclosure | QueryDisclosureService | QueryDisclosureRepository | 38Q |

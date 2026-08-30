@@ -1,6 +1,6 @@
 // Package mysql provides tests for query workspace persistence.
-// input: context, database/sql, encoding/json, errors, testing, time, sqlmock, go-sql-driver/mysql, internal/model
-// output: missing workspace, owner isolation, exact SQL arguments, insert/update OCC, and conflict mapping tests
+// input: context, database/sql, encoding/json, errors, testing, time, sqlmock, go-sql-driver/mysql, internal/model, internal/service
+// output: missing workspace, owner isolation, exact SQL arguments, insert/update OCC, and service-parity conflict mapping tests
 // pos: SQL contract coverage for the one-row-per-owner query workspace aggregate
 // note: if this file changes, update this header and module README.md.
 package mysql
@@ -17,6 +17,7 @@ import (
 	gomysql "github.com/go-sql-driver/mysql"
 
 	"github.com/fan/controlhub/internal/model"
+	"github.com/fan/controlhub/internal/service"
 )
 
 func TestQueryWorkspaceGetMissingReturnsVersionZeroAndEmptyWorksheets(t *testing.T) {
@@ -103,6 +104,9 @@ func TestQueryWorkspacePutDuplicateInsertIsConflict(t *testing.T) {
 	_, err = NewQueryWorkspaceRepository(db).Put(context.Background(), 12, workspacePutRequest(0))
 	if !errors.Is(err, ErrQueryWorkspaceConflict) {
 		t.Fatalf("Put() error = %v, want ErrQueryWorkspaceConflict", err)
+	}
+	if !errors.Is(err, service.ErrQueryWorkspaceConflict) {
+		t.Fatalf("Put() error = %v, want service ErrQueryWorkspaceConflict parity", err)
 	}
 }
 

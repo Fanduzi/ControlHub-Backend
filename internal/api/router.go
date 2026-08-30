@@ -1,7 +1,7 @@
 // Package api provides HTTP handlers and routing for the ControlHub REST API.
 // input: chi/v5, time, internal/model, internal/service (all services)
-// output: Dependencies, NewRouter, CORS, user-or-machine scoped reads/collector writes/ordinary governed execute, and user-only sibling query, bulk mutation, and admin routes
-// pos: HTTP routing entry point for the closed machine route/scope matrix and authenticated inventory, collector, named-view, topology, query, and admin operations
+// output: Dependencies, NewRouter, CORS, user-or-machine scoped reads/collector writes/ordinary governed execute, and user-only workspace, sibling query, health observation, bulk mutation, ingestion, and admin routes
+// pos: HTTP routing entry point for the closed machine route/scope matrix and authenticated inventory, collector, named-view, topology, workspace, query, and admin operations
 // note: if this file changes, update this header and module README.md.
 package api
 
@@ -33,8 +33,9 @@ type Dependencies struct {
 	// Query execution (Phase 37). QueryExecutionService is the thin interface
 	// the handlers depend on; the concrete *service.QueryExecutionService
 	// satisfies it. QueryExecutionAuth carries the bounded token-freshness TTL.
-	QueryExecutionService queryExecutionAPI
-	QueryExecutionAuth    QueryExecutionAuthConfig
+	QueryExecutionService          queryExecutionAPI
+	QueryExecutionStatementService queryExecutionStatementAPI
+	QueryExecutionAuth             QueryExecutionAuthConfig
 	// Query credential metadata (Phase 38A). queryCredentialAPI is the thin
 	// interface the handlers depend on; the concrete *service.QueryCredentialService
 	// satisfies it. All three routes require a fresh bearer token; PUT/DELETE
@@ -61,6 +62,7 @@ type Dependencies struct {
 	// *service.QuerySavedStatementService satisfies it. All four routes require
 	// a fresh bearer token (same freshness policy as query execution).
 	QuerySavedStatementService querySavedStatementAPI
+	QueryWorkspaceService      queryWorkspaceAPI
 	NamedInventoryViewService  namedInventoryViewAPI
 	MachinePrincipalService    machinePrincipalAPI
 	MachineCredentialService   machineCredentialAPI
@@ -154,6 +156,10 @@ func NewRouter(deps Dependencies) *chi.Mux {
 		Post("/resources/{id}/health-observations", handleRecordHealthObservation(deps.ResourceService))
 	router.Group(func(r chi.Router) {
 		r.Use(requireUser)
+		if deps.QueryWorkspaceService != nil {
+			r.Get("/query-workspace", handleGetQueryWorkspace(deps.QueryWorkspaceService))
+			r.Put("/query-workspace", handlePutQueryWorkspace(deps.QueryWorkspaceService))
+		}
 		r.Group(func(r chi.Router) {
 			r.Use(requireAdminActor(emitter))
 			r.Post("/resources", handleCreateResource(deps.ResourceService))
@@ -200,12 +206,15 @@ func NewRouter(deps Dependencies) *chi.Mux {
 	// The group is created when EITHER the execute or explain service is
 	// configured, so Explain does not accidentally depend on the execute
 	// service being wired (Oracle P2.9).
-	if deps.QueryExecutionService != nil || deps.QueryExplainService != nil {
+	if deps.QueryExecutionService != nil || deps.QueryExecutionStatementService != nil || deps.QueryExplainService != nil {
 		router.Group(func(r chi.Router) {
 			r.Use(requireFreshQueryActor(deps.AuthService, deps.QueryExecutionAuth, emitter))
 			if deps.QueryExecutionService != nil {
 				r.Get("/query-targets/{id}/executions", handleListQueryExecutions(deps.QueryExecutionService))
 				r.Post("/query-targets/{id}/related-records", handleNavigateRelatedRecords(deps.QueryExecutionService))
+			}
+			if deps.QueryExecutionStatementService != nil {
+				r.Get("/query-targets/{id}/executions/{executionId}/statement", handleGetQueryExecutionStatement(deps.QueryExecutionStatementService))
 			}
 			if deps.QueryExplainService != nil {
 				r.Post("/query-targets/{id}/explain", handleExplainQuery(deps.QueryExplainService))

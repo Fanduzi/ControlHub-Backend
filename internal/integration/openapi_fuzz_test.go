@@ -65,6 +65,7 @@ func TestOpenAPIFuzz(t *testing.T) {
 
 	queryTargetRepo := mysql.NewQueryTargetRepository(db)
 	queryExecutionRepo := mysql.NewQueryExecutionRepository(db)
+	queryWorkspaceSvc := service.NewQueryWorkspaceService(mysql.NewQueryWorkspaceRepository(db))
 	credentialResolver := service.NewEnvCredentialResolver()
 	queryExecutionSvc := service.NewQueryExecutionService(
 		queryTargetRepo,
@@ -95,25 +96,27 @@ func TestOpenAPIFuzz(t *testing.T) {
 
 	authService := service.NewAuthService(mysql.NewUserRepository(db), "fuzz-test-jwt-secret")
 	deps := api.Dependencies{
-		ResourceService:        service.NewResourceService(resourceRepo, relationRepo),
-		RelationService:        service.NewRelationService(relationRepo),
-		TopologyService:        service.NewTopologyService(relationRepo),
-		AuditService:           service.NewAuditService(mysql.NewAuditRepository(db)),
-		AuthService:            authService,
-		ProfileService:         profileSvc,
-		EnvironmentService:     service.NewEnvironmentService(dictRepo),
-		OwnerService:           service.NewOwnerService(dictRepo),
-		RoleService:            service.NewRoleService(dictRepo),
-		ResourceTypeService:    service.NewResourceTypeService(dictRepo),
-		RelationTypeService:    service.NewRelationTypeService(dictRepo),
-		LifecycleStatusService: service.NewLifecycleStatusService(dictRepo),
-		HealthStatusService:    service.NewHealthStatusService(dictRepo),
-		ResourceSubtypeService: service.NewResourceSubtypeService(),
-		QueryTargetService:     service.NewQueryTargetService(queryTargetRepo).WithCredentialReader(queryExecutionRepo).WithCredentialResolver(credentialResolver),
-		QueryCredentialService: queryCredentialSvc,
-		QueryExecutionService:  queryExecutionSvc,
-		QueryExplainService:    queryExplainSvc,
-		QuerySchemaService:     service.NewQuerySchemaService(accessResolver, service.NewMySQLSchemaInspector(), service.NewQuerySchemaCache(256, wallClock{}), queryExecutionRepo, wallClock{}),
+		ResourceService:                service.NewResourceService(resourceRepo, relationRepo),
+		RelationService:                service.NewRelationService(relationRepo),
+		TopologyService:                service.NewTopologyService(relationRepo),
+		AuditService:                   service.NewAuditService(mysql.NewAuditRepository(db)),
+		AuthService:                    authService,
+		ProfileService:                 profileSvc,
+		EnvironmentService:             service.NewEnvironmentService(dictRepo),
+		OwnerService:                   service.NewOwnerService(dictRepo),
+		RoleService:                    service.NewRoleService(dictRepo),
+		ResourceTypeService:            service.NewResourceTypeService(dictRepo),
+		RelationTypeService:            service.NewRelationTypeService(dictRepo),
+		LifecycleStatusService:         service.NewLifecycleStatusService(dictRepo),
+		HealthStatusService:            service.NewHealthStatusService(dictRepo),
+		ResourceSubtypeService:         service.NewResourceSubtypeService(),
+		QueryTargetService:             service.NewQueryTargetService(queryTargetRepo).WithCredentialReader(queryExecutionRepo).WithCredentialResolver(credentialResolver),
+		QueryCredentialService:         queryCredentialSvc,
+		QueryExecutionService:          queryExecutionSvc,
+		QueryExecutionStatementService: queryExecutionSvc,
+		QueryWorkspaceService:          queryWorkspaceSvc,
+		QueryExplainService:            queryExplainSvc,
+		QuerySchemaService:             service.NewQuerySchemaService(accessResolver, service.NewMySQLSchemaInspector(), service.NewQuerySchemaCache(256, wallClock{}), queryExecutionRepo, wallClock{}),
 		QuerySavedStatementService: service.NewQuerySavedStatementService(
 			mysql.NewQuerySavedStatementRepository(db),
 			mysql.NewQuerySavedStatementRepository(db),

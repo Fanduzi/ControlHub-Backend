@@ -1,6 +1,6 @@
 // Package mysql provides MySQL-backed repository implementations.
-// input: context, database/sql, encoding/json, errors, fmt, go-sql-driver/mysql, internal/model
-// output: QueryWorkspaceRepository Get/OCC Put and ErrQueryWorkspaceConflict
+// input: context, database/sql, encoding/json, errors, fmt, go-sql-driver/mysql, internal/model, internal/service
+// output: QueryWorkspaceRepository Get/OCC Put and service-parity ErrQueryWorkspaceConflict
 // pos: One-row-per-owner JSON aggregate persistence for query worksheets
 // note: if this file changes, update this header and module README.md.
 package mysql
@@ -15,9 +15,10 @@ import (
 	gomysql "github.com/go-sql-driver/mysql"
 
 	"github.com/fan/controlhub/internal/model"
+	"github.com/fan/controlhub/internal/service"
 )
 
-var ErrQueryWorkspaceConflict = errors.New("query workspace version conflict")
+var ErrQueryWorkspaceConflict = service.ErrQueryWorkspaceConflict
 
 type QueryWorkspaceRepository struct{ db *sql.DB }
 

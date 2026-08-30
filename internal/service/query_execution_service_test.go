@@ -1,7 +1,7 @@
 // Package service provides tests for the Phase 37/38S query execution service.
 // input: context, errors, fmt, strings, testing, time, internal/model
-// output: TestExecute_* including machine identity terminal outcomes, readiness/credential tests, and repository/resolver/executor/clock fakes
-// pos: Unit boundary for identity-aware governed execution, atomic terminal evidence, paging, cancellation durability, credential fail-closed behavior, and disclosure error mapping
+// output: TestExecute_* including successful-User full SQL, owner-only statement retrieval, machine identity terminal outcomes, readiness/credential tests, and repository/resolver/executor/clock fakes
+// pos: Unit boundary for identity-aware governed execution, private statement access, atomic terminal evidence, paging, cancellation durability, credential fail-closed behavior, and disclosure error mapping
 // note: if this file changes, update header and README.md
 package service
 
@@ -52,6 +52,9 @@ type fakeExecRepo struct {
 	credentials      map[uint64]model.QueryCredentialMetadata
 	credentialErr    map[uint64]error
 	insertedAttempts []model.QueryExecutionRecord
+	statement        model.QueryExecutionStatementResponse
+	statementErr     error
+	statementIDs     [3]uint64
 	auditEvents      []struct {
 		actor  uint64
 		target uint64
@@ -200,6 +203,11 @@ func (f *fakeExecRepo) InsertExecutionWithAudit(ctx context.Context, rec model.Q
 }
 
 func (f *fakeExecRepo) QueryEvidencePersistenceFailures() int64 { return 0 }
+
+func (f *fakeExecRepo) GetSuccessfulExecutionStatement(_ context.Context, executionID, targetResourceID, actorUserID uint64) (model.QueryExecutionStatementResponse, error) {
+	f.statementIDs = [3]uint64{executionID, targetResourceID, actorUserID}
+	return f.statement, f.statementErr
+}
 
 // fakeResolver mirrors the real resolver contract: validate the ref first (fail
 // closed), then return the configured DSN/error. It records whether it was
@@ -593,11 +601,36 @@ func TestExecute_RecordsSuccessfulAttempt(t *testing.T) {
 	if repo.insertedAttempts[0].ActorUserID != 7 {
 		t.Fatalf("actor = %d, want 7", repo.insertedAttempts[0].ActorUserID)
 	}
+	if repo.insertedAttempts[0].FullStatement != "select 1" {
+		t.Fatalf("full statement = %q, want exact successful user statement", repo.insertedAttempts[0].FullStatement)
+	}
 	if len(repo.auditEvents) != 1 || repo.auditEvents[0].result != "success" {
 		t.Fatalf("audit events = %+v, want one success", repo.auditEvents)
 	}
 	if executor.templateCalls != 0 {
 		t.Fatalf("ordinary Execute called QueryTemplate %d times, want 0", executor.templateCalls)
+	}
+}
+
+func TestGetExecutionStatementUsesExactOwnerPredicates(t *testing.T) {
+	repo := &fakeExecRepo{statement: model.QueryExecutionStatementResponse{Statement: "select private_value"}}
+	svc := &QueryExecutionService{executions: repo}
+
+	response, err := svc.GetExecutionStatement(context.Background(), 7, 9001, 22)
+	if err != nil {
+		t.Fatalf("GetExecutionStatement() error = %v", err)
+	}
+	if response.Statement != "select private_value" || repo.statementIDs != [3]uint64{22, 9001, 7} {
+		t.Fatalf("response/ids = %+v/%v", response, repo.statementIDs)
+	}
+}
+
+func TestGetExecutionStatementCollapsesRepositoryNoRows(t *testing.T) {
+	svc := &QueryExecutionService{executions: &fakeExecRepo{statementErr: sql.ErrNoRows}}
+
+	_, err := svc.GetExecutionStatement(context.Background(), 7, 9001, 22)
+	if !errors.Is(err, ErrQueryExecutionNotFound) {
+		t.Fatalf("GetExecutionStatement() error = %v, want ErrQueryExecutionNotFound", err)
 	}
 }
 
@@ -618,6 +651,9 @@ func TestExecute_RecordsRejectedAttempt(t *testing.T) {
 	}
 	if repo.insertedAttempts[0].Status != model.QueryExecutionRejected {
 		t.Fatalf("status = %q, want rejected", repo.insertedAttempts[0].Status)
+	}
+	if repo.insertedAttempts[0].FullStatement != "" {
+		t.Fatalf("rejected full statement = %q, want empty", repo.insertedAttempts[0].FullStatement)
 	}
 	if len(repo.auditEvents) != 1 || repo.auditEvents[0].result != "validation_failed" {
 		t.Fatalf("audit result = %+v, want validation_failed", repo.auditEvents)
@@ -657,6 +693,9 @@ func TestExecute_MachineIdentityReachesEveryTerminalEvidenceOutcome(t *testing.T
 			}
 			if rec.Status != tc.want {
 				t.Fatalf("status = %q, want %q", rec.Status, tc.want)
+			}
+			if rec.FullStatement != "" {
+				t.Fatalf("machine full statement = %q, want empty", rec.FullStatement)
 			}
 		})
 	}

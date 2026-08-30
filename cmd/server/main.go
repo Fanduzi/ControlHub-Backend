@@ -1,7 +1,7 @@
 // Package main provides the ControlHub application entry point.
 // input: config.LoadDotEnv/Load/ValidateJWTSecret/ErrQueryExecutionTokenMaxAgeRejected, mysql repositories, api.NewRouter, service constructors, os/signal Notify (SIGTERM/SIGINT), net.Listen
 // output: main() binary entry point; runServer() graceful-drain lifecycle
-// pos: Application bootstrap and lifecycle: validates the signing secret before opening the database, wires resource completeness, governed query, saved-statement template reads, and independent machine credentials, then serves HTTP; SIGTERM/SIGINT stop new traffic and drain in-flight handlers for at most ten seconds (Issue #37)
+// pos: Application bootstrap and lifecycle: validates the signing secret before opening the database, wires resource completeness, governed query, owner workspace/private statement reads, saved-statement template reads, and independent machine credentials, then serves HTTP; SIGTERM/SIGINT stop new traffic and drain in-flight handlers for at most ten seconds (Issue #37)
 // note: if wiring, startup validation, or the shutdown contract changes, update this header and cmd/server/README.md
 package main
 
@@ -69,6 +69,7 @@ func buildDependencies(db *sql.DB, cfg config.Config) api.Dependencies {
 
 	queryTargetRepo := mysql.NewQueryTargetRepository(db)
 	queryExecutionRepo := mysql.NewQueryExecutionRepository(db)
+	queryWorkspaceSvc := service.NewQueryWorkspaceService(mysql.NewQueryWorkspaceRepository(db))
 	credentialResolver := service.NewEnvCredentialResolver()
 
 	// The query target service derives readiness from credential metadata and,
@@ -142,31 +143,33 @@ func buildDependencies(db *sql.DB, cfg config.Config) api.Dependencies {
 	)
 
 	return api.Dependencies{
-		ResourceService:            service.NewResourceService(resourceRepo, relationRepo),
-		RelationService:            service.NewRelationService(relationRepo),
-		TopologyService:            service.NewTopologyService(relationRepo),
-		AuditService:               service.NewAuditService(mysql.NewAuditRepository(db)),
-		AuthService:                service.NewAuthService(mysql.NewUserRepository(db), cfg.JWTSecret),
-		AuthAuditEmitter:           mysql.NewAuthAuditEmitter(db),
-		EnvironmentService:         service.NewEnvironmentService(dictRepo),
-		OwnerService:               service.NewOwnerService(dictRepo),
-		RoleService:                service.NewRoleService(dictRepo),
-		ResourceTypeService:        service.NewResourceTypeService(dictRepo),
-		RelationTypeService:        service.NewRelationTypeService(dictRepo),
-		LifecycleStatusService:     service.NewLifecycleStatusService(dictRepo),
-		HealthStatusService:        service.NewHealthStatusService(dictRepo),
-		ResourceSubtypeService:     service.NewResourceSubtypeService(),
-		ProfileService:             profileSvc,
-		QueryTargetService:         queryTargetSvc,
-		QueryCredentialService:     queryCredentialSvc,
-		QueryExecutionService:      queryExecutionSvc,
-		QuerySchemaService:         querySchemaSvc,
-		QueryExplainService:        queryExplainSvc,
-		QueryDisclosureService:     queryDisclosureSvc,
-		QuerySavedStatementService: querySavedStatementSvc,
-		NamedInventoryViewService:  namedInventoryViewSvc,
-		MachinePrincipalService:    machinePrincipalSvc,
-		MachineCredentialService:   machinePrincipalSvc,
+		ResourceService:                service.NewResourceService(resourceRepo, relationRepo),
+		RelationService:                service.NewRelationService(relationRepo),
+		TopologyService:                service.NewTopologyService(relationRepo),
+		AuditService:                   service.NewAuditService(mysql.NewAuditRepository(db)),
+		AuthService:                    service.NewAuthService(mysql.NewUserRepository(db), cfg.JWTSecret),
+		AuthAuditEmitter:               mysql.NewAuthAuditEmitter(db),
+		EnvironmentService:             service.NewEnvironmentService(dictRepo),
+		OwnerService:                   service.NewOwnerService(dictRepo),
+		RoleService:                    service.NewRoleService(dictRepo),
+		ResourceTypeService:            service.NewResourceTypeService(dictRepo),
+		RelationTypeService:            service.NewRelationTypeService(dictRepo),
+		LifecycleStatusService:         service.NewLifecycleStatusService(dictRepo),
+		HealthStatusService:            service.NewHealthStatusService(dictRepo),
+		ResourceSubtypeService:         service.NewResourceSubtypeService(),
+		ProfileService:                 profileSvc,
+		QueryTargetService:             queryTargetSvc,
+		QueryCredentialService:         queryCredentialSvc,
+		QueryExecutionService:          queryExecutionSvc,
+		QueryExecutionStatementService: queryExecutionSvc,
+		QueryWorkspaceService:          queryWorkspaceSvc,
+		QuerySchemaService:             querySchemaSvc,
+		QueryExplainService:            queryExplainSvc,
+		QueryDisclosureService:         queryDisclosureSvc,
+		QuerySavedStatementService:     querySavedStatementSvc,
+		NamedInventoryViewService:      namedInventoryViewSvc,
+		MachinePrincipalService:        machinePrincipalSvc,
+		MachineCredentialService:       machinePrincipalSvc,
 		QueryExecutionAuth: api.QueryExecutionAuthConfig{
 			Clock: time.Now,
 		},

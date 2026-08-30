@@ -1,7 +1,7 @@
 // Package api provides HTTP handlers and routing for the ControlHub REST API.
 // input: bytes, context, errors, fmt, io, net/http, strconv, strings, time, chi, internal/model, internal/service
-// output: user-or-machine ordinary execute identity, user-only sibling query handlers, controlled error mapping, queryExecutionAPI interface
-// pos: HTTP handlers for POST /query-targets/{id}/execute, POST /query-targets/{id}/saved-statements/{statementId}/execute, POST /query-targets/{id}/related-records, and GET /query-targets/{id}/executions (Phase 37 read-only query sandbox, Phase 38S governed result paging, Phase 38W template execution). Execute/related disclosure blocks publish query_result_disclosure_blocked (Issue #48); target-not-enabled remains query_not_allowed.
+// output: user-or-machine ordinary execute identity, user-only sibling query and owner-only statement handlers, controlled error mapping, queryExecutionAPI/queryExecutionStatementAPI interfaces
+// pos: HTTP handlers for governed execute/history/owner-only statement retrieval, saved-statement execution, and related-record navigation. Execute/related disclosure blocks publish query_result_disclosure_blocked (Issue #48); target-not-enabled remains query_not_allowed.
 // note: if this file changes, update header and README.md
 package api
 
@@ -32,6 +32,10 @@ type queryExecutionAPI interface {
 	ListHistory(ctx context.Context, actorUserID uint64, actorRole string, targetID uint64, q model.QueryExecutionListQuery) (*model.QueryExecutionCursorPage, error)
 	QueryEvidencePersistenceFailures() int64
 	NavigateRelatedRecords(ctx context.Context, actorUserID uint64, targetID uint64, req model.RelatedRecordNavigationRequest) (model.RelatedRecordNavigationResponse, error)
+}
+
+type queryExecutionStatementAPI interface {
+	GetExecutionStatement(ctx context.Context, actorUserID, targetID, executionID uint64) (model.QueryExecutionStatementResponse, error)
 }
 
 func handleExecuteQuery(svc queryExecutionAPI) http.HandlerFunc {
@@ -203,6 +207,36 @@ func handleListQueryExecutions(svc queryExecutionAPI) http.HandlerFunc {
 			return
 		}
 		writeJSON(w, http.StatusOK, result)
+	}
+}
+
+func handleGetQueryExecutionStatement(svc queryExecutionStatementAPI) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		targetID, err := parseUint64IDParam(chi.URLParam(r, "id"), "target id")
+		if err != nil {
+			writeJSONError(w, http.StatusBadRequest, "validation_failed", err.Error())
+			return
+		}
+		executionID, err := parseUint64IDParam(chi.URLParam(r, "executionId"), "execution id")
+		if err != nil {
+			writeJSONError(w, http.StatusBadRequest, "validation_failed", err.Error())
+			return
+		}
+		actorUserID, ok := actorUserIDFromContext(r.Context())
+		if !ok {
+			writeJSONError(w, http.StatusInternalServerError, "internal_error", "authenticated actor missing")
+			return
+		}
+		response, err := svc.GetExecutionStatement(r.Context(), actorUserID, targetID, executionID)
+		if errors.Is(err, service.ErrQueryExecutionNotFound) {
+			writeJSONError(w, http.StatusNotFound, "query_execution_not_found", err.Error())
+			return
+		}
+		if err != nil {
+			writeJSONError(w, http.StatusInternalServerError, "internal_error", "unexpected server failure")
+			return
+		}
+		writeJSON(w, http.StatusOK, response)
 	}
 }
 

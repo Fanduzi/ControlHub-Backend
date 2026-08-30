@@ -1,7 +1,7 @@
 // Package api provides tests for the query execution handlers.
 // input: bytes, context, encoding/json, fmt, net/http, net/http/httptest, strings, testing, time, chi, internal/model, internal/service
-// output: TestQueryExecution_* (execute identity, success/errors including Preflight and Apply-path query_result_disclosure_blocked vs query_not_allowed, auth, history)
-// pos: Handler identity + auth middleware + error-mapping coverage for ordinary governed execution and user-only query siblings
+// output: TestQueryExecution_* (execute identity, controlled errors, fresh auth, history, and owner-only full-statement detail)
+// pos: HTTP identity, auth, and error-mapping regression coverage for governed execution and User-only query siblings
 // note: if this file changes, update header and README.md
 package api
 
@@ -47,6 +47,21 @@ type stubQueryExec struct {
 	templateReq    model.QuerySavedStatementExecuteRequest
 	templateStmt   uint64
 	templateCalled bool
+}
+
+type stubQueryExecutionStatement struct {
+	response    model.QueryExecutionStatementResponse
+	err         error
+	actorUserID uint64
+	targetID    uint64
+	executionID uint64
+}
+
+func (s *stubQueryExecutionStatement) GetExecutionStatement(_ context.Context, actorUserID, targetID, executionID uint64) (model.QueryExecutionStatementResponse, error) {
+	s.actorUserID = actorUserID
+	s.targetID = targetID
+	s.executionID = executionID
+	return s.response, s.err
 }
 
 func (s *stubQueryExec) Execute(_ context.Context, identity model.QueryExecutionIdentity, targetID uint64, req model.QueryExecuteRequest) (model.QueryExecuteResponse, error) {
@@ -115,6 +130,68 @@ func newQueryExecRouter(stub queryExecutionAPI) *chi.Mux {
 		},
 	}
 	return NewRouter(deps)
+}
+
+func newQueryExecutionStatementRouter(stub queryExecutionStatementAPI) *chi.Mux {
+	return NewRouter(Dependencies{
+		AuthService:                    service.NewAuthService(testAuthUsers, "qe-test-secret"),
+		QueryExecutionStatementService: stub,
+		QueryExecutionAuth:             QueryExecutionAuthConfig{Clock: fixedClock(qeTestNow)},
+	})
+}
+
+func TestQueryExecutionStatementReturnsOnlyAuthenticatedOwnerStatement(t *testing.T) {
+	stub := &stubQueryExecutionStatement{response: model.QueryExecutionStatementResponse{Statement: "select private_value"}}
+	recorder := httptest.NewRecorder()
+	token := mintToken(t, "qe-test-secret", 42, "admin", qeTestNow)
+
+	newQueryExecutionStatementRouter(stub).ServeHTTP(recorder, qeRequest(http.MethodGet, "/query-targets/22/executions/91/statement", "", token))
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", recorder.Code, recorder.Body.String())
+	}
+	if stub.actorUserID != 42 || stub.targetID != 22 || stub.executionID != 91 {
+		t.Fatalf("owner/target/execution = %d/%d/%d", stub.actorUserID, stub.targetID, stub.executionID)
+	}
+	if got := strings.TrimSpace(recorder.Body.String()); got != `{"statement":"select private_value"}` {
+		t.Fatalf("body = %s", got)
+	}
+}
+
+func TestQueryExecutionStatementMapsAllMismatchesToNotFound(t *testing.T) {
+	stub := &stubQueryExecutionStatement{err: service.ErrQueryExecutionNotFound}
+	recorder := httptest.NewRecorder()
+	token := mintToken(t, "qe-test-secret", 42, "admin", qeTestNow)
+
+	newQueryExecutionStatementRouter(stub).ServeHTTP(recorder, qeRequest(http.MethodGet, "/query-targets/22/executions/91/statement", "", token))
+
+	if recorder.Code != http.StatusNotFound || !strings.Contains(recorder.Body.String(), `"error":"query_execution_not_found"`) {
+		t.Fatalf("status/body = %d/%s", recorder.Code, recorder.Body.String())
+	}
+}
+
+func TestQueryExecutionStatementRejectsInvalidIDsBeforeService(t *testing.T) {
+	stub := &stubQueryExecutionStatement{}
+	recorder := httptest.NewRecorder()
+	token := mintToken(t, "qe-test-secret", 42, "viewer", qeTestNow)
+
+	newQueryExecutionStatementRouter(stub).ServeHTTP(recorder, qeRequest(http.MethodGet, "/query-targets/22/executions/not-an-id/statement", "", token))
+
+	if recorder.Code != http.StatusBadRequest || stub.actorUserID != 0 {
+		t.Fatalf("status/service = %d/%d; body=%s", recorder.Code, stub.actorUserID, recorder.Body.String())
+	}
+}
+
+func TestQueryExecutionStatementRequiresFreshUser(t *testing.T) {
+	stub := &stubQueryExecutionStatement{}
+	recorder := httptest.NewRecorder()
+	stale := mintToken(t, "qe-test-secret", 42, "viewer", qeTestNow.Add(-MaxQueryTokenAge-time.Minute))
+
+	newQueryExecutionStatementRouter(stub).ServeHTTP(recorder, qeRequest(http.MethodGet, "/query-targets/22/executions/91/statement", "", stale))
+
+	if recorder.Code != http.StatusUnauthorized || stub.actorUserID != 0 {
+		t.Fatalf("status/service = %d/%d; body=%s", recorder.Code, stub.actorUserID, recorder.Body.String())
+	}
 }
 
 func qeRequest(method, path, body, bearer string) *http.Request {
