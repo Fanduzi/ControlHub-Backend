@@ -29,7 +29,7 @@ func TestInsertExecutionWithAuditMachineIdentityCommitsAtomicPair(t *testing.T) 
 
 	mock.ExpectBegin()
 	mock.ExpectExec(`insert into query_executions\s+\(target_resource_id, actor_user_id, actor_machine_principal_id`).
-		WithArgs(uint64(22), nil, uint64(91), "mysql", "digest", "preview", "success", 1, int64(7), "", "", nil).
+		WithArgs(uint64(22), nil, uint64(91), "mysql", "digest", "preview", nil, "success", 1, int64(7), "", "", nil).
 		WillReturnResult(sqlmock.NewResult(101, 1))
 	mock.ExpectExec(`insert into audit_events \(actor_user_id, actor_machine_principal_id, target_resource_id, event_type, result\)`).
 		WithArgs(nil, uint64(91), uint64(22), "query.executed", "success").

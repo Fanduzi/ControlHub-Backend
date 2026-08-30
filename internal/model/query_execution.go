@@ -1,7 +1,7 @@
 // Package model provides domain entities for the resource management system.
 // input: errors, fmt, math, time packages
-// output: QueryExecution* and QueryResult* types, validated user-or-machine execution identity, pagination/status/error contracts, query credential policy/ref validators
-// pos: Query sandbox execution requests, responses, and history records
+// output: QueryExecution* and QueryResult* types, internal full statement and public statement response, validated user-or-machine execution identity, pagination/status/error contracts, query credential policy/ref validators
+// pos: Query sandbox execution requests, responses, history records, and owner-reusable statement response
 // note: if this file changes, update header and README.md
 package model
 
@@ -141,12 +141,19 @@ type QueryExecutionRecord struct {
 	Engine                  string               `json:"engine"`
 	StatementDigest         string               `json:"statementDigest"`
 	StatementPreview        string               `json:"statementPreview"`
+	FullStatement           string               `json:"-"`
 	Status                  QueryExecutionStatus `json:"status"`
 	RowCount                int                  `json:"rowCount"`
 	DurationMs              int64                `json:"durationMs"`
 	ErrorCode               string               `json:"errorCode"`
 	ErrorMessage            string               `json:"errorMessage"`
 	CreatedAt               time.Time            `json:"createdAt"`
+}
+
+// QueryExecutionStatementResponse exposes full SQL only through the dedicated
+// owner-only successful-execution lookup boundary.
+type QueryExecutionStatementResponse struct {
+	Statement string `json:"statement"`
 }
 
 // PaginationMode controls how ListExecutions selects a page.

@@ -11,7 +11,10 @@ Data access layer implementing service-layer repository interfaces with raw SQL 
 | audit_repository.go | Audit event queries (global and by resource), including nullable user/machine actor projection, target-resource environment filtering, principal-name search, pagination, and JSON field changes |
 | user_repository.go | User credential lookup by email/id; Authorization Version mutators (role/active/password); UpgradePasswordHash for legacy-to-Argon2id migration; CountLegacyHashUsers for operator visibility |
 | dictionary_repository.go | Dictionary queries — DB-backed (environments, owners, roles) and static (resource types, relation types, lifecycle/health statuses) |
-| query_execution_repository.go | Query credential metadata plus atomic identity-aware `InsertExecutionWithAudit`; each evidence pair stores exactly one user/machine actor in history and audit, and history projects the matching actor kind/name without credential data |
+| query_execution_repository.go | Query credential metadata plus atomic identity-aware `InsertExecutionWithAudit`; full statements are nullable/private, absent from list/audit projections, and readable only for an exact owner/user/success match |
+| query_execution_statement_repository_test.go | Exact full-statement insert args, audit omission, owner-only success retrieval predicates, and denial-as-no-row coverage |
+| query_workspace_repository.go | One JSON aggregate row per owner with missing-as-version-zero reads and optimistic insert/update conflict handling |
+| query_workspace_repository_test.go | Missing/owner-scoped reads, invalid/deleted target preservation, exact SQL args, duplicate conflict, and OCC race coverage |
 | query_target_repository.go | Read-only query target read model — joins database_instance resources with profiles, environments, owners, and cluster membership |
 | query_disclosure_repository.go | Phase 38Q governed result-disclosure policy CRUD (insert/update/delete/list/get by scope); duplicate scope insert maps MySQL 1062 to `ErrQueryDisclosurePolicyConflict`, update/get of a missing scope returns `sql.ErrNoRows` (fail-closed), delete is idempotent |
 | query_saved_statement_repository.go | Phase 38W governed saved statements CRUD with ordered parameter definitions and atomic audit (create/update/delete with audit, list with visibility, get by ID) |
@@ -25,7 +28,7 @@ Data access layer implementing service-layer repository interfaces with raw SQL 
 ## Exports
 - `NewResourceRepository(db)`, `NewRelationRepository(db)`, `NewAuditRepository(db)`, `NewUserRepository(db)`, `NewDictionaryRepository(db)`, `NewAuthAuditEmitter(db)` — constructor functions
 - `ResourceRepository.UpsertHealthObservation` and `SetManualHealthOverrideWithAudit` — non-audited operational evidence and audited nullable override persistence
-- `NewQueryExecutionRepository(db)`, `NewQueryTargetRepository(db)`, `NewQueryDisclosureRepository(db)`, `NewQuerySavedStatementRepository(db)` — constructor functions
+- `NewQueryExecutionRepository(db)`, `NewQueryTargetRepository(db)`, `NewQueryDisclosureRepository(db)`, `NewQuerySavedStatementRepository(db)`, `NewQueryWorkspaceRepository(db)` — constructor functions
 - `NewNamedInventoryViewRepository(db)` — named inventory view persistence constructor
 - `NewMachinePrincipalRepository(db)` — machine-principal lifecycle and credential-authentication persistence constructor
 - `ClaimCollectorScan(ctx, tx, entry)` and `ApplyCollectorScanStates(ctx, tx, entry, seenResourceIDs)` — two-phase caller-owned primitive that serializes retry identity before ingestion, then applies per-principal CI states after ingestion; `ApplyCollectorScan` composes both for callers without intervening writes
@@ -33,6 +36,8 @@ Data access layer implementing service-layer repository interfaces with raw SQL 
 - `QuerySavedStatementReader`, `QuerySavedStatementWriter` — narrow service-owned interfaces for saved statement access, including atomic parameter-definition replacement
 - `QueryEvidencePersistenceFailures` — dimensionless expvar counter for atomic Execution Evidence Pair persistence failures (Issue #34), readable through the repository's `QueryEvidencePersistenceFailures()` accessor for the service layer
 - `QueryExecutionRepository.InsertExecutionWithAudit` — repository-owned atomic Execution Evidence Pair: one transaction commits the execution-history row and its fixed per-caller audit event (service passes `query.executed` for execution and `related_record_navigation` for navigation, Issue #36); on any failure both roll back, the counter increments once, and one fixed safe log line is emitted
+- `QueryExecutionRepository.GetSuccessfulExecutionStatement` — exact execution/target/user lookup restricted to successful user-attributed rows with non-null full SQL; every mismatch is `sql.ErrNoRows`
+- `QueryWorkspaceRepository.Get` / `Put` and `ErrQueryWorkspaceConflict` — missing-as-version-zero aggregate reads plus single-statement optimistic concurrency writes
 - `ResourceRepository.ConfirmBulkResourceMutation` — stable-order resource locking, normal update revalidation, in-transaction re-preview/fingerprint verification, typed field and explicit label mutation, and per-CI field audit in one commit
 - Repository structs satisfy service-layer interfaces
 - `ResourceRepository.PutObservedValues`, `GetEffectiveValues`, `SetManualOverrideWithAudit`, `ClearManualOverrideWithAudit`, `PreviewIngestion`, `ConfirmIngestion`, and `ConfirmCollectorIngestion`

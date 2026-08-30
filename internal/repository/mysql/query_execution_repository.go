@@ -1,7 +1,7 @@
 // Package mysql provides MySQL-backed repository implementations.
 // input: database/sql, context, errors, expvar, fmt, log, strconv, internal/model
-// output: NewQueryExecutionRepository, identity-aware atomic InsertExecutionWithAudit, user/machine execution history, credential metadata/audit operations, QueryEvidencePersistenceFailures accessor
-// pos: MySQL persistence boundary for exactly-one-actor query history and at-most-one-actor audit evidence without credential data
+// output: NewQueryExecutionRepository, identity-aware atomic InsertExecutionWithAudit, owner-only successful full-statement lookup, user/machine execution history, credential metadata/audit operations, QueryEvidencePersistenceFailures accessor
+// pos: MySQL persistence boundary for exactly-one-actor query history, private reusable statements, and at-most-one-actor audit evidence without credential data
 // note: if this file changes, update header and README.md
 package mysql
 
@@ -44,8 +44,8 @@ const (
 	insertAuditEventSQL         = `insert into audit_events (actor_user_id, target_resource_id, event_type, result) values (?, ?, ?, ?)`
 	insertExecutionAuditSQL     = `insert into audit_events (actor_user_id, actor_machine_principal_id, target_resource_id, event_type, result) values (?, ?, ?, ?, ?)`
 	insertExecutionSQL          = `insert into query_executions
-	           (target_resource_id, actor_user_id, actor_machine_principal_id, engine, statement_digest, statement_preview, status, row_count, duration_ms, error_code, error_message, created_at)
-	           values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, COALESCE(?, CURRENT_TIMESTAMP(6)))`
+	           (target_resource_id, actor_user_id, actor_machine_principal_id, engine, statement_digest, statement_preview, full_statement, status, row_count, duration_ms, error_code, error_message, created_at)
+	           values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, COALESCE(?, CURRENT_TIMESTAMP(6)))`
 )
 
 // QueryEvidencePersistenceFailures is the dimensionless operational counter for
@@ -215,9 +215,13 @@ func executionRecordArgs(rec model.QueryExecutionRecord) ([]any, error) {
 	if !rec.CreatedAt.IsZero() {
 		createdAt = rec.CreatedAt.UTC()
 	}
+	var fullStatement any
+	if rec.FullStatement != "" {
+		fullStatement = rec.FullStatement
+	}
 	return []any{
 		rec.TargetResourceID, actorUserID, actorMachinePrincipalID, rec.Engine, rec.StatementDigest, rec.StatementPreview,
-		string(rec.Status), rec.RowCount, rec.DurationMs, rec.ErrorCode, rec.ErrorMessage,
+		fullStatement, string(rec.Status), rec.RowCount, rec.DurationMs, rec.ErrorCode, rec.ErrorMessage,
 		createdAt,
 	}, nil
 }
@@ -280,6 +284,22 @@ func (r *QueryExecutionRepository) InsertExecutionWithAudit(ctx context.Context,
 
 func (r *QueryExecutionRepository) QueryEvidencePersistenceFailures() int64 {
 	return QueryEvidencePersistenceFailures.Value()
+}
+
+// GetSuccessfulExecutionStatement returns full SQL only when every ownership
+// and execution predicate matches. All mismatches deliberately collapse to
+// sql.ErrNoRows at the database boundary.
+func (r *QueryExecutionRepository) GetSuccessfulExecutionStatement(ctx context.Context, executionID, targetResourceID, actorUserID uint64) (model.QueryExecutionStatementResponse, error) {
+	const q = `SELECT full_statement FROM query_executions WHERE id = ? AND target_resource_id = ? AND actor_user_id = ? AND actor_machine_principal_id IS NULL AND status = 'success' AND full_statement IS NOT NULL`
+	var response model.QueryExecutionStatementResponse
+	err := r.db.QueryRowContext(ctx, q, executionID, targetResourceID, actorUserID).Scan(&response.Statement)
+	if errors.Is(err, sql.ErrNoRows) {
+		return model.QueryExecutionStatementResponse{}, sql.ErrNoRows
+	}
+	if err != nil {
+		return model.QueryExecutionStatementResponse{}, fmt.Errorf("get successful execution statement: %w", err)
+	}
+	return response, nil
 }
 
 // ListExecutions returns execution history (newest first) for a target plus the
