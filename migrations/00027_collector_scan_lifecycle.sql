@@ -1,5 +1,5 @@
 -- input: verified machine-principal IDs, collector scan receipts, and governed resource IDs at schema version 26
--- output: idempotent collector scan ledger and capped per-principal/per-CI missing state
+-- output: idempotent collector scan ledger, capped per-principal/per-CI missing state, and fail-loud data-preserving rollback
 -- pos: durable persistence contract for collector complete-scan lifecycle transitions
 -- note: if this file changes, update this header and migrations/README.md.
 
@@ -38,6 +38,22 @@ CREATE TABLE collector_ci_scan_states (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='Per-collector durable CI presence and complete-scan omission state';
 
 -- +goose Down
+-- Refuse to erase collector idempotency or Missing evidence. Export or purge
+-- both data sets explicitly before retrying the rollback.
+DROP PROCEDURE IF EXISTS guard_collector_scan_lifecycle_down_87;
+-- +goose StatementBegin
+CREATE PROCEDURE guard_collector_scan_lifecycle_down_87()
+BEGIN
+  IF EXISTS (SELECT 1 FROM collector_scan_ledger LIMIT 1)
+     OR EXISTS (SELECT 1 FROM collector_ci_scan_states LIMIT 1) THEN
+    SIGNAL SQLSTATE '45000'
+      SET MESSAGE_TEXT = 'cannot roll back migration 00027 while collector scan lifecycle data exists';
+  END IF;
+END;
+-- +goose StatementEnd
+
+CALL guard_collector_scan_lifecycle_down_87();
+DROP PROCEDURE guard_collector_scan_lifecycle_down_87;
 
 DROP TABLE IF EXISTS collector_ci_scan_states;
 DROP TABLE IF EXISTS collector_scan_ledger;

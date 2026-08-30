@@ -1,6 +1,6 @@
 // Package migrations_test verifies migration SQL contracts without a database.
 // input: os, strings, and testing
-// output: migration 00027 collector ledger/state schema contract tests
+// output: migration 00027 collector ledger/state schema and data-preserving rollback contract tests
 // pos: Fast pre-MySQL regression coverage for collector lifecycle persistence
 // note: if this file changes, update this header and module README.md.
 package migrations_test
@@ -34,6 +34,11 @@ func TestCollectorScanMigrationContract(t *testing.T) {
 		"constraint chk_collector_ci_scan_states_last_seen check (last_seen_collector_scan_id <> '')",
 		"constraint chk_collector_ci_scan_states_omissions check (consecutive_complete_scan_omissions <= 3)",
 		"constraint chk_collector_ci_scan_states_missing check ((consecutive_complete_scan_omissions = 3) = (missing_since is not null))",
+		"create procedure guard_collector_scan_lifecycle_down_87()",
+		"exists (select 1 from collector_scan_ledger limit 1)",
+		"exists (select 1 from collector_ci_scan_states limit 1)",
+		"signal sqlstate '45000'",
+		"cannot roll back migration 00027 while collector scan lifecycle data exists",
 	} {
 		if !strings.Contains(sql, clause) {
 			t.Errorf("migration 00027 missing contract clause %q", clause)
