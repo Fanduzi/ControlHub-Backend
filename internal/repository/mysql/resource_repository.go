@@ -1,6 +1,6 @@
 // Package mysql provides MySQL-backed repository implementations.
 // input: crypto/sha256, database/sql, time, internal/model, internal/service
-// output: resource CRUD, governed identity and bounded batched typed-profile/collector-presence reads, exact/presence label filtering, health observations/effective health, observed/effective values, validated previews, audited versioned manual overrides, atomic bulk mutation, and state-capped User/collector atomic ingestion confirmation including empty terminal receipts
+// output: resource CRUD, governed identity and bounded batched typed-profile/collector-presence reads, exact/presence label filtering, health observations/effective health, fail-closed cluster operational summaries, observed/effective values, validated previews, audited versioned manual overrides, atomic bulk mutation, and state-capped User/collector atomic ingestion confirmation including empty terminal receipts
 // pos: MySQL resource persistence, identity/typed-profile/collector-presence projections, current health evidence, effective values, inventory search, and shared resource/scan transaction authority
 // note: if this file changes, update this header and module README.md.
 package mysql
@@ -576,7 +576,9 @@ from resources r ` + where + " order by r.name"
 	if err := r.attachCollectorPresence(ctx, items); err != nil {
 		return nil, 0, err
 	}
-	r.attachDatabaseOperationalSummaries(ctx, items)
+	if err := r.attachDatabaseOperationalSummaries(ctx, items); err != nil {
+		return nil, 0, err
+	}
 
 	return items, total, nil
 }
@@ -695,7 +697,11 @@ func (r *ResourceRepository) getResource(ctx context.Context, id uint64) (*model
 	item = items[0]
 
 	if item.ResourceType == model.ResourceTypeDatabaseCluster {
-		item.DatabaseOperationalSummary = r.buildDatabaseOperationalSummary(ctx, item.ID)
+		summary, err := r.buildDatabaseOperationalSummary(ctx, item.ID)
+		if err != nil {
+			return nil, err
+		}
+		item.DatabaseOperationalSummary = summary
 	}
 
 	return &item, nil
@@ -2587,8 +2593,9 @@ func (r *ResourceRepository) buildDatabaseProxyProfileSummary(ctx context.Contex
 }
 
 // attachDatabaseOperationalSummaries batch-fetches cluster member rollups for
-// database_cluster resources in the given list.
-func (r *ResourceRepository) attachDatabaseOperationalSummaries(ctx context.Context, items []model.Resource) {
+// database_cluster resources in the given list. Member-health rollup failure
+// is fail-closed so ListResources cannot look calm with missing counts.
+func (r *ResourceRepository) attachDatabaseOperationalSummaries(ctx context.Context, items []model.Resource) error {
 	var clusterIDs []uint64
 	for _, item := range items {
 		if item.ResourceType == model.ResourceTypeDatabaseCluster {
@@ -2596,20 +2603,28 @@ func (r *ResourceRepository) attachDatabaseOperationalSummaries(ctx context.Cont
 		}
 	}
 	if len(clusterIDs) == 0 {
-		return
+		return nil
 	}
 
-	summaries := r.fetchDatabaseOperationalSummaries(ctx, clusterIDs)
+	summaries, err := r.fetchDatabaseOperationalSummaries(ctx, clusterIDs)
+	if err != nil {
+		return err
+	}
 	for i := range items {
 		if s, ok := summaries[items[i].ID]; ok {
 			items[i].DatabaseOperationalSummary = s
 		}
 	}
+	return nil
 }
 
 // fetchDatabaseOperationalSummaries computes operational rollups for the given
-// cluster IDs in a single batch query.
-func (r *ResourceRepository) fetchDatabaseOperationalSummaries(ctx context.Context, clusterIDs []uint64) map[uint64]*model.DatabaseOperationalSummary {
+// cluster IDs in a single batch query. Role counts stay optional; member
+// health and observation attachment are required.
+func (r *ResourceRepository) fetchDatabaseOperationalSummaries(ctx context.Context, clusterIDs []uint64) (map[uint64]*model.DatabaseOperationalSummary, error) {
+	if len(clusterIDs) == 0 {
+		return map[uint64]*model.DatabaseOperationalSummary{}, nil
+	}
 	ph := buildInClause(len(clusterIDs))
 	args := make([]any, len(clusterIDs))
 	for i, id := range clusterIDs {
@@ -2630,7 +2645,7 @@ func (r *ResourceRepository) fetchDatabaseOperationalSummaries(ctx context.Conte
 
 	rows, err := r.db.QueryContext(ctx, memberQuery, args...)
 	if err != nil {
-		return nil
+		return nil, fmt.Errorf("fetch database operational summaries: %w", err)
 	}
 
 	type counts struct {
@@ -2666,7 +2681,7 @@ func (r *ResourceRepository) fetchDatabaseOperationalSummaries(ctx context.Conte
 			&manualHealth,
 		); err != nil {
 			rows.Close()
-			return nil
+			return nil, fmt.Errorf("scan database operational summaries: %w", err)
 		}
 		setManualHealthOverride(&item.resource, manualHealth)
 		members = append(members, item)
@@ -2674,11 +2689,11 @@ func (r *ResourceRepository) fetchDatabaseOperationalSummaries(ctx context.Conte
 	}
 	if err := rows.Err(); err != nil {
 		rows.Close()
-		return nil
+		return nil, fmt.Errorf("read database operational summaries: %w", err)
 	}
 	rows.Close()
 	if err := r.attachHealthObservations(ctx, healthResources); err != nil {
-		return nil
+		return nil, fmt.Errorf("attach cluster member health observations: %w", err)
 	}
 	worstMap := make(map[uint64]*worstInfo)
 	for i, item := range members {
@@ -2798,11 +2813,14 @@ func (r *ResourceRepository) fetchDatabaseOperationalSummaries(ctx context.Conte
 		}
 		result[cid] = s
 	}
-	return result
+	return result, nil
 }
 
 // buildDatabaseOperationalSummary computes a rollup for a single cluster.
-func (r *ResourceRepository) buildDatabaseOperationalSummary(ctx context.Context, clusterID uint64) *model.DatabaseOperationalSummary {
-	summaries := r.fetchDatabaseOperationalSummaries(ctx, []uint64{clusterID})
-	return summaries[clusterID]
+func (r *ResourceRepository) buildDatabaseOperationalSummary(ctx context.Context, clusterID uint64) (*model.DatabaseOperationalSummary, error) {
+	summaries, err := r.fetchDatabaseOperationalSummaries(ctx, []uint64{clusterID})
+	if err != nil {
+		return nil, err
+	}
+	return summaries[clusterID], nil
 }
