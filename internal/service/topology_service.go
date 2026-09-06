@@ -1,7 +1,7 @@
 // Package service provides business logic for resource topology projection.
 // input: internal/model topology contracts and repository-bounded relation/candidate reads
 // output: NewTopologyService, TopologyService.BuildTopology, TopologyRepository interface with caller-owned budgets
-// pos: Business logic for capped rooted and workspace topology read models without unbounded materialization
+// pos: Business logic for capped rooted and workspace topology read models; hop count 1–32 plus node/edge output caps
 // note: if this file changes, update this header and module README.md.
 package service
 
@@ -14,13 +14,14 @@ import (
 )
 
 var (
-	ErrInvalidDepth     = errors.New("depth must be non-negative")
+	ErrInvalidDepth     = errors.New("depth must be between 1 and 32")
 	ErrInvalidDirection = errors.New("direction must be both, upstream, or downstream")
 )
 
 const (
-	TopologyNodeCap = 200
-	TopologyEdgeCap = 400
+	MaxTopologyDepth = 32
+	TopologyNodeCap  = 200
+	TopologyEdgeCap  = 400
 )
 
 type TopologyRepository interface {
@@ -235,7 +236,7 @@ func isTopologyCandidate(res *model.Resource) bool {
 }
 
 func validateTopologyQuery(q model.TopologyQuery) error {
-	if q.Depth < 0 {
+	if q.Depth < 0 || q.Depth > MaxTopologyDepth {
 		return ErrInvalidDepth
 	}
 	switch q.Direction {
@@ -324,6 +325,16 @@ func computeClusterGroupKeys(nodeSet map[uint64]*model.Resource, edgeSet map[uin
 	return instanceGroups
 }
 
+func databaseProxyRole(res *model.Resource) string {
+	if res.ProfileSummary != nil && res.ProfileSummary.Role != "" {
+		return res.ProfileSummary.Role
+	}
+	if res.Labels != nil {
+		return res.Labels["role"]
+	}
+	return ""
+}
+
 func classifyNodeRole(res *model.Resource, edgeSet map[uint64]model.ResourceRelation) model.TopologyRole {
 	switch res.ResourceType {
 	case model.ResourceTypeService:
@@ -331,7 +342,7 @@ func classifyNodeRole(res *model.Resource, edgeSet map[uint64]model.ResourceRela
 	case model.ResourceTypeDomainName, model.ResourceTypeVirtualIP:
 		return model.TopologyRoleEntry
 	case model.ResourceTypeDatabaseProxy:
-		if res.Labels != nil && res.Labels["role"] == "standby" {
+		if databaseProxyRole(res) == "standby" {
 			return model.TopologyRoleProxyStandby
 		}
 		return model.TopologyRoleProxyActive
@@ -425,7 +436,7 @@ func classifyEdgeSemanticType(rel model.ResourceRelation, nodeSet map[uint64]*mo
 		return model.EdgeSemanticDependency
 	case model.RelationTypeFronts:
 		if from, ok := nodeSet[rel.FromResourceID]; ok {
-			if from.ResourceType == model.ResourceTypeDatabaseProxy && from.Labels != nil && from.Labels["role"] == "standby" {
+			if from.ResourceType == model.ResourceTypeDatabaseProxy && databaseProxyRole(from) == "standby" {
 				return model.EdgeSemanticFailover
 			}
 		}

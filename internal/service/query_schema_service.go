@@ -2,7 +2,7 @@
 // metadata introspection: it gates on target access, caches results, calls the
 // inspector when needed, and writes audit events for every attempt.
 // input: context, errors, fmt, internal/model
-// output: QuerySchemaService, NewQuerySchemaService, ErrSchema* sentinels
+// output: QuerySchemaService, NewQuerySchemaService, ObjectDetails, GetObjectDetails, ErrSchema* sentinels
 // pos: Governed schema metadata service with caching and audit
 // note: if this file changes, update header and README.md
 package service
@@ -187,6 +187,17 @@ func (s *QuerySchemaService) ListObjects(
 	}
 
 	return resp, nil
+}
+
+// ObjectDetails is Schema Inspection for Related Record Navigation: actor and
+// target, never a caller-supplied DSN. Inspector errors (including cancel and
+// deadline) are returned as-is so navigation can classify them.
+func (s *QuerySchemaService) ObjectDetails(ctx context.Context, actorID, targetID uint64, database, name, kind string) (*ObjectDetail, error) {
+	bound, err := s.access.Resolve(ctx, actorID, targetID)
+	if err != nil {
+		return nil, err
+	}
+	return s.inspector.GetObjectDetails(ctx, bound.dsn, database, name, kind)
 }
 
 // GetObjectDetails returns full column, index, and foreign-key metadata for a

@@ -32,7 +32,7 @@ Embeds and validates the OpenAPI contract served by the API documentation route.
 - `AuditEvent.actor`: required nullable privacy-safe user/machine label; unauthenticated events use null and raw numeric IDs remain compatibility evidence, not labels. `AuditEvent.changes` remains optional server-owned add/update/remove field evidence with before/after values.
 - `Resource` exposes at most 500 sorted per-principal `collectorPresence` entries with present/Missing status, collector source, principal ID/name, stable nullable `missingSince`, and required `collectorPresenceTruncated`; effective status, freshness, observed time, observer, and nullable manual override remain server-owned.
 - `GET /resources/{id}/relation-rules`: source-specific relation types, target resource types, and same-environment constraints consumed by the console; writes revalidate the same server matrix.
-- `GET /resources/{id}/topology` and `GET /environments/{id}/topology`: authenticated topology reads with default depth 2, optional environment-scoped root selection, output caps, and required `truncated`.
+- `GET /resources/{id}/topology` and `GET /environments/{id}/topology`: authenticated topology reads with default depth 2, hop-count safety cap 32, optional environment-scoped root selection, output caps, and required `truncated`.
 - `GET /audit-events?q=...&environmentId=...`: optional search and positive target-resource environment filtering, combined with the existing filters; targetless events do not match an environment.
 - `GET /resources?q=...&ownerId=...&label=key`: inventory identifier search, exact owner filtering, and repeatable key-presence or exact-value labels combined with AND.
 

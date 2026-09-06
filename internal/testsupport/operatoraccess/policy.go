@@ -91,6 +91,8 @@ func All() []Operation {
 		{RouterAdmin, "GET", "/resources/{id}/audit-events", "/resources/1/audit-events"},
 		// Router-admin operational metrics.
 		{RouterAdmin, "GET", "/ops/query-evidence-metrics", "/ops/query-evidence-metrics"},
+		{RouterAdmin, "GET", "/ops/auth-audit-metrics", "/ops/auth-audit-metrics"},
+		{RouterAdmin, "GET", "/admin/legacy-hash-count", "/admin/legacy-hash-count"},
 		// Fresh-any-role query surfaces.
 		{FreshAnyRole, "POST", "/query-targets/{id}/execute", "/query-targets/22/execute"},
 		{FreshAnyRole, "POST", "/query-targets/{id}/explain", "/query-targets/22/explain"},
@@ -104,7 +106,7 @@ func All() []Operation {
 		{FreshAnyRole, "GET", "/query-targets/{id}/credential", "/query-targets/22/credential"},
 		{FreshAnyRole, "GET", "/query-targets/{id}/saved-statements", "/query-targets/22/saved-statements"},
 		{FreshAnyRole, "POST", "/query-targets/{id}/saved-statements/{statementId}/execute", "/query-targets/22/saved-statements/1/execute"},
-		// Handler-admin credential writes.
+		// Handler-admin credential writes (router also requires admin).
 		{HandlerAdmin, "PUT", "/query-targets/{id}/credential", "/query-targets/22/credential"},
 		{HandlerAdmin, "DELETE", "/query-targets/{id}/credential", "/query-targets/22/credential"},
 		// Handler-admin disclosure operations, including GET.

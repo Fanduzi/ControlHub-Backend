@@ -1,0 +1,412 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <title>ControlHub 架构评审 · 2026-09-06</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script type="module">
+      import mermaid from "https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs";
+      mermaid.initialize({
+        startOnLoad: true,
+        theme: "neutral",
+        securityLevel: "loose",
+        flowchart: { htmlLabels: true, curve: "linear" },
+      });
+    </script>
+    <style>
+      :root { font-family: "PingFang SC", "Hiragino Sans GB", "Noto Sans SC", "Source Han Sans SC", ui-sans-serif, system-ui, sans-serif; }
+      .font-serif { font-family: "Songti SC", "Source Han Serif SC", "Noto Serif SC", "Times New Roman", serif; }
+      .seam { stroke-dasharray: 4 4; }
+      .leak { stroke: #dc2626; }
+      .deep { background: linear-gradient(180deg, #0f172a 0%, #1e293b 100%); }
+      .iface {
+        background: repeating-linear-gradient(
+          -45deg,
+          transparent,
+          transparent 6px,
+          rgba(15, 23, 42, 0.04) 6px,
+          rgba(15, 23, 42, 0.04) 7px
+        );
+      }
+      .ghost { opacity: 0.38; }
+      article { scroll-margin-top: 2rem; }
+    </style>
+  </head>
+  <body class="bg-stone-50 text-slate-900 antialiased">
+    <main class="max-w-5xl mx-auto px-6 py-12 space-y-12">
+      <header class="space-y-6">
+        <p class="text-xs uppercase tracking-[0.2em] text-stone-500">架构评审</p>
+        <h1 class="font-serif text-4xl text-slate-900">ControlHub</h1>
+        <p class="text-sm text-stone-500">2026 年 9 月 6 日 · 范围取自近期提交热点：Evidence-Bearing Query Attempt、Inventory Mutation、Operator Access Boundary</p>
+        <dl class="grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs">
+          <div class="flex items-center gap-2 border border-slate-200 bg-white px-3 py-2">
+            <span class="inline-block h-4 w-8 border border-slate-400 bg-white"></span>
+            <span class="text-slate-600">实线框 = module</span>
+          </div>
+          <div class="flex items-center gap-2 border border-slate-200 bg-white px-3 py-2">
+            <svg width="32" height="8" aria-hidden="true"><line x1="0" y1="4" x2="32" y2="4" class="seam" stroke="#64748b" stroke-width="2"/></svg>
+            <span class="text-slate-600">虚线 = seam</span>
+          </div>
+          <div class="flex items-center gap-2 border border-slate-200 bg-white px-3 py-2">
+            <svg width="32" height="8" aria-hidden="true"><line x1="0" y1="4" x2="32" y2="4" class="leak" stroke-width="2"/></svg>
+            <span class="text-slate-600">红线 = 泄漏</span>
+          </div>
+          <div class="flex items-center gap-2 border border-slate-200 bg-white px-3 py-2">
+            <span class="inline-block h-4 w-8 border-2 border-slate-900 bg-slate-900"></span>
+            <span class="text-slate-600">厚黑框 = deep module</span>
+          </div>
+        </dl>
+      </header>
+
+      <section id="candidates" class="space-y-14">
+
+        <article id="evidence-pair" class="space-y-5">
+          <div class="flex flex-wrap items-baseline gap-3">
+            <h2 class="font-serif text-2xl">加深 Execution Evidence Pair</h2>
+            <span class="rounded-full bg-emerald-100 text-emerald-800 px-2.5 py-0.5 text-xs">强烈建议</span>
+            <span class="rounded-full bg-slate-100 text-slate-700 px-2.5 py-0.5 text-xs">in-process</span>
+          </div>
+          <p class="font-mono text-sm text-slate-600 leading-relaxed">
+            internal/service/query_execution_service.go<br />
+            internal/service/query_template_execution_service.go<br />
+            internal/repository/mysql/query_execution_repository.go<br />
+            internal/service/query_execution_service_test.go<br />
+            internal/service/navigate_related_records_test.go
+          </p>
+
+          <div class="grid md:grid-cols-2 gap-4">
+            <div class="rounded-lg border border-slate-200 bg-white p-4 space-y-3">
+              <p class="text-xs text-stone-500">加深前</p>
+              <div class="relative h-72 text-[11px]">
+                <div class="absolute left-2 top-0 right-2 border border-slate-300 bg-stone-50 px-2 py-1">即时 Execute</div>
+                <div class="absolute left-2 top-9 right-2 border border-slate-300 bg-stone-50 px-2 py-1">Template Execution <span class="text-stone-400">靠 setter 挂上</span></div>
+                <div class="absolute left-2 top-[4.5rem] right-2 border border-slate-300 bg-stone-50 px-2 py-1">Related Record Navigation</div>
+                <svg class="absolute left-1/2 top-[6.6rem] -translate-x-1/2" width="220" height="36" aria-hidden="true">
+                  <line x1="30" y1="0" x2="30" y2="36" stroke="#dc2626" stroke-width="1.5"/>
+                  <line x1="110" y1="0" x2="110" y2="36" stroke="#dc2626" stroke-width="1.5"/>
+                  <line x1="190" y1="0" x2="190" y2="36" stroke="#dc2626" stroke-width="1.5"/>
+                </svg>
+                <div class="absolute left-0 top-[8.6rem] w-[48%] border border-red-300 bg-red-50 px-2 py-1 leading-tight">reject → persistAttempt</div>
+                <div class="absolute right-0 top-[8.6rem] w-[48%] border border-red-300 bg-red-50 px-2 py-1 leading-tight">rejectNavigation → persistNavigationAttempt</div>
+                <div class="absolute left-8 right-8 top-[12.2rem] border border-dashed border-slate-400 px-2 py-1 text-center">persistEvidencePair</div>
+                <div class="absolute left-12 right-12 bottom-0 border border-slate-400 px-2 py-1 text-center">InsertExecutionWithAudit</div>
+              </div>
+            </div>
+            <div class="rounded-lg border border-slate-200 bg-white p-4 space-y-3">
+              <p class="text-xs text-stone-500">加深后</p>
+              <div class="relative h-72 text-[11px]">
+                <div class="absolute left-2 top-0 w-[30%] border border-slate-300 bg-stone-50 px-2 py-1">即时</div>
+                <div class="absolute left-[35%] top-0 w-[30%] border border-slate-300 bg-stone-50 px-2 py-1">模板</div>
+                <div class="absolute right-2 top-0 w-[30%] border border-slate-300 bg-stone-50 px-2 py-1">导航</div>
+                <svg class="absolute inset-x-0 top-8 h-8" viewBox="0 0 400 32" aria-hidden="true">
+                  <line x1="70" y1="0" x2="200" y2="32" stroke="#64748b" stroke-width="1.5" stroke-dasharray="4 3"/>
+                  <line x1="200" y1="0" x2="200" y2="32" stroke="#64748b" stroke-width="1.5" stroke-dasharray="4 3"/>
+                  <line x1="330" y1="0" x2="200" y2="32" stroke="#64748b" stroke-width="1.5" stroke-dasharray="4 3"/>
+                </svg>
+                <div class="absolute left-4 right-4 top-16 bottom-0 border-2 border-slate-900 text-white flex flex-col overflow-hidden deep">
+                  <div class="iface bg-slate-800 px-3 py-2 text-stone-200">Execution Evidence Pair · 入口：结局 + 身份，出口：一对记录</div>
+                  <div class="flex-1 px-3 py-3 space-y-2 text-slate-300">
+                    <div class="border border-slate-600 px-2 py-1 ghost">Evidence Persistence Window</div>
+                    <div class="border border-slate-600 px-2 py-1 ghost">query.executed / related_record_navigation</div>
+                    <div class="border border-slate-600 px-2 py-1 ghost">失败即整对回滚</div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <p><span class="text-xs text-stone-500">问题</span><br />三条 Evidence-Bearing Query Attempt 入口各自拼 reject / classify / persist。Pair 在仓库里是 deep 的；execute 这个 module 仍泄漏两套 persist 栈，Template Execution 靠 setter 挂上。</p>
+          <p><span class="text-xs text-stone-500">做法</span><br />加深 Execution Evidence Pair：即时 execute、Template Execution、Related Record Navigation 只提交终端结局和可审计身份。</p>
+          <ul class="text-sm space-y-1 list-disc pl-5">
+            <li>locality：取消与 pair 失败的缺陷集中到一个 module</li>
+            <li>leverage：一条 persist 路径，三个调用方</li>
+            <li>interface 变窄；implementation 吸收 reject / persistAttempt / persistNavigationAttempt</li>
+            <li>测试打一条 interface，不再复制三套矩阵</li>
+          </ul>
+        </article>
+
+        <article id="inventory-mutation" class="space-y-5">
+          <div class="flex flex-wrap items-baseline gap-3">
+            <h2 class="font-serif text-2xl">把 Inventory Mutation 收成一个 module</h2>
+            <span class="rounded-full bg-emerald-100 text-emerald-800 px-2.5 py-0.5 text-xs">强烈建议</span>
+            <span class="rounded-full bg-slate-100 text-slate-700 px-2.5 py-0.5 text-xs">local-substitutable</span>
+          </div>
+          <p class="font-mono text-sm text-slate-600 leading-relaxed">
+            internal/service/resource_service.go<br />
+            internal/service/profile_service.go<br />
+            internal/service/relation_service.go<br />
+            internal/repository/mysql/resource_repository.go<br />
+            internal/service/audit_service.go
+          </p>
+
+          <div class="grid md:grid-cols-2 gap-4">
+            <div class="rounded-lg border border-slate-200 bg-white p-4 space-y-3">
+              <p class="text-xs text-stone-500">加深前</p>
+              <div class="space-y-2">
+                <div class="h-10 border-l-4 border-slate-300 bg-stone-50 px-3 flex items-center text-sm">CI 身份写入 · 无审计</div>
+                <div class="h-10 border-l-4 border-slate-300 bg-stone-50 px-3 flex items-center text-sm">Typed Profile 写入 · 第二份字段图，无审计</div>
+                <div class="h-10 border-l-4 border-slate-300 bg-stone-50 px-3 flex items-center text-sm">CI Relationship 写入 · 类型/方向未强制</div>
+                <div class="h-10 border-l-4 border-red-500 bg-red-50 px-3 flex items-center text-sm text-red-800">healthStatus 当 Inventory 来 PATCH</div>
+                <div class="h-10 border-l-4 border-stone-200 bg-white px-3 flex items-center text-sm text-stone-400">Audit 只读列表</div>
+              </div>
+            </div>
+            <div class="rounded-lg border border-slate-200 bg-white p-4 space-y-3">
+              <p class="text-xs text-stone-500">加深后</p>
+              <div class="h-52 border-2 border-slate-900 deep text-white flex flex-col">
+                <div class="iface bg-slate-800 px-3 py-2 text-sm text-stone-200">Inventory Mutation · 一次变更，一份审计 diff</div>
+                <div class="flex-1 p-3 grid grid-cols-2 gap-2 text-xs text-slate-300">
+                  <div class="border border-slate-600 px-2 py-2 ghost">CI 身份</div>
+                  <div class="border border-slate-600 px-2 py-2 ghost">Typed Profile</div>
+                  <div class="border border-slate-600 px-2 py-2 ghost">CI Relationship</div>
+                  <div class="border border-slate-600 px-2 py-2 ghost">字段级审计</div>
+                </div>
+              </div>
+              <p class="text-xs text-stone-500">Health Observation 不进这个 module</p>
+            </div>
+          </div>
+
+          <p><span class="text-xs text-stone-500">问题</span><br />Inventory Mutation 散成三个写入 module 加一个持久化堆。完整性（名称唯一、关系方向、Environment 局部性）和审计从 seam 泄漏出去；healthStatus 被当成 Manual Health Override 来 PATCH。</p>
+          <p><span class="text-xs text-stone-500">做法</span><br />一个 Inventory Mutation module 拥有 CI 身份、Typed Profile、CI Relationship，以及同一事务里的字段前后审计。Health Observation 不走这条路径。</p>
+          <ul class="text-sm space-y-1 list-disc pl-5">
+            <li>locality：完整性规则不再住在三个调用方里</li>
+            <li>leverage：Manual CI Registration 和日后的 CI Ingestion 共用一次写入</li>
+            <li>interface 就是这次 mutation；测试断言审计 pair，而不是 SQL 形状</li>
+            <li>删掉两份 Typed Profile 字段图</li>
+          </ul>
+          <div class="border-l-4 border-amber-400 bg-amber-50 px-3 py-2 text-sm text-amber-950">当前写入与 <span class="font-mono">2026-08-29-inventory-mutations-and-audit-commit-together</span>、<span class="font-mono">inventory-integrity-is-server-owned</span> 冲突。加深是落实这两份决策，不是重开。同时对齐 <span class="font-mono">health-observations-are-not-inventory-mutations</span>。</div>
+        </article>
+
+        <article id="related-records" class="space-y-5">
+          <div class="flex flex-wrap items-baseline gap-3">
+            <h2 class="font-serif text-2xl">让 Related Record Navigation 站在 execute 旁边</h2>
+            <span class="rounded-full bg-amber-100 text-amber-900 px-2.5 py-0.5 text-xs">值得展开</span>
+            <span class="rounded-full bg-slate-100 text-slate-700 px-2.5 py-0.5 text-xs">in-process</span>
+          </div>
+          <p class="font-mono text-sm text-slate-600 leading-relaxed">
+            internal/service/query_execution_service.go（NavigateRelatedRecords）<br />
+            internal/service/query_executor.go（QueryRelatedRecords）<br />
+            internal/service/query_disclosure_service.go（PreflightRelatedRecords）<br />
+            internal/service/query_schema_inspector.go
+          </p>
+
+          <div class="grid md:grid-cols-2 gap-4">
+            <div class="rounded-lg border border-slate-200 bg-white p-4">
+              <p class="text-xs text-stone-500 mb-2">加深前</p>
+              <pre class="mermaid">
+flowchart TB
+  NR[NavigateRelatedRecords]
+  EX[executeGuardedChain]
+  NR -->|复制超时 / 披露 / persist| NR2[手拼 SELECT]
+  NR --> INS[裸 inspector]
+  NR --> DIS[Query Disclosure]
+  NR --> EX2[QueryRelatedRecords]
+  EX --> G[Query Guard]
+  EX --> Q[queryGuarded]
+  classDef leak stroke:#dc2626,stroke-width:2px;
+  class NR,NR2,EX2 leak
+              </pre>
+            </div>
+            <div class="rounded-lg border border-slate-200 bg-white p-4">
+              <p class="text-xs text-stone-500 mb-2">加深后</p>
+              <pre class="mermaid">
+flowchart TB
+  NAV[Related Record Navigation]
+  PAIR[Execution Evidence Pair]
+  INS[Schema Inspection]
+  DIS[Query Disclosure]
+  NAV -.->|seam：结局 + 身份| PAIR
+  NAV --> INS
+  NAV --> DIS
+  EX[即时 / 模板] -.-> PAIR
+  classDef deep fill:#0f172a,stroke:#0f172a,color:#f8fafc;
+  class NAV,PAIR deep
+              </pre>
+            </div>
+          </div>
+
+          <p><span class="text-xs text-stone-500">问题</span><br />Related Record Navigation 在 execute module 里重写了整条治理链，跳过 Query Guard，拿裸 DSN 打 inspector。理解一个概念要同时读 Execute 和另一条约 180 行的路径。</p>
+          <p><span class="text-xs text-stone-500">做法</span><br />Related Record Navigation 成为拥有受信任 FK SELECT 构造的 module。它经 Execution Evidence Pair 落证。它不是第二个公开 SQL 执行器。</p>
+          <ul class="text-sm space-y-1 list-disc pl-5">
+            <li>locality：FK 信任与导航证据身份放在一起</li>
+            <li>leverage：pair module 被复用；executeGuardedChain 留给受 Guard 的 SQL</li>
+            <li>删掉 rejectNavigation / persistNavigationAttempt 副本</li>
+          </ul>
+          <div class="border-l-4 border-amber-400 bg-amber-50 px-3 py-2 text-sm text-amber-950">受 <span class="font-mono">2026-07-14-phase-38j</span> 约束：独立路由，不并进 POST /execute，不做通用绑定 SQL 执行器。加深发生在 execute 旁边，不是并进去。</div>
+        </article>
+
+        <article id="operator-access" class="space-y-5">
+          <div class="flex flex-wrap items-baseline gap-3">
+            <h2 class="font-serif text-2xl">让 Operator Access Boundary 有一个主人</h2>
+            <span class="rounded-full bg-amber-100 text-amber-900 px-2.5 py-0.5 text-xs">值得展开</span>
+            <span class="rounded-full bg-slate-100 text-slate-700 px-2.5 py-0.5 text-xs">in-process</span>
+          </div>
+          <p class="font-mono text-sm text-slate-600 leading-relaxed">
+            internal/api/router.go<br />
+            internal/api/auth_middleware.go<br />
+            internal/api/query_disclosure_handler.go<br />
+            internal/api/query_credential_handler.go<br />
+            internal/testsupport/operatoraccess/policy.go
+          </p>
+
+          <div class="grid md:grid-cols-2 gap-4">
+            <div class="rounded-lg border border-slate-200 bg-white p-4">
+              <p class="text-xs text-stone-500 mb-2">加深前</p>
+              <pre class="mermaid">
+flowchart LR
+  M[Operator Access Boundary]
+  R[requireAdminActor]
+  H[handler 里的 admin 字符串]
+  S[查询 module 里的 isAdmin]
+  P[operatoraccess.All]
+  M -.-> R
+  M -.-> H
+  M -.-> S
+  P --- M
+  H -.leak.-> A[不发 auth.authorization denied]
+  classDef leak stroke:#dc2626,stroke-width:2px;
+  class H,S,A leak
+              </pre>
+            </div>
+            <div class="rounded-lg border border-slate-200 bg-white p-4 space-y-3">
+              <p class="text-xs text-stone-500">加深后</p>
+              <div class="h-56 border-2 border-slate-900 deep text-white flex flex-col">
+                <div class="iface bg-slate-800 px-3 py-2 text-sm text-stone-200">Operator Access Boundary · 入口：actor，出口：放行 / 未认证 / 禁止</div>
+                <div class="flex-1 p-3 space-y-2 text-xs text-slate-300">
+                  <div class="border border-slate-600 px-2 py-1 ghost">Authorization Version</div>
+                  <div class="border border-slate-600 px-2 py-1 ghost">八小时新鲜度</div>
+                  <div class="border border-slate-600 px-2 py-1 ghost">角色矩阵 + denied 审计</div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <p><span class="text-xs text-stone-500">问题</span><br />Operator Access Boundary 被重述成 RouterAdmin、HandlerAdmin，以及查询 module 里的 isAdmin。披露 403 不发 auth.authorization/denied。requireAuthenticatedActor 与 requireFreshQueryActor 是同一段实现。</p>
+          <p><span class="text-xs text-stone-500">做法</span><br />一个 module 拥有矩阵、未认证与禁止两种结局，以及 denied 审计。HTTP 只把结果挂到请求上。</p>
+          <ul class="text-sm space-y-1 list-disc pl-5">
+            <li>locality：每一次角色拒绝都是同一种结局</li>
+            <li>leverage：测试打矩阵，而不是每个 handler 副本</li>
+            <li>interface 变窄；RouterAdmin / HandlerAdmin 收拢</li>
+          </ul>
+          <div class="border-l-4 border-amber-400 bg-amber-50 px-3 py-2 text-sm text-amber-950"><span class="font-mono">2026-08-15</span> 已把两套中间件工厂列为后续。真正的摩擦是矩阵分裂，不是工厂拷贝。Console BFF 按 <span class="font-mono">2026-08-09</span> 是另一套 adapter —— 不要把 Operator Session cookie 拉进这个后端。</div>
+        </article>
+
+        <article id="schema-identity" class="space-y-5">
+          <div class="flex flex-wrap items-baseline gap-3">
+            <h2 class="font-serif text-2xl">停止绕过 Schema Inspection</h2>
+            <span class="rounded-full bg-amber-100 text-amber-900 px-2.5 py-0.5 text-xs">值得展开</span>
+            <span class="rounded-full bg-slate-100 text-slate-700 px-2.5 py-0.5 text-xs">local-substitutable</span>
+          </div>
+          <p class="font-mono text-sm text-slate-600 leading-relaxed">
+            internal/service/query_schema_service.go<br />
+            internal/service/query_schema_inspector.go<br />
+            internal/service/query_schema_cache.go<br />
+            internal/service/query_execution_service.go<br />
+            internal/service/query_disclosure_service.go
+          </p>
+
+          <div class="grid md:grid-cols-2 gap-4">
+            <div class="rounded-lg border border-slate-200 bg-white p-4 space-y-3">
+              <p class="text-xs text-stone-500">加深前</p>
+              <div class="relative h-64 text-[11px]">
+                <div class="absolute left-0 top-0 w-[42%] space-y-1">
+                  <div class="border border-slate-300 px-2 py-1">ListDatabases</div>
+                  <div class="border border-slate-300 px-2 py-1">ListObjects</div>
+                  <div class="border border-slate-300 px-2 py-1">GetObjectDetails</div>
+                  <div class="border border-slate-300 px-2 py-1">GetRelationshipMap</div>
+                  <div class="border border-slate-300 px-2 py-1">GetTableDefinition</div>
+                  <p class="text-stone-400 pt-1">五份拷贝：access → cache → inspect → audit</p>
+                </div>
+                <div class="absolute right-0 top-8 w-[50%] border-2 border-slate-800 px-2 py-3 text-center">
+                  Inspector<br /><span class="text-stone-500">deep SQL</span>
+                </div>
+                <svg class="absolute inset-0 w-full h-full" aria-hidden="true">
+                  <line x1="58%" y1="55%" x2="20%" y2="92%" stroke="#dc2626" stroke-width="2"/>
+                  <line x1="58%" y1="55%" x2="80%" y2="92%" stroke="#dc2626" stroke-width="2"/>
+                </svg>
+                <div class="absolute left-2 bottom-0 border border-red-300 bg-red-50 px-2 py-1">导航裸 DSN</div>
+                <div class="absolute right-2 bottom-0 border border-red-300 bg-red-50 px-2 py-1">披露裸 DSN</div>
+              </div>
+            </div>
+            <div class="rounded-lg border border-slate-200 bg-white p-4 space-y-3">
+              <p class="text-xs text-stone-500">加深后</p>
+              <div class="h-64 border-2 border-slate-900 deep text-white flex flex-col">
+                <div class="iface bg-slate-800 px-3 py-2 text-sm text-stone-200">Schema Metadata Identity · 检视这个 target + database</div>
+                <div class="flex-1 p-3 space-y-2 text-xs text-slate-300">
+                  <div class="border border-slate-600 px-2 py-1 ghost">TargetAccessResolver</div>
+                  <div class="border border-slate-600 px-2 py-1 ghost">cache / singleflight</div>
+                  <div class="border border-slate-600 px-2 py-1 ghost">inspector SQL</div>
+                  <div class="border border-slate-600 px-2 py-1 ghost">仅审计、不写执行历史</div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <p><span class="text-xs text-stone-500">问题</span><br />Schema Inspection 的 HTTP module 是五份 shallow 的 access/cache/audit 拷贝。Related Record Navigation 和 Query Disclosure 拿裸 DSN 打 inspector，最热的路径上 Schema Metadata Identity 并不生效。</p>
+          <p><span class="text-xs text-stone-500">做法</span><br />Schema Inspection 是现场对象与 FK 元数据的唯一权威。导航和披露穿过这条 seam；不再开第二条 inspector  hop。</p>
+          <ul class="text-sm space-y-1 list-disc pl-5">
+            <li>locality：FK 元数据只有一条受治理路径</li>
+            <li>leverage：缓存和 schema 审计也覆盖导航</li>
+            <li>interface 从五个长相一样的方法收成「检视这个身份」</li>
+          </ul>
+        </article>
+
+        <article id="topology" class="space-y-5">
+          <div class="flex flex-wrap items-baseline gap-3">
+            <h2 class="font-serif text-2xl">加深 Topology Traversal</h2>
+            <span class="rounded-full bg-amber-100 text-amber-900 px-2.5 py-0.5 text-xs">值得展开</span>
+            <span class="rounded-full bg-slate-100 text-slate-700 px-2.5 py-0.5 text-xs">in-process</span>
+          </div>
+          <p class="font-mono text-sm text-slate-600 leading-relaxed">
+            internal/service/topology_service.go<br />
+            internal/api/topology_handler.go<br />
+            internal/model/topology.go
+          </p>
+
+          <div class="grid md:grid-cols-2 gap-4">
+            <div class="rounded-lg border border-slate-200 bg-white p-4 space-y-3">
+              <p class="text-xs text-stone-500">加深前 · 浅的边界</p>
+              <div class="space-y-2">
+                <div class="iface h-24 border border-slate-400 px-3 py-2 text-sm">
+                  Interface<br /><span class="text-stone-500">depth 只能是 1 或 2 · 默认 1</span>
+                </div>
+                <div class="h-28 border border-slate-800 px-3 py-2 text-sm">
+                  Implementation<br /><span class="text-stone-500">Database Estate 角色、复制链、HA 来自 Labels["role"]</span>
+                </div>
+              </div>
+            </div>
+            <div class="rounded-lg border border-slate-200 bg-white p-4 space-y-3">
+              <p class="text-xs text-stone-500">加深后 · 深的边界</p>
+              <div class="space-y-2">
+                <div class="iface h-12 border border-slate-400 px-3 py-2 text-sm">
+                  Interface · 体积受限的图，超出则 truncated
+                </div>
+                <div class="h-40 border-2 border-slate-900 deep px-3 py-3 text-xs text-slate-300 space-y-2">
+                  <div class="border border-slate-600 px-2 py-1 ghost">默认深度二</div>
+                  <div class="border border-slate-600 px-2 py-1 ghost">节点 / 边数量上限</div>
+                  <div class="border border-slate-600 px-2 py-1 ghost">Database Estate 分类</div>
+                  <div class="border border-slate-600 px-2 py-1 ghost">代理角色来自 Typed Profile</div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <p><span class="text-xs text-stone-500">问题</span><br />Topology Traversal 用深度上限挡住一条本可返回的 Database Estate 路径。分类是 deep 的；边界却是 interface。代理主备从 CI Labels 泄漏。</p>
+          <p><span class="text-xs text-stone-500">做法</span><br />Interface 是带 truncated 标记的体积受限图。展开策略和 Database Estate 含义留在 implementation，读 Typed Profile 而不是 Labels。</p>
+          <ul class="text-sm space-y-1 list-disc pl-5">
+            <li>locality：截断与分类集中在一个 module</li>
+            <li>leverage：调用方只学「图或 truncated」，不学跳数算术</li>
+            <li>测试断言输出体积，而不是 depth 1 对 2</li>
+          </ul>
+          <div class="border-l-4 border-amber-400 bg-amber-50 px-3 py-2 text-sm text-amber-950">当前深度上限与 <span class="font-mono">2026-08-29-topology-is-bounded-by-output-size</span> 冲突。加深是落实该决策。</div>
+        </article>
+
+      </section>
+
+      <section id="top-recommendation" class="border-2 border-slate-900 bg-white p-8 space-y-3">
+        <p class="text-xs text-stone-500">首选</p>
+        <h2 class="font-serif text-3xl"><a href="#evidence-pair" class="underline decoration-slate-300 hover:decoration-slate-900">加深 Execution Evidence Pair</a></h2>
+        <p class="text-slate-700">这是最热的 module。缺陷已经藏在三个调用方如何 persist 里。删掉两套 persist 栈会把复杂度收拢，而不是挪地方。</p>
+      </section>
+    </main>
+  </body>
+</html>

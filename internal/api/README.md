@@ -74,7 +74,7 @@ HTTP handlers, chi routing, CORS middleware, and fake-repo test infrastructure.
 | DELETE | /inventory/views/{viewId} | Delete an owned personal view or admin-managed shared view |
 | POST | /resources/bulk-mutations/preview | Admin-only side-effect-free bulk mutation preview with ordered per-CI diffs/errors and a review fingerprint |
 | POST | /resources/bulk-mutations/confirm | Admin-only reviewed bulk mutation confirmation; current-state or fingerprint conflicts return 409 |
-| GET | /resources/{id}/topology | Get a rooted topology graph; depth defaults to 2 and larger depths are bounded by output caps |
+| GET | /resources/{id}/topology | Get a rooted topology graph; depth defaults to 2, hop count is capped at 32, and output is bounded by node/edge caps |
 | GET | /environments/{id}/topology | Get an environment-scoped topology workspace; `rootResourceId` is optional |
 | GET | /query-targets/{id}/schema/table-definition | Get MySQL table definition (base tables only) |
 | POST | /query-targets/{id}/execute | Execute a governed read-only statement as a fresh user or `governed-select` machine principal, with optional page-number result paging for SELECT |

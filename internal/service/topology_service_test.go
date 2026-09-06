@@ -362,10 +362,10 @@ func TestBuildTopology_CyclicGraphNoLoop(t *testing.T) {
 }
 
 func TestBuildTopology_NodeCap(t *testing.T) {
-	repo := buildChainRepo(TopologyNodeCap + 1)
+	repo := buildStarRepo(TopologyNodeCap)
 	svc := NewTopologyService(repo)
 
-	resp, err := svc.BuildTopology(model.TopologyQuery{RootID: 1, Depth: TopologyNodeCap, Direction: model.TopologyDirectionBoth})
+	resp, err := svc.BuildTopology(model.TopologyQuery{RootID: 1, Depth: 1, Direction: model.TopologyDirectionBoth})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -523,6 +523,11 @@ func TestBuildTopology_InvalidDepth(t *testing.T) {
 	if !errors.Is(err, ErrInvalidDepth) {
 		t.Errorf("err = %v, want ErrInvalidDepth", err)
 	}
+
+	_, err = svc.BuildTopology(model.TopologyQuery{RootID: topoClusterID, Depth: MaxTopologyDepth + 1, Direction: model.TopologyDirectionBoth})
+	if !errors.Is(err, ErrInvalidDepth) {
+		t.Errorf("depth 33 err = %v, want ErrInvalidDepth", err)
+	}
 }
 
 func TestBuildTopology_InvalidDirection(t *testing.T) {
@@ -659,6 +664,23 @@ func nodeIDs(resp *model.TopologyResponse) map[uint64]bool {
 		m[n.ID] = true
 	}
 	return m
+}
+
+func buildStarRepo(children int) *fakeTopologyRepo {
+	resources := make(map[uint64]model.Resource, children+1)
+	relations := make([]model.ResourceRelation, 0, children)
+	resources[1] = model.Resource{ID: 1, ResourceType: model.ResourceTypeHost, Name: "root", DisplayName: "Root"}
+	for i := 2; i <= children+1; i++ {
+		id := uint64(i)
+		resources[id] = model.Resource{ID: id, ResourceType: model.ResourceTypeHost, Name: "leaf", DisplayName: "Leaf"}
+		relations = append(relations, model.ResourceRelation{
+			ID:             id,
+			FromResourceID: 1,
+			ToResourceID:   id,
+			RelationType:   model.RelationTypeDependsOn,
+		})
+	}
+	return &fakeTopologyRepo{resources: resources, relations: relations}
 }
 
 func buildChainRepo(nodes int) *fakeTopologyRepo {

@@ -14,7 +14,7 @@ Business logic layer with interface-based repository dependencies. Each service 
 | relation_service.go | Shared relation read/write entry point; validates server-owned rules before fail-closed audited persistence |
 | relation_rules.go | Single relationship matrix authority plus source-specific discovery response |
 | completeness.go | Pure seven-group, server-derived resource completeness projection using typed-profile minima and matrix-valid structural endpoints; Domain Name has no structural-edge requirement |
-| topology_service.go | Environment-scoped topology workspace and rooted graph traversal with default depth 2, deterministic node/edge caps, remaining-edge-bounded relation reads, and node-cap-plus-sentinel candidate starts |
+| topology_service.go | Environment-scoped topology workspace and rooted graph traversal with default depth 2, hop-count safety cap 32, deterministic node/edge caps, remaining-edge-bounded relation reads, and node-cap-plus-sentinel candidate starts |
 | topology_service_test.go | Topology traversal tests for depth, direction, cycles, caps, bounded high-fan-out/remaining-budget/candidate reads, environment scope, and sentinel propagation |
 | topology_semantics_test.go | Topology semantic classification tests for roles, layers, replication metadata, and problem summaries |
 | ingestion_preview.go | Strict bounded CSV/JSON parsing, ordinary non-empty and collector empty-capable preview seams, format-independent fingerprints, exact-identity classification, additive observed diffs, scan conflicts, and repository-backed confirmation delegation |
@@ -32,7 +32,7 @@ Business logic layer with interface-based repository dependencies. Each service 
 | relation_type_service.go | Relation type dictionary listing |
 | lifecycle_status_service.go | Lifecycle status dictionary listing |
 | health_status_service.go | Health status dictionary listing |
-| query_schema_service.go | QuerySchemaService.GetTableDefinition returns governed MySQL table definitions |
+| query_schema_service.go | QuerySchemaService.GetTableDefinition returns governed MySQL table definitions; ObjectDetails is actor+target Schema Inspection without a caller DSN |
 | query_guard.go | AST-backed read-only validation for execute, paginated results, explain, and saved-query entry points |
 | query_template_compiler.go | Server-owned AST placeholder compiler and guarded positional binding seam |
 | query_template_compiler_declaration.go | Declaration-only placeholder validation shared by saved-statement persistence and runtime compilation |
@@ -44,6 +44,7 @@ Business logic layer with interface-based repository dependencies. Each service 
 | query_executor_test.go | Executor scanning, result-cap, and compiler-owned template binding tests |
 | navigate_related_records_test.go | Related-record navigation service tests: governance, parameter binding, history/audit, Apply-path exclusive `ErrQueryDisclosureBlocked` (Issue #48), and inspector-phase cancellation/deadline evidence (Issue #40) |
 | query_execution_service_test.go | Query execution service tests, including successful-User full SQL, owner-only retrieval and history restore eligibility, machine/non-success omission, governed paging, disclosure, atomic persistence, and cancellation durability |
+| query_execution_evidence_pair_test.go | persistEvidencePair tests: detached two-second window, fixed audit event type, verbatim identity, and fail-closed rollback |
 | query_template_execution_service_test.go | Template-execution tests for reread, authorization, typed values, paging, rejected/failed post-target no-value evidence, cancellation durability, and disclosure wrapping |
 | query_disclosure_service.go | QueryDisclosureService — policy lookup, projection resolution, result transformation; governance refusals stay blocked while disclosure machinery failures use a distinct backend sentinel so the execution service records them as terminal failed/timeout/canceled evidence, not policy rejections (Issue #35) |
 | query_disclosure_projection.go | Column provenance resolution from SQL AST and FK metadata |
@@ -71,7 +72,7 @@ Business logic layer with interface-based repository dependencies. Each service 
 - `ValidateResourceUpdate` — normal update validation against an already-read current resource, reused by locked bulk mutations
 - `PreviewBulkResourceMutation` — pure preview of ordered targets against current snapshots; `ResourceService` delegates persisted preview/confirm reads to its resource repository
 - `BulkResourceMutationRequest`, `BulkResourceMutationTarget`, `ResourceMutationSnapshot`, `LabelOperations`, `BulkResourcePreview` — bulk mutation preview contract values
-- `TopologyService.BuildTopology` — builds rooted or environment-start topology responses with node/edge caps and `truncated`; rooted traversal requests at most the remaining edge budget plus one sentinel relation per hop, while workspace starts request the node cap plus one candidate sentinel
+- `TopologyService.BuildTopology` — builds rooted or environment-start topology responses with hop-count safety cap 32, node/edge caps, and `truncated`; rooted traversal requests at most the remaining edge budget plus one sentinel relation per hop, while workspace starts request the node cap plus one candidate sentinel
 - `ParseIngestion` and `PreviewIngestion` provide controlled parsing and pure fingerprints; `ResourceService.PreviewIngestion` keeps ordinary previews non-empty, while `PreviewCollectorIngestion` admits an empty collector set and returns its canonical reviewed fingerprint for `ConfirmCollectorIngestion`; immutable CI-type mismatches remain conflicts and observed diffs contain only submitted fields
 - `CollectorIngestionMetadata`, `model.CollectorScanResult`, `ValidateCollectorIngestionMetadata`, `ErrCollectorIngestionMetadataInvalid`, `ErrCollectorScanConflict`, and `ErrCollectorStateLimit` define the bounded collector-confirmation, retry, and capacity contract without exposing MySQL error types
 - `ValidateIngestionRows`, `ValidateCollectorIngestionRows`, `ValidateIngestionRelationship`, `ErrIngestionConflict`, and `ErrIngestionFingerprintMismatch` support repository confirmation without duplicating service-owned validation rules

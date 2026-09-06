@@ -93,7 +93,8 @@ func buildDatabaseTestRepo() *fakeTopologyRepo {
 				ResourceSubtype: "proxysql", Name: "payment-proxysql-02-prod", DisplayName: "Payment ProxySQL Standby",
 				EnvironmentID: semanticEnvProd, OwnerID: semanticOwnerDBA,
 				LifecycleStatus: "stopped", HealthStatus: "unknown",
-				Labels: map[string]string{"team": "platform", "tier": "proxy", "role": "standby"},
+				Labels:         map[string]string{"team": "platform", "tier": "proxy"},
+				ProfileSummary: &model.ProfileSummary{Role: "standby"},
 			},
 			semanticVIPID: {
 				ID: semanticVIPID, ResourceType: model.ResourceTypeVirtualIP,

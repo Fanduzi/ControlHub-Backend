@@ -173,6 +173,18 @@ func TestGetTopology_InvalidDepth(t *testing.T) {
 	}
 }
 
+func TestGetTopology_DepthAboveSafetyCap(t *testing.T) {
+	server := NewTestServer()
+
+	req := httptest.NewRequest(http.MethodGet, "/resources/4/topology?depth=33", nil)
+	w := httptest.NewRecorder()
+	server.Router.ServeHTTP(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("status = %d, want 400; body: %s", w.Code, w.Body.String())
+	}
+}
+
 func TestGetTopology_InvalidDirection(t *testing.T) {
 	server := NewTestServer()
 
