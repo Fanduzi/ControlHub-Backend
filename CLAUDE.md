@@ -173,50 +173,22 @@ Environment variables loaded via `godotenv` from `.env` (gitignored). Shell expo
 
 Migration `0004` seeds ~64 resources across 5 business domains (Order, Payment, User, Analytics, Config) in 3 environments. Includes status variety (warning, critical, degraded, stopped, provisioning), intentionally missing profiles, and long display names for frontend edge-case testing.
 
-<!-- gitnexus:start -->
-# GitNexus — Code Intelligence
+## Agent skills
 
-This project is indexed by GitNexus as **ControlHub-Backend** (8949 symbols, 26834 relationships, 300 execution flows). Use the GitNexus MCP tools to understand code, assess impact, and navigate safely.
+### Issue tracker
 
-> Index stale? Run `node .gitnexus/run.cjs analyze` from the project root — it auto-selects an available runner. No `.gitnexus/run.cjs` yet? `npx gitnexus analyze` (npm 11 crash → `npm i -g gitnexus`; #1939).
+Work is tracked in GitHub Issues for `Fanduzi/ControlHub-Backend`. See
+`docs/agents/issue-tracker.md`.
 
-## Always Do
+### Triage labels
 
-- **MUST run impact analysis before editing any symbol.** Before modifying a function, class, or method, run `impact({target: "symbolName", direction: "upstream"})` and report the blast radius (direct callers, affected processes, risk level) to the user.
-- **MUST run `detect_changes()` before committing** to verify your changes only affect expected symbols and execution flows. For regression review, compare against the default branch: `detect_changes({scope: "compare", base_ref: "main"})`.
-- **MUST warn the user** if impact analysis returns HIGH or CRITICAL risk before proceeding with edits.
-- When exploring unfamiliar code, use `query({search_query: "concept"})` to find execution flows instead of grepping. It returns process-grouped results ranked by relevance.
-- When you need full context on a specific symbol — callers, callees, which execution flows it participates in — use `context({name: "symbolName"})`.
-- For security review, `explain({target: "fileOrSymbol"})` lists taint findings (source→sink flows; needs `analyze --pdg`).
+Use the canonical labels: `needs-triage`, `needs-info`, `ready-for-agent`,
+`ready-for-human`, and `wontfix`. See `docs/agents/triage-labels.md`.
 
-## Never Do
+### Domain docs
 
-- NEVER edit a function, class, or method without first running `impact` on it.
-- NEVER ignore HIGH or CRITICAL risk warnings from impact analysis.
-- NEVER rename symbols with find-and-replace — use `rename` which understands the call graph.
-- NEVER commit changes without running `detect_changes()` to check affected scope.
-
-## Resources
-
-| Resource | Use for |
-|----------|---------|
-| `gitnexus://repo/ControlHub-Backend/context` | Codebase overview, check index freshness |
-| `gitnexus://repo/ControlHub-Backend/clusters` | All functional areas |
-| `gitnexus://repo/ControlHub-Backend/processes` | All execution flows |
-| `gitnexus://repo/ControlHub-Backend/process/{name}` | Step-by-step execution trace |
-
-## CLI
-
-| Task | Read this skill file |
-|------|---------------------|
-| Understand architecture / "How does X work?" | `.claude/skills/gitnexus/gitnexus-exploring/SKILL.md` |
-| Blast radius / "What breaks if I change X?" | `.claude/skills/gitnexus/gitnexus-impact-analysis/SKILL.md` |
-| Trace bugs / "Why is X failing?" | `.claude/skills/gitnexus/gitnexus-debugging/SKILL.md` |
-| Rename / extract / split / refactor | `.claude/skills/gitnexus/gitnexus-refactoring/SKILL.md` |
-| Tools, resources, schema reference | `.claude/skills/gitnexus/gitnexus-guide/SKILL.md` |
-| Index, status, clean, wiki CLI commands | `.claude/skills/gitnexus/gitnexus-cli/SKILL.md` |
-
-<!-- gitnexus:end -->
+This is a single-context repository: domain terms live in `CONTEXT.md`; accepted
+decisions live in `docs/decisions/`. See `docs/agents/domain.md`.
 
 # 12-rule
 
