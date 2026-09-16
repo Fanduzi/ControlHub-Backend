@@ -1,5 +1,5 @@
 // Package mysql provides MySQL-backed repository implementations.
-// input: database/sql, context, errors, fmt, internal/model, internal/service, github.com/go-sql-driver/mysql
+// input: database/sql, context, errors, fmt, internal/model, internal/service
 // output: NewQueryDisclosureRepository, MySQLQueryDisclosureRepository (QueryDisclosureReader, QueryDisclosureWriter)
 // pos: MySQL data access for Phase 38Q governed result-disclosure policy CRUD
 // note: if this file changes, update header and README.md
@@ -10,8 +10,6 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
-
-	"github.com/go-sql-driver/mysql"
 
 	"github.com/fan/controlhub/internal/model"
 	"github.com/fan/controlhub/internal/service"
@@ -109,8 +107,7 @@ func (r *MySQLQueryDisclosureRepository) Insert(ctx context.Context, req model.R
 		req.TargetResourceID, req.DatabaseName, req.ObjectName, req.ColumnName, string(req.Mode),
 	)
 	if err != nil {
-		var mysqlErr *mysql.MySQLError
-		if errors.As(err, &mysqlErr) && mysqlErr.Number == 1062 {
+		if isDuplicateKey(err) {
 			return 0, service.ErrQueryDisclosurePolicyConflict
 		}
 		return 0, fmt.Errorf("insert disclosure policy: %w", err)

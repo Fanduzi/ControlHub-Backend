@@ -14,7 +14,7 @@ Business logic layer with interface-based repository dependencies. Each service 
 | relation_service.go | Shared relation read/write entry point; validates server-owned rules before fail-closed audited persistence |
 | relation_rules.go | Single relationship matrix authority plus source-specific discovery response |
 | completeness.go | Pure seven-group, server-derived resource completeness projection using typed-profile minima and matrix-valid structural endpoints; Domain Name has no structural-edge requirement |
-| topology_service.go | Environment-scoped topology workspace and rooted graph traversal with default depth 2, hop-count safety cap 32, deterministic node/edge caps, remaining-edge-bounded relation reads, and node-cap-plus-sentinel candidate starts |
+| topology_service.go | Environment-scoped topology workspace and rooted graph traversal with default depth 2, hop-count safety cap 32, deterministic node/edge caps, remaining-edge-bounded relation reads, batched neighbor GetResourcesByIDs, and node-cap-plus-sentinel candidate starts |
 | topology_service_test.go | Topology traversal tests for depth, direction, cycles, caps, bounded high-fan-out/remaining-budget/candidate reads, environment scope, and sentinel propagation |
 | topology_semantics_test.go | Topology semantic classification tests for roles, layers, replication metadata, and problem summaries |
 | ingestion_preview.go | Strict bounded CSV/JSON parsing, ordinary non-empty and collector empty-capable preview seams, format-independent fingerprints, exact-identity classification, additive observed diffs, scan conflicts, and repository-backed confirmation delegation |

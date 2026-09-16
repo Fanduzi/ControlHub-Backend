@@ -1,6 +1,6 @@
 // Package mysql provides MySQL-backed repository implementations.
 // input: crypto/sha256, database/sql, time, internal/model, internal/service
-// output: resource CRUD, governed identity and bounded batched typed-profile/collector-presence reads, exact/presence label filtering, health observations/effective health, fail-closed cluster operational summaries, observed/effective values, validated previews, audited versioned manual overrides, atomic bulk mutation, and state-capped User/collector atomic ingestion confirmation including empty terminal receipts
+// output: resource CRUD, batched list identity/profile summaries, GetResourcesByIDs, bounded typed-profile/collector-presence reads, exact/presence label filtering, health observations/effective health, fail-closed cluster operational summaries, observed/effective values, validated previews, audited versioned manual overrides, atomic bulk mutation, and state-capped User/collector atomic ingestion confirmation including empty terminal receipts
 // pos: MySQL resource persistence, identity/typed-profile/collector-presence projections, current health evidence, effective values, inventory search, and shared resource/scan transaction authority
 // note: if this file changes, update this header and module README.md.
 package mysql
@@ -484,72 +484,14 @@ from resources r ` + where + " order by r.name"
 	}
 	defer rows.Close()
 
-	items := make([]model.Resource, 0)
-	for rows.Next() {
-		var (
-			item          model.Resource
-			rawLabels     string
-			manualHealth  sql.NullString
-			archivedAt    sql.NullTime
-			archivedBy    sql.NullInt64
-			archiveReason sql.NullString
-			clusterId     sql.NullInt64
-		)
-
-		err := rows.Scan(
-			&item.ID,
-			&item.ResourceType,
-			&item.ResourceSubtype,
-			&item.Name,
-			&item.DisplayName,
-			&item.EnvironmentID,
-			&item.OwnerID,
-			&item.LifecycleStatus,
-			&manualHealth,
-			&item.Origin,
-			&rawLabels,
-			&item.CreatedAt,
-			&item.UpdatedAt,
-			&archivedAt,
-			&archivedBy,
-			&archiveReason,
-			&clusterId,
-		)
-		if err != nil {
-			return nil, 0, err
-		}
-
-		if archivedAt.Valid {
-			item.ArchivedAt = &archivedAt.Time
-		}
-		if archivedBy.Valid {
-			v := uint64(archivedBy.Int64)
-			item.ArchivedBy = &v
-		}
-		if archiveReason.Valid {
-			item.ArchiveReason = &archiveReason.String
-		}
-		if clusterId.Valid {
-			v := uint64(clusterId.Int64)
-			item.ClusterId = &v
-		}
-		setManualHealthOverride(&item, manualHealth)
-
-		if rawLabels == "" || rawLabels == "null" {
-			item.Labels = map[string]string{}
-		} else if err := json.Unmarshal([]byte(rawLabels), &item.Labels); err != nil {
-			return nil, 0, err
-		}
-		if err := loadResourceIdentity(ctx, r.db, &item); err != nil {
-			return nil, 0, err
-		}
-
-		item.ProfileSummary = r.buildProfileSummary(ctx, item.ID, item.ResourceType)
-
-		items = append(items, item)
+	items, err := scanListedResources(rows)
+	if err != nil {
+		return nil, 0, err
 	}
-
-	if err := rows.Err(); err != nil {
+	if err := attachResourceIdentities(ctx, r.db, items); err != nil {
+		return nil, 0, err
+	}
+	if err := r.attachProfileSummaries(ctx, items); err != nil {
 		return nil, 0, err
 	}
 
@@ -604,6 +546,14 @@ func buildInClause(n int) string {
 	return strings.Join(placeholders, ", ")
 }
 
+func uint64Args(ids []uint64) []any {
+	args := make([]any, len(ids))
+	for i, id := range ids {
+		args[i] = id
+	}
+	return args
+}
+
 func (r *ResourceRepository) GetResource(id uint64) (*model.Resource, error) {
 	resource, err := r.getResource(context.Background(), id)
 	if err != nil {
@@ -614,6 +564,51 @@ func (r *ResourceRepository) GetResource(id uint64) (*model.Resource, error) {
 		return nil, err
 	}
 	return &items[0], nil
+}
+
+func (r *ResourceRepository) GetResourcesByIDs(ids []uint64) (map[uint64]*model.Resource, error) {
+	if len(ids) == 0 {
+		return map[uint64]*model.Resource{}, nil
+	}
+	ctx := context.Background()
+	args := uint64Args(ids)
+	query := `select r.id, r.resource_type, r.resource_subtype, r.name, r.display_name,
+       r.environment_id, r.owner_id, r.lifecycle_status, r.health_status,
+       r.origin, r.labels, r.created_at, r.updated_at,
+       r.archived_at, r.archived_by, r.archive_reason,
+       (select rr.to_resource_id from resource_relations rr
+        where rr.from_resource_id = r.id and rr.relation_type = 'member_of'
+        limit 1) as cluster_id
+from resources r where r.id in (` + buildInClause(len(ids)) + `)`
+	rows, err := r.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items, err := scanListedResources(rows)
+	if err != nil {
+		return nil, err
+	}
+	if err := attachResourceIdentities(ctx, r.db, items); err != nil {
+		return nil, err
+	}
+	if err := r.attachProfileSummaries(ctx, items); err != nil {
+		return nil, err
+	}
+	if err := r.attachHealthObservations(ctx, items); err != nil {
+		return nil, err
+	}
+	if err := r.attachCollectorPresence(ctx, items); err != nil {
+		return nil, err
+	}
+	if err := r.attachDatabaseOperationalSummaries(ctx, items); err != nil {
+		return nil, err
+	}
+	out := make(map[uint64]*model.Resource, len(items))
+	for i := range items {
+		out[items[i].ID] = &items[i]
+	}
+	return out, nil
 }
 
 func (r *ResourceRepository) getResource(ctx context.Context, id uint64) (*model.Resource, error) {
@@ -1291,24 +1286,7 @@ func (r *ResourceRepository) createResource(ctx context.Context, input model.Res
 }
 
 func createResourceTx(ctx context.Context, tx *sql.Tx, input model.ResourceCreateInput, profile map[string]any) (uint64, error) {
-	if input.Origin == "" {
-		switch input.Source {
-		case "", "manual":
-			input.Origin = model.ResourceOriginManual
-		case "import", "imported", "terraform":
-			input.Origin = model.ResourceOriginImported
-		case "discovery", "discovered":
-			input.Origin = model.ResourceOriginDiscovered
-		default:
-			input.Origin = model.ResourceOriginImported
-		}
-	}
-	if len(input.ExternalIdentifiers) == 0 && strings.TrimSpace(input.ExternalID) != "" {
-		input.ExternalIdentifiers = []model.ResourceExternalIdentifier{{System: "legacy", Value: input.ExternalID}}
-	}
-	if input.Labels == nil {
-		input.Labels = map[string]string{}
-	}
+	input.ApplyLegacyCreateFields()
 	labelsJSON, err := json.Marshal(input.Labels)
 	if err != nil {
 		return 0, fmt.Errorf("marshal labels: %w", err)
@@ -2121,6 +2099,263 @@ func loadResourceIdentity(ctx context.Context, q resourceIdentityQueryer, item *
 	return nil
 }
 
+func scanListedResources(rows *sql.Rows) ([]model.Resource, error) {
+	items := make([]model.Resource, 0)
+	for rows.Next() {
+		item, err := scanListedResource(rows)
+		if err != nil {
+			return nil, err
+		}
+		items = append(items, item)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+func scanListedResource(rows *sql.Rows) (model.Resource, error) {
+	var (
+		item          model.Resource
+		rawLabels     string
+		manualHealth  sql.NullString
+		archivedAt    sql.NullTime
+		archivedBy    sql.NullInt64
+		archiveReason sql.NullString
+		clusterId     sql.NullInt64
+	)
+	if err := rows.Scan(
+		&item.ID,
+		&item.ResourceType,
+		&item.ResourceSubtype,
+		&item.Name,
+		&item.DisplayName,
+		&item.EnvironmentID,
+		&item.OwnerID,
+		&item.LifecycleStatus,
+		&manualHealth,
+		&item.Origin,
+		&rawLabels,
+		&item.CreatedAt,
+		&item.UpdatedAt,
+		&archivedAt,
+		&archivedBy,
+		&archiveReason,
+		&clusterId,
+	); err != nil {
+		return model.Resource{}, err
+	}
+	if archivedAt.Valid {
+		item.ArchivedAt = &archivedAt.Time
+	}
+	if archivedBy.Valid {
+		v := uint64(archivedBy.Int64)
+		item.ArchivedBy = &v
+	}
+	if archiveReason.Valid {
+		item.ArchiveReason = &archiveReason.String
+	}
+	if clusterId.Valid {
+		v := uint64(clusterId.Int64)
+		item.ClusterId = &v
+	}
+	setManualHealthOverride(&item, manualHealth)
+	if rawLabels == "" || rawLabels == "null" {
+		item.Labels = map[string]string{}
+	} else if err := json.Unmarshal([]byte(rawLabels), &item.Labels); err != nil {
+		return model.Resource{}, err
+	}
+	return item, nil
+}
+
+func attachResourceIdentities(ctx context.Context, q resourceIdentityQueryer, items []model.Resource) error {
+	if len(items) == 0 {
+		return nil
+	}
+	index := make(map[uint64]int, len(items))
+	args := make([]any, len(items))
+	for i := range items {
+		items[i].Aliases = []string{}
+		items[i].ExternalIdentifiers = []model.ResourceExternalIdentifier{}
+		items[i].Source = string(items[i].Origin)
+		index[items[i].ID] = i
+		args[i] = items[i].ID
+	}
+	aliasRows, err := q.QueryContext(ctx, `select resource_id, alias from resource_aliases where resource_id in (`+buildInClause(len(items))+`) order by resource_id, alias`, args...)
+	if err != nil {
+		return fmt.Errorf("list aliases: %w", err)
+	}
+	defer aliasRows.Close()
+	for aliasRows.Next() {
+		var resourceID uint64
+		var alias string
+		if err := aliasRows.Scan(&resourceID, &alias); err != nil {
+			return err
+		}
+		if i, ok := index[resourceID]; ok {
+			items[i].Aliases = append(items[i].Aliases, alias)
+		}
+	}
+	if err := aliasRows.Err(); err != nil {
+		return err
+	}
+	if err := aliasRows.Close(); err != nil {
+		return err
+	}
+
+	identifierRows, err := q.QueryContext(ctx, `select resource_id, external_system, external_value from resource_external_identifiers where resource_id in (`+buildInClause(len(items))+`) order by resource_id, external_system, external_value`, args...)
+	if err != nil {
+		return fmt.Errorf("list external identifiers: %w", err)
+	}
+	defer identifierRows.Close()
+	for identifierRows.Next() {
+		var resourceID uint64
+		var identifier model.ResourceExternalIdentifier
+		if err := identifierRows.Scan(&resourceID, &identifier.System, &identifier.Value); err != nil {
+			return err
+		}
+		if i, ok := index[resourceID]; ok {
+			items[i].ExternalIdentifiers = append(items[i].ExternalIdentifiers, identifier)
+			if identifier.System == "legacy" {
+				items[i].ExternalID = identifier.Value
+			}
+		}
+	}
+	return identifierRows.Err()
+}
+
+func (r *ResourceRepository) attachProfileSummaries(ctx context.Context, items []model.Resource) error {
+	if len(items) == 0 {
+		return nil
+	}
+	index := make(map[uint64]int, len(items))
+	byType := map[model.ResourceType][]uint64{}
+	for i := range items {
+		index[items[i].ID] = i
+		switch items[i].ResourceType {
+		case model.ResourceTypeDatabaseInstance, model.ResourceTypeDatabaseCluster,
+			model.ResourceTypeHost, model.ResourceTypeService, model.ResourceTypeDatabaseProxy:
+			byType[items[i].ResourceType] = append(byType[items[i].ResourceType], items[i].ID)
+		}
+	}
+	for typ, ids := range byType {
+		if err := r.loadProfileSummariesByType(ctx, typ, ids, items, index); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (r *ResourceRepository) loadProfileSummariesByType(ctx context.Context, typ model.ResourceType, ids []uint64, items []model.Resource, index map[uint64]int) error {
+	if len(ids) == 0 {
+		return nil
+	}
+	args := uint64Args(ids)
+	in := buildInClause(len(ids))
+	var (
+		query string
+		scan  func(rows *sql.Rows) (uint64, *model.ProfileSummary, error)
+	)
+	switch typ {
+	case model.ResourceTypeDatabaseInstance:
+		query = `select resource_id, engine, version, host, port, role from resource_profiles_database_instance where resource_id in (` + in + `)`
+		scan = func(rows *sql.Rows) (uint64, *model.ProfileSummary, error) {
+			var id uint64
+			var engine, version, host, role string
+			var port int
+			if err := rows.Scan(&id, &engine, &version, &host, &port, &role); err != nil {
+				return 0, nil, err
+			}
+			return id, &model.ProfileSummary{Hostname: host, Port: port, Engine: engine, Version: version, Role: role}, nil
+		}
+	case model.ResourceTypeDatabaseCluster:
+		query = `select resource_id, engine from resource_profiles_database_cluster where resource_id in (` + in + `)`
+		scan = func(rows *sql.Rows) (uint64, *model.ProfileSummary, error) {
+			var id uint64
+			var engine string
+			if err := rows.Scan(&id, &engine); err != nil {
+				return 0, nil, err
+			}
+			return id, &model.ProfileSummary{Engine: engine}, nil
+		}
+	case model.ResourceTypeHost:
+		query = `select resource_id, hostname, ip_address from resource_profiles_host where resource_id in (` + in + `)`
+		scan = func(rows *sql.Rows) (uint64, *model.ProfileSummary, error) {
+			var id uint64
+			var hostname, ipAddress string
+			if err := rows.Scan(&id, &hostname, &ipAddress); err != nil {
+				return 0, nil, err
+			}
+			return id, &model.ProfileSummary{Hostname: hostname, IP: ipAddress}, nil
+		}
+	case model.ResourceTypeService:
+		query = `select resource_id, system_name from resource_profiles_service where resource_id in (` + in + `)`
+		scan = func(rows *sql.Rows) (uint64, *model.ProfileSummary, error) {
+			var id uint64
+			var systemName string
+			if err := rows.Scan(&id, &systemName); err != nil {
+				return 0, nil, err
+			}
+			return id, &model.ProfileSummary{Hostname: systemName}, nil
+		}
+	case model.ResourceTypeDatabaseProxy:
+		query = `select resource_id, host, port, role, version from resource_profiles_database_proxy where resource_id in (` + in + `)`
+		scan = func(rows *sql.Rows) (uint64, *model.ProfileSummary, error) {
+			var id uint64
+			var host, role, version string
+			var port int
+			if err := rows.Scan(&id, &host, &port, &role, &version); err != nil {
+				return 0, nil, err
+			}
+			return id, &model.ProfileSummary{Hostname: host, Port: port, Role: role, Version: version}, nil
+		}
+	default:
+		return nil
+	}
+	rows, err := r.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return fmt.Errorf("list %s profile summaries: %w", typ, err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		id, summary, err := scan(rows)
+		if err != nil {
+			return err
+		}
+		if i, ok := index[id]; ok {
+			items[i].ProfileSummary = summary
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	if typ == model.ResourceTypeDatabaseCluster {
+		return r.attachClusterNodeCounts(ctx, ids, items, index)
+	}
+	return nil
+}
+
+func (r *ResourceRepository) attachClusterNodeCounts(ctx context.Context, clusterIDs []uint64, items []model.Resource, index map[uint64]int) error {
+	rows, err := r.db.QueryContext(ctx,
+		`select to_resource_id, count(*) from resource_relations where relation_type = 'member_of' and to_resource_id in (`+buildInClause(len(clusterIDs))+`) group by to_resource_id`,
+		uint64Args(clusterIDs)...)
+	if err != nil {
+		return fmt.Errorf("list cluster node counts: %w", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var clusterID uint64
+		var nodeCount int
+		if err := rows.Scan(&clusterID, &nodeCount); err != nil {
+			return err
+		}
+		if i, ok := index[clusterID]; ok && items[i].ProfileSummary != nil {
+			items[i].ProfileSummary.NodeCount = nodeCount
+		}
+	}
+	return rows.Err()
+}
+
 func insertResourceIdentityTx(ctx context.Context, tx *sql.Tx, resourceID, environmentID uint64, aliases []string, identifiers []model.ResourceExternalIdentifier) error {
 	seenAliases := make(map[string]bool, len(aliases))
 	for _, rawAlias := range aliases {
@@ -2182,9 +2417,14 @@ func replaceResourceIdentityTx(ctx context.Context, tx *sql.Tx, resourceID, envi
 	return nil
 }
 
+func isDuplicateKey(err error) bool {
+	var mysqlErr *mysql.MySQLError
+	return errors.As(err, &mysqlErr) && mysqlErr.Number == 1062
+}
+
 func classifyResourceConflict(err error) error {
 	var mysqlErr *mysql.MySQLError
-	if !errors.As(err, &mysqlErr) || mysqlErr.Number != 1062 {
+	if !isDuplicateKey(err) || !errors.As(err, &mysqlErr) {
 		return nil
 	}
 	switch {

@@ -7,8 +7,8 @@ Domain structs, taxonomy constants, validation methods, and dictionary definitio
 |------|---------------|
 | collector_scan.go | Completed-scan ledger values, exact retry matching, pure capped per-CI omission/Missing transitions, and per-principal operator presence projections |
 | collector_scan_test.go | COMPLETE-only omission, idempotency, rediscovery, and conflicting-retry regression tests |
-| resource.go | Resource governed identity, immutable origin, aliases, external identifiers, effective health evidence, list/detail-only read-only Completeness and collector presence, profile response, and ResourceType |
-| resource_write.go | Resource create/update inputs, including managed identity collections and nullable manual health override |
+| resource.go | Resource governed identity, immutable origin, OriginFromSource legacy aliases, aliases, external identifiers, effective health evidence, list/detail-only read-only Completeness and collector presence, profile response, and ResourceType |
+| resource_write.go | Resource create/update inputs, including ApplyLegacyCreateFields, managed identity collections, and nullable manual health override |
 | health_observation.go | HealthObservation value and exact fresh/stale/never boundary calculation |
 | resource_effective_value.go | Effective CI value and observed/manual provenance response contracts |
 | relation.go | ResourceRelation struct, RelationType type |

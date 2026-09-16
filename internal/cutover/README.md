@@ -19,7 +19,7 @@ target transaction.
 
 ## Dependencies
 - Upstream: `cmd/cutover-local`
-- Downstream: none
+- Downstream: `internal/model` (`OriginFromSource` for legacy source → CI Origin)
 
 ## Update Rule
 If cutover gains a new behavior boundary or shared helper, update this file in the same change.

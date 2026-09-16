@@ -251,6 +251,53 @@ func TestResourceOriginValidation(t *testing.T) {
 	}
 }
 
+func TestOriginFromSourceMapsLegacyAliasesAndRejectsUnknown(t *testing.T) {
+	// CI Origin is immutable once written. Service create, MySQL persist, and
+	// cutover import must share this table: terraform is a known import alias,
+	// but an unknown source must not become imported or an empty origin would
+	// be accepted on one path and rejected on another.
+	cases := []struct {
+		source string
+		origin ResourceOrigin
+		ok     bool
+	}{
+		{source: "", origin: ResourceOriginManual, ok: true},
+		{source: "manual", origin: ResourceOriginManual, ok: true},
+		{source: "import", origin: ResourceOriginImported, ok: true},
+		{source: "imported", origin: ResourceOriginImported, ok: true},
+		{source: "terraform", origin: ResourceOriginImported, ok: true},
+		{source: "discovery", origin: ResourceOriginDiscovered, ok: true},
+		{source: "discovered", origin: ResourceOriginDiscovered, ok: true},
+		{source: "auto", ok: false},
+	}
+	for _, tc := range cases {
+		origin, ok := OriginFromSource(tc.source)
+		if ok != tc.ok || origin != tc.origin {
+			t.Fatalf("OriginFromSource(%q) = (%q, %v), want (%q, %v)", tc.source, origin, ok, tc.origin, tc.ok)
+		}
+	}
+}
+
+func TestApplyLegacyCreateFieldsLiftsSourceAndExternalID(t *testing.T) {
+	input := ResourceCreateInput{Source: "terraform", ExternalID: "  ci-9  "}
+	input.ApplyLegacyCreateFields()
+	if input.Origin != ResourceOriginImported {
+		t.Fatalf("origin = %q, want imported", input.Origin)
+	}
+	if len(input.ExternalIdentifiers) != 1 || input.ExternalIdentifiers[0] != (ResourceExternalIdentifier{System: "legacy", Value: "ci-9"}) {
+		t.Fatalf("external identifiers = %#v", input.ExternalIdentifiers)
+	}
+	if input.Labels == nil {
+		t.Fatal("labels should be an empty map, not nil")
+	}
+
+	kept := ResourceCreateInput{Origin: ResourceOriginManual, Source: "terraform"}
+	kept.ApplyLegacyCreateFields()
+	if kept.Origin != ResourceOriginManual {
+		t.Fatalf("existing origin overwritten: %q", kept.Origin)
+	}
+}
+
 func TestRelationCreateInputJSONUsesNumericIDs(t *testing.T) {
 	payload := []byte(`{"toResourceId":404,"relationType":"depends_on"}`)
 

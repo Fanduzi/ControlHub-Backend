@@ -1,6 +1,6 @@
 // Package service provides tests for the resource topology projection.
 // input: internal/model, internal/service
-// output: topology service test suite, including bounded relation/candidate reads and sentinel truncation
+// output: topology service test suite, including bounded relation/candidate reads, batched neighbor fetches, and sentinel truncation
 // pos: TDD tests for TopologyService.BuildTopology response semantics and caller-owned repository budgets
 // note: if this file changes, update this header and module README.md.
 package service
@@ -29,11 +29,14 @@ type fakeTopologyRepo struct {
 	hidden             map[uint64]bool
 	relations          []model.ResourceRelation
 	candidateIDs       []uint64
-	topologyReadLimits []int
-	candidateLimits    []int
+	topologyReadLimits   []int
+	candidateLimits      []int
+	getResourceCalls     int
+	getResourcesByIDsLen []int
 }
 
 func (f *fakeTopologyRepo) GetResource(id uint64) (*model.Resource, error) {
+	f.getResourceCalls++
 	if f.hidden[id] {
 		return nil, ErrResourceNotFound
 	}
@@ -43,6 +46,23 @@ func (f *fakeTopologyRepo) GetResource(id uint64) (*model.Resource, error) {
 	}
 	copied := r
 	return &copied, nil
+}
+
+func (f *fakeTopologyRepo) GetResourcesByIDs(ids []uint64) (map[uint64]*model.Resource, error) {
+	f.getResourcesByIDsLen = append(f.getResourcesByIDsLen, len(ids))
+	out := make(map[uint64]*model.Resource, len(ids))
+	for _, id := range ids {
+		if f.hidden[id] {
+			continue
+		}
+		r, ok := f.resources[id]
+		if !ok {
+			continue
+		}
+		copied := r
+		out[id] = &copied
+	}
+	return out, nil
 }
 
 func (f *fakeTopologyRepo) ListRelationsByResourceIDs(ids []uint64) ([]model.ResourceRelation, error) {
@@ -797,6 +817,40 @@ func TestBuildProblemSummaries_WorstSeverity(t *testing.T) {
 	}
 	if summaries[0].Severity != "critical" {
 		t.Errorf("severity = %q, want critical", summaries[0].Severity)
+	}
+}
+
+func TestBuildTopology_BatchesNeighborResourceReads(t *testing.T) {
+	// A one-hop fan-out must not call GetResource per neighbor. Topology
+	// already batches relations; nodes have to follow or a 200-node graph
+	// becomes 200 extra round-trips.
+	repo := &fakeTopologyRepo{
+		resources: map[uint64]model.Resource{
+			1: {ID: 1, ResourceType: model.ResourceTypeService, Name: "api", DisplayName: "API", EnvironmentID: testEnvID, HealthStatus: "healthy", LifecycleStatus: "running"},
+			2: {ID: 2, ResourceType: model.ResourceTypeDatabaseCluster, Name: "db-a", DisplayName: "DB A", EnvironmentID: testEnvID, HealthStatus: "healthy", LifecycleStatus: "running"},
+			3: {ID: 3, ResourceType: model.ResourceTypeDatabaseCluster, Name: "db-b", DisplayName: "DB B", EnvironmentID: testEnvID, HealthStatus: "healthy", LifecycleStatus: "running"},
+			4: {ID: 4, ResourceType: model.ResourceTypeHost, Name: "host-a", DisplayName: "Host A", EnvironmentID: testEnvID, HealthStatus: "healthy", LifecycleStatus: "running"},
+		},
+		relations: []model.ResourceRelation{
+			{ID: 11, FromResourceID: 1, ToResourceID: 2, RelationType: model.RelationTypeDependsOn},
+			{ID: 12, FromResourceID: 1, ToResourceID: 3, RelationType: model.RelationTypeDependsOn},
+			{ID: 13, FromResourceID: 1, ToResourceID: 4, RelationType: model.RelationTypeRunsOn},
+		},
+	}
+	resp, err := NewTopologyService(repo).BuildTopology(model.TopologyQuery{
+		RootID: 1, Depth: 1, Direction: model.TopologyDirectionBoth,
+	})
+	if err != nil {
+		t.Fatalf("build topology: %v", err)
+	}
+	if len(resp.Nodes) != 4 {
+		t.Fatalf("nodes = %d, want 4", len(resp.Nodes))
+	}
+	if repo.getResourceCalls != 1 {
+		t.Fatalf("GetResource calls = %d, want 1 (root only)", repo.getResourceCalls)
+	}
+	if len(repo.getResourcesByIDsLen) != 1 || repo.getResourcesByIDsLen[0] != 3 {
+		t.Fatalf("GetResourcesByIDs batches = %v, want one hop of 3 neighbors", repo.getResourcesByIDsLen)
 	}
 }
 

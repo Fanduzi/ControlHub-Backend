@@ -1,6 +1,6 @@
 // Package model provides domain entities for the resource management system.
 // input: errors, time packages
-// output: Resource struct with governed identity, health evidence, read-only Completeness and explicitly truncated per-principal collector presence, plus ResourceProfileResponse, ResourceType and identity types
+// output: Resource struct with governed identity, health evidence, read-only Completeness and explicitly truncated per-principal collector presence, plus ResourceProfileResponse, ResourceType, identity types, and OriginFromSource
 // pos: Core inventory entity and operator read-model contract
 // note: if this file changes, update this header and module README.md.
 package model
@@ -26,6 +26,23 @@ func (o ResourceOrigin) Validate() error {
 		return nil
 	default:
 		return errors.New("origin is not supported")
+	}
+}
+
+// OriginFromSource maps a legacy Source alias to CI Origin.
+// terraform is a known import alias from cutover and older persist paths.
+// Unknown values return false so callers can reject them instead of silently
+// treating them as imported.
+func OriginFromSource(source string) (ResourceOrigin, bool) {
+	switch source {
+	case "", "manual":
+		return ResourceOriginManual, true
+	case "import", "imported", "terraform":
+		return ResourceOriginImported, true
+	case "discovery", "discovered":
+		return ResourceOriginDiscovered, true
+	default:
+		return "", false
 	}
 }
 
