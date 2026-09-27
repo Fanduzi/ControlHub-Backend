@@ -1,6 +1,6 @@
 # PostgreSQL 查询工作台首批实施规格（正式规格候选）
 
-状态：Specification Candidate / ready-for-human，技术门禁已逐项定稿，待评审。日期：2026-09-23（定稿同日；外部评审修订 2026-09-26）。代码核查基线：后端 b222f29，前端 49a99ec；组件试验 `advisor-plans/023-postgresql-feasibility/lab` **24/24 PASS**（2026-09-26 实测）。
+状态：Specification Candidate / ready-for-human，技术门禁已逐项定稿，待评审。日期：2026-09-23（定稿同日；外部评审修订 2026-09-26）。代码核查基线：后端 b222f29，前端 49a99ec；组件试验 `advisor-plans/023-postgresql-feasibility/lab` **25/25 PASS**（2026-09-26 实测）。
 
 评审议题：[PostgreSQL 查询工作台首批接入规格草案](https://github.com/Fanduzi/ControlHub-Backend/issues/108)。议题正文保存完整草案；评审副本在分支 `spec/postgresql-query-workbench-v1`（仅含本文件）。
 
@@ -228,7 +228,7 @@ PG 下所有 schema 端点携带 `?database=`（G1 连接选择器，须匹配�
 1. `Acquire` → `SELECT pg_backend_pid()`，记 `query_executions.backend_pid`；
 2. `BEGIN READ ONLY`；
 3. `SELECT set_config('search_path', $1, true)`——绑定值 = `<pinned_schema>,pg_catalog`（pg_catalog **显式排在 pinned 之后**，消除其未列名时的隐式最先解析；G10）。pinned schema 是**服务端解析后的本次执行上下文**：请求显式携带时经连接校验后使用请求值，缺省取连接 `default_schema`——执行序列/解析门/披露/digest/context 回显共用该解析结果；值经绑定注入免疫（证据：`SET LOCAL` 在 RO tx 内生效）；
-4. **关系名解析门**（G10，tx 内）：输入为**作用域解析后的实体关系引用**——守卫收集 RangeVar 时按 WITH 作用域区分：未限定名命中任一外围 CTE 名 → CTE 引用（**不做 catalog 存在性核对**，CTE 遮蔽同名实体表是 PG 语义，lab 9.2 实测），其定义内实体照常收集核对；其余未限定名 → pinned schema 实体引用。（a）存在未限定实体引用时先核 `pg_catalog.has_schema_privilege(<pinned>,'USAGE')`——为假则 pinned schema 会被 search_path **静默跳过**（9.2 实测：有表级 SELECT 也无济于事），受控拒绝 `query_schema_not_usable`（连接配置错误）；（b）实体引用批量探针存在性核对——探针自身 catalog 引用**显式限定** `pg_catalog.pg_class`⨝`pg_catalog.pg_namespace`（未限定名会被 pinned 遮蔽对象干扰，9.1 实测）；任一不在 pinned schema → `query_object_not_found` 受控拒绝并回滚；
+4. **关系名解析门 + 身份钉住**（G10，tx 内）：输入为**作用域解析后的实体关系引用**——守卫收集 RangeVar 时按 WITH 位置可见性区分（非递归定义体只见先前同级+外层、自身不可见；`WITH RECURSIVE` 同级互见含自身；内层遮蔽外层；限定名恒为实体引用）：未限定名命中当前位置可见的 CTE 名 → CTE 引用（**不做 catalog 存在性核对**，CTE 遮蔽同名实体表是 PG 语义，lab 9.2 实测），其定义内实体照常收集核对。（a）存在未限定实体引用时先核 `pg_catalog.has_schema_privilege(<pinned>,'USAGE')`——为假则 pinned schema 会被 search_path **静默跳过**（9.2 实测：有表级 SELECT 也无济于事），受控拒绝 `query_schema_not_usable`（连接配置错误）；（b）实体引用批量探针存在性核对——探针自身 catalog 引用**显式限定** `pg_catalog.pg_class`⨝`pg_catalog.pg_namespace`（未限定名会被 pinned 遮蔽对象干扰，9.1 实测）；任一不在 pinned schema → `query_object_not_found` 受控拒绝并回滚；（c）**身份钉住**：对每个未限定实体名执行 `SELECT 1 FROM "<pinned>"."<name>" LIMIT 0`（显式限定标识符经 `%I` 等效转义）——探针只证明检查时刻状态，Read Committed 下并发 DDL 可在检查与执行之间改名使未限定名静默落到 pg_catalog（9.3 实测无 pin 时确实漂移）；touch 在实际实体上取 ACCESS SHARE 锁并持有至 tx 结束，并发改名/删除被阻塞，改名若先提交则 touch 得 42P01 → 受控拒绝 `query_object_not_found`（响亮失败，绝不回退解析）——检查+USAGE+锁+排序四者联合才与显式限定等价；
 5. `SET LOCAL TimeZone = 'UTC'`——timestamptz 文本恒带 `+00`；
 6. `SET LOCAL statement_timeout = <预算>`（非生产 5000ms/生产 3000ms）——DB 侧兜底，不依赖客户端存活；
 7. `PgConn().ExecParams(分页后 SQL, 参数值, nil, nil, []int16{0})`——服务端绑定 + 全文本结果，读 ≤pageSize+1 行；
@@ -242,7 +242,7 @@ PG 下所有 schema 端点携带 `?database=`（G1 连接选择器，须匹配�
 - 驱动：`github.com/jackc/pgx/v5 v5.11.0`（2026-09-07 发布，当前最新）。安全下限：**GO-2026-5004 修复版为 v5.9.2**（pkg.go.dev/vuln 核实；该漏洞仅影响 simple-protocol 的客户端 `Query.Sanitize` 插值路径——本规格走 `ExecParams` 服务端绑定，不触该路径；仍以下限 + 最新双约束锁定）。
 - 集成测试：`github.com/testcontainers/testcontainers-go/modules/postgres v0.44.0`。
 - 守卫（证据 2.1）：解析成功 + 恰好一条语句 + 顶层 `SelectStmt` + 递归校验所有 WithClause/子查询同为 SelectStmt + 无 `IntoClause`（SELECT INTO）+ 无 `LockingClause`（FOR UPDATE/SHARE/KEY SHARE）+ FuncCall 递归拒绝清单：
-  `pg_sleep, nextval, setval, currval, pg_terminate_backend, pg_cancel_backend, pg_reload_conf, pg_rotate_logfile, pg_create_restore_point, pg_switch_wal, pg_backup_start/stop, pg_promote, pg_read_file, pg_read_binary_file, pg_stat_file, pg_ls_dir, pg_ls_logdir, pg_ls_waldir, pg_logdir_ls, pg_ls_archive_statusdir, pg_ls_tmpdir, pg_advisory_lock(_shared), pg_advisory_xact_lock(_shared), pg_advisory_unlock(_all), pg_notify, setseed, pg_stat_get_backend_pid, pg_column_size`。守卫同时收集**全部** RangeVar（顶层及 CTE 体/子查询/集合分支内层），按 WITH 作用域分类为**实体引用**与 **CTE 引用**（PG 语义：CTE 名遮蔽同名实体表、内层 WITH 遮蔽外层；限定名恒为实体引用）后交给 G4 步骤 4 的解析门。
+  `pg_sleep, nextval, setval, currval, pg_terminate_backend, pg_cancel_backend, pg_reload_conf, pg_rotate_logfile, pg_create_restore_point, pg_switch_wal, pg_backup_start/stop, pg_promote, pg_read_file, pg_read_binary_file, pg_stat_file, pg_ls_dir, pg_ls_logdir, pg_ls_waldir, pg_logdir_ls, pg_ls_archive_statusdir, pg_ls_tmpdir, pg_advisory_lock(_shared), pg_advisory_xact_lock(_shared), pg_advisory_unlock(_all), pg_notify, setseed, pg_stat_get_backend_pid, pg_column_size`。守卫同时收集**全部** RangeVar（顶层及 CTE 体/子查询/集合分支内层），按 **WITH 位置可见性**分类为**实体引用**与 **CTE 引用**（G10 机制 1 完整规则：非递归定义体只见先前同级+外层、自身不可见；`WITH RECURSIVE` 同级互见；内层遮蔽外层；限定名恒为实体引用；无法确定归属时 fail-closed 按实体引用处理）后交给 G4 步骤 4 的解析门。
 - 首批可执行语句：单条 SELECT（含 JOIN/子查询/只读 CTE/集合运算/窗口函数/引号标识符/`$n` 占位符/顶层 LIMIT|OFFSET|FETCH FIRST）。其余一律受控拒绝。声明：拒绝清单是**纵深一层**而非完备安全证明，真正边界由 RO tx + 最小权限账号保证（证据 2.2/2.3）。
 - PG 服务器版本门禁：连接校验 `SHOW server_version_num` ∈ `[140000, 180000)` = **PG 14–17**；之外拒绝启用（决定：解析器内嵌 PG18 文法无缺口，但组件验证与集成测试仅覆盖 PG 17 服务端；PG 18 行为未认证）。
 - 更新/安全策略：go-pgquery 跟随 libpg_query 上游；pgx 锁 `v5.11.0` 精确版本（≥v5.9.2 为安全下限），升级走依赖评审（govulncheck + CHANGELOG）。
@@ -339,13 +339,18 @@ PG 下所有 schema 端点携带 `?database=`（G1 连接选择器，须匹配�
   - **并发与失败**：同 key 并发仅一方占用执行；finalize 与读取无竞争撕裂（单一一致快照读，读见占用前态或完整终态关联）；并发读取幂等零写入；占用 INSERT 失败 → 无执行受控错误；**finalize 事务失败（含审计写失败）→ 终态历史与 claim 终态关联整笔回滚**，claim 保留为可发现的未完成占用；持久化失败的对外呈现沿用既有 `ErrQueryBackendFailure` → **502 `query_backend_error`** + 无维度计数器+固定日志（不新增错误码）；并发 finalize 不存在（占用唯一胜者）；同 key 不同内容 → `client_execution_id_conflict`。
   - `running`/`unknown` 为**派生展示值**：`query_executions.status` 存储值仍恒为终态枚举（`cancelled` 为新增存储值），派生值仅出现于 API 响应（前端类型扩展）。
 
-#### G10 名称解析与披露一致性（证据 1.4/9.1/9.2，议题 #103；外部评审硬冲突修正）
+#### G10 名称解析与披露一致性（证据 1.4/9.1/9.2/9.3，议题 #103；外部评审硬冲突修正）
 
-承诺语义：**未限定实体关系名仅在 pinned schema 解析**；缺失 → 响亮失败（42P01 等效语义，受控拒绝 `query_object_not_found`），**无静默回退**。关键事实（评审修正）：PostgreSQL 将未列名于 `search_path` 的 `pg_catalog` **隐式最先搜索**，且**静默跳过**执行账号无 `USAGE` 的 schema——单独 `SET search_path='app'` 无法兑现该承诺：`SELECT count(*) FROM pg_class` 会解析到 `pg_catalog.pg_class` 而非报错；pinned 自建的 `app.pg_class` 遮蔽表也被隐式 pg_catalog 遮蔽；`search_path='nogranted,pg_catalog'` 且执行账号无 `nogranted` USAGE 时（即便持表级 SELECT），未限定 `pg_class` 仍落 `pg_catalog`（9.2 实测）。因此承诺由**三道机制**共同兑现：
+承诺语义：**未限定实体关系名仅在 pinned schema 解析**；缺失 → 响亮失败（42P01 等效语义，受控拒绝 `query_object_not_found`），**无静默回退**。关键事实（评审修正）：PostgreSQL 将未列名于 `search_path` 的 `pg_catalog` **隐式最先搜索**，且**静默跳过**执行账号无 `USAGE` 的 schema——单独 `SET search_path='app'` 无法兑现该承诺：`SELECT count(*) FROM pg_class` 会解析到 `pg_catalog.pg_class` 而非报错；pinned 自建的 `app.pg_class` 遮蔽表也被隐式 pg_catalog 遮蔽；`search_path='nogranted,pg_catalog'` 且执行账号无 `nogranted` USAGE 时（即便持表级 SELECT），未限定 `pg_class` 仍落 `pg_catalog`（9.2 实测）；且 Read Committed 下**并发 DDL 可在检查与执行之间改名**，使已通过存在性核对的未限定名在绑定时落到 pg_catalog（9.3 实测：无锁定时 `app.pg_class` 改名后 `SELECT marker FROM pg_class` 漂到 catalog）。因此承诺由以下机制联合兑现：
 
-1. **作用域分类（守卫侧）**：全部 RangeVar 按 WITH 作用域解析——未限定名命中任一外围 CTE 名（含内层遮蔽外层）→ **CTE 引用**，不占存在性核对位；否则为实体引用（限定名恒为实体引用，`schema.object` 不解析到 CTE）。CTE 引用不做 catalog 核对——CTE 遮蔽同名实体表是 PG 语义（9.2 实测 `WITH orders AS (SELECT -1 id)` 返回 -1 而非 `app.orders`）；CTE 定义内的实体引用照常收集核对。
-2. **解析门（G4 步骤 4，执行前，tx 内）**：（a）存在未限定实体引用时先核 `pg_catalog.has_schema_privilege(<pinned>,'USAGE')`——为假则 pinned schema 被静默跳过、存在性核对再好也无法约束执行绑定 → `query_schema_not_usable` 受控拒绝（连接配置错误，修复连接后可重试）；（b）实体引用逐一与 pinned schema 做存在性核对（`pg_catalog.pg_class`⨝`pg_catalog.pg_namespace` 显式限定批量探针，一次往返）；任一未限定实体名不在 pinned schema → `query_object_not_found`——包括仅在 `pg_catalog`/`information_schema` 存在的名。探针读 catalog 属元数据查询，不计入用户语句执行。**存在性核对+USAGE 核对+显式排序三者联合等价于显式限定**：唯一隐式优先的 `pg_temp` 在 RO tx 不可利用，pinned 经 USAGE 验证不会被跳过，门后不存在 pinned 外可解析名——canonical 身份与执行绑定同源。
-3. **search_path 显式排序（G4 步骤 3）**：绑定值 `<pinned_schema>,pg_catalog`——pg_catalog 显式排在 pinned 之后，同名遮蔽对象由 pinned 胜出（9.1 实测遮蔽方向）。防御冗余：门已拒绝 pinned 外名，排序保证 pinned 内名不被遮蔽。
+1. **作用域分类（守卫侧）**：全部 RangeVar 按 **PostgreSQL 位置可见性**解析——未限定名命中**当前位置已可见**的最近一层 CTE 名 → **CTE 引用**，不占存在性核对位；否则为实体引用（限定名恒为实体引用，`schema.object` 不解析到 CTE）。位置可见性规则：
+   - 非递归 `WITH` 内，**CTE 定义体只见先前同级 CTE 与可见的外层 CTE**——自身及后续同级名在定义体内尚不可见，命中它们的内层引用仍是实体引用，必须接受 pinned 存在性核对（9.2：`WITH pg_class AS (SELECT oid FROM pg_class)` 内层 `pg_class` 分类为实体）；
+   - 主查询与下层子查询可见本级**全部** CTE；`WITH RECURSIVE` 同级互见（含自身——递归自引用是合法 CTE 引用），非法递归结构仍由守卫/数据库受控拒绝；
+   - 内层 CTE 名遮蔽外层同名（9.2 实测外层 CTE 在子查询内可见）；CTE 遮蔽同名实体表（`WITH orders AS (SELECT -1 id)` 返回 -1 而非 `app.orders`）。
+   CTE 定义内的实体引用照常收集核对；若实现无法确定某引用的作用域归属，**按实体引用处理**（fail-closed：误进存在性核对顶多是受控拒绝，绝不豁免核对）。
+2. **解析门（G4 步骤 4，执行前，tx 内）**：（a）存在未限定实体引用时先核 `pg_catalog.has_schema_privilege(<pinned>,'USAGE')`——为假则 pinned schema 被静默跳过、存在性核对再好也无法约束执行绑定 → `query_schema_not_usable` 受控拒绝（连接配置错误，修复连接后可重试）；（b）实体引用逐一与 pinned schema 做存在性核对（`pg_catalog.pg_class`⨝`pg_catalog.pg_namespace` 显式限定批量探针，一次往返）；任一未限定实体名不在 pinned schema → `query_object_not_found`——包括仅在 `pg_catalog`/`information_schema` 存在的名。探针读 catalog 属元数据查询，不计入用户语句执行。
+3. **身份钉住（G4 步骤 4c，与门同 tx）**：对每个未限定实体名执行 `SELECT 1 FROM "<pinned>"."<name>" LIMIT 0`——在真实实体上取 **ACCESS SHARE** 锁并持有至 tx 结束。效果：并发改名/删除被阻塞至本 tx 完成（9.3 实测）；若改名先提交，touch 得 42P01 → 受控拒绝，**绝不回退到其他 schema**。仅探针查询不持对象锁，不构成绑定保护；钉住后 pinned 对象身份在 tx 内不可被并发 DDL 移走——**检查+USAGE+锁+显式排序四者联合等价于显式限定**（唯一隐式优先的 `pg_temp` 在 RO tx 不可利用，pinned 不会被跳过且对象不可被移走，门后不存在 pinned 外可解析名）。用户 SQL 原文不改写——审计/digest/执行文本一致。
+4. **search_path 显式排序（G4 步骤 3）**：绑定值 `<pinned_schema>,pg_catalog`——pg_catalog 显式排在 pinned 之后，同名遮蔽对象由 pinned 胜出（9.1 实测遮蔽方向）。防御冗余：门已拒绝 pinned 外名，排序保证 pinned 内名不被遮蔽。
 
 - **适用范围**：承诺仅覆盖**关系引用**（表/视图/物化视图/分区表 = RangeVar；CTE 引用按作用域规则另行处理）。函数名解析保持 PG 原生语义（含隐式 pg_catalog 回退）——函数由守卫按名拒绝清单约束（G5），披露不治理函数；`FROM` 中的集返回函数（RangeFunction，如 `generate_series`）同此规则。
 - **显式限定名不变**：`schema.object` 直达目标、按实际对象校验（实测 220/40 行各归各 schema）；`pg_catalog.x`/`information_schema.x` 显式查询允许，canonical 身份照常进披露匹配。
@@ -388,7 +393,7 @@ PG 下所有 schema 端点携带 `?database=`（G1 连接选择器，须匹配�
 | 参数模板 | 正确值绑定；缺失/额外/错误类型拒绝；重复出现的命名参数按 G8 声明校验受控拒绝；保存恢复不保留值 |
 | 取消与超时 | 完成先、执行中取消、发出前取消分别断言结果；执行中先观察数据库 active 再取消；核对数据库停止证据和连接恢复 |
 | 证据生命周期 | 并发同 key 仅一方执行 SQL（执行次数=1）；**已终态/取消后/finalize 失败后同 key 重试执行次数仍=1**；占用后进程退出且零轮询→claim 存留、无未配对历史行、读取派生 `unknown`（不伪造终态历史/审计）；两并发读取派生一致且零写入；finalize 与读取仅见未完成占用或真实终态关联（无撕裂/无伪造 ID）；审计写失败→终态历史+claim 关联整笔回滚、持久化失败计数+1；未授权主体按 key 查询返回空（含 user/machine 跨类型：user:7 读不到 machine:7）；机器主体带 key 调用走同一 claim 协议且归属 machine 列；**边界（G9 表）**：占用前终态对（访问拒绝/claim 持久化失败）写 NULL key 且不阻塞同 key 重试；重复 key 拒绝零证据写；缺失/非法 `clientExecutionId` 在目标解析前 `validation_failed` 拒绝 |
-| 名称解析门 | 未限定实体名不在 pinned schema → `query_object_not_found`（含仅在 pg_catalog 存在的名，无隐式回退）；pinned/pg_catalog 同名遮蔽对象由 pinned 胜出；**CTE 引用不做实体核对**（CTE 遮蔽同名实体表）且 CTE 定义内实体照常核对；pinned schema 无 USAGE → `query_schema_not_usable`（不可静默跳过）；显式 `pg_catalog.x` 允许且披露身份匹配；CTE 输出列披露身份沿定义实体追溯 |
+| 名称解析门 | 未限定实体名不在 pinned schema → `query_object_not_found`（含仅在 pg_catalog 存在的名，无隐式回退）；pinned/pg_catalog 同名遮蔽对象由 pinned 胜出；**CTE 引用按位置可见性分类**（定义体内自身不可见、RECURSIVE 同级互见、嵌套遮蔽、CTE 遮蔽同名实体表）；pinned schema 无 USAGE → `query_schema_not_usable`；**检查与绑定之间的并发改名 → pin touch 42P01 受控拒绝或 ACCESS SHARE 阻塞并发 DDL，绝不漂移到其他 schema**；显式 `pg_catalog.x` 允许且披露身份匹配；CTE 输出列披露身份沿定义实体追溯 |
 | 类型保真 | 超安全整数、小数、内嵌大数字、数组 NULL、二进制与微秒时间跨响应/UI/复制验证 |
 | 截断与 CSV | 8192/8193 字节和中文边界；截断值明确标记且导出拒绝，完整值可导出；引号/逗号/换行保真 |
 | 治理闭环 | 成功、拒绝、失败、超时、取消均走现有披露/历史/审计规则；不能拿孤立组件输出替代 HTTP 集成证据 |
@@ -406,11 +411,11 @@ MySQL/TiDB 保留用户窗口的修正由独立议题跟踪，不阻塞 PostgreS
 
 ### 设计验证记录
 
-**环境**：macOS 本地，Go 1.26.2；`pgx/v5 v5.11.0`、`wasilibs/go-pgquery v0.0.0-20260721025817-45baeffb0133`、`pg_query_go/v6 v6.2.2`（仅类型）；Docker `postgres:17` 隔离容器（`chub-pg-lab`，`labdb`/`labdb_other`，`ro_user` 只读账号，schema `app`/`analytics`/`secret`，合成数据含同名 `orders` 及 `app.pg_class` 遮蔽表）。运行命令：`cd advisor-plans/023-postgresql-feasibility/lab && ./run.sh`。**结果：24/24 PASS，0 PARTIAL**（2026-09-26 实测；MySQL `chub-mysql-lab` 承载 8.x 协议检查）。
+**环境**：macOS 本地，Go 1.26.2；`pgx/v5 v5.11.0`、`wasilibs/go-pgquery v0.0.0-20260721025817-45baeffb0133`、`pg_query_go/v6 v6.2.2`（仅类型）；Docker `postgres:17` 隔离容器（`chub-pg-lab`，`labdb`/`labdb_other`，`ro_user` 只读账号，schema `app`/`analytics`/`secret`，合成数据含同名 `orders` 及 `app.pg_class` 遮蔽表）。运行命令：`cd advisor-plans/023-postgresql-feasibility/lab && ./run.sh`。**结果：25/25 PASS，0 PARTIAL**（2026-09-26 实测；MySQL `chub-mysql-lab` 承载 8.x 协议检查）。
 
 **事实（试验或源码直接证据）**
 
-- `SET LOCAL search_path`/`set_config('search_path',$1,true)`/`SET LOCAL TimeZone`/`statement_timeout` 均在 `BEGIN READ ONLY` 内生效；显式限定名恒达目标；RO tx 内不可建临时表（pg_temp 无影）（1.4/2.2）。**范围修正（外部评审两轮）**：早期"未限定名缺失报 42P01"的实测只覆盖了**各处皆不存在**的名；仅在 `pg_catalog` 存在的未限定名（如 `pg_class`）在 `search_path='app'` 下会解析到 pg_catalog（隐式最先），pinned 与 pg_catalog 同名对象亦被遮蔽（9.1）；执行账号无 pinned schema `USAGE` 时该 schema 被静默跳过——存在性核对与排序均无法约束执行绑定（9.2）；CTE 引用遮蔽同名实体表、不占存在性核对位（9.2）。修复机制（作用域分类+USAGE 核对+存在性门+显式排序）由 9.1/9.2 覆盖。
+- `SET LOCAL search_path`/`set_config('search_path',$1,true)`/`SET LOCAL TimeZone`/`statement_timeout` 均在 `BEGIN READ ONLY` 内生效；显式限定名恒达目标；RO tx 内不可建临时表（pg_temp 无影）（1.4/2.2）。**范围修正（外部评审两轮）**：早期"未限定名缺失报 42P01"的实测只覆盖了**各处皆不存在**的名；仅在 `pg_catalog` 存在的未限定名（如 `pg_class`）在 `search_path='app'` 下会解析到 pg_catalog（隐式最先），pinned 与 pg_catalog 同名对象亦被遮蔽（9.1）；执行账号无 pinned schema `USAGE` 时该 schema 被静默跳过——存在性核对与排序均无法约束执行绑定（9.2）；CTE 引用遮蔽同名实体表、不占存在性核对位（9.2）；**检查与绑定之间并发改名可使未限定名漂移**——无锁定时 `app.pg_class` 改名后 `SELECT marker FROM pg_class` 落到 catalog（9.3）。修复机制（位置可见性分类+USAGE 核对+存在性门+实体 pin 锁+显式排序）由 9.1/9.2/9.3 覆盖。
 - 分页新语义全部实测（4.1）：用户窗口保真、哨兵、预算边界、LIMIT 0、内层不动、参数化/非整数窗口拒绝、UNION 根窗口、deparse 不改对象名（3.5）。
 - `pgconn.ExecParams(resultFormats={0})` 返回数据库原生文本：bytea→`\x`十六进制、timestamptz 在 UTC 会话下带 `+00`、timestamp 无后缀、数组 `{1,2,NULL,4}`、jsonb 原文、NULL 与 `''` 可区分；同调用服务端绑定参数（6.1）。`database/sql` 通用扫描被证不可用作合同（bytea 出原始字节、timestamp 伪造 Z、timestamptz 带会话时区）。
 - 取消三方向实测（5.1/5.2 在 `pgx/stdlib` 链、5.3 在原生 `pgxpool`+`PgConn().ExecParams` 链）：ctx 取消 → pgconn ctx-watch → 独立连接发 CancelRequest → 后端进程消失；本连接销毁不可复用、池恢复正常；完成/取消竞争按实际分类；取消前从未到达服务端；statement_timeout 为 DB 侧兜底。
@@ -430,7 +435,7 @@ MySQL/TiDB 保留用户窗口的修正由独立议题跟踪，不阻塞 PostgreS
 - 不新增取消 API；`cancelled`+`remote_state` 持久化终态。
 - 执行占用选独立 `query_execution_claims` 表而非历史行 `running` 态——历史行保持「终态+单一审计事件」字面语义；claim 终态后保留并经 `execution_id` 关联（防重 key 不释放）；`running`/`unknown` 为读取派生展示值，无存储非终态、无后台清扫。
 - 占用时点定于**目标/访问解析之后、守卫与执行之前**（外部评审修正）：占用前终态对写 NULL key（不消耗 key，修复后可重试）；重复 key 拒绝属准入拒绝不写证据对；`request_digest` 覆盖三入口全部执行影响字段（排除 `capabilities`/key 本身）；PG 三入口服务端强制非空 key。
-- 名称解析承诺由「WITH 作用域分类（CTE 引用不占核对位）+ pinned `USAGE` 核对（防静默跳过）+ pinned 存在性门 + `search_path='<pinned>,pg_catalog'` 显式排序」联合兑现——三者联合等价于显式限定（外部评审两轮修正——单独 search_path 或仅存在性核对均不足；未选 AST 重写/显式限定改写路径以保留用户原文与审计一致性）。
+- 名称解析承诺由「WITH 位置可见性分类（CTE 引用不占核对位，定义体内自身/前向同级仍为实体引用）+ pinned `USAGE` 核对（防静默跳过）+ pinned 存在性门 + **实体 pin touch（ACCESS SHARE 锁钉住绑定身份至 tx 结束，防检查-绑定漂移）** + `search_path='<pinned>,pg_catalog'` 显式排序」联合兑现——等价于显式限定（外部评审三轮修正；未选 AST 重写/显式限定改写路径以保留用户原文与审计一致性，选定锁钉住机制而非仅探针）。
 - `pgxpool` 每连接一池（池参数运维可调）。
 - `RelKind∈{r,p,v}` 计为可浏览对象。
 
@@ -453,10 +458,10 @@ MySQL/TiDB 保留用户窗口的修正由独立议题跟踪，不阻塞 PostgreS
 | T1 | 共享身份/模型合同落地：migration 00029（G1 列+唯一键+`query_execution_claims` 表含 request_digest/execution_id 关联）+ model 常量 + OpenAPI 字段 | — | 迁移 Up/Down 守护实测；旧 MySQL 行行为不变 | `make test`；迁移集成测试 | 后端+迁移 |
 | T2 | 凭据元数据 + 复合键读取接口 `GetCredential(resource,database)` + `validatePGDSNBinding` 移植（G3）+ credential seed 校验扩展（database/default_schema） | T1 | 绑定全矩阵单测过；env 补全拒绝；(R,'') 旧行读取不变 | 现有 credential 测试不变红 | 后端 |
 | T3 | PostgreSQL 连接工厂：ConnConfig→pgxpool；`SHOW server_version_num` 门禁 [14,18) | T2 | 版本外拒绝实测；连接成功路径通 | — | 后端 |
-| T4 | go-pgquery 守卫（G5 规则+拒绝清单+RangeVar **作用域分类**：实体引用 vs CTE 引用）+ 单测矩阵 | T1 | 守卫矩阵用例全过（含 CTE/集合/锁定/INTO/函数）+ RangeVar 收集覆盖内层 + CTE 引用不误拒、CTE 遮蔽同名实体用例 | vitess 路径不受影响 | 后端+依赖 |
+| T4 | go-pgquery 守卫（G5 规则+拒绝清单+RangeVar **位置可见性分类**：实体引用 vs CTE 引用）+ 单测矩阵 | T1 | 守卫矩阵用例全过（含 CTE/集合/锁定/INTO/函数）+ 分类覆盖：CTE 不误拒、CTE 遮蔽同名实体、**定义体内自身/前向同级为实体引用**、RECURSIVE 同级互见、嵌套遮蔽、不确定归属 fail-closed | vitess 路径不受影响 | 后端+依赖 |
 | T5 | 分页层 `paginatePG` 移植（G6 新语义）+ 窗口形态单测 | T4 | 4.1 全部用例在后端单测重现 | MySQL 分页不动 | 后端 |
 | T6 | schema 元数据服务（G11：`/schemas` 新端点+objects/details/fk schema 参数） | T3 | testcontainers PG 元数据用例过；`table-definition`→unsupported code | MySQL schema 端点回归 | 后端+OpenAPI |
-| T7 | 执行器（G4 序列）+ `ExecParams` 文本 wire + 类型映射（G7） | T3,T4,T5 | 隔离 PG 执行实测：类型表全对、UTC、bytea hex、NULL 区分 | — | 后端 |
+| T7 | 执行器（G4 序列含解析门+**实体 pin touch**）+ `ExecParams` 文本 wire + 类型映射（G7） | T3,T4,T5 | 隔离 PG 执行实测：类型表全对、UTC、bytea hex、NULL 区分 + **pin 下并发改名阻塞不漂移、改名先于 touch 得 42P01 受控拒绝**（9.3 场景重现） | — | 后端 |
 | T8 | 逐格截断 + `cellTruncated` 矩阵（双引擎，含 RelatedRecordNavigationResponse）+ `capabilities` 声明与 `result_contract_upgrade_required` 门（共享结果边界，**post-finalize 交付决定**）+ CSV 门（G2/G7） | T7 | 8192/8193、rune 边界、CSV 拒绝/往返用例过；**execute、saved-statements/execute、related-records 三路径**：未声明能力+截断页→受控错误不返回 rows **且历史如实记 `success`**（非 rejected、无第二条历史）；能力错误不得掩盖证据持久化失败（502 优先） | MySQL 响应回归（字段附加不破坏） | 后端+OpenAPI+前端 |
 | T9 | 披露投影 schema 维度 + canonical 匹配（G10，含 CTE 输出列沿定义实体溯源）+ 策略 CRUD/迁移 | T1,T6,T7 | 同库两 schema 同名表各自策略命中/封堵；CTE 列溯源到定义实体而非 CTE 名 | 旧策略 `schema=''` 回归 | 后端 |
 | T10 | 取消与终态证据（G9）：backend_pid、remote_state 探测、cancelled 存储态、`query_execution_claims` 执行前原子占用（终态后保留+execution_id 关联+request_digest 冲突）+`?clientExecutionId=` 过滤+一致视图派生 running/unknown、evidence 分离 ctx、CONTEXT.md 领域术语同步；**证据边界表全行落地**（占用前终态 NULL-key 对、claim 持久化失败 NULL-key failed 对、dup 拒绝零写入、缺 key 校验拒绝） | T7 | 三方向集成用例 + paused/不可达用例 + 中止后轮询读到终态行 + **并发同 key 仅一方执行 SQL** + **已终态后同 key 重试仍不执行** + 占用后进程退出且零轮询→claim 存留派生 unknown + 并发读取派生一致零写入 + finalize 写失败→整笔回滚 claim 可发现 + 未授权 key 查询为空 + **访问拒绝 pair 不消耗 key（同 key 修复后可执行）** + **重复 key 拒绝无新增执行行** + 机器主体 keyed claim 归属 machine 列、跨类型不可读 + 取消链在**原生 pgxpool/PgConn** 路径实测（非 stdlib） + 解析门含 pinned `USAGE` 核对 | 既有终态分类回归 | 后端 |
@@ -477,4 +482,4 @@ MySQL/TiDB 保留用户窗口的修正由独立议题跟踪，不阻塞 PostgreS
 - [模板及定义范围](https://github.com/Fanduzi/ControlHub-Backend/issues/107#issuecomment-5778471472)
 - [独立 MySQL/TiDB 修正](https://github.com/Fanduzi/ControlHub-Backend/issues/106)
 
-本地组件试验（`advisor-plans/023-postgresql-feasibility/lab`，gitignore 忽略目录）已按本规格语义扩展并 24/24 通过，覆盖新分页语义、schema 一致性、名称解析门（9.1 遮蔽/泄漏 + 9.2 CTE 作用域与 USAGE 跳失）、DSN 绑定、UTF-16 光标、模板编译、类型 wire、取消证据（5.1/5.2 stdlib 链 + 5.3 原生链）、claim 协议与证据边界（8.x，真实 MySQL scratch 库，含带类型主体）。组件证据不等于后端 HTTP 治理链验证——远程实施者必须取得可复现资产并按 T12 完成集成验收，不能仅依据本文件宣称端到端证据。
+本地组件试验（`advisor-plans/023-postgresql-feasibility/lab`，gitignore 忽略目录）已按本规格语义扩展并 25/25 通过，覆盖新分页语义、schema 一致性、名称解析门（9.1 遮蔽/泄漏 + 9.2 CTE 位置可见性与 USAGE 跳失 + 9.3 检查-绑定漂移与实体 pin）、DSN 绑定、UTF-16 光标、模板编译、类型 wire、取消证据（5.1/5.2 stdlib 链 + 5.3 原生链）、claim 协议与证据边界（8.x，真实 MySQL scratch 库，含带类型主体）。组件证据不等于后端 HTTP 治理链验证——远程实施者必须取得可复现资产并按 T12 完成集成验收，不能仅依据本文件宣称端到端证据。
