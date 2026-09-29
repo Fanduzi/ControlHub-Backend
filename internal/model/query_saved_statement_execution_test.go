@@ -89,6 +89,13 @@ func TestQuerySavedStatementExecuteRequestValidate(t *testing.T) {
 		t.Fatal("expected pageSize 7 to be rejected")
 	}
 
+	oversizedClaimKey := QuerySavedStatementExecuteRequest{
+		ClientExecutionID: strings.Repeat("k", MaxClientExecutionIDLength+1),
+	}
+	if err := oversizedClaimKey.Validate(); err == nil {
+		t.Fatal("expected over-length clientExecutionId to be rejected")
+	}
+
 	valid := QuerySavedStatementExecuteRequest{
 		Values:     map[string]json.RawMessage{"status": json.RawMessage(`"paid"`)},
 		MaxRows:    100,

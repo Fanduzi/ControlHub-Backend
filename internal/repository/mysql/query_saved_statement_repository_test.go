@@ -62,9 +62,9 @@ func TestListVisible_ReturnsSharedAndPersonalForOwner(t *testing.T) {
 		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(2))
 
 	// Select query
-	rows := sqlmock.NewRows([]string{"id", "target_resource_id", "owner_user_id", "name", "statement", "scope", "created_at", "updated_at"}).
-		AddRow(1, uint64(10), uint64(1), "my query", "SELECT 1", "personal", now, now).
-		AddRow(2, uint64(10), uint64(2), "shared tpl", "SELECT 2", "shared_template", now, now)
+	rows := sqlmock.NewRows([]string{"id", "target_resource_id", "owner_user_id", "database_name", "schema_name", "name", "statement", "scope", "created_at", "updated_at"}).
+		AddRow(1, uint64(10), uint64(1), "", "", "my query", "SELECT 1", "personal", now, now).
+		AddRow(2, uint64(10), uint64(2), "", "", "shared tpl", "SELECT 2", "shared_template", now, now)
 	mock.ExpectQuery("SELECT id, target_resource_id").
 		WithArgs(uint64(10), uint64(1), 20, 0).
 		WillReturnRows(rows)
@@ -113,8 +113,8 @@ func TestListVisible_ExcludesOtherUsersPersonal(t *testing.T) {
 		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(1))
 
 	now := time.Date(2026, 7, 28, 12, 0, 0, 0, time.UTC)
-	rows := sqlmock.NewRows([]string{"id", "target_resource_id", "owner_user_id", "name", "statement", "scope", "created_at", "updated_at"}).
-		AddRow(2, uint64(10), uint64(2), "shared tpl", "SELECT 2", "shared_template", now, now)
+	rows := sqlmock.NewRows([]string{"id", "target_resource_id", "owner_user_id", "database_name", "schema_name", "name", "statement", "scope", "created_at", "updated_at"}).
+		AddRow(2, uint64(10), uint64(2), "", "", "shared tpl", "SELECT 2", "shared_template", now, now)
 	mock.ExpectQuery("SELECT id, target_resource_id").
 		WithArgs(uint64(10), uint64(1), 20, 0).
 		WillReturnRows(rows)
@@ -158,7 +158,7 @@ func TestListVisible_NameSearchEscapesLike(t *testing.T) {
 		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(0))
 	mock.ExpectQuery("SELECT id, target_resource_id").
 		WithArgs(uint64(10), uint64(1), `%100\%%`, 20, 0).
-		WillReturnRows(sqlmock.NewRows([]string{"id", "target_resource_id", "owner_user_id", "name", "statement", "scope", "created_at", "updated_at"}))
+		WillReturnRows(sqlmock.NewRows([]string{"id", "target_resource_id", "owner_user_id", "database_name", "schema_name", "name", "statement", "scope", "created_at", "updated_at"}))
 
 	resp, err := repo.ListVisible(t.Context(), model.QuerySavedStatementListQuery{
 		TargetResourceID: 10,
@@ -192,8 +192,8 @@ func TestListVisible_Pagination(t *testing.T) {
 		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(50))
 
 	now := time.Date(2026, 7, 28, 12, 0, 0, 0, time.UTC)
-	rows := sqlmock.NewRows([]string{"id", "target_resource_id", "owner_user_id", "name", "statement", "scope", "created_at", "updated_at"}).
-		AddRow(3, uint64(10), uint64(1), "page2 item", "SELECT 1", "personal", now, now)
+	rows := sqlmock.NewRows([]string{"id", "target_resource_id", "owner_user_id", "database_name", "schema_name", "name", "statement", "scope", "created_at", "updated_at"}).
+		AddRow(3, uint64(10), uint64(1), "", "", "page2 item", "SELECT 1", "personal", now, now)
 	// Page 2, pageSize 10 → offset 10
 	mock.ExpectQuery("SELECT id, target_resource_id").
 		WithArgs(uint64(10), uint64(1), 10, 10).
@@ -264,8 +264,8 @@ func TestGetByID_Found(t *testing.T) {
 	now := time.Date(2026, 7, 28, 12, 0, 0, 0, time.UTC)
 	mock.ExpectQuery("SELECT id, target_resource_id").
 		WithArgs(uint64(10), uint64(1)).
-		WillReturnRows(sqlmock.NewRows([]string{"id", "target_resource_id", "owner_user_id", "name", "statement", "scope", "created_at", "updated_at"}).
-			AddRow(1, 10, 5, "my query", "SELECT 1", "personal", now, now))
+		WillReturnRows(sqlmock.NewRows([]string{"id", "target_resource_id", "owner_user_id", "database_name", "schema_name", "name", "statement", "scope", "created_at", "updated_at"}).
+			AddRow(1, 10, 5, "", "", "my query", "SELECT 1", "personal", now, now))
 	mock.ExpectQuery("SELECT statement_id, name, type, ordinal").
 		WithArgs(uint64(1)).
 		WillReturnRows(sqlmock.NewRows([]string{"statement_id", "name", "type", "ordinal"}))

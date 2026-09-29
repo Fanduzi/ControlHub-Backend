@@ -226,6 +226,8 @@ func buildCredentialStatusResponse(target model.QueryTarget, cred *model.QueryCr
 	}
 	if cred != nil {
 		resp.Configured = true
+		resp.Database = cred.DatabaseName
+		resp.DefaultSchema = cred.DefaultSchema
 		resp.CredentialRef = cred.CredentialRef
 		resp.Enabled = cred.Enabled
 		resp.EnvironmentPolicy = cred.EnvironmentPolicy

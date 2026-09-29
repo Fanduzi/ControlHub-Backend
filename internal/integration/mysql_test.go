@@ -2,7 +2,7 @@
 
 // Package integration provides real-MySQL schema proofs for goose migrations.
 // input: database/sql, Testcontainers database, and schema migrations
-// output: migration-28 schema, collector/user/machine constraints and indexes, seed, and no-FK proofs
+// output: migration-29 schema, collector/user/machine constraints and indexes, seed, and no-FK proofs
 // pos: real-MySQL clean-migration schema contract coverage
 // note: if this file changes, update this header and module README.md.
 package integration
@@ -65,6 +65,14 @@ func TestSchemaUsesBigintPrimaryKeysWithoutForeignKeys(t *testing.T) {
 		assertPrimaryKeyColumns(t, db, tableName, "id")
 	}
 
+	// query_execution_claims is the composite-keyed occupancy ledger: its
+	// primary key is (target_resource_id, client_execution_id), not an id
+	// column, so it is asserted outside the id-keyed map above.
+	for _, columnName := range []string{"target_resource_id", "actor_user_id", "actor_machine_principal_id", "execution_id"} {
+		assertUnsignedBigintColumn(t, db, "query_execution_claims", columnName)
+	}
+	assertPrimaryKeyColumns(t, db, "query_execution_claims", "target_resource_id", "client_execution_id")
+
 	for _, tableName := range []string{
 		"roles",
 		"users",
@@ -93,6 +101,7 @@ func TestSchemaUsesBigintPrimaryKeysWithoutForeignKeys(t *testing.T) {
 		"collector_scan_ledger",
 		"collector_ci_scan_states",
 		"query_executions",
+		"query_execution_claims",
 		"audit_events",
 	} {
 		assertNoForeignKeys(t, db, tableName)
@@ -140,8 +149,8 @@ func assertSchemaChainBaseline(t *testing.T, db *sql.DB) {
 	if err != nil {
 		t.Fatalf("query max version: %v", err)
 	}
-	if maxVersion != 28 {
-		t.Fatalf("migration version = %d, want 28", maxVersion)
+	if maxVersion != 29 {
+		t.Fatalf("migration version = %d, want 29", maxVersion)
 	}
 
 	expectedTables := []string{
@@ -161,6 +170,7 @@ func assertSchemaChainBaseline(t *testing.T, db *sql.DB) {
 		"named_inventory_views",
 		"machine_principals", "machine_principal_credentials",
 		"collector_scan_ledger", "collector_ci_scan_states",
+		"query_execution_claims",
 	}
 	for _, table := range expectedTables {
 		if !tableExists(t, db, table) {

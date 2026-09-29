@@ -59,10 +59,14 @@ type QuerySavedStatementParameterDefinition struct {
 }
 
 // QuerySavedStatement is the persisted saved statement record.
+// DatabaseName and SchemaName carry the composite connection identity the
+// statement is bound to; both are empty for legacy MySQL/TiDB statements.
 type QuerySavedStatement struct {
 	ID               uint64                                   `json:"id"`
 	TargetResourceID uint64                                   `json:"targetResourceId"`
 	OwnerUserID      uint64                                   `json:"-"` // Never exposed in API
+	DatabaseName     string                                   `json:"database"`
+	SchemaName       string                                   `json:"schema"`
 	Name             string                                   `json:"name"`
 	Statement        string                                   `json:"statement"`
 	Parameters       []QuerySavedStatementParameterDefinition `json:"parameters"`
@@ -139,6 +143,12 @@ type QuerySavedStatementExecuteRequest struct {
 	Values     map[string]json.RawMessage     `json:"values"`
 	MaxRows    int                            `json:"maxRows,omitempty"`
 	Pagination *QueryExecutePaginationRequest `json:"pagination,omitempty"`
+	// ClientExecutionID is the idempotency key for the claim protocol (G9).
+	// Rejected while non-empty until claims are wired (T10).
+	ClientExecutionID string `json:"clientExecutionId,omitempty"`
+	// Capabilities declares client result-contract capabilities (e.g.
+	// "cellTruncated"); declaration-only until the truncation gate (T8).
+	Capabilities []string `json:"capabilities,omitempty"`
 }
 
 // Validate enforces the request-level limits: non-negative maxRows, the
@@ -153,6 +163,9 @@ func (r QuerySavedStatementExecuteRequest) Validate() error {
 		if err := ValidatePagination(r.Pagination.Page, r.Pagination.PageSize); err != nil {
 			return err
 		}
+	}
+	if err := ValidateClientExecutionID(r.ClientExecutionID); err != nil {
+		return err
 	}
 	if len(r.Values) == 0 {
 		return nil

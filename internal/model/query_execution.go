@@ -1,6 +1,6 @@
 // Package model provides domain entities for the resource management system.
 // input: errors, fmt, math, time packages
-// output: QueryExecution* and QueryResult* types, internal full-statement availability and public restore eligibility/statement response, validated user-or-machine execution identity, pagination/status/error contracts, query credential policy/ref validators
+// output: QueryExecution* and QueryResult* types, internal full-statement availability and public restore eligibility/statement response, validated user-or-machine execution identity, pagination/status/remote-state/error contracts, connection-scope request fields, query credential policy/ref validators
 // pos: Query sandbox execution requests, responses, history records with server-computed restore eligibility, and owner-reusable statement response
 // note: if this file changes, update header and README.md
 package model
@@ -22,10 +22,11 @@ import (
 type QueryExecutionStatus string
 
 const (
-	QueryExecutionSuccess  QueryExecutionStatus = "success"
-	QueryExecutionRejected QueryExecutionStatus = "rejected"
-	QueryExecutionFailed   QueryExecutionStatus = "failed"
-	QueryExecutionTimeout  QueryExecutionStatus = "timeout"
+	QueryExecutionSuccess   QueryExecutionStatus = "success"
+	QueryExecutionRejected  QueryExecutionStatus = "rejected"
+	QueryExecutionFailed    QueryExecutionStatus = "failed"
+	QueryExecutionTimeout   QueryExecutionStatus = "timeout"
+	QueryExecutionCancelled QueryExecutionStatus = "cancelled"
 )
 
 type QueryExecutionActorKind string
@@ -85,6 +86,17 @@ type QueryExecuteRequest struct {
 	Statement  string                         `json:"statement"`
 	MaxRows    int                            `json:"maxRows,omitempty"`
 	Pagination *QueryExecutePaginationRequest `json:"pagination,omitempty"`
+	// Database and Schema are the composite connection-identity selectors.
+	// They are accepted in the contract but rejected while non-empty until the
+	// PostgreSQL execution path is wired (T7/T12).
+	Database string `json:"database,omitempty"`
+	Schema   string `json:"schema,omitempty"`
+	// ClientExecutionID is the idempotency key for the claim protocol (G9).
+	// Rejected while non-empty until claims are wired (T10).
+	ClientExecutionID string `json:"clientExecutionId,omitempty"`
+	// Capabilities declares client result-contract capabilities (e.g.
+	// "cellTruncated"); declaration-only until the truncation gate (T8).
+	Capabilities []string `json:"capabilities,omitempty"`
 }
 
 // QueryResultColumn describes one result column by its name and database type.
@@ -113,6 +125,21 @@ type QueryExecuteResponse struct {
 	LimitApplied     int                             `json:"limitApplied"`
 	ExecutedAt       time.Time                       `json:"executedAt"`
 	Pagination       *QueryExecutePaginationResponse `json:"pagination,omitempty"`
+	// CellTruncated aligns with Rows cell-for-cell; absent means no
+	// per-cell truncation information for this page.
+	CellTruncated [][]bool `json:"cellTruncated,omitempty"`
+	// Context echoes the server-resolved execution context. PostgreSQL
+	// executions always carry database+schema; nil for engines without
+	// pinned connection context.
+	Context *QueryExecutionContext `json:"context,omitempty"`
+}
+
+// QueryExecutionContext is the resolved connection scope echoed back on
+// execution responses so clients can correlate results with the connection
+// they selected.
+type QueryExecutionContext struct {
+	Database string `json:"database"`
+	Schema   string `json:"schema"`
 }
 
 // QueryExecutionActor is the privacy-safe actor projection for read models.
@@ -128,28 +155,72 @@ const UnknownHistoryActorDisplayName = "Unknown user"
 
 const UnknownHistoryMachineActorDisplayName = "Unknown machine principal"
 
+// QueryExecutionRemoteState is the backend-side state probed for cancel and
+// verification evidence. Empty means the execution never needed a probe or the
+// engine does not expose one.
+type QueryExecutionRemoteState string
+
+const (
+	QueryExecutionRemoteNone      QueryExecutionRemoteState = ""
+	QueryExecutionRemoteStopped   QueryExecutionRemoteState = "stopped"
+	QueryExecutionRemoteUnknown   QueryExecutionRemoteState = "unknown"
+	QueryExecutionRemoteCompleted QueryExecutionRemoteState = "completed"
+)
+
+// Validate returns nil only for a declared remote-state value.
+func (s QueryExecutionRemoteState) Validate() error {
+	switch s {
+	case QueryExecutionRemoteNone,
+		QueryExecutionRemoteStopped,
+		QueryExecutionRemoteUnknown,
+		QueryExecutionRemoteCompleted:
+		return nil
+	}
+	return fmt.Errorf("invalid query execution remote state: %s", s)
+}
+
+// MaxClientExecutionIDLength bounds the client-supplied idempotency key.
+const MaxClientExecutionIDLength = 64
+
+// ValidateClientExecutionID enforces the VARCHAR(64) bound on the
+// client-supplied idempotency key. Empty is allowed — the key is optional on
+// the wire. Entry-point acceptance is a separate, handler-level decision.
+func ValidateClientExecutionID(id string) error {
+	if len(id) > MaxClientExecutionIDLength {
+		return fmt.Errorf("clientExecutionId exceeds %d characters", MaxClientExecutionIDLength)
+	}
+	return nil
+}
+
 // QueryExecutionRecord is the persisted metadata for one execution attempt.
 // It stores a statement digest and short preview, never full result rows.
 // User and machine-principal IDs are internal (insert/scan); the public JSON
 // shape uses the typed Actor projection only. Exactly one internal ID is set.
+// BackendPID, RemoteState, and ClientExecutionID are internal evidence fields —
+// they never serialize to the API.
 type QueryExecutionRecord struct {
-	ID                      uint64               `json:"id"`
-	TargetResourceID        uint64               `json:"targetResourceId"`
-	ActorUserID             uint64               `json:"-"`
-	ActorMachinePrincipalID uint64               `json:"-"`
-	Actor                   QueryExecutionActor  `json:"actor"`
-	Engine                  string               `json:"engine"`
-	StatementDigest         string               `json:"statementDigest"`
-	StatementPreview        string               `json:"statementPreview"`
-	FullStatement           string               `json:"-"`
-	HasFullStatement        bool                 `json:"-"`
-	CanRestore              bool                 `json:"canRestore"`
-	Status                  QueryExecutionStatus `json:"status"`
-	RowCount                int                  `json:"rowCount"`
-	DurationMs              int64                `json:"durationMs"`
-	ErrorCode               string               `json:"errorCode"`
-	ErrorMessage            string               `json:"errorMessage"`
-	CreatedAt               time.Time            `json:"createdAt"`
+	ID                      uint64                    `json:"id"`
+	TargetResourceID        uint64                    `json:"targetResourceId"`
+	ActorUserID             uint64                    `json:"-"`
+	ActorMachinePrincipalID uint64                    `json:"-"`
+	Actor                   QueryExecutionActor       `json:"actor"`
+	Engine                  string                    `json:"engine"`
+	DatabaseName            string                    `json:"database"`
+	SchemaName              string                    `json:"schema"`
+	StatementDigest         string                    `json:"statementDigest"`
+	StatementPreview        string                    `json:"statementPreview"`
+	FullStatement           string                    `json:"-"`
+	HasFullStatement        bool                      `json:"-"`
+	CanRestore              bool                      `json:"canRestore"`
+	Status                  QueryExecutionStatus      `json:"status"`
+	RowCount                int                       `json:"rowCount"`
+	DurationMs              int64                     `json:"durationMs"`
+	ErrorCode               string                    `json:"errorCode"`
+	ErrorMessage            string                    `json:"errorMessage"`
+	BackendPID              *int64                    `json:"-"`
+	RemoteState             QueryExecutionRemoteState `json:"-"`
+	ClientExecutionID       *string                   `json:"-"`
+	CreatedAt               time.Time                 `json:"createdAt"`
 }
 
 // QueryExecutionStatementResponse exposes full SQL only through the dedicated
@@ -297,10 +368,12 @@ func ComputeQueryHash(targetID uint64, status *QueryExecutionStatus, from, to *t
 	return fmt.Sprintf("%x", h)
 }
 
-// ValidateStatus accepts exactly the four known execution status strings.
+// ValidateStatus accepts exactly the five known stored execution status
+// strings. Derived view-only states (running/unknown surfaced from claims)
+// are not persisted statuses and are rejected here.
 func ValidateStatus(s string) error {
 	switch QueryExecutionStatus(s) {
-	case QueryExecutionSuccess, QueryExecutionRejected, QueryExecutionFailed, QueryExecutionTimeout:
+	case QueryExecutionSuccess, QueryExecutionRejected, QueryExecutionFailed, QueryExecutionTimeout, QueryExecutionCancelled:
 		return nil
 	}
 	return fmt.Errorf("invalid status: %s", s)
@@ -409,11 +482,15 @@ func ValidateCredentialRef(ref string) error {
 }
 
 // QueryCredentialMetadata is the resolved credential metadata for a query
-// target. The DSN/password is never stored here or returned — only the opaque
-// credential_ref plus its enabled flag and environment policy.
+// connection row. The DSN/password is never stored here or returned — only the
+// opaque credential_ref plus its enabled flag and environment policy.
+// (ResourceID, DatabaseName) together identify the connection row; DatabaseName
+// is empty for legacy single-connection MySQL/TiDB targets.
 type QueryCredentialMetadata struct {
 	ID                uint64                 `json:"id"`
 	ResourceID        uint64                 `json:"resourceId"`
+	DatabaseName      string                 `json:"database"`
+	DefaultSchema     string                 `json:"defaultSchema"`
 	Engine            string                 `json:"engine"`
 	CredentialRef     string                 `json:"credentialRef"`
 	Enabled           bool                   `json:"enabled"`

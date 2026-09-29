@@ -60,6 +60,16 @@ func handleExecuteQuery(svc queryExecutionAPI) http.HandlerFunc {
 				return
 			}
 		}
+		// Composite-identity and claim fields land in the contract with
+		// migration 00029 but stay fail-closed until the owning tickets wire
+		// them: PostgreSQL execution (T7/T12) for database/schema and the
+		// claim protocol (T10) for clientExecutionId. Accepting them silently
+		// would misroute identity or imply dedup that does not exist.
+		if req.Database != "" || req.Schema != "" || req.ClientExecutionID != "" {
+			writeJSONError(w, http.StatusBadRequest, "validation_failed",
+				"database, schema, and clientExecutionId are not accepted until the postgresql execution path is enabled")
+			return
+		}
 		identity, ok := queryExecutionIdentityFromContext(r.Context())
 		if !ok {
 			writeJSONError(w, http.StatusInternalServerError, "internal_error", "authenticated actor missing")
@@ -126,6 +136,14 @@ func handleExecuteSavedStatement(svc queryExecutionAPI) http.HandlerFunc {
 		}
 		if err := req.Validate(); err != nil {
 			writeJSONError(w, http.StatusBadRequest, "validation_failed", err.Error())
+			return
+		}
+		// clientExecutionId is accepted in the contract but fails closed until
+		// the claim protocol is wired (T10); accepting it silently would imply
+		// idempotent execution that does not exist yet.
+		if req.ClientExecutionID != "" {
+			writeJSONError(w, http.StatusBadRequest, "validation_failed",
+				"clientExecutionId is not accepted until the execution claim protocol is enabled")
 			return
 		}
 		actorUserID, ok := actorUserIDFromContext(r.Context())
@@ -400,6 +418,15 @@ func handleNavigateRelatedRecords(svc queryExecutionAPI) http.HandlerFunc {
 		}
 		if err := req.Validate(); err != nil {
 			writeJSONError(w, http.StatusBadRequest, "validation_failed", err.Error())
+			return
+		}
+		// source.schema (pinned-schema selector) and clientExecutionId (claim
+		// protocol) are contract fields that fail closed until the owning
+		// tickets wire them; source.database keeps its existing browse-scope
+		// meaning for MySQL/TiDB.
+		if req.Source.Schema != "" || req.ClientExecutionID != "" {
+			writeJSONError(w, http.StatusBadRequest, "validation_failed",
+				"source.schema and clientExecutionId are not accepted until the postgresql execution path is enabled")
 			return
 		}
 		actorUserID, ok := actorUserIDFromContext(r.Context())

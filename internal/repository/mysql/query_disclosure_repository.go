@@ -43,7 +43,7 @@ func NewQueryDisclosureRepository(db *sql.DB) *MySQLQueryDisclosureRepository {
 // ListByTarget returns all disclosure policies for a target, ordered by
 // database_name, object_name, column_name.
 func (r *MySQLQueryDisclosureRepository) ListByTarget(ctx context.Context, targetResourceID uint64) ([]model.ResultDisclosurePolicy, error) {
-	const q = `select id, target_resource_id, database_name, object_name, column_name, mode, created_at, updated_at
+	const q = `select id, target_resource_id, database_name, schema_name, object_name, column_name, mode, created_at, updated_at
 	           from query_result_disclosure_policies
 	           where target_resource_id = ?
 	           order by database_name, object_name, column_name`
@@ -58,7 +58,7 @@ func (r *MySQLQueryDisclosureRepository) ListByTarget(ctx context.Context, targe
 		var p model.ResultDisclosurePolicy
 		var mode string
 		if err := rows.Scan(
-			&p.ID, &p.TargetResourceID, &p.DatabaseName, &p.ObjectName, &p.ColumnName,
+			&p.ID, &p.TargetResourceID, &p.DatabaseName, &p.SchemaName, &p.ObjectName, &p.ColumnName,
 			&mode, &p.CreatedAt, &p.UpdatedAt,
 		); err != nil {
 			return nil, fmt.Errorf("scan disclosure policy: %w", err)
@@ -72,17 +72,19 @@ func (r *MySQLQueryDisclosureRepository) ListByTarget(ctx context.Context, targe
 	return items, nil
 }
 
-// GetByScope returns the disclosure policy for an exact scope
-// (target_resource_id, database_name, object_name, column_name). Returns
-// sql.ErrNoRows when no matching policy exists (caller treats as blocked).
+// GetByScope returns the disclosure policy for an exact legacy scope
+// (target_resource_id, database_name, schema_name='', object_name, column_name).
+// The schema segment is pinned to '' until schema-aware matching lands (T9);
+// a 4-part lookup can never silently hit a schema-scoped sibling row.
+// Returns sql.ErrNoRows when no matching policy exists (caller treats as blocked).
 func (r *MySQLQueryDisclosureRepository) GetByScope(ctx context.Context, targetResourceID uint64, database, object, column string) (model.ResultDisclosurePolicy, error) {
-	const q = `select id, target_resource_id, database_name, object_name, column_name, mode, created_at, updated_at
+	const q = `select id, target_resource_id, database_name, schema_name, object_name, column_name, mode, created_at, updated_at
 	           from query_result_disclosure_policies
-	           where target_resource_id = ? and database_name = ? and object_name = ? and column_name = ?`
+	           where target_resource_id = ? and database_name = ? and schema_name = '' and object_name = ? and column_name = ?`
 	var p model.ResultDisclosurePolicy
 	var mode string
 	err := r.db.QueryRowContext(ctx, q, targetResourceID, database, object, column).Scan(
-		&p.ID, &p.TargetResourceID, &p.DatabaseName, &p.ObjectName, &p.ColumnName,
+		&p.ID, &p.TargetResourceID, &p.DatabaseName, &p.SchemaName, &p.ObjectName, &p.ColumnName,
 		&mode, &p.CreatedAt, &p.UpdatedAt,
 	)
 	if err != nil {
@@ -124,7 +126,7 @@ func (r *MySQLQueryDisclosureRepository) Insert(ctx context.Context, req model.R
 func (r *MySQLQueryDisclosureRepository) Update(ctx context.Context, req model.ResultDisclosurePolicyUpsertRequest) error {
 	const q = `update query_result_disclosure_policies
 	           set mode = ?
-	           where target_resource_id = ? and database_name = ? and object_name = ? and column_name = ?`
+	           where target_resource_id = ? and database_name = ? and schema_name = '' and object_name = ? and column_name = ?`
 	res, err := r.db.ExecContext(ctx, q,
 		string(req.Mode), req.TargetResourceID, req.DatabaseName, req.ObjectName, req.ColumnName,
 	)
@@ -145,7 +147,7 @@ func (r *MySQLQueryDisclosureRepository) Update(ctx context.Context, req model.R
 // scope that has no row is not an error.
 func (r *MySQLQueryDisclosureRepository) Delete(ctx context.Context, targetResourceID uint64, database, object, column string) error {
 	const q = `delete from query_result_disclosure_policies
-	           where target_resource_id = ? and database_name = ? and object_name = ? and column_name = ?`
+	           where target_resource_id = ? and database_name = ? and schema_name = '' and object_name = ? and column_name = ?`
 	if _, err := r.db.ExecContext(ctx, q, targetResourceID, database, object, column); err != nil {
 		return fmt.Errorf("delete disclosure policy: %w", err)
 	}

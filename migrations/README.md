@@ -6,6 +6,7 @@ Forward and rollback MySQL schema/data migrations applied in numeric order.
 
 | File | Responsibility |
 |------|---------------|
+| 00029_pg_query_connections.sql | Widens query connection identity to (resource_id, database_name), adds pinned-schema and PostgreSQL evidence columns plus the per-key claim table; rollback refuses while any new-dimension data exists |
 | 00028_query_workspace_and_execution_statement.sql | Adds one bounded JSON workspace row per owner and nullable private full SQL without backfill; rollback refuses while either contains data |
 | 00027_collector_scan_lifecycle.sql | Adds the idempotent per-principal completed-scan ledger and capped per-principal/per-CI Missing state; rollback refuses while either contains data |
 | 00026_machine_query_evidence_identity.sql | Makes query execution evidence exactly one-of user/machine actor and audit evidence at-most-one, with machine lookup indexes, no foreign keys, and guarded rollback |
@@ -30,10 +31,15 @@ Forward and rollback MySQL schema/data migrations applied in numeric order.
 - `query_workspaces(owner_user_id, worksheets, version, updated_at)` stores one optimistic JSON worksheet aggregate per owner without target foreign keys.
 - Nullable `query_executions.full_statement` stores private SQL for later exact-owner successful-execution retrieval; migration 00028 performs no legacy backfill.
 - Migration 00028 downgrade fails with SQLSTATE `45000` while any workspace row or non-null full statement exists; operators must explicitly export or purge both data sets first.
+- `query_target_credentials` rows are composite Query Connections keyed by `(resource_id, database_name)`; empty `database_name` preserves the legacy single-connection identity. `default_schema` pins the PostgreSQL execution schema.
+- `query_executions` carries the resolved `database_name`/`schema_name` context, nullable `backend_pid`/`remote_state`/`client_execution_id` evidence, and a NULL-tolerant unique `(target_resource_id, client_execution_id)` key.
+- `query_execution_claims(target_resource_id, client_execution_id)` holds at most one occupancy row per key with a request digest and nullable terminal `execution_id` link; exactly one of the two actor columns is populated by the writer.
+- `query_saved_statements` and `query_result_disclosure_policies` carry `database_name`/`schema_name` segments; disclosure uniqueness is the five-part `(target_resource_id, database_name, schema_name, object_name, column_name)` key.
+- Migration 00029 downgrade fails with SQLSTATE `45000` while any claim row or any new-dimension value (`database_name`/`schema_name`/`default_schema` non-empty, `backend_pid`/`remote_state`/`client_execution_id` populated) exists; operators must explicitly export or purge that data first.
 
 ## Dependencies
 
-- Upstream: MySQL 8.0 schema state through migration 00027.
+- Upstream: MySQL 8.0 schema state through migration 00028.
 - Downstream: `internal/repository/mysql` queries and integration tests.
 
 ## Update Rule

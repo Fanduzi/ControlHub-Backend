@@ -188,7 +188,7 @@ func TestComputeQueryHash_FractionalSecondTimestampsProduceDifferentHashes(t *te
 
 func TestValidateStatus_ValidPasses(t *testing.T) {
 	t.Parallel()
-	for _, s := range []string{"success", "rejected", "failed", "timeout"} {
+	for _, s := range []string{"success", "rejected", "failed", "timeout", "cancelled"} {
 		if err := ValidateStatus(s); err != nil {
 			t.Errorf("ValidateStatus(%q) = %v, want nil", s, err)
 		}
@@ -197,10 +197,39 @@ func TestValidateStatus_ValidPasses(t *testing.T) {
 
 func TestValidateStatus_RejectsInvalid(t *testing.T) {
 	t.Parallel()
-	for _, s := range []string{"", "SUCCESS", "Success", "pending", "ok", " error"} {
+	// running/unknown are derived view-only states from the claim ledger —
+	// they must never persist as an execution status.
+	for _, s := range []string{"", "SUCCESS", "Success", "pending", "ok", " error", "running", "unknown"} {
 		if err := ValidateStatus(s); err == nil {
 			t.Errorf("ValidateStatus(%q) = nil, want error", s)
 		}
+	}
+}
+
+func TestQueryExecutionRemoteStateValidate(t *testing.T) {
+	t.Parallel()
+	for _, s := range []QueryExecutionRemoteState{"", "stopped", "unknown", "completed"} {
+		if err := s.Validate(); err != nil {
+			t.Errorf("Validate(%q) = %v, want nil", s, err)
+		}
+	}
+	for _, s := range []QueryExecutionRemoteState{"running", "STARTED", "none"} {
+		if err := s.Validate(); err == nil {
+			t.Errorf("Validate(%q) = nil, want error", s)
+		}
+	}
+}
+
+func TestValidateClientExecutionID(t *testing.T) {
+	t.Parallel()
+	// Empty is legal: the idempotency key is optional on the wire.
+	for _, id := range []string{"", "exec-123", string(make([]byte, MaxClientExecutionIDLength))} {
+		if err := ValidateClientExecutionID(id); err != nil {
+			t.Errorf("ValidateClientExecutionID(len=%d) = %v, want nil", len(id), err)
+		}
+	}
+	if err := ValidateClientExecutionID(string(make([]byte, MaxClientExecutionIDLength+1))); err == nil {
+		t.Errorf("ValidateClientExecutionID(len=%d) = nil, want error", MaxClientExecutionIDLength+1)
 	}
 }
 
