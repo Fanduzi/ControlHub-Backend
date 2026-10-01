@@ -119,6 +119,51 @@ func TestValidatePGDSNBinding_AllowedKeysLandInRealFields(t *testing.T) {
 	}
 }
 
+// TestValidatePGDSNBinding_URIDecodingSemantics proves the pre-check applies each
+// URI decode exactly once, in pgconn order, so accepted configs carry the real
+// password/database rather than a double-decoded or order-scrambled value.
+func TestValidatePGDSNBinding_URIDecodingSemantics(t *testing.T) {
+	for _, tc := range []struct {
+		name         string
+		dsn          string
+		wantPassword string
+	}{
+		{"%25 decodes once to a literal percent", "postgres://ro:p%25ss@db.internal:5432/orders?sslmode=disable", "p%ss"},
+		{"%252F decodes once to %2F", "postgres://ro:p%252Fss@db.internal:5432/orders?sslmode=disable", "p%2Fss"},
+		{"raw plus stays a plus", "postgres://ro:p+q@db.internal:5432/orders?sslmode=disable", "p+q"},
+		{"%2B decodes to plus", "postgres://ro:p%2Bss@db.internal:5432/orders?sslmode=disable", "p+ss"},
+		{"percent password via query param", "postgres://ro@db.internal:5432/orders?password=p%25ss&sslmode=disable", "p%ss"},
+	} {
+		cfg, err := validatePGDSNBinding(tc.dsn, "db.internal", 5432, "orders")
+		if err != nil {
+			t.Fatalf("%s: valid dsn rejected: %v", tc.name, err)
+		}
+		if cfg.Password != tc.wantPassword {
+			t.Fatalf("%s: cfg.Password decoded wrong (mismatch with the explicit value)", tc.name)
+		}
+	}
+	// dbname/database aliases: last occurrence in raw order wins.
+	cfg, err := validatePGDSNBinding(
+		"postgres://ro:pw@db.internal:5432/other?database=&dbname=orders&sslmode=disable",
+		"db.internal", 5432, "orders")
+	if err != nil {
+		t.Fatalf("dbname-last URI rejected: %v", err)
+	}
+	if cfg.Database != "orders" {
+		t.Fatalf("dbname-last URI bound to %q, want orders", cfg.Database)
+	}
+	// A real backslash password (escaped \\ in keyword form) is preserved.
+	cfg, err = validatePGDSNBinding(
+		`host=db.internal port=5432 dbname=orders user=ro password=p\\w sslmode=disable`,
+		"db.internal", 5432, "orders")
+	if err != nil {
+		t.Fatalf("escaped backslash password rejected: %v", err)
+	}
+	if cfg.Password != `p\w` {
+		t.Fatalf("backslash password decoded wrong: %q", cfg.Password)
+	}
+}
+
 // TestValidatePGDSNBinding_RejectedMatrix covers every rejection class. Rejected
 // DSNs must not be able to reach a valid configuration through a second syntax,
 // environment completion, or a passfile.
@@ -161,6 +206,17 @@ func TestValidatePGDSNBinding_RejectedMatrix(t *testing.T) {
 		{"multi-host via query", "postgres://ro:pw@db.internal:5432/orders?host=a,b", host, port, db},
 		{"multi-host keyword", "host=h1,h2 port=5432 dbname=orders user=u password=p", host, port, db},
 		{"multi-port keyword", "host=db.internal port=5432,5433 dbname=orders user=u password=p", host, port, db},
+		// A trailing backslash escapes nothing — pgx drops it, leaving an empty
+		// password a passfile could then fill.
+		{"trailing backslash empties password", `host=db.internal port=5432 dbname=orders user=ro password=\`, host, port, db},
+		// Raw ASCII space at a value's edge is trimmed by uriDecode — the
+		// effective password is empty even though the text is non-empty.
+		{"raw-space-only password", "postgres://ro:pw@db.internal:5432/orders?sslmode=disable&password= ", host, port, db},
+		{"raw space inside query value", "postgres://ro:pw@db.internal:5432/orders?password=p w", host, port, db},
+		// Alias keys canonicalize; the LAST occurrence in raw order wins — an
+		// empty "database=" last must not be masked by an earlier dbname, and a
+		// real "dbname=" last must not be cleared by an earlier empty database.
+		{"empty database= after dbname clears it", "postgres://ro:pw@db.internal:5432/orders?dbname=x&database=", host, port, db},
 		{"options= can mutate session GUCs", "postgres://ro:pw@db.internal:5432/orders?options=-c%20statement_timeout%3D1s", host, port, db},
 		{"options= keyword form", "host=db.internal port=5432 dbname=orders user=u password=p options='-c x'", host, port, db},
 		// Review P1: double quotes are ordinary characters under libpq — this DSN
@@ -191,9 +247,9 @@ func TestValidatePGDSNBinding_RejectedMatrix(t *testing.T) {
 		{"requiressl not consumed", "host=db.internal port=5432 dbname=orders user=u password=p requiressl=1", host, port, db},
 		{"sslcrl not consumed", "host=db.internal port=5432 dbname=orders user=u password=p sslcrl=/x", host, port, db},
 		{"sslcrldir not consumed", "host=db.internal port=5432 dbname=orders user=u password=p sslcrldir=/x", host, port, db},
-		{"ssl_min_protocol_version not consumed (pgx spelling differs)", "host=db.internal port=5432 dbname=orders user=u password=p ssl_min_protocol_version=TLSv1.2", host, port, db},
+		{"ssl_min_protocol_version not consumed", "host=db.internal port=5432 dbname=orders user=u password=p ssl_min_protocol_version=TLSv1.2", host, port, db},
 		{"ssl_max_protocol_version not consumed", "host=db.internal port=5432 dbname=orders user=u password=p ssl_max_protocol_version=TLSv1.3", host, port, db},
-		{"pgx min_protocol_version outside spec allowlist", "host=db.internal port=5432 dbname=orders user=u password=p min_protocol_version=1.2", host, port, db},
+		{"min_protocol_version is a wire-protocol knob, not in the allowlist", "host=db.internal port=5432 dbname=orders user=u password=p min_protocol_version=3.2", host, port, db},
 		{"keepalives in URI form", "postgres://ro:pw@db.internal:5432/orders?keepalives=1", host, port, db},
 		{"unix socket host", "host=/tmp port=5432 dbname=orders user=u password=p", host, port, db},
 		{"unix socket via query host", "postgres://ro:pw@db.internal:5432/orders?host=%2Ftmp", host, port, db},
@@ -226,12 +282,14 @@ func TestValidatePGDSNBinding_EnvironmentCannotComplete(t *testing.T) {
 	t.Setenv("PGPASSFILE", passfile)
 
 	for _, dsn := range []string{
-		"host=db.internal port=5432 dbname=orders",                           // env would fill user+password
-		"host=db.internal port=5432 dbname=orders user=ro password=pw user=", // empty user cannot be re-emptied
-		"postgres://ro@db.internal:5432/orders",                              // passfile could fill the password
-		"postgres://ro:@db.internal:5432/orders?sslmode=disable",             // explicit-empty password likewise
-		"postgres://ro:pw@db.internal:5432/orders?password=",                 // emptied by query param
-		"postgres://db.internal:5432/orders?password=pw&sslmode=disable",     // env would fill user
+		"host=db.internal port=5432 dbname=orders",                                    // env would fill user+password
+		"host=db.internal port=5432 dbname=orders user=ro password=pw user=",          // empty user cannot be re-emptied
+		"postgres://ro@db.internal:5432/orders",                                       // passfile could fill the password
+		"postgres://ro:@db.internal:5432/orders?sslmode=disable",                      // explicit-empty password likewise
+		"postgres://ro:pw@db.internal:5432/orders?password=",                          // emptied by query param
+		`host=db.internal port=5432 dbname=orders user=ro sslmode=disable password=\`, // trailing backslash decodes to empty
+		"postgres://ro:pw@db.internal:5432/orders?password= ",                         // raw-space trims to empty
+		"postgres://db.internal:5432/orders?password=pw&sslmode=disable",              // env would fill user
 	} {
 		if _, err := validatePGDSNBinding(dsn, "db.internal", 5432, "orders"); err == nil {
 			t.Fatalf("dsn reached config via environment/passfile completion: %s", dsn)

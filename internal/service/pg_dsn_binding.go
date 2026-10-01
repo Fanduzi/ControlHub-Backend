@@ -142,55 +142,80 @@ func unescapePGKeywordValue(raw string) string {
 	var sb strings.Builder
 	sb.Grow(len(raw))
 	for i := 0; i < len(raw); i++ {
-		if raw[i] == '\\' && i+1 < len(raw) {
+		if raw[i] == '\\' {
 			i++
+			if i >= len(raw) {
+				break // a trailing backslash escapes nothing and is dropped
+			}
 		}
 		sb.WriteByte(raw[i])
 	}
 	return sb.String()
 }
 
-// pgURIExplicitFields resolves the effective per-field text a URI supplies, using
-// pgconn's own precedence: query parameters override the hierarchical part, and an
-// empty userinfo password is treated as absent (pgconn drops it, which would let a
-// passfile fill it). Returned values are percent-decoded.
-func pgURIExplicitFields(u *url.URL) (map[string]string, error) {
-	q := u.Query()
-	last := func(key string) (string, bool) {
-		vals, ok := q[key]
-		if !ok {
-			return "", false
-		}
-		return vals[len(vals)-1], true
+// pgURIDecode mirrors pgconn's uriDecode for URI components: raw ASCII spaces at
+// either end are stripped, a raw space in the middle is an error, %XX decodes,
+// %00 is forbidden, and '+' is a literal plus — never a space.
+func pgURIDecode(raw string) (string, error) {
+	var b strings.Builder
+	b.Grow(len(raw))
+	i := 0
+	for i < len(raw) && raw[i] == ' ' {
+		i++
 	}
-	decode := func(raw string) (string, error) {
-		v, err := url.PathUnescape(raw)
-		if err != nil {
+	for i < len(raw) && raw[i] != ' ' {
+		if raw[i] != '%' {
+			b.WriteByte(raw[i])
+			i++
+			continue
+		}
+		if i+2 >= len(raw) {
 			return "", fmt.Errorf("invalid percent-encoding in DSN")
 		}
-		return v, nil
+		hi, ok1 := pgHexDigit(raw[i+1])
+		lo, ok2 := pgHexDigit(raw[i+2])
+		if !ok1 || !ok2 {
+			return "", fmt.Errorf("invalid percent-encoding in DSN")
+		}
+		if hi<<4|lo == 0 {
+			return "", fmt.Errorf("invalid percent-encoding in DSN")
+		}
+		b.WriteByte(hi<<4 | lo)
+		i += 3
 	}
+	for i < len(raw) && raw[i] == ' ' {
+		i++
+	}
+	if i < len(raw) {
+		return "", fmt.Errorf("raw spaces inside a URI component require percent-encoding")
+	}
+	return b.String(), nil
+}
 
+func pgHexDigit(c byte) (byte, bool) {
+	switch {
+	case '0' <= c && c <= '9':
+		return c - '0', true
+	case 'a' <= c && c <= 'f':
+		return c - 'a' + 10, true
+	case 'A' <= c && c <= 'F':
+		return c - 'A' + 10, true
+	}
+	return 0, false
+}
+
+// pgURIExplicitFields resolves the effective per-field values a URI supplies under
+// pgconn's own rules: userinfo is already decoded by net/url (never decode twice),
+// query parameters are scanned in raw order with dbname->database canonicalization
+// and last-occurrence-wins, and every value decodes like pgconn's uriDecode.
+func pgURIExplicitFields(u *url.URL) (map[string]string, error) {
 	fields := make(map[string]string)
-	// userinfo: "user" / "user:password" before '@'; empty components are absent.
-	username := ""
-	password := ""
 	if u.User != nil {
-		username = u.User.Username()
-		password, _ = u.User.Password()
-	}
-	if v, err := decode(username); err != nil {
-		return nil, err
-	} else {
-		fields["user"] = v
-	}
-	if v, err := decode(password); err != nil {
-		return nil, err
-	} else {
-		fields["password"] = v
+		fields["user"] = u.User.Username()
+		fields["password"], _ = u.User.Password()
 	}
 	// A multi-host authority is not valid net/url — pgconn parses it manually —
-	// so detect the comma on the raw authority before splitting host/port.
+	// so preserve the raw comma for the later multi-host check.
 	rawHost := u.Host
 	if i := strings.IndexByte(rawHost, ':'); i >= 0 && !strings.HasPrefix(rawHost, "[") {
 		rawHost = rawHost[:i]
@@ -200,28 +225,44 @@ func pgURIExplicitFields(u *url.URL) (map[string]string, error) {
 			rawHost = rawHost[1:end]
 		}
 	}
-	if v, err := decode(rawHost); err != nil {
+	v, err := pgURIDecode(rawHost)
+	if err != nil {
 		return nil, err
-	} else {
-		fields["host"] = v
 	}
-	fields["port"] = u.Port()
-	// Path supplies dbname; the whole path segment (sans '?') is the dbname.
-	dbname := strings.TrimPrefix(u.EscapedPath(), "/")
-	if i := strings.IndexByte(dbname, '?'); i >= 0 {
-		dbname = dbname[:i]
-	}
-	if v, err := decode(dbname); err != nil {
+	fields["host"] = v
+	v, err = pgURIDecode(u.Port())
+	if err != nil {
 		return nil, err
-	} else {
-		fields["database"] = v
 	}
-	// Query parameters override every hierarchical field; presence of the key
-	// means override even when its value is empty.
-	for _, key := range []string{"user", "password", "host", "port", "dbname", "database"} {
-		if v, ok := last(key); ok {
-			fields[pgCanonicalField(key)] = v
+	fields["port"] = v
+	v, err = pgURIDecode(strings.TrimPrefix(u.EscapedPath(), "/"))
+	if err != nil {
+		return nil, err
+	}
+	fields["database"] = v
+	// Query parameters override the hierarchical part in raw order; a repeated
+	// key wins by position, including overriding with an empty value.
+	params := u.RawQuery
+	for params != "" {
+		pair := params
+		if i := strings.IndexByte(params, '&'); i >= 0 {
+			pair, params = params[:i], params[i+1:]
+		} else {
+			params = ""
 		}
+		rawKey, rawValue, found := strings.Cut(pair, "=")
+		if !found || strings.ContainsRune(rawValue, '=') {
+			return nil, fmt.Errorf("invalid URI query parameter in DSN")
+		}
+		key, err := pgURIDecode(rawKey)
+		if err != nil {
+			return nil, err
+		}
+		value, err := pgURIDecode(rawValue)
+		if err != nil {
+			return nil, err
+		}
+		fields[pgCanonicalField(key)] = value
 	}
 	return fields, nil
 }
@@ -304,6 +345,18 @@ func validatePGDSNBinding(dsn, host string, port int, databaseName string) (*pgx
 	}
 	if strings.HasPrefix(cfg.Host, "/") || strings.HasPrefix(cfg.Host, "@") {
 		return nil, fmt.Errorf("unix-socket DSN hosts are not permitted")
+	}
+	// Defense in depth: the effective config must carry exactly the values the
+	// raw-text pre-check saw — never a value a passfile, environment variable, or
+	// decoding quirk could have substituted. Error text must not echo values.
+	if cfg.User != fields["user"] ||
+		cfg.Password != fields["password"] ||
+		cfg.Host != fields["host"] ||
+		cfg.Database != fields["database"] {
+		return nil, fmt.Errorf("PostgreSQL DSN effective configuration diverged from its explicit fields")
+	}
+	if p, err := strconv.Atoi(fields["port"]); err != nil || p != int(cfg.Port) {
+		return nil, fmt.Errorf("PostgreSQL DSN effective configuration diverged from its explicit fields")
 	}
 	for _, fb := range cfg.Fallbacks {
 		if fb.Host != cfg.Host || fb.Port != cfg.Port {
