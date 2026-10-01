@@ -109,7 +109,7 @@ func TestQueryCredentialAPI_AdminPutGetDelete_Lifecycle(t *testing.T) {
 	svc := newCredentialApiSvc(db)
 
 	// Before any metadata, GET reports not configured.
-	before, err := svc.GetStatus(ctx, targetID)
+	before, err := svc.GetStatus(ctx, targetID, "")
 	if err != nil {
 		t.Fatalf("get before put: %v", err)
 	}
@@ -118,7 +118,7 @@ func TestQueryCredentialAPI_AdminPutGetDelete_Lifecycle(t *testing.T) {
 	}
 
 	// Admin PUT with a resolvable, bound secret -> secret_resolved + eligible.
-	upserted, err := svc.Upsert(ctx, qcAdmin(), targetID, model.QueryCredentialUpsertRequest{
+	upserted, err := svc.Upsert(ctx, qcAdmin(), targetID, "", model.QueryCredentialUpsertRequest{
 		CredentialRef:     qcCredentialRef,
 		Enabled:           true,
 		EnvironmentPolicy: model.QueryEnvPolicyNonProdOnly,
@@ -131,7 +131,7 @@ func TestQueryCredentialAPI_AdminPutGetDelete_Lifecycle(t *testing.T) {
 	}
 
 	// GET returns the configured status.
-	got, err := svc.GetStatus(ctx, targetID)
+	got, err := svc.GetStatus(ctx, targetID, "")
 	if err != nil {
 		t.Fatalf("get after put: %v", err)
 	}
@@ -140,10 +140,10 @@ func TestQueryCredentialAPI_AdminPutGetDelete_Lifecycle(t *testing.T) {
 	}
 
 	// DELETE removes metadata; GET reads not-configured again.
-	if err := svc.Delete(ctx, qcAdmin(), targetID); err != nil {
+	if err := svc.Delete(ctx, qcAdmin(), targetID, ""); err != nil {
 		t.Fatalf("delete: %v", err)
 	}
-	after, err := svc.GetStatus(ctx, targetID)
+	after, err := svc.GetStatus(ctx, targetID, "")
 	if err != nil {
 		t.Fatalf("get after delete: %v", err)
 	}
@@ -167,7 +167,7 @@ func TestQueryCredentialAPI_SecretResolvedMakesTargetReady(t *testing.T) {
 
 	// Secret not provisioned yet: PUT succeeds, but secret_missing keeps it locked.
 	t.Setenv("CONTROLHUB_QUERY_CREDENTIAL_"+qcCredentialRef, "")
-	if _, err := svc.Upsert(ctx, qcAdmin(), targetID, model.QueryCredentialUpsertRequest{
+	if _, err := svc.Upsert(ctx, qcAdmin(), targetID, "", model.QueryCredentialUpsertRequest{
 		CredentialRef: qcCredentialRef, Enabled: true, EnvironmentPolicy: model.QueryEnvPolicyNonProdOnly,
 	}); err != nil {
 		t.Fatalf("upsert with unresolved secret: %v", err)
@@ -175,14 +175,14 @@ func TestQueryCredentialAPI_SecretResolvedMakesTargetReady(t *testing.T) {
 	if tgt := qcReadyTarget(t, db, ctx, targetID); tgt.Readiness == model.ReadinessReady || tgt.AvailableActions.Run {
 		t.Fatal("target must NOT be ready when the secret is missing (metadata alone is insufficient)")
 	}
-	status, _ := svc.GetStatus(ctx, targetID)
+	status, _ := svc.GetStatus(ctx, targetID, "")
 	if status.RuntimeStatus != model.QueryCredentialRuntimeSecretMissing {
 		t.Fatalf("runtime = %q, want secret_missing", status.RuntimeStatus)
 	}
 
 	// Provision the secret with a matching binding -> secret_resolved -> READY.
 	t.Setenv("CONTROLHUB_QUERY_CREDENTIAL_"+qcCredentialRef, globalEnv.dsn)
-	if _, err := svc.Upsert(ctx, qcAdmin(), targetID, model.QueryCredentialUpsertRequest{
+	if _, err := svc.Upsert(ctx, qcAdmin(), targetID, "", model.QueryCredentialUpsertRequest{
 		CredentialRef: qcCredentialRef, Enabled: true, EnvironmentPolicy: model.QueryEnvPolicyNonProdOnly,
 	}); err != nil {
 		t.Fatalf("upsert with resolved secret: %v", err)
@@ -205,12 +205,12 @@ func TestQueryCredentialAPI_BindingMismatchLocksTarget(t *testing.T) {
 	t.Setenv("CONTROLHUB_QUERY_CREDENTIAL_"+qcCredentialRef, globalEnv.dsn)
 	svc := newCredentialApiSvc(db)
 
-	if _, err := svc.Upsert(ctx, qcAdmin(), targetID, model.QueryCredentialUpsertRequest{
+	if _, err := svc.Upsert(ctx, qcAdmin(), targetID, "", model.QueryCredentialUpsertRequest{
 		CredentialRef: qcCredentialRef, Enabled: true, EnvironmentPolicy: model.QueryEnvPolicyAllEnvironments, ConfirmAllEnvironments: true,
 	}); err != nil {
 		t.Fatalf("upsert mismatched: %v", err)
 	}
-	status, err := svc.GetStatus(ctx, targetID)
+	status, err := svc.GetStatus(ctx, targetID, "")
 	if err != nil {
 		t.Fatalf("get: %v", err)
 	}
@@ -234,13 +234,13 @@ func TestQueryCredentialAPI_AuditAndNoDSN(t *testing.T) {
 	t.Setenv("CONTROLHUB_QUERY_CREDENTIAL_"+qcCredentialRef, globalEnv.dsn)
 	svc := newCredentialApiSvc(db)
 
-	resp, err := svc.Upsert(ctx, qcAdmin(), targetID, model.QueryCredentialUpsertRequest{
+	resp, err := svc.Upsert(ctx, qcAdmin(), targetID, "", model.QueryCredentialUpsertRequest{
 		CredentialRef: qcCredentialRef, Enabled: true, EnvironmentPolicy: model.QueryEnvPolicyNonProdOnly,
 	})
 	if err != nil {
 		t.Fatalf("upsert: %v", err)
 	}
-	if err := svc.Delete(ctx, qcAdmin(), targetID); err != nil {
+	if err := svc.Delete(ctx, qcAdmin(), targetID, ""); err != nil {
 		t.Fatalf("delete: %v", err)
 	}
 
@@ -255,7 +255,7 @@ func TestQueryCredentialAPI_AuditAndNoDSN(t *testing.T) {
 	// No DSN-looking value in the credential metadata columns (now empty after delete,
 	// so also assert the prior row, while it existed, stored no DSN via the upsert path —
 	// re-upsert to re-create the row and inspect it).
-	if _, err := svc.Upsert(ctx, qcAdmin(), targetID, model.QueryCredentialUpsertRequest{
+	if _, err := svc.Upsert(ctx, qcAdmin(), targetID, "", model.QueryCredentialUpsertRequest{
 		CredentialRef: qcCredentialRef, Enabled: true, EnvironmentPolicy: model.QueryEnvPolicyNonProdOnly,
 	}); err != nil {
 		t.Fatalf("re-upsert for DSN inspection: %v", err)
@@ -282,12 +282,12 @@ func TestQueryCredentialAPI_NonAdminRejected(t *testing.T) {
 	svc := newCredentialApiSvc(db)
 	viewer := service.AuthenticatedUser{ID: ownerDBA + 1, Role: "viewer"}
 
-	if _, err := svc.Upsert(ctx, viewer, targetID, model.QueryCredentialUpsertRequest{
+	if _, err := svc.Upsert(ctx, viewer, targetID, "", model.QueryCredentialUpsertRequest{
 		CredentialRef: qcCredentialRef, Enabled: true, EnvironmentPolicy: model.QueryEnvPolicyNonProdOnly,
 	}); !errors.Is(err, service.ErrQueryCredentialForbidden) {
 		t.Fatalf("non-admin upsert err = %v, want ErrQueryCredentialForbidden", err)
 	}
-	if err := svc.Delete(ctx, viewer, targetID); !errors.Is(err, service.ErrQueryCredentialForbidden) {
+	if err := svc.Delete(ctx, viewer, targetID, ""); !errors.Is(err, service.ErrQueryCredentialForbidden) {
 		t.Fatalf("non-admin delete err = %v, want ErrQueryCredentialForbidden", err)
 	}
 	if qcAuditCount(t, db, targetID, "query.credential.updated") != 0 || qcAuditCount(t, db, targetID, "query.credential.deleted") != 0 {

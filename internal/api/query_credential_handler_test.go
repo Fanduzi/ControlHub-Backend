@@ -26,21 +26,24 @@ type stubQueryCredential struct {
 	deleteErr    error
 	gotActor     service.AuthenticatedUser
 	gotTarget    uint64
+	gotDatabase  string
 	gotReq       model.QueryCredentialUpsertRequest
 	upsertCalled bool
 	deleteCalled bool
 	getCalled    bool
 }
 
-func (s *stubQueryCredential) GetStatus(_ context.Context, _ uint64) (model.QueryCredentialStatusResponse, error) {
+func (s *stubQueryCredential) GetStatus(_ context.Context, _ uint64, databaseName string) (model.QueryCredentialStatusResponse, error) {
 	s.getCalled = true
+	s.gotDatabase = databaseName
 	return s.statusResp, s.statusErr
 }
 
-func (s *stubQueryCredential) Upsert(_ context.Context, actor service.AuthenticatedUser, targetID uint64, req model.QueryCredentialUpsertRequest) (model.QueryCredentialStatusResponse, error) {
+func (s *stubQueryCredential) Upsert(_ context.Context, actor service.AuthenticatedUser, targetID uint64, databaseName string, req model.QueryCredentialUpsertRequest) (model.QueryCredentialStatusResponse, error) {
 	s.upsertCalled = true
 	s.gotActor = actor
 	s.gotTarget = targetID
+	s.gotDatabase = databaseName
 	s.gotReq = req
 	if s.upsertErr != nil {
 		return model.QueryCredentialStatusResponse{}, s.upsertErr
@@ -48,10 +51,11 @@ func (s *stubQueryCredential) Upsert(_ context.Context, actor service.Authentica
 	return s.statusResp, nil
 }
 
-func (s *stubQueryCredential) Delete(_ context.Context, actor service.AuthenticatedUser, targetID uint64) error {
+func (s *stubQueryCredential) Delete(_ context.Context, actor service.AuthenticatedUser, targetID uint64, databaseName string) error {
 	s.deleteCalled = true
 	s.gotActor = actor
 	s.gotTarget = targetID
+	s.gotDatabase = databaseName
 	return s.deleteErr
 }
 
@@ -244,4 +248,47 @@ func TestQueryCredential_DeleteSuccess(t *testing.T) {
 	if !stub.deleteCalled {
 		t.Fatal("Delete was not called")
 	}
+}
+
+// TestQueryCredential_DatabaseParamPassthrough proves the ?database= connection
+// selector reaches the service on all three credential operations — the
+// composite addressing surface added in T2 for PostgreSQL connection rows.
+func TestQueryCredential_DatabaseParamPassthrough(t *testing.T) {
+	t.Run("get", func(t *testing.T) {
+		stub := &stubQueryCredential{statusResp: configuredStatusResponse()}
+		router := newCredentialRouter(stub)
+		rec := httptest.NewRecorder()
+		router.ServeHTTP(rec, qeRequest(http.MethodGet, "/query-targets/22/credential?database=labdb", "", adminToken(t)))
+		if rec.Code != http.StatusOK {
+			t.Fatalf("GET = %d, want 200", rec.Code)
+		}
+		if stub.gotDatabase != "labdb" {
+			t.Fatalf("service database = %q, want labdb", stub.gotDatabase)
+		}
+	})
+	t.Run("put", func(t *testing.T) {
+		stub := &stubQueryCredential{statusResp: configuredStatusResponse()}
+		router := newCredentialRouter(stub)
+		rec := httptest.NewRecorder()
+		router.ServeHTTP(rec, qeRequest(http.MethodPut, "/query-targets/22/credential?database=labdb",
+			`{"credentialRef":"ORDER_PG_RO","enabled":true,"environmentPolicy":"non_prod_only","defaultSchema":"app"}`, adminToken(t)))
+		if rec.Code != http.StatusOK {
+			t.Fatalf("PUT = %d, want 200", rec.Code)
+		}
+		if stub.gotDatabase != "labdb" || stub.gotReq.DefaultSchema != "app" {
+			t.Fatalf("service got database=%q defaultSchema=%q", stub.gotDatabase, stub.gotReq.DefaultSchema)
+		}
+	})
+	t.Run("delete", func(t *testing.T) {
+		stub := &stubQueryCredential{}
+		router := newCredentialRouter(stub)
+		rec := httptest.NewRecorder()
+		router.ServeHTTP(rec, qeRequest(http.MethodDelete, "/query-targets/22/credential?database=labdb", "", adminToken(t)))
+		if rec.Code != http.StatusNoContent {
+			t.Fatalf("DELETE = %d, want 204", rec.Code)
+		}
+		if stub.gotDatabase != "labdb" {
+			t.Fatalf("service database = %q, want labdb", stub.gotDatabase)
+		}
+	})
 }

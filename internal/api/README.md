@@ -21,7 +21,7 @@ HTTP handlers, chi routing, CORS middleware, and fake-repo test infrastructure.
 | query_schema_handler.go | handleGetTableDefinition for MySQL table-definition requests |
 | query_execution_handler.go | User-or-machine POST ordinary execute plus fresh-User saved-statement execution, related-record navigation, execution history, and exact owner-only successful statement detail handlers; migration-29 contract fields (database, schema, clientExecutionId, source.schema) fail closed until their owning tickets wire them |
 | query_workspace_handler.go | User-only singular query workspace GET/strict bounded PUT with controlled OCC conflict mapping |
-| query_credential_handler.go | Phase 38A credential metadata handlers (GET/PUT/DELETE) |
+| query_credential_handler.go | Phase 38A credential metadata handlers (GET/PUT/DELETE) with the composite `?database=` connection selector |
 | query_disclosure_handler.go | Phase 38Q disclosure policy CRUD/list handlers (handler-admin) |
 | query_saved_statement_handler.go | Phase 38W saved statement CRUD handlers with strict typed parameter declaration decoding |
 | named_inventory_view_handler.go | User personal/shared named-view CRUD plus machine-only `ListShared` reads |

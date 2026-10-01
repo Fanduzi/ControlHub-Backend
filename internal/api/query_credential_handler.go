@@ -21,9 +21,9 @@ import (
 // handlers thin and lets tests substitute a stub. The actor is taken from the
 // verified token (context), never from the request body.
 type queryCredentialAPI interface {
-	GetStatus(ctx context.Context, targetID uint64) (model.QueryCredentialStatusResponse, error)
-	Upsert(ctx context.Context, actor service.AuthenticatedUser, targetID uint64, req model.QueryCredentialUpsertRequest) (model.QueryCredentialStatusResponse, error)
-	Delete(ctx context.Context, actor service.AuthenticatedUser, targetID uint64) error
+	GetStatus(ctx context.Context, targetID uint64, databaseName string) (model.QueryCredentialStatusResponse, error)
+	Upsert(ctx context.Context, actor service.AuthenticatedUser, targetID uint64, databaseName string, req model.QueryCredentialUpsertRequest) (model.QueryCredentialStatusResponse, error)
+	Delete(ctx context.Context, actor service.AuthenticatedUser, targetID uint64, databaseName string) error
 }
 
 // adminRoleName is the canonical role permitted to write/delete credential
@@ -41,7 +41,7 @@ func handleGetQueryCredential(svc queryCredentialAPI) http.HandlerFunc {
 			writeJSONError(w, http.StatusBadRequest, "validation_failed", err.Error())
 			return
 		}
-		resp, err := svc.GetStatus(r.Context(), targetID)
+		resp, err := svc.GetStatus(r.Context(), targetID, r.URL.Query().Get("database"))
 		if err != nil {
 			writeQueryCredentialError(w, err)
 			return
@@ -82,7 +82,7 @@ func handlePutQueryCredential(svc queryCredentialAPI) http.HandlerFunc {
 			writeJSONError(w, http.StatusBadRequest, "validation_failed", err.Error())
 			return
 		}
-		resp, err := svc.Upsert(r.Context(), actor, targetID, req)
+		resp, err := svc.Upsert(r.Context(), actor, targetID, r.URL.Query().Get("database"), req)
 		if err != nil {
 			writeQueryCredentialError(w, err)
 			return
@@ -109,7 +109,7 @@ func handleDeleteQueryCredential(svc queryCredentialAPI) http.HandlerFunc {
 			writeJSONError(w, http.StatusForbidden, "forbidden", "admin role required to manage credential metadata")
 			return
 		}
-		if err := svc.Delete(r.Context(), actor, targetID); err != nil {
+		if err := svc.Delete(r.Context(), actor, targetID, r.URL.Query().Get("database")); err != nil {
 			writeQueryCredentialError(w, err)
 			return
 		}

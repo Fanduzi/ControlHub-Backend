@@ -1229,7 +1229,7 @@ func (applyPathTargets) ListQueryTargets(_ context.Context, q model.QueryTargetL
 
 type applyPathRepo struct{}
 
-func (applyPathRepo) GetCredentialByResourceID(_ context.Context, resourceID uint64) (model.QueryCredentialMetadata, error) {
+func (applyPathRepo) GetCredential(_ context.Context, resourceID uint64, _ string) (model.QueryCredentialMetadata, error) {
 	if resourceID != 22 {
 		return model.QueryCredentialMetadata{}, fmt.Errorf("unknown resource")
 	}

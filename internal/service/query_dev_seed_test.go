@@ -87,14 +87,14 @@ func TestQueryDevSeed_RejectsInvalidCredentialRef(t *testing.T) {
 }
 
 // TestQueryDevSeed_RejectsUnsupportedEngine fails closed when the target engine
-// is known but not mysql/tidb (e.g. postgres). WHY: Phase 37 executes only
-// mysql/tidb; seeding a credential for another engine would imply a readiness
-// the backend cannot honor.
+// is not credential-managed (e.g. clickhouse). WHY: seeding a credential for an
+// unmanaged engine would imply a readiness the backend cannot honor. PostgreSQL
+// became credential-managed in T2 (its identity-shape rules apply instead).
 func TestQueryDevSeed_RejectsUnsupportedEngine(t *testing.T) {
 	writer := &fakeCredentialWriter{}
-	postgresTarget := mysqlTarget("staging")
-	postgresTarget.ConnectionContext.Engine = "postgresql"
-	s := newDevSeeder(fakeTargetRepo{targets: []model.QueryTarget{postgresTarget}}, &fakeResolver{dsn: testResolverDSN}, writer)
+	unmanagedTarget := mysqlTarget("staging")
+	unmanagedTarget.ConnectionContext.Engine = "clickhouse"
+	s := newDevSeeder(fakeTargetRepo{targets: []model.QueryTarget{unmanagedTarget}}, &fakeResolver{dsn: testResolverDSN}, writer)
 
 	_, err := s.Seed(context.Background(), validDevSeedConfig())
 	if !errors.Is(err, errSeedUnsupportedEngine) {

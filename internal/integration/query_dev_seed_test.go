@@ -208,7 +208,7 @@ func TestQueryDevSeed_RejectsMismatchedCredentialAndStaysLocked(t *testing.T) {
 
 	// No metadata row written → the target stays locked and not runnable.
 	repo := mysql.NewQueryExecutionRepository(db)
-	if _, err := repo.GetCredentialByResourceID(ctx, targetID); !errors.Is(err, sql.ErrNoRows) {
+	if _, err := repo.GetCredential(ctx, targetID, ""); !errors.Is(err, sql.ErrNoRows) {
 		t.Fatalf("credential row must not exist after a failed seed, got err=%v", err)
 	}
 

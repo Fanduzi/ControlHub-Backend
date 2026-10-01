@@ -105,7 +105,7 @@ func (r *TargetAccessResolver) Resolve(ctx context.Context, actorID uint64, targ
 	// 4. Credential metadata check. A missing row, invalid ref, disabled
 	//    credential, or policy block all fail closed with the same controlled
 	//    rejection message.
-	cred, err := r.credentials.GetCredentialByResourceID(ctx, targetID)
+	cred, err := r.credentials.GetCredential(ctx, targetID, "")
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return BoundTargetAccess{Target: target}, &TargetAccessError{

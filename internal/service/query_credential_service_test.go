@@ -17,8 +17,15 @@ import (
 
 // fakeCredentialStore implements QueryCredentialMetadataStore in memory. It
 // records upsert/delete/audit calls so tests can assert side effects.
+// credentialStoreKey mirrors the composite connection key
+// (resource_id, database_name); ” is the legacy MySQL/TiDB row.
+type credentialStoreKey struct {
+	resourceID   uint64
+	databaseName string
+}
+
 type fakeCredentialStore struct {
-	metadata  map[uint64]model.QueryCredentialMetadata
+	metadata  map[credentialStoreKey]model.QueryCredentialMetadata
 	upserts   []model.QueryCredentialMetadata
 	deletes   []uint64
 	audits    []credentialAuditCall
@@ -36,11 +43,11 @@ type credentialAuditCall struct {
 }
 
 func newFakeCredentialStore() *fakeCredentialStore {
-	return &fakeCredentialStore{metadata: map[uint64]model.QueryCredentialMetadata{}}
+	return &fakeCredentialStore{metadata: map[credentialStoreKey]model.QueryCredentialMetadata{}}
 }
 
-func (f *fakeCredentialStore) GetCredentialByResourceID(_ context.Context, rid uint64) (model.QueryCredentialMetadata, error) {
-	m, ok := f.metadata[rid]
+func (f *fakeCredentialStore) GetCredential(_ context.Context, rid uint64, databaseName string) (model.QueryCredentialMetadata, error) {
+	m, ok := f.metadata[credentialStoreKey{rid, databaseName}]
 	if f.getErr != nil {
 		// Mirror the real repository: return the scanned row alongside the error
 		// (e.g. an invalid-ref sentinel) so callers that classify by errors.Is can
@@ -63,12 +70,12 @@ func (f *fakeCredentialStore) UpsertCredentialMetadataWithAudit(_ context.Contex
 		return f.auditErr
 	}
 	f.upserts = append(f.upserts, m)
-	f.metadata[m.ResourceID] = m
+	f.metadata[credentialStoreKey{m.ResourceID, m.DatabaseName}] = m
 	f.audits = append(f.audits, credentialAuditCall{actor, m.ResourceID, etype, result})
 	return nil
 }
 
-func (f *fakeCredentialStore) DeleteCredentialMetadataWithAudit(_ context.Context, rid, actor uint64, etype, result string) error {
+func (f *fakeCredentialStore) DeleteCredentialMetadataWithAudit(_ context.Context, rid uint64, databaseName string, actor uint64, etype, result string) error {
 	if f.deleteErr != nil {
 		return f.deleteErr
 	}
@@ -78,7 +85,7 @@ func (f *fakeCredentialStore) DeleteCredentialMetadataWithAudit(_ context.Contex
 		return f.auditErr
 	}
 	f.deletes = append(f.deletes, rid)
-	delete(f.metadata, rid)
+	delete(f.metadata, credentialStoreKey{rid, databaseName})
 	f.audits = append(f.audits, credentialAuditCall{actor, rid, etype, result})
 	return nil
 }
@@ -205,7 +212,7 @@ func TestInspectCredentialRuntime_StatusMatrix(t *testing.T) {
 		},
 		{
 			name:             "unsupported engine",
-			target:           credentialTarget("postgresql", "db.internal", 5432, "staging"),
+			target:           credentialTarget("clickhouse", "db.internal", 9000, "staging"),
 			cred:             metaPtr("ORDER_MYSQL_RO", true, model.QueryEnvPolicyAllEnvironments),
 			resolver:         &fakeResolver{},
 			want:             model.QueryCredentialRuntimeUnsupportedTarget,
@@ -260,7 +267,7 @@ func TestQueryCredentialService_GetStatus_MissingMetadata(t *testing.T) {
 		newFakeCredentialStore(),
 		&fakeResolver{},
 	)
-	resp, err := svc.GetStatus(context.Background(), credentialTargetID)
+	resp, err := svc.GetStatus(context.Background(), credentialTargetID, "")
 	if err != nil {
 		t.Fatalf("GetStatus: %v", err)
 	}
@@ -283,7 +290,7 @@ func TestQueryCredentialService_GetStatus_TargetLookupUsesTargetIDFilter(t *test
 		&fakeResolver{},
 	)
 
-	_, err := svc.GetStatus(context.Background(), credentialTargetID)
+	_, err := svc.GetStatus(context.Background(), credentialTargetID, "")
 	if err != nil {
 		t.Fatalf("GetStatus: %v", err)
 	}
@@ -305,7 +312,7 @@ func TestQueryCredentialService_Upsert_WritesMetadataAndAudit(t *testing.T) {
 		store,
 		&fakeResolver{err: errors.New("not provisioned yet")}, // secret unresolved on purpose
 	)
-	resp, err := svc.Upsert(context.Background(), adminActor(), credentialTargetID, model.QueryCredentialUpsertRequest{
+	resp, err := svc.Upsert(context.Background(), adminActor(), credentialTargetID, "", model.QueryCredentialUpsertRequest{
 		CredentialRef:     "ORDER_MYSQL_RO",
 		Enabled:           true,
 		EnvironmentPolicy: model.QueryEnvPolicyNonProdOnly,
@@ -344,7 +351,7 @@ func TestQueryCredentialService_Upsert_AllEnvironmentsRequiresConfirmation(t *te
 		newFakeCredentialStore(),
 		&fakeResolver{},
 	)
-	if _, err := svc.Upsert(context.Background(), adminActor(), credentialTargetID, model.QueryCredentialUpsertRequest{
+	if _, err := svc.Upsert(context.Background(), adminActor(), credentialTargetID, "", model.QueryCredentialUpsertRequest{
 		CredentialRef:     "ORDER_MYSQL_RO",
 		Enabled:           true,
 		EnvironmentPolicy: model.QueryEnvPolicyAllEnvironments,
@@ -362,7 +369,7 @@ func TestQueryCredentialService_Upsert_NonAdminForbidden(t *testing.T) {
 		store,
 		&fakeResolver{},
 	)
-	if _, err := svc.Upsert(context.Background(), viewerActor(), credentialTargetID, model.QueryCredentialUpsertRequest{
+	if _, err := svc.Upsert(context.Background(), viewerActor(), credentialTargetID, "", model.QueryCredentialUpsertRequest{
 		CredentialRef: "ORDER_MYSQL_RO", Enabled: true, EnvironmentPolicy: model.QueryEnvPolicyNonProdOnly,
 	}); !errors.Is(err, ErrQueryCredentialForbidden) {
 		t.Fatalf("non-admin upsert err = %v, want ErrQueryCredentialForbidden", err)
@@ -376,19 +383,19 @@ func TestQueryCredentialService_Upsert_NonAdminForbidden(t *testing.T) {
 // delete removes metadata and records a query.credential.deleted audit event.
 func TestQueryCredentialService_Delete_WritesAuditAndRemovesMetadata(t *testing.T) {
 	store := newFakeCredentialStore()
-	store.metadata[credentialTargetID] = credentialMeta("ORDER_MYSQL_RO", true, model.QueryEnvPolicyNonProdOnly)
+	store.metadata[credentialStoreKey{credentialTargetID, ""}] = credentialMeta("ORDER_MYSQL_RO", true, model.QueryEnvPolicyNonProdOnly)
 	svc := NewQueryCredentialService(
 		fakeTargetRepo{targets: []model.QueryTarget{credentialTarget("mysql", "db.internal", 3306, "staging")}},
 		store,
 		&fakeResolver{},
 	)
-	if err := svc.Delete(context.Background(), adminActor(), credentialTargetID); err != nil {
+	if err := svc.Delete(context.Background(), adminActor(), credentialTargetID, ""); err != nil {
 		t.Fatalf("Delete: %v", err)
 	}
 	if len(store.deletes) != 1 || store.deletes[0] != credentialTargetID {
 		t.Fatalf("deletes = %+v, want one delete of the target", store.deletes)
 	}
-	if _, ok := store.metadata[credentialTargetID]; ok {
+	if _, ok := store.metadata[credentialStoreKey{credentialTargetID, ""}]; ok {
 		t.Fatal("metadata must be removed after delete")
 	}
 	wantAudit := credentialAuditCall{actor: 7, target: credentialTargetID, etype: "query.credential.deleted", result: "success"}
@@ -401,13 +408,13 @@ func TestQueryCredentialService_Delete_WritesAuditAndRemovesMetadata(t *testing.
 // delete credential metadata and no audit row is written.
 func TestQueryCredentialService_Delete_NonAdminForbidden(t *testing.T) {
 	store := newFakeCredentialStore()
-	store.metadata[credentialTargetID] = credentialMeta("ORDER_MYSQL_RO", true, model.QueryEnvPolicyNonProdOnly)
+	store.metadata[credentialStoreKey{credentialTargetID, ""}] = credentialMeta("ORDER_MYSQL_RO", true, model.QueryEnvPolicyNonProdOnly)
 	svc := NewQueryCredentialService(
 		fakeTargetRepo{targets: []model.QueryTarget{credentialTarget("mysql", "db.internal", 3306, "staging")}},
 		store,
 		&fakeResolver{},
 	)
-	if err := svc.Delete(context.Background(), viewerActor(), credentialTargetID); !errors.Is(err, ErrQueryCredentialForbidden) {
+	if err := svc.Delete(context.Background(), viewerActor(), credentialTargetID, ""); !errors.Is(err, ErrQueryCredentialForbidden) {
 		t.Fatalf("non-admin delete err = %v, want ErrQueryCredentialForbidden", err)
 	}
 	if len(store.deletes) != 0 || len(store.audits) != 0 {
@@ -419,10 +426,10 @@ func TestQueryCredentialService_Delete_NonAdminForbidden(t *testing.T) {
 // shared not-found error for both read and write paths.
 func TestQueryCredentialService_TargetNotFound(t *testing.T) {
 	svc := NewQueryCredentialService(fakeTargetRepo{}, newFakeCredentialStore(), &fakeResolver{})
-	if _, err := svc.GetStatus(context.Background(), credentialTargetID); !errors.Is(err, ErrQueryTargetNotFound) {
+	if _, err := svc.GetStatus(context.Background(), credentialTargetID, ""); !errors.Is(err, ErrQueryTargetNotFound) {
 		t.Fatalf("get status err = %v, want ErrQueryTargetNotFound", err)
 	}
-	if _, err := svc.Upsert(context.Background(), adminActor(), credentialTargetID, model.QueryCredentialUpsertRequest{
+	if _, err := svc.Upsert(context.Background(), adminActor(), credentialTargetID, "", model.QueryCredentialUpsertRequest{
 		CredentialRef: "ORDER_MYSQL_RO", Enabled: true, EnvironmentPolicy: model.QueryEnvPolicyNonProdOnly,
 	}); !errors.Is(err, ErrQueryTargetNotFound) {
 		t.Fatalf("upsert err = %v, want ErrQueryTargetNotFound", err)
@@ -439,14 +446,14 @@ func TestQueryCredentialService_TargetNotFound(t *testing.T) {
 // resolver is never consulted for an invalid row.
 func TestQueryCredentialService_GetStatus_InvalidStoredRef_ReturnsInvalidRefNotMissingMetadata(t *testing.T) {
 	store := newFakeCredentialStore()
-	store.metadata[credentialTargetID] = credentialMeta("bad-ref!", true, model.QueryEnvPolicyNonProdOnly)
+	store.metadata[credentialStoreKey{credentialTargetID, ""}] = credentialMeta("bad-ref!", true, model.QueryEnvPolicyNonProdOnly)
 	store.getErr = model.ErrInvalidCredentialMetadata
 	svc := NewQueryCredentialService(
 		fakeTargetRepo{targets: []model.QueryTarget{credentialTarget("mysql", "db.internal", 3306, "staging")}},
 		store,
 		&fakeResolver{},
 	)
-	resp, err := svc.GetStatus(context.Background(), credentialTargetID)
+	resp, err := svc.GetStatus(context.Background(), credentialTargetID, "")
 	if err != nil {
 		t.Fatalf("GetStatus: %v", err)
 	}
@@ -474,14 +481,14 @@ func TestQueryCredentialService_GetStatus_InvalidStoredRef_ReturnsInvalidRefNotM
 // as a normal policy block.
 func TestQueryCredentialService_GetStatus_InvalidStoredPolicy_ReturnsInvalidRefAndSanitizedPolicy(t *testing.T) {
 	store := newFakeCredentialStore()
-	store.metadata[credentialTargetID] = credentialMeta("ORDER_MYSQL_RO", true, model.QueryEnvironmentPolicy("prod_plus"))
+	store.metadata[credentialStoreKey{credentialTargetID, ""}] = credentialMeta("ORDER_MYSQL_RO", true, model.QueryEnvironmentPolicy("prod_plus"))
 	store.getErr = model.ErrInvalidCredentialMetadata
 	svc := NewQueryCredentialService(
 		fakeTargetRepo{targets: []model.QueryTarget{credentialTarget("mysql", "db.internal", 3306, "staging")}},
 		store,
 		&fakeResolver{},
 	)
-	resp, err := svc.GetStatus(context.Background(), credentialTargetID)
+	resp, err := svc.GetStatus(context.Background(), credentialTargetID, "")
 	if err != nil {
 		t.Fatalf("GetStatus: %v", err)
 	}
@@ -515,7 +522,7 @@ func TestQueryCredentialService_GetStatus_UnexpectedCredentialReadError_ReturnsB
 		store,
 		&fakeResolver{},
 	)
-	resp, err := svc.GetStatus(context.Background(), credentialTargetID)
+	resp, err := svc.GetStatus(context.Background(), credentialTargetID, "")
 	if err == nil {
 		t.Fatalf("unexpected read error must propagate as a backend error, got response %+v", resp)
 	}
@@ -537,12 +544,12 @@ func TestQueryCredentialService_Upsert_AuditFailureLeavesNoMetadata(t *testing.T
 		store,
 		&fakeResolver{},
 	)
-	if _, err := svc.Upsert(context.Background(), adminActor(), credentialTargetID, model.QueryCredentialUpsertRequest{
+	if _, err := svc.Upsert(context.Background(), adminActor(), credentialTargetID, "", model.QueryCredentialUpsertRequest{
 		CredentialRef: "ORDER_MYSQL_RO", Enabled: true, EnvironmentPolicy: model.QueryEnvPolicyNonProdOnly,
 	}); err == nil {
 		t.Fatal("audit failure must surface as an error from Upsert")
 	}
-	if _, ok := store.metadata[credentialTargetID]; ok {
+	if _, ok := store.metadata[credentialStoreKey{credentialTargetID, ""}]; ok {
 		t.Fatal("audit failure must not leave committed credential metadata (upsert+audit must be atomic)")
 	}
 }
@@ -553,17 +560,193 @@ func TestQueryCredentialService_Upsert_AuditFailureLeavesNoMetadata(t *testing.T
 // attributed configuration change; delete+audit must be one atomic op.
 func TestQueryCredentialService_Delete_AuditFailureKeepsMetadata(t *testing.T) {
 	store := newFakeCredentialStore()
-	store.metadata[credentialTargetID] = credentialMeta("ORDER_MYSQL_RO", true, model.QueryEnvPolicyNonProdOnly)
+	store.metadata[credentialStoreKey{credentialTargetID, ""}] = credentialMeta("ORDER_MYSQL_RO", true, model.QueryEnvPolicyNonProdOnly)
 	store.auditErr = errors.New("audit insert failed")
 	svc := NewQueryCredentialService(
 		fakeTargetRepo{targets: []model.QueryTarget{credentialTarget("mysql", "db.internal", 3306, "staging")}},
 		store,
 		&fakeResolver{},
 	)
-	if err := svc.Delete(context.Background(), adminActor(), credentialTargetID); err == nil {
+	if err := svc.Delete(context.Background(), adminActor(), credentialTargetID, ""); err == nil {
 		t.Fatal("audit failure must surface as an error from Delete")
 	}
-	if _, ok := store.metadata[credentialTargetID]; !ok {
+	if _, ok := store.metadata[credentialStoreKey{credentialTargetID, ""}]; !ok {
 		t.Fatal("audit failure must not remove credential metadata (delete+audit must be atomic)")
+	}
+}
+
+// --- T2: PostgreSQL composite connection identity ---
+
+// pgCredentialMeta builds a credential row for a PostgreSQL connection — the
+// composite identity (resource, database) plus the pinned default schema.
+func pgCredentialMeta(database, schema, ref string, enabled bool, policy model.QueryEnvironmentPolicy) model.QueryCredentialMetadata {
+	return model.QueryCredentialMetadata{
+		ResourceID:        credentialTargetID,
+		DatabaseName:      database,
+		DefaultSchema:     schema,
+		Engine:            "postgresql",
+		CredentialRef:     ref,
+		Enabled:           enabled,
+		EnvironmentPolicy: policy,
+	}
+}
+
+// pgDSN is a resolver DSN that binds to host db.internal:5432, database labdb.
+const pgDSN = "postgres://ro:pw@db.internal:5432/labdb?sslmode=disable"
+
+// TestQueryCredentialService_ConnectionSelectorRules proves the composite
+// addressing rule: a PostgreSQL target requires a non-empty database segment,
+// while a MySQL/TiDB target rejects one (the legacy ” row keeps behavior).
+func TestQueryCredentialService_ConnectionSelectorRules(t *testing.T) {
+	pg := credentialTarget("postgresql", "db.internal", 5432, "staging")
+	mysql := credentialTarget("mysql", "db.internal", 3306, "staging")
+
+	svcPG := NewQueryCredentialService(fakeTargetRepo{targets: []model.QueryTarget{pg}}, newFakeCredentialStore(), &fakeResolver{})
+	if _, err := svcPG.GetStatus(context.Background(), credentialTargetID, ""); !errors.Is(err, ErrQueryCredentialValidation) {
+		t.Fatalf("PG GetStatus without database: err = %v, want validation", err)
+	}
+	if _, err := svcPG.GetStatus(context.Background(), credentialTargetID, "labdb"); err != nil {
+		t.Fatalf("PG GetStatus with database: %v", err)
+	}
+	if err := svcPG.Delete(context.Background(), adminActor(), credentialTargetID, ""); !errors.Is(err, ErrQueryCredentialValidation) {
+		t.Fatalf("PG Delete without database: err = %v, want validation", err)
+	}
+
+	svcMy := NewQueryCredentialService(fakeTargetRepo{targets: []model.QueryTarget{mysql}}, newFakeCredentialStore(), &fakeResolver{})
+	if _, err := svcMy.GetStatus(context.Background(), credentialTargetID, "labdb"); !errors.Is(err, ErrQueryCredentialValidation) {
+		t.Fatalf("mysql GetStatus with database: err = %v, want validation", err)
+	}
+	if _, err := svcMy.GetStatus(context.Background(), credentialTargetID, ""); err != nil {
+		t.Fatalf("mysql GetStatus without database must keep working: %v", err)
+	}
+}
+
+// TestQueryCredentialService_Upsert_PGConnectionRow proves an admin upsert on a
+// PostgreSQL target writes the composite-identity row (database + defaultSchema)
+// and that MySQL upserts reject the PG-only fields.
+func TestQueryCredentialService_Upsert_PGConnectionRow(t *testing.T) {
+	pg := credentialTarget("postgresql", "db.internal", 5432, "staging")
+	store := newFakeCredentialStore()
+	svc := NewQueryCredentialService(fakeTargetRepo{targets: []model.QueryTarget{pg}}, store, &fakeResolver{dsn: pgDSN})
+
+	valid := model.QueryCredentialUpsertRequest{
+		CredentialRef:     "ORDER_PG_RO",
+		Enabled:           true,
+		EnvironmentPolicy: model.QueryEnvPolicyNonProdOnly,
+		DefaultSchema:     "app",
+	}
+	// Missing database selector -> rejected before any write.
+	if _, err := svc.Upsert(context.Background(), adminActor(), credentialTargetID, "", valid); !errors.Is(err, ErrQueryCredentialValidation) {
+		t.Fatalf("PG upsert without database: err = %v, want validation", err)
+	}
+	// Missing defaultSchema -> rejected before any write.
+	noSchema := valid
+	noSchema.DefaultSchema = ""
+	if _, err := svc.Upsert(context.Background(), adminActor(), credentialTargetID, "labdb", noSchema); !errors.Is(err, ErrQueryCredentialValidation) {
+		t.Fatalf("PG upsert without defaultSchema: err = %v, want validation", err)
+	}
+	resp, err := svc.Upsert(context.Background(), adminActor(), credentialTargetID, "labdb", valid)
+	if err != nil {
+		t.Fatalf("PG upsert: %v", err)
+	}
+	if len(store.upserts) != 1 {
+		t.Fatalf("upserts = %d, want 1", len(store.upserts))
+	}
+	got := store.upserts[0]
+	if got.DatabaseName != "labdb" || got.DefaultSchema != "app" || got.Engine != "postgresql" {
+		t.Fatalf("stored meta = %+v, want composite PG identity", got)
+	}
+	// The DSN binds host+port+dbname -> resolved. But resolution must NOT be
+	// reported as execution eligibility: postgresql stays outside
+	// isExecutableEngine until the governed PG chain lands.
+	if resp.RuntimeStatus != model.QueryCredentialRuntimeSecretResolved {
+		t.Fatalf("runtime = %q, want secret_resolved", resp.RuntimeStatus)
+	}
+	if resp.ExecutionEligible {
+		t.Fatal("resolved PG credential must not report executionEligible=true while PG execution is gated")
+	}
+	// GET status echoes the same resolved-but-not-eligible state.
+	st, err := svc.GetStatus(context.Background(), credentialTargetID, "labdb")
+	if err != nil {
+		t.Fatalf("PG GetStatus: %v", err)
+	}
+	if st.RuntimeStatus != model.QueryCredentialRuntimeSecretResolved || st.ExecutionEligible {
+		t.Fatalf("PG status = %+v, want secret_resolved + executionEligible=false", st)
+	}
+	// And a resolved MySQL credential still reports eligible — unchanged legacy.
+	storeMy := newFakeCredentialStore()
+	svcMyOK := NewQueryCredentialService(fakeTargetRepo{targets: []model.QueryTarget{credentialTarget("mysql", "db.internal", 3306, "staging")}}, storeMy, &fakeResolver{dsn: "rouser:pw@tcp(db.internal:3306)/orders"})
+	myResp, err := svcMyOK.Upsert(context.Background(), adminActor(), credentialTargetID, "", model.QueryCredentialUpsertRequest{
+		CredentialRef: "R", Enabled: true, EnvironmentPolicy: model.QueryEnvPolicyNonProdOnly,
+	})
+	if err != nil {
+		t.Fatalf("mysql upsert: %v", err)
+	}
+	if myResp.RuntimeStatus == model.QueryCredentialRuntimeSecretResolved && !myResp.ExecutionEligible {
+		t.Fatal("resolved mysql credential must remain executionEligible=true")
+	}
+
+	// MySQL target rejects PG-only fields.
+	store2 := newFakeCredentialStore()
+	svcMy := NewQueryCredentialService(fakeTargetRepo{targets: []model.QueryTarget{credentialTarget("mysql", "db.internal", 3306, "staging")}}, store2, &fakeResolver{})
+	if _, err := svcMy.Upsert(context.Background(), adminActor(), credentialTargetID, "labdb", valid); !errors.Is(err, ErrQueryCredentialValidation) {
+		t.Fatalf("mysql upsert with database: err = %v, want validation", err)
+	}
+	if _, err := svcMy.Upsert(context.Background(), adminActor(), credentialTargetID, "", model.QueryCredentialUpsertRequest{
+		CredentialRef: "R", Enabled: true, EnvironmentPolicy: model.QueryEnvPolicyNonProdOnly, DefaultSchema: "app",
+	}); !errors.Is(err, ErrQueryCredentialValidation) {
+		t.Fatalf("mysql upsert with defaultSchema: err = %v, want validation", err)
+	}
+	if len(store2.upserts) != 0 {
+		t.Fatal("rejected upserts must not reach the store")
+	}
+}
+
+// TestInspectCredentialRuntime_PG proves the PG inspection path binds the DSN
+// to host+port+dbname and that a dbname mismatch is a binding mismatch — the
+// gap the MySQL-era host/port-only check could not cover.
+func TestInspectCredentialRuntime_PG(t *testing.T) {
+	ctx := context.Background()
+	pg := credentialTarget("postgresql", "db.internal", 5432, "staging")
+	cred := pgCredentialMeta("labdb", "app", "ORDER_PG_RO", true, model.QueryEnvPolicyNonProdOnly)
+
+	if got := InspectCredentialRuntime(ctx, &fakeResolver{dsn: pgDSN}, pg, &cred); got != model.QueryCredentialRuntimeSecretResolved {
+		t.Fatalf("runtime = %q, want secret_resolved", got)
+	}
+	// DSN points at a different database on the same host:port -> mismatch.
+	otherDB := &fakeResolver{dsn: "postgres://ro:pw@db.internal:5432/orders?sslmode=disable"}
+	if got := InspectCredentialRuntime(ctx, otherDB, pg, &cred); got != model.QueryCredentialRuntimeBindingMismatch {
+		t.Fatalf("dbname mismatch runtime = %q, want binding_mismatch", got)
+	}
+	// A malformed PG row (empty default_schema) fails closed as invalid.
+	bad := pgCredentialMeta("labdb", "", "ORDER_PG_RO", true, model.QueryEnvPolicyNonProdOnly)
+	if got := InspectCredentialRuntime(ctx, &fakeResolver{dsn: pgDSN}, pg, &bad); got != model.QueryCredentialRuntimeInvalidRef {
+		t.Fatalf("malformed PG row runtime = %q, want invalid_ref", got)
+	}
+	// A MySQL-shaped row (empty database) on a PG target is likewise malformed.
+	legacy := pgCredentialMeta("", "app", "ORDER_PG_RO", true, model.QueryEnvPolicyNonProdOnly)
+	if got := InspectCredentialRuntime(ctx, &fakeResolver{dsn: pgDSN}, pg, &legacy); got != model.QueryCredentialRuntimeInvalidRef {
+		t.Fatalf("PG row with empty database runtime = %q, want invalid_ref", got)
+	}
+}
+
+// TestQueryCredentialService_Delete_PGAddressesConnectionRow proves delete
+// removes exactly the addressed (resource, database) connection row and leaves
+// sibling connections on the same target untouched.
+func TestQueryCredentialService_Delete_PGAddressesConnectionRow(t *testing.T) {
+	pg := credentialTarget("postgresql", "db.internal", 5432, "staging")
+	store := newFakeCredentialStore()
+	store.metadata[credentialStoreKey{credentialTargetID, "labdb"}] = pgCredentialMeta("labdb", "app", "ORDER_PG_RO", true, model.QueryEnvPolicyNonProdOnly)
+	store.metadata[credentialStoreKey{credentialTargetID, "analytics"}] = pgCredentialMeta("analytics", "app", "OTHER_PG_RO", true, model.QueryEnvPolicyNonProdOnly)
+	svc := NewQueryCredentialService(fakeTargetRepo{targets: []model.QueryTarget{pg}}, store, &fakeResolver{})
+
+	if err := svc.Delete(context.Background(), adminActor(), credentialTargetID, "labdb"); err != nil {
+		t.Fatalf("PG delete: %v", err)
+	}
+	if _, ok := store.metadata[credentialStoreKey{credentialTargetID, "labdb"}]; ok {
+		t.Fatal("addressed connection row must be deleted")
+	}
+	if _, ok := store.metadata[credentialStoreKey{credentialTargetID, "analytics"}]; !ok {
+		t.Fatal("sibling connection row must survive")
 	}
 }

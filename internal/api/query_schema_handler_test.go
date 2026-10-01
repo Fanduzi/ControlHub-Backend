@@ -1034,7 +1034,7 @@ func (auditFailingTargetRepo) ListQueryTargets(_ context.Context, q model.QueryT
 
 type auditFailingCredReader struct{}
 
-func (auditFailingCredReader) GetCredentialByResourceID(_ context.Context, _ uint64) (model.QueryCredentialMetadata, error) {
+func (auditFailingCredReader) GetCredential(_ context.Context, _ uint64, _ string) (model.QueryCredentialMetadata, error) {
 	return model.QueryCredentialMetadata{
 		Enabled:           true,
 		Engine:            "mysql",
@@ -1071,7 +1071,7 @@ type auditFailingExecRepo struct {
 	marker string
 }
 
-func (auditFailingExecRepo) GetCredentialByResourceID(_ context.Context, _ uint64) (model.QueryCredentialMetadata, error) {
+func (auditFailingExecRepo) GetCredential(_ context.Context, _ uint64, _ string) (model.QueryCredentialMetadata, error) {
 	return model.QueryCredentialMetadata{}, nil
 }
 func (auditFailingExecRepo) InsertExecution(_ context.Context, _ model.QueryExecutionRecord) (uint64, error) {

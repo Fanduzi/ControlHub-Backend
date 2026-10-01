@@ -1149,12 +1149,18 @@ func queryTargetSeed() []fakeQueryTargetRow {
 // missing_metadata (mirroring the real repository); the write/delete methods
 // apply metadata + audit together (atomic from the service's perspective).
 type fakeCredentialMetadataStore struct {
-	metadata map[uint64]model.QueryCredentialMetadata
+	metadata map[[2]interface{}]model.QueryCredentialMetadata
 	audits   int
 }
 
-func (f *fakeCredentialMetadataStore) GetCredentialByResourceID(_ context.Context, rid uint64) (model.QueryCredentialMetadata, error) {
-	if m, ok := f.metadata[rid]; ok {
+// credentialKey mirrors the composite connection key (resource_id,
+// database_name): ” is the legacy MySQL/TiDB row, non-empty a PG row.
+func credentialKey(resourceID uint64, databaseName string) [2]interface{} {
+	return [2]interface{}{resourceID, databaseName}
+}
+
+func (f *fakeCredentialMetadataStore) GetCredential(_ context.Context, rid uint64, databaseName string) (model.QueryCredentialMetadata, error) {
+	if m, ok := f.metadata[credentialKey(rid, databaseName)]; ok {
 		return m, nil
 	}
 	return model.QueryCredentialMetadata{}, sql.ErrNoRows
@@ -1162,15 +1168,15 @@ func (f *fakeCredentialMetadataStore) GetCredentialByResourceID(_ context.Contex
 
 func (f *fakeCredentialMetadataStore) UpsertCredentialMetadataWithAudit(_ context.Context, m model.QueryCredentialMetadata, _ uint64, _, _ string) error {
 	if f.metadata == nil {
-		f.metadata = map[uint64]model.QueryCredentialMetadata{}
+		f.metadata = map[[2]interface{}]model.QueryCredentialMetadata{}
 	}
-	f.metadata[m.ResourceID] = m
+	f.metadata[credentialKey(m.ResourceID, m.DatabaseName)] = m
 	f.audits++
 	return nil
 }
 
-func (f *fakeCredentialMetadataStore) DeleteCredentialMetadataWithAudit(_ context.Context, rid uint64, _ uint64, _, _ string) error {
-	delete(f.metadata, rid)
+func (f *fakeCredentialMetadataStore) DeleteCredentialMetadataWithAudit(_ context.Context, rid uint64, databaseName string, _ uint64, _, _ string) error {
+	delete(f.metadata, credentialKey(rid, databaseName))
 	f.audits++
 	return nil
 }
