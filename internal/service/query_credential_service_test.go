@@ -656,9 +656,34 @@ func TestQueryCredentialService_Upsert_PGConnectionRow(t *testing.T) {
 	if got.DatabaseName != "labdb" || got.DefaultSchema != "app" || got.Engine != "postgresql" {
 		t.Fatalf("stored meta = %+v, want composite PG identity", got)
 	}
-	// The DSN binds host+port+dbname -> resolved.
+	// The DSN binds host+port+dbname -> resolved. But resolution must NOT be
+	// reported as execution eligibility: postgresql stays outside
+	// isExecutableEngine until the governed PG chain lands.
 	if resp.RuntimeStatus != model.QueryCredentialRuntimeSecretResolved {
 		t.Fatalf("runtime = %q, want secret_resolved", resp.RuntimeStatus)
+	}
+	if resp.ExecutionEligible {
+		t.Fatal("resolved PG credential must not report executionEligible=true while PG execution is gated")
+	}
+	// GET status echoes the same resolved-but-not-eligible state.
+	st, err := svc.GetStatus(context.Background(), credentialTargetID, "labdb")
+	if err != nil {
+		t.Fatalf("PG GetStatus: %v", err)
+	}
+	if st.RuntimeStatus != model.QueryCredentialRuntimeSecretResolved || st.ExecutionEligible {
+		t.Fatalf("PG status = %+v, want secret_resolved + executionEligible=false", st)
+	}
+	// And a resolved MySQL credential still reports eligible — unchanged legacy.
+	storeMy := newFakeCredentialStore()
+	svcMyOK := NewQueryCredentialService(fakeTargetRepo{targets: []model.QueryTarget{credentialTarget("mysql", "db.internal", 3306, "staging")}}, storeMy, &fakeResolver{dsn: "rouser:pw@tcp(db.internal:3306)/orders"})
+	myResp, err := svcMyOK.Upsert(context.Background(), adminActor(), credentialTargetID, "", model.QueryCredentialUpsertRequest{
+		CredentialRef: "R", Enabled: true, EnvironmentPolicy: model.QueryEnvPolicyNonProdOnly,
+	})
+	if err != nil {
+		t.Fatalf("mysql upsert: %v", err)
+	}
+	if myResp.RuntimeStatus == model.QueryCredentialRuntimeSecretResolved && !myResp.ExecutionEligible {
+		t.Fatal("resolved mysql credential must remain executionEligible=true")
 	}
 
 	// MySQL target rejects PG-only fields.

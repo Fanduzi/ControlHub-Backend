@@ -1,8 +1,30 @@
-// Package service provides the PostgreSQL credential DSN binding validator.
-// input: fmt, net/url, strconv, strings, jackc/pgx/v5, internal/model
-// output: validatePGDSNBinding — single parse-once-use-everywhere entry returning the executable *pgx.ConnConfig
-// pos: PG workbench T2 (G3) — validates that a resolved PostgreSQL DSN explicitly and exactly binds to the selected connection (host, port, dbname) before any connection is built
-// note: if this file changes, update header and README.md
+// Package service — pg_dsn_binding.go: PostgreSQL DSN binding validation for governed
+// query credentials. The DSN itself is never persisted, logged, or returned; only its
+// pass/fail verdict and parsed *pgx.ConnConfig flow onward.
+//
+// Contract (per frozen spec G3):
+//   - required fields (user, password, host, port, dbname) must be explicit in the
+//     raw text and non-empty — environment defaults or driver fallback must not fill
+//     them (PGUSER/PGPASSWORD/PGHOST/PGPORT/PGDATABASE/PGSERVICE/.pgpass);
+//   - the key space is an explicit allowlist enforced twice: once by the driver's own
+//     parser (pgconn ConnStringAllowedKeys, covering both keyword and URI forms
+//     including superseded repeated keys) and once on the effective RuntimeParams so
+//     libpq-only client options cannot smuggle session mutations to the server;
+//   - forbidden options (options, service, passfile, sslpassword, sslnegotiation,
+//     channel_binding, require_auth, krbspn, servicefile, and any unknown key) are
+//     rejected outright;
+//   - multi-host / multi-port and alternate fallback endpoints are rejected;
+//   - unix-socket hosts are rejected;
+//   - effective host/port/database must bind to the target's connection context and
+//     the credential row's database_name.
+//
+// pgx v5.11.0 compatibility note (deviation from the spec's libpq-spelled allowlist,
+// reported under issue #108): sslcrl, sslcrldir, ssl_min_protocol_version,
+// ssl_max_protocol_version, keepalives, keepalives_idle, keepalives_interval,
+// keepalives_count, tcp_user_timeout, gssencmode, and requiressl are NOT consumed by
+// pgconn — they would silently become RuntimeParams sent to the server, so they are
+// rejected here rather than honored. application_name is the single allowed
+// RuntimeParams key.
 package service
 
 import (
@@ -11,208 +33,291 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/jackc/pgx/v5"
-
 	"github.com/fan/controlhub/internal/model"
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 )
 
-// errPGDSNBinding is the fail-closed sentinel for every PostgreSQL DSN binding
-// rejection. Callers map it to a fixed status/message — the wrapped reasons are
-// static strings that never echo the DSN, password, or resolved endpoint.
-var errPGDSNBinding = fmt.Errorf("credential DSN does not bind to the connection")
-
-// allowedPGDSNKeys is the allowlist for URI query params and keyword DSN keys.
-// Anything outside this list is rejected — fail closed rather than ignore a
-// knob that changes where/how the connection lands (e.g. options= can mutate
-// session GUCs; service=/passfile= re-source config or secrets).
-var allowedPGDSNKeys = map[string]bool{
-	"user": true, "password": true, "host": true, "port": true, "dbname": true,
-	"sslmode": true, "sslcert": true, "sslkey": true, "sslrootcert": true,
-	"sslcrl": true, "sslcrldir": true, "sslsni": true,
-	"ssl_min_protocol_version": true, "ssl_max_protocol_version": true,
-	"connect_timeout": true, "application_name": true,
-	"target_session_attrs": true,
-	"keepalives":           true, "keepalives_idle": true, "keepalives_interval": true,
-	"keepalives_count": true, "tcp_user_timeout": true,
-	"gssencmode": true, "krbsrvname": true,
-	"requiressl": true, // deprecated libpq alias; honored by pgconn
+// allowedPGDSNKeys is the ConnStringAllowedKeys list handed to pgx: keys pgconn
+// actually consumes as connection configuration plus application_name (a legitimate
+// server runtime parameter). Keys the driver would only forward into RuntimeParams
+// are deliberately absent — see the package contract note above.
+var allowedPGDSNKeys = []string{
+	"user",
+	"password",
+	"host",
+	"port",
+	"dbname", // pgx also accepts its internal spelling "database"
+	"sslmode",
+	"sslcert",
+	"sslkey",
+	"sslrootcert",
+	"sslsni",
+	"connect_timeout",
+	"application_name",
+	"target_session_attrs",
+	"krbsrvname",
 }
 
-// validatePGDSNBinding parses dsn with the real pgx parser AND verifies the raw
-// text carries every binding-relevant field explicitly — user, password, host,
-// port, dbname must appear in the DSN itself; environment/driver defaults
-// (PGUSER, default port 5432, dbname=user) must never silently complete a
-// binding field. The parsed config must bind exactly to the connection's
-// host/port/database. The returned *pgx.ConnConfig is the config the executor
-// must use — parse once, use everywhere; the DSN is never stored or logged.
-func validatePGDSNBinding(dsn, wantHost string, wantPort int, wantDB string) (*pgx.ConnConfig, error) {
-	raw := strings.TrimSpace(dsn)
-	if raw == "" {
-		return nil, fmt.Errorf("%w: empty dsn", errPGDSNBinding)
+// allowedPGRuntimeParams is the closed set of effective RuntimeParams keys a bound
+// DSN may produce. Everything else — whether smuggled through the allowlist or
+// introduced by a future driver change — is rejected after parsing.
+var allowedPGRuntimeParams = map[string]struct{}{
+	"application_name": {},
+}
+
+// pgConnInfoSpace mirrors the ASCII whitespace class libpq/pgx use between
+// keyword=value pairs (space, tab, newline, vertical tab, form feed, carriage
+// return). Double quotes are ordinary value characters — only single quotes quote.
+const pgConnInfoSpace = " \t\n\v\f\r"
+
+// parsePGConnInfo lexes a libpq keyword/value string exactly as pgconn does:
+// whitespace may surround keys and '=', single-quoted values support backslash
+// escapes (as do unquoted values), and a value ends at ASCII whitespace only.
+func parsePGConnInfo(dsn string) (map[string]string, error) {
+	out := make(map[string]string)
+	s := strings.TrimLeft(dsn, pgConnInfoSpace)
+	for len(s) > 0 {
+		eq := strings.IndexByte(s, '=')
+		if eq < 0 {
+			return nil, fmt.Errorf("invalid keyword/value in DSN")
+		}
+		key := strings.Trim(s[:eq], pgConnInfoSpace)
+		if key == "" || strings.ContainsAny(key, pgConnInfoSpace) {
+			return nil, fmt.Errorf("invalid keyword in DSN")
+		}
+		s = strings.TrimLeft(s[eq+1:], pgConnInfoSpace)
+		var val string
+		if len(s) > 0 && s[0] == '\'' {
+			s = s[1:]
+			end := 0
+			for ; end < len(s); end++ {
+				if s[end] == '\'' {
+					break
+				}
+				if s[end] == '\\' {
+					end++
+					if end == len(s) {
+						return nil, fmt.Errorf("unterminated quoted string in DSN")
+					}
+				}
+			}
+			if end == len(s) {
+				return nil, fmt.Errorf("unterminated quoted string in DSN")
+			}
+			val = unescapePGKeywordValue(s[:end])
+			s = strings.TrimLeft(s[end+1:], pgConnInfoSpace)
+		} else {
+			end := 0
+			for ; end < len(s); end++ {
+				if strings.IndexByte(pgConnInfoSpace, s[end]) >= 0 {
+					break
+				}
+				if s[end] == '\\' {
+					end++
+					if end == len(s) {
+						break
+					}
+				}
+			}
+			val = unescapePGKeywordValue(s[:end])
+			s = strings.TrimLeft(s[end:], pgConnInfoSpace)
+		}
+		// pgconn canonicalizes dbname -> database; do the same so that a later
+		// "database=" spelling correctly supersedes an earlier "dbname=".
+		if key == "dbname" {
+			key = "database"
+		}
+		out[key] = val
+	}
+	return out, nil
+}
+
+// unescapePGKeywordValue applies libpq's rule: a backslash is dropped and the next
+// character is taken literally; a trailing backslash contributes nothing.
+func unescapePGKeywordValue(raw string) string {
+	if !strings.ContainsRune(raw, '\\') {
+		return raw
+	}
+	var sb strings.Builder
+	sb.Grow(len(raw))
+	for i := 0; i < len(raw); i++ {
+		if raw[i] == '\\' && i+1 < len(raw) {
+			i++
+		}
+		sb.WriteByte(raw[i])
+	}
+	return sb.String()
+}
+
+// pgURIExplicitFields resolves the effective per-field text a URI supplies, using
+// pgconn's own precedence: query parameters override the hierarchical part, and an
+// empty userinfo password is treated as absent (pgconn drops it, which would let a
+// passfile fill it). Returned values are percent-decoded.
+func pgURIExplicitFields(u *url.URL) (map[string]string, error) {
+	q := u.Query()
+	last := func(key string) (string, bool) {
+		vals, ok := q[key]
+		if !ok {
+			return "", false
+		}
+		return vals[len(vals)-1], true
+	}
+	decode := func(raw string) (string, error) {
+		v, err := url.PathUnescape(raw)
+		if err != nil {
+			return "", fmt.Errorf("invalid percent-encoding in DSN")
+		}
+		return v, nil
 	}
 
-	lower := strings.ToLower(raw)
-	if strings.HasPrefix(lower, "postgres://") || strings.HasPrefix(lower, "postgresql://") {
-		if err := checkPGURIForm(raw); err != nil {
-			return nil, err
-		}
+	fields := make(map[string]string)
+	// userinfo: "user" / "user:password" before '@'; empty components are absent.
+	username := ""
+	password := ""
+	if u.User != nil {
+		username = u.User.Username()
+		password, _ = u.User.Password()
+	}
+	if v, err := decode(username); err != nil {
+		return nil, err
 	} else {
-		if err := checkPGKeywordForm(raw); err != nil {
-			return nil, err
+		fields["user"] = v
+	}
+	if v, err := decode(password); err != nil {
+		return nil, err
+	} else {
+		fields["password"] = v
+	}
+	// A multi-host authority is not valid net/url — pgconn parses it manually —
+	// so detect the comma on the raw authority before splitting host/port.
+	rawHost := u.Host
+	if i := strings.IndexByte(rawHost, ':'); i >= 0 && !strings.HasPrefix(rawHost, "[") {
+		rawHost = rawHost[:i]
+	}
+	if strings.HasPrefix(rawHost, "[") {
+		if end := strings.IndexByte(rawHost, ']'); end >= 0 {
+			rawHost = rawHost[1:end]
 		}
+	}
+	if v, err := decode(rawHost); err != nil {
+		return nil, err
+	} else {
+		fields["host"] = v
+	}
+	fields["port"] = u.Port()
+	// Path supplies dbname; the whole path segment (sans '?') is the dbname.
+	dbname := strings.TrimPrefix(u.EscapedPath(), "/")
+	if i := strings.IndexByte(dbname, '?'); i >= 0 {
+		dbname = dbname[:i]
+	}
+	if v, err := decode(dbname); err != nil {
+		return nil, err
+	} else {
+		fields["database"] = v
+	}
+	// Query parameters override every hierarchical field; presence of the key
+	// means override even when its value is empty.
+	for _, key := range []string{"user", "password", "host", "port", "dbname", "database"} {
+		if v, ok := last(key); ok {
+			fields[pgCanonicalField(key)] = v
+		}
+	}
+	return fields, nil
+}
+
+// pgCanonicalField maps either accepted spelling to the canonical settings key
+// pgconn uses internally.
+func pgCanonicalField(key string) string {
+	if key == "dbname" {
+		return "database"
+	}
+	return key
+}
+
+// pgExplicitFields returns the field→text map for whichever DSN form the input is,
+// so required-field explicitness can be checked before driver parsing.
+func pgExplicitFields(dsn string) (map[string]string, error) {
+	if strings.HasPrefix(dsn, "postgres://") || strings.HasPrefix(dsn, "postgresql://") {
+		u, err := url.Parse(dsn)
+		if err != nil {
+			return nil, fmt.Errorf("invalid PostgreSQL DSN")
+		}
+		return pgURIExplicitFields(u)
+	}
+	return parsePGConnInfo(dsn)
+}
+
+// validatePGDSNBindingForTarget binds a DSN to a target's connection context —
+// the seam credential inspection and dev seeding share.
+func validatePGDSNBindingForTarget(dsn string, target model.QueryTarget, databaseName string) (*pgx.ConnConfig, error) {
+	cc := target.ConnectionContext
+	return validatePGDSNBinding(dsn, cc.Host, cc.Port, databaseName)
+}
+
+// validatePGDSNBinding parses the DSN once and proves it binds to the expected
+// host/port/database. The returned config is the only parsed representation — callers
+// must reuse it rather than re-parsing.
+func validatePGDSNBinding(dsn, host string, port int, databaseName string) (*pgx.ConnConfig, error) {
+	// 1. Required fields must be explicit and non-empty in the raw text. This runs
+	//    before any driver parse so environment variables, defaults, or passfile can
+	//    never satisfy them.
+	fields, err := pgExplicitFields(dsn)
+	if err != nil {
+		return nil, err
+	}
+	for _, key := range []string{"user", "password", "host", "port", "database"} {
+		if fields[key] == "" {
+			return nil, fmt.Errorf("PostgreSQL DSN must specify %s explicitly (environment/default completion is forbidden)", key)
+		}
+	}
+	if strings.Contains(fields["host"], ",") || strings.Contains(fields["port"], ",") {
+		return nil, fmt.Errorf("PostgreSQL DSN must address a single host and port")
+	}
+	if strings.HasPrefix(fields["host"], "/") {
+		return nil, fmt.Errorf("unix-socket DSN hosts are not permitted")
+	}
+	if strings.HasPrefix(fields["host"], "@") {
+		return nil, fmt.Errorf("abstract unix-socket DSN hosts are not permitted")
+	}
+	if p, err := strconv.Atoi(fields["port"]); err != nil || p < 1 || p > 65535 {
+		return nil, fmt.Errorf("PostgreSQL DSN port must be a valid TCP port number")
 	}
 
-	cfg, err := pgx.ParseConfig(raw)
+	// 2. Parse once with the driver's own allowed-key restriction: any conninfo key
+	//    outside the allowlist — keyword or URI form, including superseded repeats —
+	//    fails here before filesystem or network access.
+	cfg, err := pgx.ParseConfigWithOptions(dsn, pgx.ParseConfigOptions{
+		ParseConfigOptions: pgconn.ParseConfigOptions{ConnStringAllowedKeys: allowedPGDSNKeys},
+	})
 	if err != nil {
-		return nil, fmt.Errorf("%w: unparsable dsn", errPGDSNBinding)
+		return nil, fmt.Errorf("invalid PostgreSQL DSN")
 	}
-	// pgx adds a same-endpoint TLS-mode fallback whenever sslmode allows a retry
-	// (e.g. prefer) — that is NOT a multi-host config. A different host or port
-	// in any fallback is what must be rejected.
-	for _, fb := range cfg.Fallbacks {
-		if !strings.EqualFold(fb.Host, cfg.Host) || fb.Port != cfg.Port {
-			return nil, fmt.Errorf("%w: multi-host/fallback endpoints are not supported", errPGDSNBinding)
+
+	// 3. Effective-config checks: nothing may reach the server that the allowlist
+	//    did not intend, and every fallback must be the same endpoint (e.g.
+	//    sslmode=prefer) — never an alternate host or port.
+	for k := range cfg.RuntimeParams {
+		if _, ok := allowedPGRuntimeParams[k]; !ok {
+			return nil, fmt.Errorf("PostgreSQL DSN uses a connection option the driver cannot honor safely")
 		}
 	}
-	if cfg.Host == "" || strings.HasPrefix(cfg.Host, "/") {
-		return nil, fmt.Errorf("%w: unix-socket hosts are not supported", errPGDSNBinding)
+	if strings.HasPrefix(cfg.Host, "/") || strings.HasPrefix(cfg.Host, "@") {
+		return nil, fmt.Errorf("unix-socket DSN hosts are not permitted")
 	}
-	if !strings.EqualFold(cfg.Host, wantHost) || int(cfg.Port) != wantPort || cfg.Database != wantDB {
-		return nil, fmt.Errorf("%w: dsn endpoint/database does not match the connection", errPGDSNBinding)
+	for _, fb := range cfg.Fallbacks {
+		if fb.Host != cfg.Host || fb.Port != cfg.Port {
+			return nil, fmt.Errorf("PostgreSQL DSN must address a single endpoint")
+		}
+	}
+	if cfg.Host != host {
+		return nil, fmt.Errorf("PostgreSQL DSN host does not match the target connection endpoint")
+	}
+	if int(cfg.Port) != port {
+		return nil, fmt.Errorf("PostgreSQL DSN port does not match the target connection endpoint")
+	}
+	if cfg.Database != databaseName {
+		return nil, fmt.Errorf("PostgreSQL DSN dbname does not match the credential connection identity")
 	}
 	return cfg, nil
-}
-
-// validatePGDSNBindingForTarget is the target-shaped convenience wrapper: it
-// binds the resolved DSN to the target's host/port and to the connection row's
-// database_name — the dbname must equal the addressed connection, which is the
-// core fix over the MySQL-era host/port-only binding.
-func validatePGDSNBindingForTarget(dsn string, target model.QueryTarget, databaseName string) (*pgx.ConnConfig, error) {
-	return validatePGDSNBinding(dsn, target.ConnectionContext.Host, target.ConnectionContext.Port, databaseName)
-}
-
-// checkPGURIForm verifies explicitness on the raw URI (net/url parse) —
-// independent of pgx so no default can silently fill a binding field.
-func checkPGURIForm(raw string) error {
-	u, err := url.Parse(raw)
-	if err != nil {
-		return fmt.Errorf("%w: unparsable URI", errPGDSNBinding)
-	}
-	if u.Hostname() == "" {
-		return fmt.Errorf("%w: missing host", errPGDSNBinding)
-	}
-	if strings.Contains(u.Host, ",") {
-		return fmt.Errorf("%w: multi-host authority is not supported", errPGDSNBinding)
-	}
-	port := u.Port()
-	if port == "" {
-		return fmt.Errorf("%w: missing explicit port", errPGDSNBinding)
-	}
-	if p, err := strconv.Atoi(port); err != nil || p < 1 || p > 65535 {
-		return fmt.Errorf("%w: invalid port", errPGDSNBinding)
-	}
-	dbname, err := url.PathUnescape(strings.TrimPrefix(u.EscapedPath(), "/"))
-	if err != nil || dbname == "" || strings.Contains(dbname, "/") {
-		return fmt.Errorf("%w: missing database name", errPGDSNBinding)
-	}
-	if u.User == nil || u.User.Username() == "" {
-		return fmt.Errorf("%w: missing user", errPGDSNBinding)
-	}
-	_, hasPw := u.User.Password()
-	q := u.Query()
-	if !hasPw && q.Get("password") == "" {
-		return fmt.Errorf("%w: missing password", errPGDSNBinding)
-	}
-	for k := range q {
-		if !allowedPGDSNKeys[strings.ToLower(k)] {
-			return fmt.Errorf("%w: dsn key is not allowed", errPGDSNBinding)
-		}
-	}
-	return nil
-}
-
-// checkPGKeywordForm tokenizes key=value pairs honoring single/double quotes
-// and backslash escapes — the libpq conninfo syntax.
-func checkPGKeywordForm(raw string) error {
-	kv, err := parsePGConnInfo(raw)
-	if err != nil {
-		return err
-	}
-	for _, k := range []string{"user", "password", "host", "port", "dbname"} {
-		if v, ok := kv[k]; !ok || v == "" {
-			return fmt.Errorf("%w: missing %s=", errPGDSNBinding, k)
-		}
-	}
-	if strings.Contains(kv["host"], ",") || strings.Contains(kv["port"], ",") {
-		return fmt.Errorf("%w: multi-host/port lists are not supported", errPGDSNBinding)
-	}
-	if strings.HasPrefix(kv["host"], "/") {
-		return fmt.Errorf("%w: unix-socket hosts are not supported", errPGDSNBinding)
-	}
-	if p, err := strconv.Atoi(kv["port"]); err != nil || p < 1 || p > 65535 {
-		return fmt.Errorf("%w: invalid port", errPGDSNBinding)
-	}
-	for k := range kv {
-		if !allowedPGDSNKeys[k] {
-			return fmt.Errorf("%w: dsn key is not allowed", errPGDSNBinding)
-		}
-	}
-	return nil
-}
-
-// parsePGConnInfo splits `k=v k='v v' k="v"` pairs. Keys are lowercased; a bare
-// token or missing '=' is a hard error — the DSN is admin-controlled config
-// and must fail loudly, not be reinterpreted.
-func parsePGConnInfo(s string) (map[string]string, error) {
-	kv := map[string]string{}
-	i, n := 0, len(s)
-	for i < n {
-		for i < n && s[i] == ' ' {
-			i++
-		}
-		if i >= n {
-			break
-		}
-		start := i
-		for i < n && s[i] != '=' && s[i] != ' ' {
-			i++
-		}
-		key := strings.ToLower(s[start:i])
-		if key == "" || i >= n || s[i] != '=' {
-			return nil, fmt.Errorf("%w: malformed conninfo", errPGDSNBinding)
-		}
-		i++ // '='
-		var v strings.Builder
-		if i < n && (s[i] == '\'' || s[i] == '"') {
-			quote := s[i]
-			i++
-			for i < n && s[i] != quote {
-				if s[i] == '\\' && i+1 < n {
-					i++
-				}
-				v.WriteByte(s[i])
-				i++
-			}
-			if i >= n {
-				return nil, fmt.Errorf("%w: unterminated quoted value for %s=", errPGDSNBinding, key)
-			}
-			i++
-		} else {
-			for i < n && s[i] != ' ' {
-				if s[i] == '\\' && i+1 < n {
-					i++
-				}
-				v.WriteByte(s[i])
-				i++
-			}
-		}
-		if _, dup := kv[key]; dup {
-			return nil, fmt.Errorf("%w: duplicate key %s=", errPGDSNBinding, key)
-		}
-		kv[key] = v.String()
-	}
-	if len(kv) == 0 {
-		return nil, fmt.Errorf("%w: not a keyword/value dsn", errPGDSNBinding)
-	}
-	return kv, nil
 }

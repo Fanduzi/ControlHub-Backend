@@ -272,10 +272,13 @@ func (s *QueryCredentialService) findTarget(ctx context.Context, targetID uint64
 // runtime status + eligibility otherwise. It never carries a DSN, host, or port.
 func buildCredentialStatusResponse(target model.QueryTarget, cred *model.QueryCredentialMetadata, runtime model.QueryCredentialRuntimeStatus) model.QueryCredentialStatusResponse {
 	resp := model.QueryCredentialStatusResponse{
-		ResourceID:        target.ResourceID,
-		Engine:            target.ConnectionContext.Engine,
-		RuntimeStatus:     runtime,
-		ExecutionEligible: runtime.IsResolved(),
+		ResourceID:    target.ResourceID,
+		Engine:        target.ConnectionContext.Engine,
+		RuntimeStatus: runtime,
+		// Eligibility mirrors the execution gate, not just secret resolution: a
+		// resolved PostgreSQL secret is reported honestly (secret_resolved) but the
+		// target is not executable until the governed PG chain lands.
+		ExecutionEligible: runtime.IsResolved() && isExecutableEngine(target.ConnectionContext.Engine),
 		Message:           credentialRuntimeMessage(runtime),
 	}
 	if cred != nil {
