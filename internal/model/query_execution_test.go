@@ -222,14 +222,28 @@ func TestQueryExecutionRemoteStateValidate(t *testing.T) {
 
 func TestValidateClientExecutionID(t *testing.T) {
 	t.Parallel()
-	// Empty is legal: the idempotency key is optional on the wire.
-	for _, id := range []string{"", "exec-123", string(make([]byte, MaxClientExecutionIDLength))} {
+	// The contract bounds characters, not UTF-8 bytes: 64 CJK runes (192
+	// bytes) or 64 emoji (256 bytes) must pass, matching the VARCHAR(64)
+	// character semantics of the claim columns.
+	for name, id := range map[string]string{
+		"empty":    "",
+		"ascii_64": strings.Repeat("k", MaxClientExecutionIDLength),
+		"cjk_64":   strings.Repeat("测", MaxClientExecutionIDLength),
+		"emoji_64": strings.Repeat("🔑", MaxClientExecutionIDLength),
+		"typical":  "exec-123",
+	} {
 		if err := ValidateClientExecutionID(id); err != nil {
-			t.Errorf("ValidateClientExecutionID(len=%d) = %v, want nil", len(id), err)
+			t.Errorf("ValidateClientExecutionID(%s) = %v, want nil", name, err)
 		}
 	}
-	if err := ValidateClientExecutionID(string(make([]byte, MaxClientExecutionIDLength+1))); err == nil {
-		t.Errorf("ValidateClientExecutionID(len=%d) = nil, want error", MaxClientExecutionIDLength+1)
+	for name, id := range map[string]string{
+		"ascii_65": strings.Repeat("k", MaxClientExecutionIDLength+1),
+		"cjk_65":   strings.Repeat("测", MaxClientExecutionIDLength+1),
+		"emoji_65": strings.Repeat("🔑", MaxClientExecutionIDLength+1),
+	} {
+		if err := ValidateClientExecutionID(id); err == nil {
+			t.Errorf("ValidateClientExecutionID(%s) = nil, want error", name)
+		}
 	}
 }
 

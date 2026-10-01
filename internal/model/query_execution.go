@@ -1,5 +1,5 @@
 // Package model provides domain entities for the resource management system.
-// input: errors, fmt, math, time packages
+// input: errors, fmt, math, time, unicode/utf8 packages
 // output: QueryExecution* and QueryResult* types, internal full-statement availability and public restore eligibility/statement response, validated user-or-machine execution identity, pagination/status/remote-state/error contracts, connection-scope request fields, query credential policy/ref validators
 // pos: Query sandbox execution requests, responses, history records with server-computed restore eligibility, and owner-reusable statement response
 // note: if this file changes, update header and README.md
@@ -15,6 +15,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 )
 
 // QueryExecutionStatus is the outcome category recorded for every execution
@@ -182,11 +183,13 @@ func (s QueryExecutionRemoteState) Validate() error {
 // MaxClientExecutionIDLength bounds the client-supplied idempotency key.
 const MaxClientExecutionIDLength = 64
 
-// ValidateClientExecutionID enforces the VARCHAR(64) bound on the
-// client-supplied idempotency key. Empty is allowed — the key is optional on
-// the wire. Entry-point acceptance is a separate, handler-level decision.
+// ValidateClientExecutionID enforces the ≤64-character bound on the
+// client-supplied idempotency key, counted in Unicode code points like the
+// saved-statement name checks — not UTF-8 bytes. Empty is allowed — the key
+// is optional on the wire. Entry-point acceptance is a separate,
+// handler-level decision.
 func ValidateClientExecutionID(id string) error {
-	if len(id) > MaxClientExecutionIDLength {
+	if utf8.RuneCountInString(id) > MaxClientExecutionIDLength {
 		return fmt.Errorf("clientExecutionId exceeds %d characters", MaxClientExecutionIDLength)
 	}
 	return nil
