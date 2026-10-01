@@ -7,8 +7,8 @@ Domain structs, taxonomy constants, validation methods, and dictionary definitio
 |------|---------------|
 | collector_scan.go | Completed-scan ledger values, exact retry matching, pure capped per-CI omission/Missing transitions, and per-principal operator presence projections |
 | collector_scan_test.go | COMPLETE-only omission, idempotency, rediscovery, and conflicting-retry regression tests |
-| resource.go | Resource governed identity, immutable origin, aliases, external identifiers, effective health evidence, list/detail-only read-only Completeness and collector presence, profile response, and ResourceType |
-| resource_write.go | Resource create/update inputs, including managed identity collections and nullable manual health override |
+| resource.go | Resource governed identity, immutable origin, OriginFromSource legacy aliases, aliases, external identifiers, effective health evidence, list/detail-only read-only Completeness and collector presence, profile response, and ResourceType |
+| resource_write.go | Resource create/update inputs, including ApplyLegacyCreateFields, managed identity collections, and nullable manual health override |
 | health_observation.go | HealthObservation value and exact fresh/stale/never boundary calculation |
 | resource_effective_value.go | Effective CI value and observed/manual provenance response contracts |
 | relation.go | ResourceRelation struct, RelationType type |
@@ -23,17 +23,17 @@ Domain structs, taxonomy constants, validation methods, and dictionary definitio
 | dictionary.go | DictionaryItem struct (shared by all dictionaries) |
 | taxonomy.go | All enum constants (8 resource types, 7 relation types, 5 lifecycle statuses, 4 health statuses), dictionary slices including service worker subtype, Validate() methods; Domain Name `dns` and Virtual IP `floating` subtypes |
 | taxonomy.go | All enum constants (8 resource types, 7 relation types, 5 lifecycle statuses, 4 health statuses), dictionary slices, Validate() methods. Database Proxy technology subtypes and Control Plane ha_monitor; ambiguous ha is rejected. |
-| query_target.go | QueryTarget read-model types, query capability/readiness/safety enums, QueryTargetSafetyStateDictionary + Validate |
+| query_target.go | QueryTarget read-model types incl. per-connection (resourceId, database) QueryTargetConnection entries, query capability/readiness/safety enums, QueryTargetSafetyStateDictionary + Validate |
 | query_schema.go | Query schema response types, including TableDefinitionResponse |
-| query_execution.go | Query execution request/response/history types, internal full-statement availability, public restore eligibility and dedicated statement response, validated user-or-machine QueryExecutionIdentity, truthful actor projection, execution status enum, credential policy/ref validation, and governed result paging |
-| query_credential.go | Phase 38A query credential metadata request/response/runtime-status types + Validate (metadata only; never DSN/password) |
-| query_disclosure.go | Phase 38Q governed result-disclosure policy: ResultDisclosureMode enum + Validate, ResultDisclosurePolicy, ResultDisclosurePolicyUpsertRequest + Validate, ResultDisclosurePolicyListQuery |
-| query_saved_statement.go | Phase 38W governed saved statements: immutable scopes, typed parameter definitions, request validation, template-execution request/limits, and list response types |
+| query_execution.go | Query execution request/response/history types, internal full-statement availability, public restore eligibility and dedicated statement response, validated user-or-machine QueryExecutionIdentity, truthful actor projection, execution status enum (incl. cancelled), remote-state enum + client-execution-id bound, composite connection-scope request/context fields, credential policy/ref validation, and governed result paging |
+| query_credential.go | Phase 38A query credential metadata request/response/runtime-status types + Validate (metadata only; never DSN/password); status/resolved records carry the (resourceId, database) connection identity and pinned defaultSchema |
+| query_disclosure.go | Phase 38Q governed result-disclosure policy: ResultDisclosureMode enum + Validate, ResultDisclosurePolicy (five-part canonical key incl. schemaName), ResultDisclosurePolicyUpsertRequest + Validate, ResultDisclosurePolicyListQuery |
+| query_saved_statement.go | Phase 38W governed saved statements: immutable scopes, typed parameter definitions, connection-scope (database/schema) persistence fields, request validation, template-execution request/limits incl. clientExecutionId bound, and list response types |
 | query_workspace.go | Bounded one-row-per-owner worksheet aggregate with optimistic version requests, control-free metadata, and opaque statement preservation |
 | query_workspace_test.go | Workspace bounds/opaque-SQL tests and full-statement history JSON omission coverage |
 | resource_test.go | Validation and dictionary completeness tests |
 | health_observation_test.go | Freshness time-boundary contract tests |
-| query_execution_test.go | User/machine execution-identity, environment-policy, credential_ref, and governed-result-paging validation tests |
+| query_execution_test.go | User/machine execution-identity, environment-policy, credential_ref, stored-status (cancelled admitted, derived running/unknown rejected), remote-state, client-execution-id bound, and governed-result-paging validation tests |
 | query_credential_test.go | Runtime-status and upsert-request validation tests (fail-closed enum, all-environments confirmation) |
 | query_disclosure_test.go | Disclosure-mode and upsert-request validation tests (fail-closed mode, identifier syntax/length) |
 | query_saved_statement_test.go | Saved-statement scope, create, and update request validation tests (fail-closed scope, name bounds/control chars, statement size) |

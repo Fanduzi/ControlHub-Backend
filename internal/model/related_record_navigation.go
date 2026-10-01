@@ -28,7 +28,11 @@ const (
 // constraint the browser identifies. The backend resolves referenced
 // identifiers from schema metadata — the browser never supplies them.
 type RelatedRecordNavigationSource struct {
-	Database   string `json:"database"`
+	Database string `json:"database"`
+	// Schema is the pinned-schema segment of the composite connection
+	// identity. PostgreSQL sources require it; it must stay empty for
+	// engines without schema namespaces until the PG path is wired.
+	Schema     string `json:"schema,omitempty"`
 	Object     string `json:"object"`
 	Kind       string `json:"kind"`
 	ForeignKey string `json:"foreignKey"`
@@ -42,6 +46,12 @@ type RelatedRecordNavigationRequest struct {
 	Source      RelatedRecordNavigationSource `json:"source"`
 	LocalValues []string                      `json:"localValues"`
 	MaxRows     int                           `json:"maxRows,omitempty"`
+	// ClientExecutionID is the idempotency key for the claim protocol (G9).
+	// Rejected while non-empty until claims are wired (T10).
+	ClientExecutionID string `json:"clientExecutionId,omitempty"`
+	// Capabilities declares client result-contract capabilities (e.g.
+	// "cellTruncated"); declaration-only until the truncation gate (T8).
+	Capabilities []string `json:"capabilities,omitempty"`
 }
 
 // Validate checks structural invariants. It returns a controlled error message
@@ -53,6 +63,12 @@ func (r *RelatedRecordNavigationRequest) Validate() error {
 	}
 	if len(r.Source.Database) > MaxSourceDatabaseLength {
 		return fmt.Errorf("source database exceeds %d characters", MaxSourceDatabaseLength)
+	}
+	if len(r.Source.Schema) > MaxSourceObjectLength {
+		return fmt.Errorf("source schema exceeds %d characters", MaxSourceObjectLength)
+	}
+	if err := ValidateClientExecutionID(r.ClientExecutionID); err != nil {
+		return err
 	}
 	if strings.TrimSpace(r.Source.Object) == "" {
 		return fmt.Errorf("source object is required")
@@ -120,6 +136,9 @@ type RelatedRecordNavigationResponse struct {
 	DurationMs       int64                `json:"durationMs"`
 	LimitApplied     int                  `json:"limitApplied"`
 	ExecutedAt       time.Time            `json:"executedAt"`
+	// CellTruncated aligns with Rows cell-for-cell; absent means no
+	// per-cell truncation information for this page.
+	CellTruncated [][]bool `json:"cellTruncated,omitempty"`
 
 	// Relation metadata — safe to display; no values or SQL.
 	SourceDatabase     string   `json:"sourceDatabase"`

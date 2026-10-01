@@ -188,7 +188,7 @@ func TestComputeQueryHash_FractionalSecondTimestampsProduceDifferentHashes(t *te
 
 func TestValidateStatus_ValidPasses(t *testing.T) {
 	t.Parallel()
-	for _, s := range []string{"success", "rejected", "failed", "timeout"} {
+	for _, s := range []string{"success", "rejected", "failed", "timeout", "cancelled"} {
 		if err := ValidateStatus(s); err != nil {
 			t.Errorf("ValidateStatus(%q) = %v, want nil", s, err)
 		}
@@ -197,9 +197,52 @@ func TestValidateStatus_ValidPasses(t *testing.T) {
 
 func TestValidateStatus_RejectsInvalid(t *testing.T) {
 	t.Parallel()
-	for _, s := range []string{"", "SUCCESS", "Success", "pending", "ok", " error"} {
+	// running/unknown are derived view-only states from the claim ledger —
+	// they must never persist as an execution status.
+	for _, s := range []string{"", "SUCCESS", "Success", "pending", "ok", " error", "running", "unknown"} {
 		if err := ValidateStatus(s); err == nil {
 			t.Errorf("ValidateStatus(%q) = nil, want error", s)
+		}
+	}
+}
+
+func TestQueryExecutionRemoteStateValidate(t *testing.T) {
+	t.Parallel()
+	for _, s := range []QueryExecutionRemoteState{"", "stopped", "unknown", "completed"} {
+		if err := s.Validate(); err != nil {
+			t.Errorf("Validate(%q) = %v, want nil", s, err)
+		}
+	}
+	for _, s := range []QueryExecutionRemoteState{"running", "STARTED", "none"} {
+		if err := s.Validate(); err == nil {
+			t.Errorf("Validate(%q) = nil, want error", s)
+		}
+	}
+}
+
+func TestValidateClientExecutionID(t *testing.T) {
+	t.Parallel()
+	// The contract bounds characters, not UTF-8 bytes: 64 CJK runes (192
+	// bytes) or 64 emoji (256 bytes) must pass, matching the VARCHAR(64)
+	// character semantics of the claim columns.
+	for name, id := range map[string]string{
+		"empty":    "",
+		"ascii_64": strings.Repeat("k", MaxClientExecutionIDLength),
+		"cjk_64":   strings.Repeat("测", MaxClientExecutionIDLength),
+		"emoji_64": strings.Repeat("🔑", MaxClientExecutionIDLength),
+		"typical":  "exec-123",
+	} {
+		if err := ValidateClientExecutionID(id); err != nil {
+			t.Errorf("ValidateClientExecutionID(%s) = %v, want nil", name, err)
+		}
+	}
+	for name, id := range map[string]string{
+		"ascii_65": strings.Repeat("k", MaxClientExecutionIDLength+1),
+		"cjk_65":   strings.Repeat("测", MaxClientExecutionIDLength+1),
+		"emoji_65": strings.Repeat("🔑", MaxClientExecutionIDLength+1),
+	} {
+		if err := ValidateClientExecutionID(id); err == nil {
+			t.Errorf("ValidateClientExecutionID(%s) = nil, want error", name)
 		}
 	}
 }

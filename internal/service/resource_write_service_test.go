@@ -421,6 +421,20 @@ func TestNormalizeResourceIdentity(t *testing.T) {
 	}
 }
 
+func TestNormalizeResourceCreateInputUsesSharedOriginAliases(t *testing.T) {
+	// terraform must become imported on the service path too; otherwise MySQL
+	// persist and cutover would accept a CI Origin that HTTP create rejects.
+	// Unknown sources stay empty so validateResourceCreateInput still fails.
+	imported := normalizeResourceCreateInput(model.ResourceCreateInput{Source: "terraform"})
+	if imported.Origin != model.ResourceOriginImported {
+		t.Fatalf("terraform origin = %q, want imported", imported.Origin)
+	}
+	unknown := normalizeResourceCreateInput(model.ResourceCreateInput{Source: "auto"})
+	if unknown.Origin != "" {
+		t.Fatalf("unknown source origin = %q, want empty so validation can reject it", unknown.Origin)
+	}
+}
+
 func TestRelationServiceCreate(t *testing.T) {
 	repo := &fakeRelationWriteRepo{
 		resources: map[uint64]model.Resource{

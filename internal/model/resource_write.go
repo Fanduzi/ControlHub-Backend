@@ -1,6 +1,6 @@
 // Package model provides write-side request and repository input types for resources.
 // input: bytes, encoding/json, and time packages
-// output: resource create/update inputs with governed identity and explicit nullable manual health override writes
+// output: resource create/update inputs with governed identity, ApplyLegacyCreateFields, and explicit nullable manual health override writes
 // pos: Shared request contracts for resource write APIs
 // note: if this file changes, update this header and module README.md.
 package model
@@ -8,6 +8,7 @@ package model
 import (
 	"bytes"
 	"encoding/json"
+	"strings"
 	"time"
 )
 
@@ -27,6 +28,23 @@ type ResourceCreateInput struct {
 	ExternalID          string                       `json:"externalId"`
 	Labels              map[string]string            `json:"labels"`
 	Profile             map[string]interface{}       `json:"profile,omitempty"`
+}
+
+// ApplyLegacyCreateFields fills empty Origin from a Source alias, lifts a lone
+// ExternalID into ExternalIdentifiers, and ensures Labels is non-nil.
+// Unknown Source values leave Origin empty so validation can reject them.
+func (input *ResourceCreateInput) ApplyLegacyCreateFields() {
+	if input.Origin == "" {
+		if origin, ok := OriginFromSource(input.Source); ok {
+			input.Origin = origin
+		}
+	}
+	if len(input.ExternalIdentifiers) == 0 && strings.TrimSpace(input.ExternalID) != "" {
+		input.ExternalIdentifiers = []ResourceExternalIdentifier{{System: "legacy", Value: strings.TrimSpace(input.ExternalID)}}
+	}
+	if input.Labels == nil {
+		input.Labels = map[string]string{}
+	}
 }
 
 type ResourcePatchRequest struct {

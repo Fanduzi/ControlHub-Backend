@@ -52,6 +52,26 @@ func TestRelatedRecordNavigationRequest_Validate_DatabaseTooLong(t *testing.T) {
 	}
 }
 
+func TestRelatedRecordNavigationRequest_Validate_SchemaTooLong(t *testing.T) {
+	req := validRequest()
+	req.Source.Schema = strings.Repeat("s", MaxSourceObjectLength+1)
+	if err := req.Validate(); err == nil {
+		t.Fatal("expected error for overlong schema")
+	} else if !strings.Contains(err.Error(), "source schema") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestRelatedRecordNavigationRequest_Validate_ClientExecutionIDTooLong(t *testing.T) {
+	req := validRequest()
+	req.ClientExecutionID = strings.Repeat("k", MaxClientExecutionIDLength+1)
+	if err := req.Validate(); err == nil {
+		t.Fatal("expected error for overlong clientExecutionId")
+	} else if !strings.Contains(err.Error(), "clientExecutionId") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
 func TestRelatedRecordNavigationRequest_Validate_EmptyObject(t *testing.T) {
 	req := validRequest()
 	req.Source.Object = ""

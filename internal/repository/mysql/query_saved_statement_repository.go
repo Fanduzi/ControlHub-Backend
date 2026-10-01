@@ -71,7 +71,7 @@ func (r *MySQLQuerySavedStatementRepository) ListVisible(ctx context.Context, qu
 	page, pageSize := model.NormalizePagination(query.Page, query.PageSize)
 	offset := (page - 1) * pageSize
 
-	selectQ := fmt.Sprintf(`SELECT id, target_resource_id, owner_user_id, name, statement, scope, created_at, updated_at
+	selectQ := fmt.Sprintf(`SELECT id, target_resource_id, owner_user_id, database_name, schema_name, name, statement, scope, created_at, updated_at
 		FROM query_saved_statements
 		WHERE %s
 		ORDER BY updated_at DESC, id DESC
@@ -88,7 +88,7 @@ func (r *MySQLQuerySavedStatementRepository) ListVisible(ctx context.Context, qu
 	for rows.Next() {
 		var s model.QuerySavedStatement
 		var scope string
-		if err := rows.Scan(&s.ID, &s.TargetResourceID, &s.OwnerUserID, &s.Name, &s.Statement, &scope, &s.CreatedAt, &s.UpdatedAt); err != nil {
+		if err := rows.Scan(&s.ID, &s.TargetResourceID, &s.OwnerUserID, &s.DatabaseName, &s.SchemaName, &s.Name, &s.Statement, &scope, &s.CreatedAt, &s.UpdatedAt); err != nil {
 			return model.QuerySavedStatementListResponse{}, fmt.Errorf("scan saved statement: %w", err)
 		}
 		s.Scope = model.QuerySavedStatementScope(scope)
@@ -113,13 +113,13 @@ func (r *MySQLQuerySavedStatementRepository) ListVisible(ctx context.Context, qu
 // GetByID returns a saved statement by target and ID. Returns sql.ErrNoRows
 // when not found.
 func (r *MySQLQuerySavedStatementRepository) GetByID(ctx context.Context, targetResourceID, id uint64) (model.QuerySavedStatement, error) {
-	const q = `SELECT id, target_resource_id, owner_user_id, name, statement, scope, created_at, updated_at
+	const q = `SELECT id, target_resource_id, owner_user_id, database_name, schema_name, name, statement, scope, created_at, updated_at
 		FROM query_saved_statements
 		WHERE target_resource_id = ? AND id = ?`
 	var s model.QuerySavedStatement
 	var scope string
 	err := r.db.QueryRowContext(ctx, q, targetResourceID, id).Scan(
-		&s.ID, &s.TargetResourceID, &s.OwnerUserID, &s.Name, &s.Statement, &scope, &s.CreatedAt, &s.UpdatedAt,
+		&s.ID, &s.TargetResourceID, &s.OwnerUserID, &s.DatabaseName, &s.SchemaName, &s.Name, &s.Statement, &scope, &s.CreatedAt, &s.UpdatedAt,
 	)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {

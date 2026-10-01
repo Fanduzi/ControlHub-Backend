@@ -1,6 +1,6 @@
 // Package model provides domain entities for the resource management system.
 // input: fmt package
-// output: QueryTarget read-model types, query capability/readiness/safety enums, QueryTargetSafetyStateDictionary + Validate
+// output: QueryTarget read-model types incl. per-connection identity, query capability/readiness/safety enums, QueryTargetSafetyStateDictionary + Validate
 // pos: Read-only query target context for the Query Workbench (Phase 36 shell + Phase 37 readiness)
 // note: if this file changes, update header and README.md
 package model
@@ -120,6 +120,17 @@ type QueryTargetSchemaPreviewNode struct {
 	Children []QueryTargetSchemaPreviewNode `json:"children,omitempty"`
 }
 
+// QueryTargetConnection is one Query Connection row belonging to a target:
+// the (resource_id, database_name) composite identity with its pinned default
+// schema and enablement. A legacy MySQL/TiDB target reports a single entry
+// with an empty database. Empty until the credential-join read is wired (T2).
+type QueryTargetConnection struct {
+	Database          string                 `json:"database"`
+	DefaultSchema     string                 `json:"defaultSchema"`
+	Enabled           bool                   `json:"enabled"`
+	EnvironmentPolicy QueryEnvironmentPolicy `json:"environmentPolicy"`
+}
+
 // QueryTarget is the read-only query capability context for one database
 // resource, ready to drive a locked Query Workbench shell.
 type QueryTarget struct {
@@ -134,6 +145,9 @@ type QueryTarget struct {
 	Governance        QueryTargetGovernance          `json:"governance"`
 	AvailableActions  QueryTargetAvailableActions    `json:"availableActions"`
 	SchemaPreview     []QueryTargetSchemaPreviewNode `json:"schemaPreview"`
+	// Connections enumerates this target's Query Connection rows for
+	// connection selection; populated once the composite-key read exists (T2).
+	Connections []QueryTargetConnection `json:"connections,omitempty"`
 }
 
 const (

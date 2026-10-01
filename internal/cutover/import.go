@@ -1,5 +1,5 @@
 // Package cutover preserves legacy data into the bigint runtime schema.
-// input: context, database/sql, errors, fmt, go-sql-driver/mysql
+// input: context, database/sql, errors, fmt, go-sql-driver/mysql, internal/model
 // output: ImportLegacyData, ImportConfig
 // pos: One-shot migration boundary translating legacy UUID identities into current bigint rows inside a single target transaction
 // note: if this file changes, update this header and README.md
@@ -13,6 +13,8 @@ import (
 
 	_ "github.com/go-sql-driver/mysql"
 	gosqlmysql "github.com/go-sql-driver/mysql"
+
+	"github.com/fan/controlhub/internal/model"
 )
 
 type ImportConfig struct {
@@ -457,16 +459,11 @@ func (imp importer) importResources(ctx context.Context, tx *sql.Tx, environment
 }
 
 func legacyResourceOrigin(source string) (string, error) {
-	switch source {
-	case "", "manual":
-		return "manual", nil
-	case "import", "imported", "terraform":
-		return "imported", nil
-	case "discovery", "discovered":
-		return "discovered", nil
-	default:
+	origin, ok := model.OriginFromSource(source)
+	if !ok {
 		return "", fmt.Errorf("unsupported legacy source %q", source)
 	}
+	return string(origin), nil
 }
 
 func (imp importer) importHostProfiles(ctx context.Context, tx *sql.Tx, resourceMap map[string]uint64) error {

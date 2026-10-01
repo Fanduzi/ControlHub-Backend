@@ -1143,10 +1143,10 @@ paths:
             default: 20
         - name: status
           in: query
-          description: Filter by execution status.
+          description: Filter by execution status (stored terminal values only).
           schema:
             type: string
-            enum: [success, rejected, failed, timeout]
+            enum: [success, rejected, failed, timeout, cancelled]
         - name: from
           in: query
           description: Inclusive start (RFC3339).
@@ -1854,6 +1854,7 @@ paths:
                   - id: 1
                     targetResourceId: 22
                     databaseName: orders
+                    schemaName: ""
                     objectName: users
                     columnName: email
                     mode: raw_copy_allowed
@@ -1923,6 +1924,7 @@ paths:
                 id: 1
                 targetResourceId: 22
                 databaseName: orders
+                schemaName: ""
                 objectName: users
                 columnName: email
                 mode: raw_copy_allowed
@@ -4699,6 +4701,27 @@ components:
             Empty in Phase 36 — never the result of live database introspection.
           items:
             $ref: "#/components/schemas/QueryTargetSchemaPreviewNode"
+        connections:
+          type: array
+          description: >-
+            Query Connection rows of this target keyed by
+            (resourceId, database). A legacy MySQL/TiDB target reports a
+            single entry with an empty database. Omitted until the
+            composite-key credential read is wired (T2).
+          items:
+            type: object
+            required: [database, defaultSchema, enabled, environmentPolicy]
+            properties:
+              database:
+                type: string
+                maxLength: 128
+              defaultSchema:
+                type: string
+                maxLength: 128
+              enabled:
+                type: boolean
+              environmentPolicy:
+                $ref: "#/components/schemas/QueryEnvironmentPolicy"
     QueryTargetConnectionContext:
       type: object
       required: [environment, owner, engine, host, port]
@@ -4859,6 +4882,18 @@ components:
         resourceId:
           type: integer
           format: int64
+        database:
+          type: string
+          maxLength: 128
+          description: >
+            Connection-row database segment of the composite identity. Empty
+            for legacy single-connection MySQL/TiDB rows.
+        defaultSchema:
+          type: string
+          maxLength: 128
+          description: >
+            Pinned default schema of the connection row. Empty for engines
+            without schema namespaces.
         configured:
           type: boolean
           description: True when credential metadata exists for the target.
@@ -5175,7 +5210,7 @@ components:
         Per-column result disclosure mode for a query target. Absence of a
         matching row means the column is blocked (fail-closed). Never carries
         credentials, DSNs, or secrets.
-      required: [id, targetResourceId, databaseName, objectName, columnName, mode, createdAt, updatedAt]
+      required: [id, targetResourceId, databaseName, schemaName, objectName, columnName, mode, createdAt, updatedAt]
       properties:
         id:
           type: integer
@@ -5188,6 +5223,13 @@ components:
           maxLength: 128
           pattern: '^[a-zA-Z0-9_]+$'
           description: Database name identifier.
+        schemaName:
+          type: string
+          maxLength: 128
+          description: >
+            Schema segment of the canonical policy key. Empty for legacy
+            MySQL/TiDB policies and non-schema engines. Write-side schema
+            support arrives with schema-aware policy matching (T9).
         objectName:
           type: string
           maxLength: 128
@@ -5414,6 +5456,18 @@ components:
         targetResourceId:
           type: integer
           format: int64
+        database:
+          type: string
+          maxLength: 128
+          description: >
+            Connection database the statement is bound to. Empty for legacy
+            MySQL/TiDB single-connection statements.
+        schema:
+          type: string
+          maxLength: 128
+          description: >
+            Pinned schema the statement is bound to. Empty for engines
+            without schema namespaces.
         name:
           type: string
           maxLength: 120
@@ -5519,6 +5573,22 @@ components:
             Optional governed result paging boundary. When present, page and
             pageSize are validated strictly and each page is a fresh governed
             execution through this route.
+        clientExecutionId:
+          type: string
+          maxLength: 64
+          description: >
+            Client-supplied idempotency key for the execution-claim protocol.
+            Required non-empty for PostgreSQL executions; rejected while the
+            claim protocol is not yet enabled.
+        capabilities:
+          type: array
+          items:
+            type: string
+            enum: [cellTruncated]
+          description: >
+            Declared client result-contract capabilities. Declaration-only;
+            the per-cell truncation gate (result_contract_upgrade_required)
+            activates when truncation lands.
     QuerySavedStatementListResponse:
       type: object
       required: [items, pageInfo, canManageSharedTemplates]
@@ -6651,10 +6721,13 @@ components:
             snake_case codes.
           enum:
             - bulk_resource_mutation_conflict
+            - client_execution_id_conflict
             - collector_state_limit
             - disclosure_policy_conflict
             - disclosure_policy_not_found
+            - dsn_binding_mismatch
             - environment_not_found
+            - execution_already_exists
             - forbidden
             - forbidden_header
             - internal_error
@@ -6670,13 +6743,21 @@ components:
             - malformed_json
             - not_found
             - owner_not_found
+            - page_out_of_range
             - payload_too_large
+            - pg_version_unsupported
             - profile_not_supported
             - query_backend_error
+            - query_connection_disabled
+            - query_connection_not_found
             - query_execution_not_found
             - query_explain_not_supported
             - query_not_allowed
+            - query_object_definition_unsupported
+            - query_object_not_found
+            - query_reference_not_witnessable
             - query_result_disclosure_blocked
+            - query_schema_not_usable
             - query_target_not_found
             - query_timeout
             - query_workspace_conflict
@@ -6689,16 +6770,19 @@ components:
             - resource_external_identifier_conflict
             - resource_name_conflict
             - resource_not_found
+            - result_contract_upgrade_required
             - saved_statement_not_found
             - schema_backend_error
             - schema_definition_not_supported
             - schema_not_allowed
+            - schema_not_found
             - schema_object_not_found
             - schema_target_not_found
             - schema_timeout
             - schema_validation_failed
             - service_unavailable
             - unauthorized
+            - unsupported_limit_offset_form
             - validation_failed
         message:
           type: string
@@ -6724,6 +6808,37 @@ components:
             DATABASES, SHOW TABLES, SHOW COLUMNS, DESCRIBE/DESC, EXPLAIN SELECT.
             Schema-qualified metadata forms (SHOW TABLES FROM db, SHOW COLUMNS
             FROM db.tbl, DESCRIBE db.tbl) are allowed.
+        database:
+          type: string
+          maxLength: 128
+          description: >
+            Composite connection-identity selector. Required non-empty for
+            PostgreSQL targets; must be omitted/empty for MySQL/TiDB. The
+            backend rejects non-empty values with validation_failed until the
+            PostgreSQL execution path is enabled.
+        schema:
+          type: string
+          maxLength: 128
+          description: >
+            Optional pinned schema for the execution. PostgreSQL defaults to
+            the connection's defaultSchema; non-empty values are rejected for
+            MySQL/TiDB and until the PostgreSQL execution path is enabled.
+        clientExecutionId:
+          type: string
+          maxLength: 64
+          description: >
+            Client-supplied idempotency key for the execution-claim protocol.
+            Required non-empty for PostgreSQL execute entry points; rejected
+            while the claim protocol is not yet enabled.
+        capabilities:
+          type: array
+          items:
+            type: string
+            enum: [cellTruncated]
+          description: >
+            Declared client result-contract capabilities. Declaration-only;
+            the per-cell truncation gate (result_contract_upgrade_required)
+            activates when truncation lands.
         maxRows:
           type: integer
           minimum: 0
@@ -6815,7 +6930,12 @@ components:
           format: int64
         status:
           type: string
-          enum: [success, rejected, failed, timeout]
+          enum: [success, rejected, failed, timeout, cancelled]
+          description: >
+            Terminal outcome of this attempt. The execute response always
+            reports a terminal status. cancelled denotes a client-initiated
+            cancellation; it does not by itself confirm that the remote
+            backend has stopped. Remote execution state may remain unknown.
         targetResourceId:
           type: integer
           format: int64
@@ -6831,6 +6951,18 @@ components:
           items:
             type: array
             items: {}
+        cellTruncated:
+          type: array
+          description: >
+            Per-cell truncation flags aligned cell-for-cell with rows. Absent
+            when the page carries no truncation information. A page containing
+            any true cell is delivered only to clients that declared the
+            cellTruncated capability; otherwise the response is the controlled
+            result_contract_upgrade_required error without rows.
+          items:
+            type: array
+            items:
+              type: boolean
         rowCount:
           type: integer
         truncated:
@@ -6848,6 +6980,17 @@ components:
             Present only when the request included a pagination object and the
             statement is a bare SELECT. Absent for metadata statements (SHOW,
             DESCRIBE) and when pagination was not requested.
+        context:
+          type: object
+          description: >
+            Server-resolved execution context echo. PostgreSQL executions
+            always carry database+schema; absent for engines without a pinned
+            connection context.
+          properties:
+            database:
+              type: string
+            schema:
+              type: string
     ExplainRequest:
       type: object
       additionalProperties: false
@@ -6951,6 +7094,13 @@ components:
           minLength: 1
           maxLength: 128
           description: Source database name
+        schema:
+          type: string
+          maxLength: 128
+          description: >
+            Pinned-schema segment of the composite connection identity.
+            Required for PostgreSQL sources; must stay empty for engines
+            without schema namespaces until the PostgreSQL path is enabled.
         object:
           type: string
           minLength: 1
@@ -6992,6 +7142,22 @@ components:
           description: >
             Optional row cap. Zero/omitted uses the backend default (100);
             values above the hard maximum (500) are clamped.
+        clientExecutionId:
+          type: string
+          maxLength: 64
+          description: >
+            Client-supplied idempotency key for the execution-claim protocol.
+            Required non-empty for PostgreSQL navigation; rejected while the
+            claim protocol is not yet enabled.
+        capabilities:
+          type: array
+          items:
+            type: string
+            enum: [cellTruncated]
+          description: >
+            Declared client result-contract capabilities. Declaration-only;
+            the per-cell truncation gate (result_contract_upgrade_required)
+            activates when truncation lands.
     RelatedRecordNavigationResponse:
       type: object
       required:
@@ -7018,7 +7184,7 @@ components:
           format: int64
         status:
           type: string
-          enum: [success, rejected, failed, timeout]
+          enum: [success, rejected, failed, timeout, cancelled]
         targetResourceId:
           type: integer
           format: int64
@@ -7033,6 +7199,16 @@ components:
           items:
             type: array
             items: {}
+        cellTruncated:
+          type: array
+          description: >
+            Per-cell truncation flags aligned cell-for-cell with rows, same
+            semantics as QueryExecuteResponse.cellTruncated. Absent when the
+            page carries no truncation information.
+          items:
+            type: array
+            items:
+              type: boolean
         rowCount:
           type: integer
         truncated:
@@ -7159,6 +7335,16 @@ components:
           $ref: "#/components/schemas/QueryExecutionActor"
         engine:
           type: string
+        database:
+          type: string
+          description: >
+            Connection database the execution ran against. Empty for legacy
+            MySQL/TiDB single-connection executions.
+        schema:
+          type: string
+          description: >
+            Pinned schema the execution ran under. Empty for engines without
+            schema namespaces.
         statementDigest:
           type: string
           description: Literal-masked statement shape (never raw parameter values).
@@ -7172,7 +7358,12 @@ components:
             owner-only statement endpoint.
         status:
           type: string
-          enum: [success, rejected, failed, timeout]
+          enum: [success, rejected, failed, timeout, cancelled, running, unknown]
+          description: >
+            Stored terminal statuses are success/rejected/failed/timeout/
+            cancelled. running and unknown are derived view-only states
+            surfaced from the claim ledger; they are never persisted on an
+            execution row.
         rowCount:
           type: integer
         durationMs:

@@ -1,5 +1,5 @@
 // Package mysql provides MySQL-backed repository implementations.
-// input: context, database/sql, errors, fmt, slices, MySQL driver errors, collector scan models, and the ingestion row ceiling
+// input: context, database/sql, errors, fmt, slices, collector scan models, and the ingestion row ceiling
 // output: locked retry lookup plus bounded caller-transaction collector ledger and idempotent per-principal/per-CI state application
 // pos: Durable idempotency and lifecycle-state boundary for completed collector scans
 // note: if this file changes, update this header and module README.md.
@@ -11,8 +11,6 @@ import (
 	"errors"
 	"fmt"
 	"slices"
-
-	drivermysql "github.com/go-sql-driver/mysql"
 
 	"github.com/fan/controlhub/internal/model"
 	"github.com/fan/controlhub/internal/service"
@@ -76,8 +74,7 @@ func insertCollectorScanLedger(ctx context.Context, tx *sql.Tx, entry model.Coll
 		(machine_principal_id, collector_scan_id, payload_hash, result, completed_at)
 		values (?, ?, ?, ?, ?)`, entry.MachinePrincipalID, entry.CollectorScanID, entry.PayloadHash[:], string(entry.Result), entry.CompletedAt.UTC())
 	if err != nil {
-		var mysqlErr *drivermysql.MySQLError
-		if errors.As(err, &mysqlErr) && mysqlErr.Number == 1062 {
+		if isDuplicateKey(err) {
 			id, err := compareCollectorScanRetry(ctx, tx, entry)
 			return id, false, err
 		}

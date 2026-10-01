@@ -1353,3 +1353,40 @@ func newApplyPathBlockedService() *service.QueryExecutionService {
 		applyPathDisclosure{},
 	)
 }
+
+func TestQueryExecution_Execute_FailClosedPGContractFields(t *testing.T) {
+	// WHY: database/schema select a composite connection identity and
+	// clientExecutionId arms the claim protocol — none are wired until their
+	// owning tickets (T7/T10/T12). Accepting them silently would misroute
+	// identity or imply dedup that does not exist, so the contract fields
+	// fail closed with a controlled validation error instead.
+	cases := []struct {
+		name string
+		body string
+	}{
+		{"database", `{"statement":"select 1","database":"pgdb"}`},
+		{"schema", `{"statement":"select 1","schema":"app"}`},
+		{"clientExecutionId", `{"statement":"select 1","clientExecutionId":"exec-1"}`},
+		{"all three", `{"statement":"select 1","database":"pgdb","schema":"app","clientExecutionId":"exec-1"}`},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			stub := &stubQueryExec{}
+			router := newQueryExecRouter(stub)
+			token := mintToken(t, "qe-test-secret", 42, "admin", qeTestNow)
+
+			rec := httptest.NewRecorder()
+			router.ServeHTTP(rec, qeRequest(http.MethodPost, "/query-targets/22/execute", tc.body, token))
+
+			if rec.Code != http.StatusBadRequest {
+				t.Fatalf("status = %d, want 400; body=%s", rec.Code, rec.Body.String())
+			}
+			if !strings.Contains(rec.Body.String(), "validation_failed") {
+				t.Fatalf("body = %s, want validation_failed", rec.Body.String())
+			}
+			if stub.executeCalled {
+				t.Fatal("Execute must not run when unwired contract fields are set")
+			}
+		})
+	}
+}

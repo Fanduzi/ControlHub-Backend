@@ -1,6 +1,6 @@
 // Package mysql provides MySQL-backed repository implementations.
 // input: database/sql, internal/model, topology row budgets, and multi-observer effective-health evidence
-// output: relation CRUD with stable endpoint locks plus bounded topology relations/candidates and one-row health projections
+// output: relation CRUD with stable endpoint locks, GetResourcesByIDs, bounded topology relations/candidates, and one-row health projections
 // pos: MySQL data access for bounded rooted/workspace topology reads and candidate-specific effective health
 // note: if this file changes, update this header and module README.md.
 package mysql
@@ -13,8 +13,6 @@ import (
 	"fmt"
 	"strings"
 	"time"
-
-	"github.com/go-sql-driver/mysql"
 
 	"github.com/fan/controlhub/internal/model"
 	"github.com/fan/controlhub/internal/service"
@@ -228,6 +226,10 @@ func (r *RelationRepository) GetResource(id uint64) (*model.Resource, error) {
 	return NewResourceRepository(r.db).GetResource(id)
 }
 
+func (r *RelationRepository) GetResourcesByIDs(ids []uint64) (map[uint64]*model.Resource, error) {
+	return NewResourceRepository(r.db).GetResourcesByIDs(ids)
+}
+
 func (r *RelationRepository) CreateRelation(ctx context.Context, input model.RelationCreateInput) (*model.ResourceRelation, error) {
 	tx, err := r.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -253,8 +255,7 @@ func insertRelation(ctx context.Context, execer sqlExecer, input model.RelationC
 
 	result, err := execer.ExecContext(ctx, query, input.FromResourceID, input.ToResourceID, input.RelationType)
 	if err != nil {
-		var mysqlErr *mysql.MySQLError
-		if errors.As(err, &mysqlErr) && mysqlErr.Number == 1062 {
+		if isDuplicateKey(err) {
 			return nil, service.ErrRelationConflict
 		}
 		return nil, fmt.Errorf("insert relation: %w", err)
@@ -560,13 +561,15 @@ func (r *RelationRepository) ListTopologyCandidates(environmentID uint64, limit 
 		} else if err := json.Unmarshal([]byte(rawLabels), &item.Labels); err != nil {
 			return nil, err
 		}
-		item.ProfileSummary = resourceRepo.buildProfileSummary(context.Background(), item.ID, item.ResourceType)
 		items = append(items, item)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
 	rows.Close()
+	if err := resourceRepo.attachProfileSummaries(context.Background(), items); err != nil {
+		return nil, err
+	}
 
 	if err := r.attachTopologyCandidateHealth(items, now); err != nil {
 		return nil, err

@@ -59,8 +59,12 @@ func (s QueryCredentialRuntimeStatus) Validate() error {
 
 // QueryCredentialStatusResponse is the body of GET /query-targets/{id}/credential.
 // It is metadata only: it never carries a DSN, password, host, port, or actor.
+// Database and DefaultSchema echo the addressed connection row's composite
+// identity; both are empty for legacy single-connection MySQL/TiDB rows.
 type QueryCredentialStatusResponse struct {
 	ResourceID        uint64                       `json:"resourceId"`
+	Database          string                       `json:"database"`
+	DefaultSchema     string                       `json:"defaultSchema"`
 	Configured        bool                         `json:"configured"`
 	Engine            string                       `json:"engine"`
 	CredentialRef     string                       `json:"credentialRef"`

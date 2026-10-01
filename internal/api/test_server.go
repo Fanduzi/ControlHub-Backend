@@ -902,6 +902,18 @@ func (f *fakeTopologyRepo) GetResource(id uint64) (*model.Resource, error) {
 	return f.resources.GetResource(id)
 }
 
+func (f *fakeTopologyRepo) GetResourcesByIDs(ids []uint64) (map[uint64]*model.Resource, error) {
+	out := make(map[uint64]*model.Resource, len(ids))
+	for _, id := range ids {
+		res, err := f.GetResource(id)
+		if err != nil {
+			continue
+		}
+		out[id] = res
+	}
+	return out, nil
+}
+
 func (f *fakeTopologyRepo) ListRelationsByResourceIDs(ids []uint64) ([]model.ResourceRelation, error) {
 	idSet := make(map[uint64]bool, len(ids))
 	for _, id := range ids {

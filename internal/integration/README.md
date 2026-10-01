@@ -7,7 +7,7 @@ MySQL-backed integration tests run against disposable Testcontainers databases.
 |------|---------------|
 | health_observation_test.go | Real-MySQL latest observation, freshness, effective filtering, no-audit, and atomic manual override contracts |
 | testenv_test.go | Starts MySQL, applies migrations, and provides database helpers |
-| mysql_test.go | Exact migration-28 schema/table, collector/user/machine constraints and indexes, unsigned-ID, and no-foreign-key guards after clean migration |
+| mysql_test.go | Exact migration-29 schema/table, collector/user/machine/claim constraints and indexes, unsigned-ID, and no-foreign-key guards after clean migration |
 | resource_test.go | Resource repository CRUD, key-presence/exact-value label filtering, constant-query batched-profile reads, seed-isolated observation-derived cluster rollups, create-with-profile atomicity, profile validation, and PATCH partial-merge semantics against real MySQL |
 | inventory_audit_test.go | Real-MySQL inventory audit atomicity, typed-profile and relationship behavior, per-CI evidence, multi-source observations, override precedence, stale-write conflicts, clear, effective provenance, and per-CI relationship evidence |
 | bulk_resource_mutation_test.go | Real-MySQL reviewed bulk success/idempotent preview/conflict, structurally decoded externalId field audit, true multi-target mid-batch rollback, audit-failure rollback, archived-CI lock validation, and two-connection lock/drift enforcement |
@@ -17,6 +17,7 @@ MySQL-backed integration tests run against disposable Testcontainers databases.
 | resource_identity_test.go | MySQL identity normalization/uniqueness, immutable ID/origin, and atomic identity-plus-field-audit rollback coverage |
 | resource_identity_migration_test.go | Fail-loud v21 migration preflight for duplicate legacy external IDs before schema mutation |
 | query_workspace_migration_test.go | Real-MySQL migration-28 downgrade guard: workspace rows and any non-null full SQL survive a refused rollback, while empty storage permits downgrade |
+| pg_query_connections_migration_test.go | Real-MySQL migration-29 contract proof: composite (resource_id, database_name) credential key, claims PK/nullable execution_id, NULL-tolerant client_execution_id uniqueness, legacy '' defaults, and per-datum downgrade refusal until the new-dimension data is purged |
 | query_workspace_statement_api_test.go | Real-MySQL + HTTP workspace OCC and owner-only successful statement access matrix, including other/admin/machine/failed/legacy denial and list/audit non-disclosure |
 | topology_test.go | Topology traversal plus real-MySQL bounded multi-observer effective-health projection, deterministic cap-plus-sentinel reads, and overflow propagation |
 | auth_authorization_version_test.go | Verifies Authorization Version credential invalidation and governed-query freshness against current database state |

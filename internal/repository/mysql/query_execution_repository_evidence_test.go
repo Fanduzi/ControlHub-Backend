@@ -94,9 +94,11 @@ func TestListExecutionsProjectsMachinePrincipalIdentity(t *testing.T) {
 		WithArgs(uint64(22), 20).
 		WillReturnRows(sqlmock.NewRows([]string{
 			"id", "target_resource_id", "actor_user_id", "actor_machine_principal_id", "engine",
+			"database_name", "schema_name",
 			"statement_digest", "statement_preview", "has_full_statement", "status", "row_count", "duration_ms",
-			"error_code", "error_message", "created_at", "user_display_name", "machine_name",
-		}).AddRow(101, 22, nil, 91, "mysql", "digest", "preview", false, "success", 1, 7, "", "", createdAt, nil, "inventory-agent"))
+			"error_code", "error_message", "backend_pid", "remote_state", "client_execution_id",
+			"created_at", "user_display_name", "machine_name",
+		}).AddRow(101, 22, nil, 91, "mysql", "", "", "digest", "preview", false, "success", 1, 7, "", "", nil, "", nil, createdAt, nil, "inventory-agent"))
 
 	items, _, err := NewQueryExecutionRepository(db).ListExecutions(context.Background(), model.QueryExecutionListQuery{
 		TargetResourceID: 22,

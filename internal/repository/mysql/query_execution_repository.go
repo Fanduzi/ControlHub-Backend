@@ -40,7 +40,7 @@ const (
 		             credential_ref = values(credential_ref),
 		             enabled = values(enabled),
 		             environment_policy = values(environment_policy)`
-	deleteCredentialMetadataSQL = `delete from query_target_credentials where resource_id = ?`
+	deleteCredentialMetadataSQL = `delete from query_target_credentials where resource_id = ? and database_name = ''`
 	insertAuditEventSQL         = `insert into audit_events (actor_user_id, target_resource_id, event_type, result) values (?, ?, ?, ?)`
 	insertExecutionAuditSQL     = `insert into audit_events (actor_user_id, actor_machine_principal_id, target_resource_id, event_type, result) values (?, ?, ?, ?, ?)`
 	insertExecutionSQL          = `insert into query_executions
@@ -79,15 +79,16 @@ var errQueryEvidencePairFailed = errors.New("query evidence pair persistence fai
 //
 // The environment_policy is returned as the typed enum.
 func (r *QueryExecutionRepository) GetCredentialByResourceID(ctx context.Context, resourceID uint64) (model.QueryCredentialMetadata, error) {
-	const q = `select id, resource_id, engine, credential_ref, enabled, environment_policy
-	           from query_target_credentials where resource_id = ?`
+	const q = `select id, resource_id, database_name, default_schema, engine, credential_ref, enabled, environment_policy
+	           from query_target_credentials where resource_id = ? and database_name = ''`
 	var (
 		meta      model.QueryCredentialMetadata
 		enabled   bool
 		policyStr string
 	)
 	err := r.db.QueryRowContext(ctx, q, resourceID).Scan(
-		&meta.ID, &meta.ResourceID, &meta.Engine, &meta.CredentialRef, &enabled, &policyStr,
+		&meta.ID, &meta.ResourceID, &meta.DatabaseName, &meta.DefaultSchema,
+		&meta.Engine, &meta.CredentialRef, &enabled, &policyStr,
 	)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
@@ -360,8 +361,8 @@ func (r *QueryExecutionRepository) ListExecutions(ctx context.Context, q model.Q
 		args = append(args, payload.CreatedAt, payload.CreatedAt, cursorID)
 	}
 
-	listSQL := `SELECT qe.id, qe.target_resource_id, qe.actor_user_id, qe.actor_machine_principal_id, qe.engine, qe.statement_digest, qe.statement_preview, qe.full_statement IS NOT NULL,
-		 qe.status, qe.row_count, qe.duration_ms, qe.error_code, qe.error_message, qe.created_at,
+	listSQL := `SELECT qe.id, qe.target_resource_id, qe.actor_user_id, qe.actor_machine_principal_id, qe.engine, qe.database_name, qe.schema_name, qe.statement_digest, qe.statement_preview, qe.full_statement IS NOT NULL,
+		 qe.status, qe.row_count, qe.duration_ms, qe.error_code, qe.error_message, qe.backend_pid, qe.remote_state, qe.client_execution_id, qe.created_at,
 		 u.display_name AS user_display_name, mp.name AS machine_name
 		 FROM query_executions qe
 		 LEFT JOIN users u ON u.id = qe.actor_user_id
@@ -397,8 +398,10 @@ func (r *QueryExecutionRepository) ListExecutions(ctx context.Context, q model.Q
 		)
 		if err := rows.Scan(
 			&rec.ID, &rec.TargetResourceID, &actorUserID, &actorMachineID, &rec.Engine,
+			&rec.DatabaseName, &rec.SchemaName,
 			&rec.StatementDigest, &rec.StatementPreview, &rec.HasFullStatement, &status,
-			&rec.RowCount, &rec.DurationMs, &rec.ErrorCode, &rec.ErrorMessage, &rec.CreatedAt,
+			&rec.RowCount, &rec.DurationMs, &rec.ErrorCode, &rec.ErrorMessage,
+			&rec.BackendPID, &rec.RemoteState, &rec.ClientExecutionID, &rec.CreatedAt,
 			&userDisplayName, &machineName,
 		); err != nil {
 			return nil, 0, fmt.Errorf("scan query execution: %w", err)

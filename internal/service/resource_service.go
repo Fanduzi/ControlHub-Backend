@@ -577,25 +577,10 @@ func validateReferenceIDs(environmentID, ownerID uint64) error {
 }
 
 func normalizeResourceCreateInput(input model.ResourceCreateInput) model.ResourceCreateInput {
-	if input.Origin == "" {
-		switch input.Source {
-		case "", "manual":
-			input.Origin = model.ResourceOriginManual
-		case "import", "imported":
-			input.Origin = model.ResourceOriginImported
-		case "discovery", "discovered":
-			input.Origin = model.ResourceOriginDiscovered
-		}
-	}
+	input.ApplyLegacyCreateFields()
 	input.Source = string(input.Origin)
 	input.Aliases, _ = normalizeAliases(input.Aliases)
-	if len(input.ExternalIdentifiers) == 0 && strings.TrimSpace(input.ExternalID) != "" {
-		input.ExternalIdentifiers = []model.ResourceExternalIdentifier{{System: "legacy", Value: strings.TrimSpace(input.ExternalID)}}
-	}
 	input.ExternalIdentifiers, _ = normalizeExternalIdentifiers(input.ExternalIdentifiers)
-	if input.Labels == nil {
-		input.Labels = map[string]string{}
-	}
 	return input
 }
 

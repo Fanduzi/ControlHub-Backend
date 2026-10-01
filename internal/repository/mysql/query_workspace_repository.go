@@ -1,5 +1,5 @@
 // Package mysql provides MySQL-backed repository implementations.
-// input: context, database/sql, encoding/json, errors, fmt, go-sql-driver/mysql, internal/model, internal/service
+// input: context, database/sql, encoding/json, errors, fmt, internal/model, internal/service
 // output: QueryWorkspaceRepository Get/OCC Put and service-parity ErrQueryWorkspaceConflict
 // pos: One-row-per-owner JSON aggregate persistence for query worksheets
 // note: if this file changes, update this header and module README.md.
@@ -11,8 +11,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-
-	gomysql "github.com/go-sql-driver/mysql"
 
 	"github.com/fan/controlhub/internal/model"
 	"github.com/fan/controlhub/internal/service"
@@ -61,8 +59,7 @@ func (r *QueryWorkspaceRepository) Put(ctx context.Context, ownerUserID uint64, 
 	if req.ExpectedVersion == 0 {
 		_, err := r.db.ExecContext(ctx, `INSERT INTO query_workspaces (owner_user_id, worksheets, version) VALUES (?, ?, 1)`, ownerUserID, raw)
 		if err != nil {
-			var mysqlErr *gomysql.MySQLError
-			if errors.As(err, &mysqlErr) && mysqlErr.Number == 1062 {
+			if isDuplicateKey(err) {
 				return 0, ErrQueryWorkspaceConflict
 			}
 			return 0, fmt.Errorf("insert query workspace: %w", err)

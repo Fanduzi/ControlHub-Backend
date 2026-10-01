@@ -1,6 +1,6 @@
 // Package service provides business logic for resource topology projection.
 // input: internal/model topology contracts and repository-bounded relation/candidate reads
-// output: NewTopologyService, TopologyService.BuildTopology, TopologyRepository interface with caller-owned budgets
+// output: NewTopologyService, TopologyService.BuildTopology, TopologyRepository interface with caller-owned budgets and batched neighbor reads
 // pos: Business logic for capped rooted and workspace topology read models; hop count 1–32 plus node/edge output caps
 // note: if this file changes, update this header and module README.md.
 package service
@@ -26,6 +26,7 @@ const (
 
 type TopologyRepository interface {
 	GetResource(id uint64) (*model.Resource, error)
+	GetResourcesByIDs(ids []uint64) (map[uint64]*model.Resource, error)
 	ListTopologyRelationsByResourceIDs(ids []uint64, direction model.TopologyDirection, relationType model.RelationType, limit int) ([]model.ResourceRelation, error)
 	ListTopologyCandidates(environmentID uint64, limit int) ([]model.Resource, error)
 }
@@ -83,36 +84,39 @@ func (s *TopologyService) BuildTopology(query model.TopologyQuery) (*model.Topol
 		}
 		sortTopologyRelations(relations)
 
-		var nextFrontier []uint64
+		var pendingIDs []uint64
+		pendingSeen := map[uint64]struct{}{}
 		for _, rel := range relations {
-			if query.RelationType != "" && rel.RelationType != query.RelationType {
+			neighborID, ok := topologyNeighborID(rel, frontier, query)
+			if !ok {
 				continue
 			}
+			if neighborID == 0 {
+				continue
+			}
+			if _, nodeSeen := nodeSet[neighborID]; nodeSeen {
+				continue
+			}
+			if _, already := pendingSeen[neighborID]; already {
+				continue
+			}
+			pendingSeen[neighborID] = struct{}{}
+			pendingIDs = append(pendingIDs, neighborID)
+		}
+		fetched := map[uint64]*model.Resource{}
+		if len(pendingIDs) > 0 {
+			var fetchErr error
+			fetched, fetchErr = s.repo.GetResourcesByIDs(pendingIDs)
+			if fetchErr != nil {
+				return nil, fetchErr
+			}
+		}
 
-			fromInFrontier := contains(frontier, rel.FromResourceID)
-			toInFrontier := contains(frontier, rel.ToResourceID)
-
-			var neighborID uint64
-			switch query.Direction {
-			case model.TopologyDirectionUpstream:
-				if !toInFrontier {
-					continue
-				}
-				neighborID = rel.FromResourceID
-			case model.TopologyDirectionDownstream:
-				if !fromInFrontier {
-					continue
-				}
-				neighborID = rel.ToResourceID
-			default:
-				if fromInFrontier && toInFrontier {
-				} else if fromInFrontier {
-					neighborID = rel.ToResourceID
-				} else if toInFrontier {
-					neighborID = rel.FromResourceID
-				} else {
-					continue
-				}
+		var nextFrontier []uint64
+		for _, rel := range relations {
+			neighborID, ok := topologyNeighborID(rel, frontier, query)
+			if !ok {
+				continue
 			}
 
 			_, edgeSeen := edgeSet[rel.ID]
@@ -127,8 +131,8 @@ func (s *TopologyService) BuildTopology(query model.TopologyQuery) (*model.Topol
 			}
 			if neighborID != 0 {
 				if !nodeSeen {
-					res, err := s.repo.GetResource(neighborID)
-					if err != nil {
+					res, found := fetched[neighborID]
+					if !found {
 						continue
 					}
 					if query.EnvironmentID != 0 && res.EnvironmentID != query.EnvironmentID {
@@ -245,6 +249,37 @@ func validateTopologyQuery(q model.TopologyQuery) error {
 		return ErrInvalidDirection
 	}
 	return nil
+}
+
+func topologyNeighborID(rel model.ResourceRelation, frontier []uint64, query model.TopologyQuery) (uint64, bool) {
+	if query.RelationType != "" && rel.RelationType != query.RelationType {
+		return 0, false
+	}
+	fromInFrontier := contains(frontier, rel.FromResourceID)
+	toInFrontier := contains(frontier, rel.ToResourceID)
+	switch query.Direction {
+	case model.TopologyDirectionUpstream:
+		if !toInFrontier {
+			return 0, false
+		}
+		return rel.FromResourceID, true
+	case model.TopologyDirectionDownstream:
+		if !fromInFrontier {
+			return 0, false
+		}
+		return rel.ToResourceID, true
+	default:
+		if fromInFrontier && toInFrontier {
+			return 0, true
+		}
+		if fromInFrontier {
+			return rel.ToResourceID, true
+		}
+		if toInFrontier {
+			return rel.FromResourceID, true
+		}
+		return 0, false
+	}
 }
 
 func contains(slice []uint64, s uint64) bool {

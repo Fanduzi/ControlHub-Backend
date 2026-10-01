@@ -51,11 +51,13 @@ var identifierSyntax = regexp.MustCompile(`^[a-zA-Z0-9_]+$`)
 
 // ResultDisclosurePolicy is the persisted per-column disclosure mode for a
 // query result. Absence of a matching row means the column is blocked
-// (fail-closed).
+// (fail-closed). SchemaName is the schema segment of the canonical policy key;
+// it is empty for legacy MySQL/TiDB policies.
 type ResultDisclosurePolicy struct {
 	ID               uint64               `json:"id"`
 	TargetResourceID uint64               `json:"targetResourceId"`
 	DatabaseName     string               `json:"databaseName"`
+	SchemaName       string               `json:"schemaName"`
 	ObjectName       string               `json:"objectName"`
 	ColumnName       string               `json:"columnName"`
 	Mode             ResultDisclosureMode `json:"mode"`
