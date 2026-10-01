@@ -800,10 +800,10 @@ paths:
       summary: Get query credential metadata status for a query target
       operationId: getQueryTargetCredential
       description: >
-        Phase 38A. Returns the credential metadata status for a MySQL/TiDB query
-        target — metadata only (opaque credential ref, enabled flag, environment
-        policy, runtime status). It NEVER returns a DSN, password, host, or port.
-        Requires a fresh Bearer token.
+        Phase 38A. Returns the credential metadata status for one query
+        connection — metadata only (opaque credential ref, enabled flag,
+        environment policy, runtime status). It NEVER returns a DSN, password,
+        host, or port. Requires a fresh Bearer token.
       security:
         - bearerAuth: []
       parameters:
@@ -814,6 +814,17 @@ paths:
             type: integer
             format: int64
             minimum: 1
+        - name: database
+          in: query
+          required: false
+          schema:
+            type: string
+            maxLength: 128
+          description: >-
+            Connection selector — the database segment of the composite
+            connection key (resource, database). Required non-empty for
+            PostgreSQL targets; must be absent/empty for MySQL/TiDB targets
+            (the legacy '' row is addressed).
       responses:
         "200":
           description: Credential metadata status
@@ -872,14 +883,17 @@ paths:
       summary: Create or update query credential metadata for a query target
       operationId: putQueryTargetCredential
       description: >
-        Phase 38A. Admin-only. Persists credential METADATA for a MySQL/TiDB query
-        target: an opaque credential reference, an enabled flag, and an environment
-        policy. The body must never carry a DSN, password, host, port, or actor
-        field (unknown fields are rejected by strict decoding). The engine is
-        derived from the target, never accepted from the request. Save succeeds
-        even when the secret cannot be resolved yet; the returned runtimeStatus
-        explains it and the target stays locked. Requires a fresh Bearer token and
-        the admin role.
+        Phase 38A. Admin-only. Persists credential METADATA for one query
+        connection: an opaque credential reference, an enabled flag, and an
+        environment policy. The ?database= query parameter selects the
+        connection row — required non-empty for PostgreSQL targets (which also
+        require a non-empty defaultSchema body field), absent/empty for
+        MySQL/TiDB targets. The body must never carry a DSN, password, host,
+        port, or actor field (unknown fields are rejected by strict decoding).
+        The engine is derived from the target, never accepted from the request.
+        Save succeeds even when the secret cannot be resolved yet; the returned
+        runtimeStatus explains it and the target stays locked. Requires a fresh
+        Bearer token and the admin role.
       security:
         - bearerAuth: []
       parameters:
@@ -890,6 +904,16 @@ paths:
             type: integer
             format: int64
             minimum: 1
+        - name: database
+          in: query
+          required: false
+          schema:
+            type: string
+            maxLength: 128
+          description: >-
+            Connection selector — the database segment of the composite
+            connection key (resource, database). Required non-empty for
+            PostgreSQL targets; must be absent/empty for MySQL/TiDB targets.
       requestBody:
         required: true
         content:
@@ -955,8 +979,10 @@ paths:
       summary: Remove query credential metadata for a query target
       operationId: deleteQueryTargetCredential
       description: >
-        Phase 38A. Admin-only. Removes a target's credential metadata and returns
-        204. After delete the target remains visible and locked as
+        Phase 38A. Admin-only. Removes one connection's credential metadata and
+        returns 204. The ?database= query parameter selects the connection row —
+        required non-empty for PostgreSQL targets, absent/empty for MySQL/TiDB.
+        After delete the target remains visible and locked as
         credential_required. Requires a fresh Bearer token and the admin role.
       security:
         - bearerAuth: []
@@ -968,6 +994,16 @@ paths:
             type: integer
             format: int64
             minimum: 1
+        - name: database
+          in: query
+          required: false
+          schema:
+            type: string
+            maxLength: 128
+          description: >-
+            Connection selector — the database segment of the composite
+            connection key (resource, database). Required non-empty for
+            PostgreSQL targets; must be absent/empty for MySQL/TiDB targets.
       responses:
         "204":
           description: Credential metadata removed
@@ -4937,6 +4973,13 @@ components:
         confirmAllEnvironments:
           type: boolean
           description: Required true when environmentPolicy is all_environments.
+        defaultSchema:
+          type: string
+          maxLength: 128
+          description: >-
+            Pinned default schema for a PostgreSQL connection — required
+            non-empty when the target engine is postgresql; must be absent/empty
+            for MySQL/TiDB.
     ObjectKind:
       type: string
       description: >-

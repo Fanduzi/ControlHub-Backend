@@ -436,7 +436,7 @@ func TestCompleteQueryTarget_MySQLExplainEnabled(t *testing.T) {
 // an already-known frontend credentialState, so no contract change is needed.
 func TestQueryTargetService_List_InvalidStoredCredentialYieldsInvalidRefNotMissing(t *testing.T) {
 	store := newFakeCredentialStore()
-	store.metadata[credentialTargetID] = credentialMeta("bad-ref!", true, model.QueryEnvPolicyNonProdOnly)
+	store.metadata[credentialStoreKey{credentialTargetID, ""}] = credentialMeta("bad-ref!", true, model.QueryEnvPolicyNonProdOnly)
 	store.getErr = model.ErrInvalidCredentialMetadata
 	target := credentialTarget("mysql", "db.internal", 3306, "staging")
 	svc := NewQueryTargetService(fakeTargetRepo{targets: []model.QueryTarget{target}}).
@@ -468,7 +468,7 @@ func TestQueryTargetService_List_InvalidStoredCredentialYieldsInvalidRefNotMissi
 // must fail closed as invalid metadata rather than appear as policy_blocked.
 func TestQueryTargetService_List_InvalidStoredPolicyYieldsInvalidRefNotPolicyBlocked(t *testing.T) {
 	store := newFakeCredentialStore()
-	store.metadata[credentialTargetID] = credentialMeta("ORDER_MYSQL_RO", true, model.QueryEnvironmentPolicy("prod_plus"))
+	store.metadata[credentialStoreKey{credentialTargetID, ""}] = credentialMeta("ORDER_MYSQL_RO", true, model.QueryEnvironmentPolicy("prod_plus"))
 	store.getErr = model.ErrInvalidCredentialMetadata
 	target := credentialTarget("mysql", "db.internal", 3306, "staging")
 	svc := NewQueryTargetService(fakeTargetRepo{targets: []model.QueryTarget{target}}).

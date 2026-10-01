@@ -1,6 +1,6 @@
 // Package service provides business logic for resource reads and typed profile assembly.
 // input: internal/model (QueryTarget, QueryTargetListQuery, QueryCredentialMetadata, QueryEnvironmentPolicy, QueryCredentialRuntimeStatus), context, database/sql, errors, strings
-// output: QueryTargetRepository + QueryCredentialReader interfaces, NewQueryTargetService, WithCredentialReader, WithCredentialResolver, QueryTargetService.List, readTargetCredential, classifyQueryKind, completeQueryTarget, completeQueryTargetWithRuntime, credentialAllowsExecution, isExecutableEngine
+// output: QueryTargetRepository + QueryCredentialReader interfaces, NewQueryTargetService, WithCredentialReader, WithCredentialResolver, QueryTargetService.List, readTargetCredential, classifyQueryKind, completeQueryTarget, completeQueryTargetWithRuntime, credentialAllowsExecution, isExecutableEngine, isCredentialManagedEngine, isPGEngine
 // pos: Query target read model — sources database_instance targets and derives workbench context + Phase 37 readiness, with the Phase 38A runtime-gated readiness correction
 // note: if this file changes, update header and README.md
 package service
@@ -26,7 +26,11 @@ type QueryTargetRepository interface {
 // dependency of QueryTargetService — when absent, targets stay in their Phase 36
 // locked state (no execution readiness is derived).
 type QueryCredentialReader interface {
-	GetCredentialByResourceID(ctx context.Context, resourceID uint64) (model.QueryCredentialMetadata, error)
+	// GetCredential reads one connection's credential row by composite key
+	// (resourceID, databaseName). databaseName '' addresses the legacy
+	// single-connection MySQL/TiDB row; a non-empty name addresses a
+	// PostgreSQL connection row.
+	GetCredential(ctx context.Context, resourceID uint64, databaseName string) (model.QueryCredentialMetadata, error)
 }
 
 // QueryTargetService assembles the query target read model: it sources raw
@@ -117,7 +121,7 @@ func (s *QueryTargetService) readTargetCredential(ctx context.Context, resourceI
 	if s.credentials == nil {
 		return nil, nil
 	}
-	c, err := s.credentials.GetCredentialByResourceID(ctx, resourceID)
+	c, err := s.credentials.GetCredential(ctx, resourceID, "")
 	switch {
 	case err == nil:
 		return &c, nil
@@ -315,14 +319,34 @@ func completeQueryTargetWithRuntime(in model.QueryTarget, cred *model.QueryCrede
 }
 
 // isExecutableEngine reports whether an engine is supported for Phase 37
-// read-only execution (MySQL/TiDB only). Other SQL engines (postgres/clickhouse)
-// are known but deferred to a later phase.
+// read-only execution (MySQL/TiDB only). PostgreSQL remains a credential-
+// managed engine but is NOT executable until the governed PG chain is wired —
+// keeping it out of this set is the execution fail-closed boundary.
 func isExecutableEngine(engine string) bool {
 	switch strings.ToLower(strings.TrimSpace(engine)) {
 	case "mysql", "tidb":
 		return true
 	}
 	return false
+}
+
+// isCredentialManagedEngine reports whether an engine's targets carry managed
+// credential metadata (read/upsert/delete + runtime inspection). PostgreSQL is
+// included so its connection rows are manageable; it stays outside
+// isExecutableEngine so no execution path opens early.
+func isCredentialManagedEngine(engine string) bool {
+	switch strings.ToLower(strings.TrimSpace(engine)) {
+	case "mysql", "tidb", "postgresql":
+		return true
+	}
+	return false
+}
+
+// isPGEngine reports whether the engine is PostgreSQL — the engine whose
+// connections are keyed by (resource_id, database_name) and bound via
+// validatePGDSNBinding rather than the MySQL DSN check.
+func isPGEngine(engine string) bool {
+	return strings.EqualFold(strings.TrimSpace(engine), "postgresql")
 }
 
 // credentialAllowsExecution applies the credential binding + environment-policy

@@ -1,7 +1,7 @@
 // Package service provides the Phase 38A query credential metadata service.
 // input: context, database/sql, errors, fmt, internal/model
-// output: QueryCredentialMetadataStore interface, InspectCredentialRuntime, QueryCredentialService, NewQueryCredentialService, GetStatus/Upsert/Delete, ErrQueryCredential* sentinels
-// pos: Phase 38A authenticated credential METADATA management — runtime status inspection (resolver + binding, never returning the DSN), admin-gated upsert/delete, and audit recording
+// output: QueryCredentialMetadataStore interface, InspectCredentialRuntime, QueryCredentialService, NewQueryCredentialService, GetStatus/Upsert/Delete with composite (resource,database) addressing, validateConnectionSelector, ErrQueryCredential* sentinels
+// pos: Phase 38A authenticated credential METADATA management — runtime status inspection (resolver + per-engine binding incl. PG dbname match, never returning the DSN), admin-gated composite-key upsert/delete, and audit recording
 // note: if this file changes, update header and README.md
 package service
 
@@ -40,9 +40,11 @@ func isAdmin(actor AuthenticatedUser) bool {
 // back the metadata change. This keeps the "every successful change is audited"
 // guarantee — there is never a configured row without its audit trail.
 type QueryCredentialMetadataStore interface {
-	GetCredentialByResourceID(ctx context.Context, resourceID uint64) (model.QueryCredentialMetadata, error)
+	// GetCredential reads one connection's credential row by composite key
+	// (resourceID, databaseName); '' addresses the legacy MySQL/TiDB row.
+	GetCredential(ctx context.Context, resourceID uint64, databaseName string) (model.QueryCredentialMetadata, error)
 	UpsertCredentialMetadataWithAudit(ctx context.Context, meta model.QueryCredentialMetadata, actorUserID uint64, eventType, result string) error
-	DeleteCredentialMetadataWithAudit(ctx context.Context, resourceID, actorUserID uint64, eventType, result string) error
+	DeleteCredentialMetadataWithAudit(ctx context.Context, resourceID uint64, databaseName string, actorUserID uint64, eventType, result string) error
 }
 
 // query credential audit event types and the success result vocabulary.
@@ -59,9 +61,13 @@ const (
 // execution. cred may be nil (no metadata row). The resolver is never called for
 // a status decided before resolution (unsupported, incomplete, missing,
 // invalid, disabled, policy_blocked).
+//
+// PostgreSQL connections are inspected through the PG binding validator: the
+// DSN's dbname must equal the credential row's database_name — the composite
+// connection identity segment — not merely the target's host/port.
 func InspectCredentialRuntime(ctx context.Context, resolver QueryCredentialResolver, target model.QueryTarget, cred *model.QueryCredentialMetadata) model.QueryCredentialRuntimeStatus {
 	engine := target.ConnectionContext.Engine
-	if !isExecutableEngine(engine) {
+	if !isCredentialManagedEngine(engine) {
 		return model.QueryCredentialRuntimeUnsupportedTarget
 	}
 	if target.ConnectionContext.Host == "" || target.ConnectionContext.Port == 0 {
@@ -71,6 +77,12 @@ func InspectCredentialRuntime(ctx context.Context, resolver QueryCredentialResol
 		return model.QueryCredentialRuntimeMissingMetadata
 	}
 	if err := model.ValidateCredentialRef(cred.CredentialRef); err != nil {
+		return model.QueryCredentialRuntimeInvalidRef
+	}
+	// Row-shape contract (G1): a PostgreSQL connection row must carry a
+	// non-empty database_name/default_schema; any other engine's row must
+	// carry neither. A malformed row is treated as corrupt — fail closed.
+	if err := cred.ValidateConnectionIdentity(); err != nil {
 		return model.QueryCredentialRuntimeInvalidRef
 	}
 	if !cred.Enabled {
@@ -83,17 +95,23 @@ func InspectCredentialRuntime(ctx context.Context, resolver QueryCredentialResol
 	if err != nil || dsn == "" {
 		return model.QueryCredentialRuntimeSecretMissing
 	}
-	if err := validateDSNBinding(dsn, target); err != nil {
+	if isPGEngine(engine) {
+		if _, err := validatePGDSNBindingForTarget(dsn, target, cred.DatabaseName); err != nil {
+			return model.QueryCredentialRuntimeBindingMismatch
+		}
+	} else if err := validateDSNBinding(dsn, target); err != nil {
 		return model.QueryCredentialRuntimeBindingMismatch
 	}
 	return model.QueryCredentialRuntimeSecretResolved
 }
 
-// QueryCredentialService manages credential metadata for MySQL/TiDB query
-// targets. It inspects runtime status (never returning the DSN), enforces the
-// admin-only write/delete boundary, persists metadata only, and records an audit
-// event for every successful write/delete. The engine is always derived from the
-// selected target, never accepted from a request.
+// QueryCredentialService manages credential metadata for query target
+// connections — legacy MySQL/TiDB rows at (resource, ”) and PostgreSQL
+// connection rows at (resource, database). It inspects runtime status (never
+// returning the DSN), enforces the admin-only write/delete boundary, persists
+// metadata only, and records an audit event for every successful write/delete.
+// The engine is always derived from the selected target, never accepted from a
+// request.
 type QueryCredentialService struct {
 	targets  QueryTargetRepository
 	store    QueryCredentialMetadataStore
@@ -117,12 +135,15 @@ func NewQueryCredentialService(targets QueryTargetRepository, store QueryCredent
 //     the raw ref suppressed (it failed validation and could be DSN-shaped);
 //   - any other read error -> propagated as a controlled backend error (the
 //     handler maps it to 500), never missing_metadata.
-func (s *QueryCredentialService) GetStatus(ctx context.Context, targetID uint64) (model.QueryCredentialStatusResponse, error) {
+func (s *QueryCredentialService) GetStatus(ctx context.Context, targetID uint64, databaseName string) (model.QueryCredentialStatusResponse, error) {
 	target, err := s.findTarget(ctx, targetID)
 	if err != nil {
 		return model.QueryCredentialStatusResponse{}, err
 	}
-	c, readErr := s.store.GetCredentialByResourceID(ctx, targetID)
+	if err := validateConnectionSelector(target.ConnectionContext.Engine, databaseName); err != nil {
+		return model.QueryCredentialStatusResponse{}, fmt.Errorf("%w: %v", ErrQueryCredentialValidation, err)
+	}
+	c, readErr := s.store.GetCredential(ctx, targetID, databaseName)
 	switch {
 	case readErr == nil:
 		runtime := InspectCredentialRuntime(ctx, s.resolver, target, &c)
@@ -154,7 +175,7 @@ func (s *QueryCredentialService) GetStatus(ctx context.Context, targetID uint64)
 // is not resolvable yet; the returned runtime status explains it and the target
 // stays locked. Only an admin may upsert; a non-admin receives
 // ErrQueryCredentialForbidden and nothing is written.
-func (s *QueryCredentialService) Upsert(ctx context.Context, actor AuthenticatedUser, targetID uint64, req model.QueryCredentialUpsertRequest) (model.QueryCredentialStatusResponse, error) {
+func (s *QueryCredentialService) Upsert(ctx context.Context, actor AuthenticatedUser, targetID uint64, databaseName string, req model.QueryCredentialUpsertRequest) (model.QueryCredentialStatusResponse, error) {
 	if !isAdmin(actor) {
 		return model.QueryCredentialStatusResponse{}, ErrQueryCredentialForbidden
 	}
@@ -165,11 +186,26 @@ func (s *QueryCredentialService) Upsert(ctx context.Context, actor Authenticated
 	if err != nil {
 		return model.QueryCredentialStatusResponse{}, err
 	}
-	if !isExecutableEngine(target.ConnectionContext.Engine) || target.ConnectionContext.Host == "" || target.ConnectionContext.Port == 0 {
-		return model.QueryCredentialStatusResponse{}, fmt.Errorf("%w: target is not a complete mysql/tidb query target", ErrQueryCredentialValidation)
+	if !isCredentialManagedEngine(target.ConnectionContext.Engine) || target.ConnectionContext.Host == "" || target.ConnectionContext.Port == 0 {
+		return model.QueryCredentialStatusResponse{}, fmt.Errorf("%w: target is not a complete query target", ErrQueryCredentialValidation)
+	}
+	if err := validateConnectionSelector(target.ConnectionContext.Engine, databaseName); err != nil {
+		return model.QueryCredentialStatusResponse{}, fmt.Errorf("%w: %v", ErrQueryCredentialValidation, err)
+	}
+	// defaultSchema is part of the PostgreSQL connection identity and required
+	// at connection creation; for MySQL/TiDB it must stay empty so a legacy
+	// (resource,'') row can never silently gain schema context.
+	if isPGEngine(target.ConnectionContext.Engine) {
+		if err := model.ValidateConnectionName("defaultSchema", req.DefaultSchema); err != nil {
+			return model.QueryCredentialStatusResponse{}, fmt.Errorf("%w: %v", ErrQueryCredentialValidation, err)
+		}
+	} else if req.DefaultSchema != "" {
+		return model.QueryCredentialStatusResponse{}, fmt.Errorf("%w: defaultSchema is only valid for postgresql targets", ErrQueryCredentialValidation)
 	}
 	meta := model.QueryCredentialMetadata{
 		ResourceID:        target.ResourceID,
+		DatabaseName:      databaseName,
+		DefaultSchema:     req.DefaultSchema,
 		Engine:            target.ConnectionContext.Engine,
 		CredentialRef:     req.CredentialRef,
 		Enabled:           req.Enabled,
@@ -186,7 +222,7 @@ func (s *QueryCredentialService) Upsert(ctx context.Context, actor Authenticated
 // query.credential.deleted audit event (the store owns the transaction, so a
 // failed audit leaves the original metadata in place). Only an admin may delete;
 // a non-admin receives ErrQueryCredentialForbidden and nothing is removed.
-func (s *QueryCredentialService) Delete(ctx context.Context, actor AuthenticatedUser, targetID uint64) error {
+func (s *QueryCredentialService) Delete(ctx context.Context, actor AuthenticatedUser, targetID uint64, databaseName string) error {
 	if !isAdmin(actor) {
 		return ErrQueryCredentialForbidden
 	}
@@ -194,7 +230,25 @@ func (s *QueryCredentialService) Delete(ctx context.Context, actor Authenticated
 	if err != nil {
 		return err
 	}
-	return s.store.DeleteCredentialMetadataWithAudit(ctx, target.ResourceID, actor.ID, queryCredentialDeletedEvent, auditResultSuccess)
+	if err := validateConnectionSelector(target.ConnectionContext.Engine, databaseName); err != nil {
+		return fmt.Errorf("%w: %v", ErrQueryCredentialValidation, err)
+	}
+	return s.store.DeleteCredentialMetadataWithAudit(ctx, target.ResourceID, databaseName, actor.ID, queryCredentialDeletedEvent, auditResultSuccess)
+}
+
+// validateConnectionSelector enforces the composite-identity addressing rule
+// on credential operations (spec G1): a PostgreSQL target requires a non-empty
+// database segment selecting the (resource, database) connection row; every
+// other engine requires it absent/empty so the legacy (resource, ”) row is
+// addressed and behavior is unchanged.
+func validateConnectionSelector(engine, databaseName string) error {
+	if isPGEngine(engine) {
+		return model.ValidateConnectionName("database", databaseName)
+	}
+	if databaseName != "" {
+		return fmt.Errorf("database is only valid for postgresql targets")
+	}
+	return nil
 }
 
 // findTarget locates a single query target by id, mirroring the execute path.

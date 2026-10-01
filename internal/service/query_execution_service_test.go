@@ -86,7 +86,7 @@ type fakeExecRepo struct {
 	lastQuery model.QueryExecutionListQuery
 }
 
-func (f *fakeExecRepo) GetCredentialByResourceID(_ context.Context, resourceID uint64) (model.QueryCredentialMetadata, error) {
+func (f *fakeExecRepo) GetCredential(_ context.Context, resourceID uint64, _ string) (model.QueryCredentialMetadata, error) {
 	if err, ok := f.credentialErr[resourceID]; ok {
 		return model.QueryCredentialMetadata{}, err
 	}

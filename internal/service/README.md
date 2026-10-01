@@ -42,6 +42,7 @@ Business logic layer with interface-based repository dependencies. Each service 
 | query_workspace_service_test.go | Owner propagation, model validation, persisted aggregate, and OCC conflict service tests |
 | query_template_execution_service.go | Fresh-query-actor saved-statement (template) execution — rereads the latest authorized statement, records every post-target terminal outcome without template identity, SQL, parameter names, or values, validates typed values, compiles server-side, then reuses the governed chain per page |
 | query_executor_test.go | Executor scanning, result-cap, and compiler-owned template binding tests |
+| pg_dsn_binding.go | PostgreSQL credential DSN binding validator (G3): explicit-field enforcement (env/driver defaults rejected), key allowlist, multi-host/unix-socket rejection, and parse-once `*pgx.ConnConfig` reused as the executed config |
 | navigate_related_records_test.go | Related-record navigation service tests: governance, parameter binding, history/audit, Apply-path exclusive `ErrQueryDisclosureBlocked` (Issue #48), and inspector-phase cancellation/deadline evidence (Issue #40) |
 | query_execution_service_test.go | Query execution service tests, including successful-User full SQL, owner-only retrieval and history restore eligibility, machine/non-success omission, governed paging, disclosure, atomic persistence, and cancellation durability |
 | query_execution_evidence_pair_test.go | persistEvidencePair tests: detached two-second window, fixed audit event type, verbatim identity, and fail-closed rollback |

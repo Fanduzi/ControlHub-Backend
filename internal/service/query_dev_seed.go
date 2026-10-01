@@ -1,7 +1,7 @@
 // Package service provides the local/dev query credential metadata seeder.
 // input: context, errors, fmt, internal/model
 // output: QueryDevCredentialSeedConfig, DevCredentialWriter, QueryDevCredentialSeeder, NewQueryDevCredentialSeeder, Seed, seed sentinel errors
-// pos: Local/dev-only credential METADATA seed path — validates config, binds the env DSN to the selected target, and upserts metadata only (the DSN is never stored, logged, or returned)
+// pos: Local/dev-only credential METADATA seed path — validates config + engine-keyed connection identity (PG database/default_schema), binds the env DSN to the selected target/connection, and upserts metadata only (the DSN is never stored, logged, or returned)
 // note: if this file changes, update header and README.md
 package service
 
@@ -21,20 +21,25 @@ var (
 	errSeedInvalidEnvironmentPolicy        = errors.New("dev seed environment policy is invalid")
 	errSeedAllEnvironmentsRequiresOverride = errors.New("dev seed all_environments requires an explicit override")
 	errSeedTargetNotFound                  = errors.New("dev seed target not found")
-	errSeedUnsupportedEngine               = errors.New("dev seed target engine is not supported for execution")
+	errSeedUnsupportedEngine               = errors.New("dev seed target engine is not supported for credential management")
 	errSeedIncompleteConnection            = errors.New("dev seed target connection is incomplete")
 	errSeedMissingResolvedDSN              = errors.New("dev seed credential resolved to no DSN")
 	errSeedCredentialNotBound              = errors.New("dev seed credential is not bound to the target")
+	errSeedInvalidConnectionIdentity       = errors.New("dev seed connection identity is invalid for the target engine")
 )
 
 // QueryDevCredentialSeedConfig is the validated input to the local/dev seed
 // path. It carries identity and policy only — no DSN. The DSN is read from the
-// environment by the credential resolver at seed time.
+// environment by the credential resolver at seed time. Database and
+// DefaultSchema form the PostgreSQL connection identity segment; both must be
+// empty for MySQL/TiDB targets and non-empty for PostgreSQL targets.
 type QueryDevCredentialSeedConfig struct {
 	TargetResourceID     uint64
 	CredentialRef        string
 	EnvironmentPolicy    model.QueryEnvironmentPolicy
 	AllowAllEnvironments bool
+	Database             string
+	DefaultSchema        string
 }
 
 // DevCredentialWriter persists credential metadata for the local/dev seed path.
@@ -81,11 +86,24 @@ func (s *QueryDevCredentialSeeder) Seed(ctx context.Context, cfg QueryDevCredent
 	if err != nil {
 		return model.QueryCredentialMetadata{}, err
 	}
-	if !isExecutableEngine(target.ConnectionContext.Engine) {
+	if !isCredentialManagedEngine(target.ConnectionContext.Engine) {
 		return model.QueryCredentialMetadata{}, errSeedUnsupportedEngine
 	}
 	if target.ConnectionContext.Host == "" || target.ConnectionContext.Port == 0 {
 		return model.QueryCredentialMetadata{}, errSeedIncompleteConnection
+	}
+
+	// Connection identity is engine-keyed (G1): PostgreSQL requires a non-empty
+	// database + default schema; every other engine requires both empty.
+	if isPGEngine(target.ConnectionContext.Engine) {
+		if err := model.ValidateConnectionName("database", cfg.Database); err != nil {
+			return model.QueryCredentialMetadata{}, errSeedInvalidConnectionIdentity
+		}
+		if err := model.ValidateConnectionName("default_schema", cfg.DefaultSchema); err != nil {
+			return model.QueryCredentialMetadata{}, errSeedInvalidConnectionIdentity
+		}
+	} else if cfg.Database != "" || cfg.DefaultSchema != "" {
+		return model.QueryCredentialMetadata{}, errSeedInvalidConnectionIdentity
 	}
 
 	// Resolve the DSN from the environment. The resolver validates the ref first
@@ -95,16 +113,21 @@ func (s *QueryDevCredentialSeeder) Seed(ctx context.Context, cfg QueryDevCredent
 	if err != nil || dsn == "" {
 		return model.QueryCredentialMetadata{}, errSeedMissingResolvedDSN
 	}
-	// Defense in depth: the resolved DSN must point at the selected target's
-	// host/port. Reuses the Phase 37 binding check verbatim so the seed and
-	// execute paths agree on what "bound" means. The binding error never echoes
-	// the DSN, and it is discarded here in favor of the fixed seed sentinel.
-	if err := validateDSNBinding(dsn, target); err != nil {
+	// Defense in depth: the resolved DSN must bind to the selected connection —
+	// host/port for MySQL/TiDB, host/port/dbname for PostgreSQL. The binding
+	// error never echoes the DSN and is discarded for the fixed seed sentinel.
+	if isPGEngine(target.ConnectionContext.Engine) {
+		if _, err := validatePGDSNBindingForTarget(dsn, target, cfg.Database); err != nil {
+			return model.QueryCredentialMetadata{}, errSeedCredentialNotBound
+		}
+	} else if err := validateDSNBinding(dsn, target); err != nil {
 		return model.QueryCredentialMetadata{}, errSeedCredentialNotBound
 	}
 
 	meta := model.QueryCredentialMetadata{
 		ResourceID:        target.ResourceID,
+		DatabaseName:      cfg.Database,
+		DefaultSchema:     cfg.DefaultSchema,
 		Engine:            target.ConnectionContext.Engine,
 		CredentialRef:     cfg.CredentialRef,
 		Enabled:           true,

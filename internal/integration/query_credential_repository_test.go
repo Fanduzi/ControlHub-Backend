@@ -3,7 +3,7 @@
 // Package integration provides Testcontainers-backed tests for the Phase 38A
 // query credential metadata repository operations (Task B2): product-safe
 // get/upsert/delete, in-method validation guard, fail-closed read of an invalid
-// stored ref, and the no-DSN-stored invariant.
+// stored ref, the no-DSN-stored invariant, and the composite (resource, database) connection-key semantics.
 package integration
 
 import (
@@ -37,7 +37,7 @@ func TestQueryCredentialRepository_UpsertGetDelete(t *testing.T) {
 	const rid uint64 = 7700000001
 
 	// 1. No metadata row -> not-found sentinel, never a zero-value row.
-	if _, err := repo.GetCredentialByResourceID(ctx, rid); !errors.Is(err, sql.ErrNoRows) {
+	if _, err := repo.GetCredential(ctx, rid, ""); !errors.Is(err, sql.ErrNoRows) {
 		t.Fatalf("missing row: err = %v, want sql.ErrNoRows", err)
 	}
 
@@ -52,7 +52,7 @@ func TestQueryCredentialRepository_UpsertGetDelete(t *testing.T) {
 	if err := repo.UpsertCredentialMetadata(ctx, meta); err != nil {
 		t.Fatalf("upsert insert: %v", err)
 	}
-	got, err := repo.GetCredentialByResourceID(ctx, rid)
+	got, err := repo.GetCredential(ctx, rid, "")
 	if err != nil {
 		t.Fatalf("get after insert: %v", err)
 	}
@@ -67,7 +67,7 @@ func TestQueryCredentialRepository_UpsertGetDelete(t *testing.T) {
 	if err := repo.UpsertCredentialMetadata(ctx, meta); err != nil {
 		t.Fatalf("upsert update: %v", err)
 	}
-	got, err = repo.GetCredentialByResourceID(ctx, rid)
+	got, err = repo.GetCredential(ctx, rid, "")
 	if err != nil {
 		t.Fatalf("get after update: %v", err)
 	}
@@ -79,10 +79,10 @@ func TestQueryCredentialRepository_UpsertGetDelete(t *testing.T) {
 	}
 
 	// 4. Delete -> not-found again.
-	if err := repo.DeleteCredentialByResourceID(ctx, rid); err != nil {
+	if err := repo.DeleteCredential(ctx, rid, ""); err != nil {
 		t.Fatalf("delete: %v", err)
 	}
-	if _, err := repo.GetCredentialByResourceID(ctx, rid); !errors.Is(err, sql.ErrNoRows) {
+	if _, err := repo.GetCredential(ctx, rid, ""); !errors.Is(err, sql.ErrNoRows) {
 		t.Fatalf("after delete: err = %v, want sql.ErrNoRows", err)
 	}
 	if credentialRowCount(t, db, rid) != 0 {
@@ -102,7 +102,7 @@ func TestQueryCredentialRepository_InvalidStoredRefFailsClosed(t *testing.T) {
 	// Bypass application validation to plant an invalid ref directly.
 	mustExec(t, db, `insert into query_target_credentials (resource_id, engine, credential_ref, enabled, environment_policy) values (?, 'mysql', 'lowercase-bad', false, 'non_prod_only')`, rid)
 
-	_, err := repo.GetCredentialByResourceID(ctx, rid)
+	_, err := repo.GetCredential(ctx, rid, "")
 	if err == nil {
 		t.Fatal("read of an invalid stored ref must fail closed, got nil")
 	}
@@ -122,7 +122,7 @@ func TestQueryCredentialRepository_InvalidStoredPolicyFailsClosed(t *testing.T) 
 
 	mustExec(t, db, `insert into query_target_credentials (resource_id, engine, credential_ref, enabled, environment_policy) values (?, 'mysql', 'ORDER_MYSQL_RO', true, 'prod_plus')`, rid)
 
-	_, err := repo.GetCredentialByResourceID(ctx, rid)
+	_, err := repo.GetCredential(ctx, rid, "")
 	if !errors.Is(err, model.ErrInvalidCredentialMetadata) {
 		t.Fatalf("read of an invalid stored policy err = %v, want ErrInvalidCredentialMetadata", err)
 	}
@@ -261,6 +261,96 @@ func TestQueryCredentialRepository_UpsertWithAudit_RollsBackOnAuditFailure(t *te
 	}
 }
 
+// TestQueryCredentialRepository_CompositeConnectionIdentity proves the
+// (resource_id, database_name) composite key semantics on a real schema: the
+// legacy (R,”) row and a PostgreSQL (R,'labdb') row coexist on one resource,
+// reads address the exact row, delete removes only the addressed connection,
+// and the write path rejects engine-mismatched identity shapes.
+func TestQueryCredentialRepository_CompositeConnectionIdentity(t *testing.T) {
+	db, repo := newCredentialRepoTestDB(t)
+	ctx := context.Background()
+	const rid uint64 = 7700000009
+
+	legacy := model.QueryCredentialMetadata{
+		ResourceID: rid, Engine: "mysql", CredentialRef: "ORDER_MYSQL_RO",
+		Enabled: true, EnvironmentPolicy: model.QueryEnvPolicyNonProdOnly,
+	}
+	pg := model.QueryCredentialMetadata{
+		ResourceID: rid, Engine: "postgresql", DatabaseName: "labdb", DefaultSchema: "app",
+		CredentialRef: "ORDER_PG_RO", Enabled: true, EnvironmentPolicy: model.QueryEnvPolicyNonProdOnly,
+	}
+	if err := repo.UpsertCredentialMetadata(ctx, legacy); err != nil {
+		t.Fatalf("upsert legacy row: %v", err)
+	}
+	if err := repo.UpsertCredentialMetadata(ctx, pg); err != nil {
+		t.Fatalf("upsert PG row: %v", err)
+	}
+	if credentialRowCount(t, db, rid) != 2 {
+		t.Fatal("legacy and PG connection rows must coexist on one resource")
+	}
+
+	// Reads address the exact row: (R,'') -> legacy, (R,'labdb') -> PG.
+	got, err := repo.GetCredential(ctx, rid, "")
+	if err != nil || got.Engine != "mysql" || got.DatabaseName != "" {
+		t.Fatalf("(R,'') read = %+v err=%v, want legacy row", got, err)
+	}
+	got, err = repo.GetCredential(ctx, rid, "labdb")
+	if err != nil || got.Engine != "postgresql" || got.DatabaseName != "labdb" || got.DefaultSchema != "app" {
+		t.Fatalf("(R,'labdb') read = %+v err=%v, want PG row", got, err)
+	}
+	if _, err := repo.GetCredential(ctx, rid, "other"); !errors.Is(err, sql.ErrNoRows) {
+		t.Fatalf("(R,'other') read err = %v, want sql.ErrNoRows", err)
+	}
+
+	// Delete removes only the addressed connection.
+	if err := repo.DeleteCredential(ctx, rid, "labdb"); err != nil {
+		t.Fatalf("delete PG row: %v", err)
+	}
+	if _, err := repo.GetCredential(ctx, rid, "labdb"); !errors.Is(err, sql.ErrNoRows) {
+		t.Fatal("deleted PG connection must read not-found")
+	}
+	if _, err := repo.GetCredential(ctx, rid, ""); err != nil {
+		t.Fatal("legacy row must survive the PG-row delete")
+	}
+}
+
+// TestQueryCredentialRepository_UpsertRejectsEngineMismatchedIdentity proves the
+// write path enforces the identity contract: PG rows must carry database +
+// default schema; non-PG rows must carry neither. WHY: a malformed row would
+// poison the composite key space and downstream binding checks.
+func TestQueryCredentialRepository_UpsertRejectsEngineMismatchedIdentity(t *testing.T) {
+	db, repo := newCredentialRepoTestDB(t)
+	ctx := context.Background()
+
+	cases := []struct {
+		name string
+		meta model.QueryCredentialMetadata
+	}{
+		{"pg missing database", model.QueryCredentialMetadata{
+			ResourceID: 7700000010, Engine: "postgresql", DefaultSchema: "app",
+			CredentialRef: "ORDER_PG_RO", Enabled: true, EnvironmentPolicy: model.QueryEnvPolicyNonProdOnly}},
+		{"pg missing schema", model.QueryCredentialMetadata{
+			ResourceID: 7700000010, Engine: "postgresql", DatabaseName: "labdb",
+			CredentialRef: "ORDER_PG_RO", Enabled: true, EnvironmentPolicy: model.QueryEnvPolicyNonProdOnly}},
+		{"mysql with database", model.QueryCredentialMetadata{
+			ResourceID: 7700000010, Engine: "mysql", DatabaseName: "labdb",
+			CredentialRef: "ORDER_MYSQL_RO", Enabled: true, EnvironmentPolicy: model.QueryEnvPolicyNonProdOnly}},
+		{"mysql with schema", model.QueryCredentialMetadata{
+			ResourceID: 7700000010, Engine: "mysql", DefaultSchema: "app",
+			CredentialRef: "ORDER_MYSQL_RO", Enabled: true, EnvironmentPolicy: model.QueryEnvPolicyNonProdOnly}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if err := repo.UpsertCredentialMetadata(ctx, tc.meta); err == nil {
+				t.Fatalf("upsert %q must be rejected", tc.name)
+			}
+			if credentialRowCount(t, db, tc.meta.ResourceID) != 0 {
+				t.Fatalf("rejected upsert must not write a row for %q", tc.name)
+			}
+		})
+	}
+}
+
 // TestQueryCredentialRepository_DeleteWithAudit_RollsBackOnAuditFailure proves a
 // failed audit write rolls back the metadata delete inside the real MySQL
 // transaction. WHY: deleting metadata without an audit row would silently remove
@@ -277,7 +367,7 @@ func TestQueryCredentialRepository_DeleteWithAudit_RollsBackOnAuditFailure(t *te
 		t.Fatalf("seed metadata: %v", err)
 	}
 	longEventType := strings.Repeat("x", 65) // exceeds audit_events.event_type varchar(64)
-	if err := repo.DeleteCredentialMetadataWithAudit(ctx, rid, 42, longEventType, "success"); err == nil {
+	if err := repo.DeleteCredentialMetadataWithAudit(ctx, rid, "", 42, longEventType, "success"); err == nil {
 		t.Fatal("an overflowing event_type must make the audit insert fail")
 	}
 	if credentialRowCount(t, db, rid) != 1 {

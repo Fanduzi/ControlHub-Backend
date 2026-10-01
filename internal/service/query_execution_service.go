@@ -86,7 +86,9 @@ const (
 // intentionally create no execution-history row (explain, schema reads);
 // governed execution and navigation never call it.
 type QueryExecutionRepository interface {
-	GetCredentialByResourceID(ctx context.Context, resourceID uint64) (model.QueryCredentialMetadata, error)
+	// GetCredential reads one connection's credential row by composite key
+	// (resourceID, databaseName); '' addresses the legacy MySQL/TiDB row.
+	GetCredential(ctx context.Context, resourceID uint64, databaseName string) (model.QueryCredentialMetadata, error)
 	ListExecutions(ctx context.Context, q model.QueryExecutionListQuery) ([]model.QueryExecutionRecord, int, error)
 	// InsertAuditEvent is the audit-ONLY write for operations that intentionally
 	// create no execution-history row (explain, schema reads). Governed query

@@ -152,7 +152,7 @@ func TestQueryExecutionRepository_CredentialMetadataReported(t *testing.T) {
 	// data that lets the service mark a non-production target ready.
 	seedCredentialRow(t, db, targetID, "mysql", "ORDER_MYSQL_RO", true, string(model.QueryEnvPolicyNonProdOnly))
 
-	got, err := repo.GetCredentialByResourceID(ctx, targetID)
+	got, err := repo.GetCredential(ctx, targetID, "")
 	if err != nil {
 		t.Fatalf("get credential: %v", err)
 	}
@@ -180,7 +180,7 @@ func TestQueryExecutionRepository_DisabledCredentialReported(t *testing.T) {
 	// that as locked. The repo reports the flag faithfully.
 	seedCredentialRow(t, db, targetID, "mysql", "ORDER_MYSQL_RO", false, string(model.QueryEnvPolicyDisabled))
 
-	got, err := repo.GetCredentialByResourceID(ctx, targetID)
+	got, err := repo.GetCredential(ctx, targetID, "")
 	if err != nil {
 		t.Fatalf("get credential: %v", err)
 	}
@@ -203,7 +203,7 @@ func TestQueryExecutionRepository_InvalidCredentialRefFailsClosed(t *testing.T) 
 	// an error, distinct from a simple not-found), keeping the target locked.
 	seedCredentialRow(t, db, targetID, "mysql", "bad-ref", true, string(model.QueryEnvPolicyAllEnvironments))
 
-	_, err := repo.GetCredentialByResourceID(ctx, targetID)
+	_, err := repo.GetCredential(ctx, targetID, "")
 	if err == nil {
 		t.Fatal("expected error for invalid credential_ref, got nil")
 	}
@@ -229,7 +229,7 @@ func TestQueryExecutionRepository_RoundTripsTypedEnvironmentPolicy(t *testing.T)
 			targetID := createQueryTargetResource(t, db, "qe-policy-"+tc.name)
 			seedCredentialRow(t, db, targetID, "mysql", "ORDER_MYSQL_RO", true, string(tc.policy))
 
-			got, err := repo.GetCredentialByResourceID(ctx, targetID)
+			got, err := repo.GetCredential(ctx, targetID, "")
 			if err != nil {
 				t.Fatalf("get credential: %v", err)
 			}
@@ -249,7 +249,7 @@ func TestQueryExecutionRepository_MissingCredentialReturnsNotFound(t *testing.T)
 	ctx := context.Background()
 	targetID := createQueryTargetResource(t, db, "qe-cred-missing")
 
-	_, err := repo.GetCredentialByResourceID(ctx, targetID)
+	_, err := repo.GetCredential(ctx, targetID, "")
 	if !errors.Is(err, sql.ErrNoRows) {
 		t.Fatalf("missing credential error = %v, want sql.ErrNoRows", err)
 	}

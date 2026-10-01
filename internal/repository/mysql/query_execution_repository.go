@@ -33,14 +33,15 @@ func NewQueryExecutionRepository(db *sql.DB) *QueryExecutionRepository {
 // (WithAudit) methods use the SAME statements so their behavior cannot drift;
 // only the transaction boundary differs.
 const (
-	upsertCredentialMetadataSQL = `insert into query_target_credentials (resource_id, engine, credential_ref, enabled, environment_policy)
-		           values (?, ?, ?, ?, ?)
+	upsertCredentialMetadataSQL = `insert into query_target_credentials (resource_id, database_name, default_schema, engine, credential_ref, enabled, environment_policy)
+		           values (?, ?, ?, ?, ?, ?, ?)
 		           on duplicate key update
+		             default_schema = values(default_schema),
 		             engine = values(engine),
 		             credential_ref = values(credential_ref),
 		             enabled = values(enabled),
 		             environment_policy = values(environment_policy)`
-	deleteCredentialMetadataSQL = `delete from query_target_credentials where resource_id = ? and database_name = ''`
+	deleteCredentialMetadataSQL = `delete from query_target_credentials where resource_id = ? and database_name = ?`
 	insertAuditEventSQL         = `insert into audit_events (actor_user_id, target_resource_id, event_type, result) values (?, ?, ?, ?)`
 	insertExecutionAuditSQL     = `insert into audit_events (actor_user_id, actor_machine_principal_id, target_resource_id, event_type, result) values (?, ?, ?, ?, ?)`
 	insertExecutionSQL          = `insert into query_executions
@@ -67,7 +68,10 @@ func recordQueryEvidencePersistenceFailure() {
 // callers. It is a fixed string with no driver/database/statement details.
 var errQueryEvidencePairFailed = errors.New("query evidence pair persistence failed")
 
-// GetCredentialByResourceID returns the credential metadata for a query target.
+// GetCredential returns the credential metadata for one query CONNECTION —
+// the composite row keyed by (resource_id, database_name). databaseName is the
+// connection's database segment: ” addresses the legacy single-connection
+// MySQL/TiDB row; a non-empty name addresses a PostgreSQL connection row.
 // It distinguishes three outcomes so callers never mask a failure as "no row":
 //   - no row -> sql.ErrNoRows;
 //   - a row whose credential_ref OR environment_policy fails validation ->
@@ -78,15 +82,15 @@ var errQueryEvidencePairFailed = errors.New("query evidence pair persistence fai
 //   - any other read error -> a wrapped error (propagated as a backend error).
 //
 // The environment_policy is returned as the typed enum.
-func (r *QueryExecutionRepository) GetCredentialByResourceID(ctx context.Context, resourceID uint64) (model.QueryCredentialMetadata, error) {
+func (r *QueryExecutionRepository) GetCredential(ctx context.Context, resourceID uint64, databaseName string) (model.QueryCredentialMetadata, error) {
 	const q = `select id, resource_id, database_name, default_schema, engine, credential_ref, enabled, environment_policy
-	           from query_target_credentials where resource_id = ? and database_name = ''`
+	           from query_target_credentials where resource_id = ? and database_name = ?`
 	var (
 		meta      model.QueryCredentialMetadata
 		enabled   bool
 		policyStr string
 	)
-	err := r.db.QueryRowContext(ctx, q, resourceID).Scan(
+	err := r.db.QueryRowContext(ctx, q, resourceID, databaseName).Scan(
 		&meta.ID, &meta.ResourceID, &meta.DatabaseName, &meta.DefaultSchema,
 		&meta.Engine, &meta.CredentialRef, &enabled, &policyStr,
 	)
@@ -125,8 +129,11 @@ func (r *QueryExecutionRepository) UpsertCredentialMetadata(ctx context.Context,
 	if err := meta.EnvironmentPolicy.Validate(); err != nil {
 		return fmt.Errorf("upsert query credential metadata: %w", err)
 	}
+	if err := meta.ValidateConnectionIdentity(); err != nil {
+		return fmt.Errorf("upsert query credential metadata: %w", err)
+	}
 	if _, err := r.db.ExecContext(ctx, upsertCredentialMetadataSQL,
-		meta.ResourceID, meta.Engine, meta.CredentialRef, meta.Enabled, string(meta.EnvironmentPolicy),
+		meta.ResourceID, meta.DatabaseName, meta.DefaultSchema, meta.Engine, meta.CredentialRef, meta.Enabled, string(meta.EnvironmentPolicy),
 	); err != nil {
 		return fmt.Errorf("upsert query credential metadata: %w", err)
 	}
@@ -146,9 +153,12 @@ func (r *QueryExecutionRepository) UpsertCredentialMetadataWithAudit(ctx context
 	if err := meta.EnvironmentPolicy.Validate(); err != nil {
 		return fmt.Errorf("upsert query credential metadata: %w", err)
 	}
+	if err := meta.ValidateConnectionIdentity(); err != nil {
+		return fmt.Errorf("upsert query credential metadata: %w", err)
+	}
 	return r.inTx(ctx, func(tx *sql.Tx) error {
 		if _, err := tx.ExecContext(ctx, upsertCredentialMetadataSQL,
-			meta.ResourceID, meta.Engine, meta.CredentialRef, meta.Enabled, string(meta.EnvironmentPolicy),
+			meta.ResourceID, meta.DatabaseName, meta.DefaultSchema, meta.Engine, meta.CredentialRef, meta.Enabled, string(meta.EnvironmentPolicy),
 		); err != nil {
 			return fmt.Errorf("upsert query credential metadata: %w", err)
 		}
@@ -163,9 +173,9 @@ func (r *QueryExecutionRepository) UpsertCredentialMetadataWithAudit(ctx context
 // writes its audit event in a single transaction: if the audit insert fails, the
 // delete is rolled back so the original metadata remains (no unattributed
 // removal). The audit row records actor, target, event type, and result only.
-func (r *QueryExecutionRepository) DeleteCredentialMetadataWithAudit(ctx context.Context, resourceID, actorUserID uint64, eventType, result string) error {
+func (r *QueryExecutionRepository) DeleteCredentialMetadataWithAudit(ctx context.Context, resourceID uint64, databaseName string, actorUserID uint64, eventType, result string) error {
 	return r.inTx(ctx, func(tx *sql.Tx) error {
-		if _, err := tx.ExecContext(ctx, deleteCredentialMetadataSQL, resourceID); err != nil {
+		if _, err := tx.ExecContext(ctx, deleteCredentialMetadataSQL, resourceID, databaseName); err != nil {
 			return fmt.Errorf("delete query credential metadata: %w", err)
 		}
 		if _, err := tx.ExecContext(ctx, insertAuditEventSQL, actorUserID, resourceID, eventType, result); err != nil {
@@ -195,11 +205,12 @@ func (r *QueryExecutionRepository) inTx(ctx context.Context, fn func(*sql.Tx) er
 	return nil
 }
 
-// DeleteCredentialByResourceID removes a target's credential metadata. It is
-// idempotent: deleting a target that has no row is not an error. It never touches
-// a DSN (none is stored) and is the Phase 38A product delete path.
-func (r *QueryExecutionRepository) DeleteCredentialByResourceID(ctx context.Context, resourceID uint64) error {
-	if _, err := r.db.ExecContext(ctx, deleteCredentialMetadataSQL, resourceID); err != nil {
+// DeleteCredential removes one connection's credential metadata, addressed by
+// the composite key (resource_id, database_name). It is idempotent: deleting a
+// connection that has no row is not an error. It never touches a DSN (none is
+// stored) and is the Phase 38A product delete path.
+func (r *QueryExecutionRepository) DeleteCredential(ctx context.Context, resourceID uint64, databaseName string) error {
+	if _, err := r.db.ExecContext(ctx, deleteCredentialMetadataSQL, resourceID, databaseName); err != nil {
 		return fmt.Errorf("delete query credential metadata: %w", err)
 	}
 	return nil

@@ -113,7 +113,7 @@ func assertAuthorized(t *testing.T, h http.Handler, token string) {
 
 type authzCredStub struct{}
 
-func (authzCredStub) GetStatus(_ context.Context, _ uint64) (model.QueryCredentialStatusResponse, error) {
+func (authzCredStub) GetStatus(_ context.Context, _ uint64, _ string) (model.QueryCredentialStatusResponse, error) {
 	return model.QueryCredentialStatusResponse{
 		ResourceID:        1,
 		Configured:        false,
@@ -122,11 +122,11 @@ func (authzCredStub) GetStatus(_ context.Context, _ uint64) (model.QueryCredenti
 	}, nil
 }
 
-func (authzCredStub) Upsert(_ context.Context, _ service.AuthenticatedUser, _ uint64, _ model.QueryCredentialUpsertRequest) (model.QueryCredentialStatusResponse, error) {
+func (authzCredStub) Upsert(_ context.Context, _ service.AuthenticatedUser, _ uint64, _ string, _ model.QueryCredentialUpsertRequest) (model.QueryCredentialStatusResponse, error) {
 	return model.QueryCredentialStatusResponse{}, nil
 }
 
-func (authzCredStub) Delete(_ context.Context, _ service.AuthenticatedUser, _ uint64) error {
+func (authzCredStub) Delete(_ context.Context, _ service.AuthenticatedUser, _ uint64, _ string) error {
 	return nil
 }
 

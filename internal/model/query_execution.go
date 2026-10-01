@@ -500,6 +500,28 @@ type QueryCredentialMetadata struct {
 	EnvironmentPolicy QueryEnvironmentPolicy `json:"environmentPolicy"`
 }
 
+// ValidateConnectionIdentity enforces the engine-keyed connection identity
+// contract on a credential row (frozen spec G1): a postgresql row MUST carry a
+// non-empty database_name and default_schema (the composite connection
+// identity); every other engine's row MUST leave both empty — the legacy
+// MySQL/TiDB identity is (resource_id, ''). Applied on the write path
+// (upsert/seed) so a malformed row can never be persisted.
+func (m QueryCredentialMetadata) ValidateConnectionIdentity() error {
+	if m.Engine == "postgresql" {
+		if err := ValidateConnectionName("database", m.DatabaseName); err != nil {
+			return err
+		}
+		if err := ValidateConnectionName("defaultSchema", m.DefaultSchema); err != nil {
+			return err
+		}
+		return nil
+	}
+	if m.DatabaseName != "" || m.DefaultSchema != "" {
+		return fmt.Errorf("database/defaultSchema are only valid for postgresql connections")
+	}
+	return nil
+}
+
 // ErrInvalidCredentialMetadata is the fail-closed signal returned by the
 // credential metadata reader when a stored row EXISTS but its credential_ref or
 // environment_policy fails validation (e.g. legacy/manual data that bypassed the
