@@ -6,6 +6,8 @@
 package pgsql
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"testing"
@@ -26,7 +28,7 @@ func (s stubResolver) Columns(schema, name string) ([]string, error) {
 	if c, ok := s[key]; ok {
 		return c, nil
 	}
-	return nil, fmt.Errorf("unknown relation %s", key)
+	return nil, fmt.Errorf("%w: %s", ErrRelationNotFound, key)
 }
 
 var testCols = stubResolver{
@@ -392,11 +394,13 @@ func TestInject_CTEAliasColnamesRename(t *testing.T) {
 }
 
 func TestInject_ValuesStarExpansion(t *testing.T) {
-	// `v.*` over a VALUES alias-column item expands positionally.
+	// `v.*` over a witness-free VALUES item stays verbatim — PostgreSQL
+	// expands it to the positional colnames itself; the recorded public
+	// layout must already carry them.
 	r := rewriteOK(t, `SELECT v.* FROM (VALUES (1,2)) v(x,y)`)
 	reparseable(t, r)
-	if !strings.Contains(r.SQL, "v.x") || !strings.Contains(r.SQL, "v.y") {
-		t.Fatalf("VALUES alias `*` expansion wrong: %s", r.SQL)
+	if len(r.Public) != 2 || r.Public[0] != "x" || r.Public[1] != "y" {
+		t.Fatalf("VALUES alias colnames not applied to public layout: %v (%s)", r.Public, r.SQL)
 	}
 }
 
@@ -473,3 +477,94 @@ func TestInject_Tablesample(t *testing.T) {
 		t.Fatalf("TABLESAMPLE witness wrong: %+v", r.Witnesses)
 	}
 }
+
+func TestInject_SetOpMergeNoCycle(t *testing.T) {
+	// Two CTE references to the same entity enter a UNION in opposite
+	// witness order — the merge must converge on one representative, not
+	// create an A→B→A cycle the coverage check would chase forever.
+	_, err := Rewrite(`WITH a AS (SELECT id FROM orders),
+		b AS (SELECT id FROM orders),
+		c AS (SELECT a.id FROM a CROSS JOIN b
+		      UNION ALL SELECT b.id FROM b CROSS JOIN a)
+		SELECT 1 WHERE EXISTS (SELECT 1 FROM c)`, "app", testCols)
+	if err == nil {
+		t.Fatal("expected coverage rejection — no witness reaches the output")
+	}
+	var re *RejectError
+	if !errors.As(err, &re) || re.Code != "query_reference_not_witnessable" {
+		t.Fatalf("expected query_reference_not_witnessable, got %v", err)
+	}
+}
+
+func TestInject_CTEUseSiteColnames(t *testing.T) {
+	// FROM c AS d(x,y) renames this reference's public columns — the layout
+	// and any expansion must use x,y, not the body's original names.
+	r := rewriteOK(t, `WITH c AS (SELECT id, amt FROM orders) SELECT d.* FROM c AS d(x,y)`)
+	reparseable(t, r)
+	if len(r.Public) != 2 || r.Public[0] != "x" || r.Public[1] != "y" {
+		t.Fatalf("CTE use-site colnames not applied: %v (%s)", r.Public, r.SQL)
+	}
+}
+
+func TestInject_EntityUseSiteColnames(t *testing.T) {
+	// FROM orders AS o(x,y) — the relation's exposed columns are renamed for
+	// this reference; DISTINCT wrapping must keep x,y, not id,amt.
+	r := rewriteOK(t, `SELECT DISTINCT * FROM orders AS o(x,y)`)
+	reparseable(t, r)
+	if len(r.Public) != 2 || r.Public[0] != "x" || r.Public[1] != "y" {
+		t.Fatalf("entity colnames not applied: %v (%s)", r.Public, r.SQL)
+	}
+}
+
+func TestInject_DistinctStarQualifiedOrderBy(t *testing.T) {
+	// o.* is retained verbatim; ORDER BY o.id must rebind to the position
+	// its star expansion produced — not leak `o.` into the D layer.
+	r := rewriteOK(t, `SELECT DISTINCT o.* FROM orders o ORDER BY o.id`)
+	reparseable(t, r)
+	if strings.Contains(r.SQL, "ORDER BY \"o\"") || strings.Contains(r.SQL, "ORDER BY o.") {
+		t.Fatalf("inner alias leaked into D layer sort key: %s", r.SQL)
+	}
+	if !strings.Contains(r.SQL, "ORDER BY 1") {
+		t.Fatalf("qualified sort key not rebound to position: %s", r.SQL)
+	}
+}
+
+func TestInject_ResolverErrorNotPublic(t *testing.T) {
+	// A resolver backend failure is an internal error, never a governed
+	// RejectError — and its Unwrap chain must survive so the executor can
+	// classify timeout/cancel/backend faults. Only ErrRelationNotFound maps
+	// to query_object_not_found, with a fixed safe message.
+	timeout := secretErrResolver{err: context.DeadlineExceeded}
+	_, err := Rewrite(`SELECT * FROM ghost`, "app", timeout)
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	var re *RejectError
+	if errors.As(err, &re) {
+		t.Fatalf("backend failure misclassified as governed rejection: %v", re.Code)
+	}
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("resolver cause lost — timeout classification impossible: %v", err)
+	}
+	_, err = Rewrite(`SELECT * FROM ghost`, "app", stubResolver{})
+	if !errors.As(err, &re) || re.Code != "query_object_not_found" {
+		t.Fatalf("missing relation must map to query_object_not_found, got %v", err)
+	}
+	if strings.Contains(re.Message, "ghost") == false {
+		t.Fatalf("not-found message should name the relation safely: %v", re.Message)
+	}
+	// A not-found wrapping sensitive diagnostics still produces the fixed
+	// safe message — the marker must not appear in the public text.
+	marked := secretErrResolver{err: fmt.Errorf("%w: dial 10.0.0.7 refused", ErrRelationNotFound)}
+	_, err = Rewrite(`SELECT * FROM ghost`, "app", marked)
+	if !errors.As(err, &re) || re.Code != "query_object_not_found" {
+		t.Fatalf("wrapped not-found lost its mapping: %v", err)
+	}
+	if strings.Contains(re.Message, "10.0.0.7") || strings.Contains(re.Message, "dial") {
+		t.Fatalf("resolver diagnostics leaked into public message: %v", re.Message)
+	}
+}
+
+type secretErrResolver struct{ err error }
+
+func (s secretErrResolver) Columns(schema, name string) ([]string, error) { return nil, s.err }
