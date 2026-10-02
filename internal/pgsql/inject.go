@@ -1,8 +1,8 @@
 // Package pgsql implements the PostgreSQL governed read-only query front half
 // (spec G4/G5/G10 stage: parse → guard → classify → qualify → inject).
-// input: qualified *pg.ParseResult, ColumnResolver supplying FROM-position column names
+// input: qualified *pg.ParseResult, ColumnResolver supplying FROM-position column names (optional ColumnTyper for coercion-free merge proofs)
 // output: InjectWitnesses, InjectResult, WitnessRecord, EntityKey, ColumnResolver — layout-freeze + per-layer witness injection + DISTINCT Q+D transform
-// pos: G10 mechanism 5a — records the original visible layout (* / x.* / NATURAL join / ordinals / VALUES / per-reference colnames) BEFORE appending witnesses; stars stay verbatim unless an injected column forces expansion, and forced USING/NATURAL merges are projected through the join's join_using_alias (generated under the __chub_ prefix when absent) so PostgreSQL computes the merged column natively — common-type coercion included; emits CASE WHEN FALSE THEN alias.* END on ordinary/window-only layers and (array_agg(alias.*) FILTER (WHERE FALSE))[1] on aggregate/grouping layers; propagates through CTEs and derived tables, suppresses inside SubLinks, merges set-op branches through canonical representatives only when attested entities match, and rejects when any entity's witness cannot reach the output; plain SELECT DISTINCT becomes Q+D (D groups by original public columns only and receives ORDER BY/LIMIT/OFFSET exactly once); internal names live under the reserved __chub_ prefix
+// pos: G10 mechanism 5a — records the original visible layout (* / x.* / ordinals / VALUES / per-reference colnames — NATURAL freezes to USING whenever merged columns exist so the join_using_alias stays declarable) BEFORE appending witnesses; stars stay verbatim unless an injected column forces expansion, and forced USING/NATURAL merges are projected through the join's join_using_alias (generated under the __chub_ prefix when absent) so PostgreSQL computes the merged column natively — common-type coercion included; emits CASE WHEN FALSE THEN alias.* END on ordinary/window-only layers and (array_agg(alias.*) FILTER (WHERE FALSE))[1] on aggregate/grouping layers; propagates through CTEs and derived tables, suppresses inside SubLinks, merges set-op branches through canonical representatives only when attested entities match, and rejects when any entity's witness cannot reach the output; plain SELECT DISTINCT becomes Q+D (D groups by original public columns only and receives ORDER BY/LIMIT/OFFSET exactly once); internal names live under the reserved __chub_ prefix
 // note: if this file changes, update header and README.md
 package pgsql
 
@@ -32,6 +32,19 @@ type ColumnResolver interface {
 	// any other error is treated as an internal failure, not a user-facing
 	// rejection — its text is never copied into a RejectError message.
 	Columns(schema, name string) ([]string, error)
+}
+
+// ColumnTyper is an optional ColumnResolver capability: per-column type
+// identity in Columns order. The injector only compares type identity for
+// equality — never resolves a common type — to decide whether a merged
+// USING column stays legally referenceable through a leaf alias (PostgreSQL
+// keeps the picked side's Var only when it needs no coercion; equal types
+// guarantee that). Resolvers unable to supply types simply do not
+// implement it; merged columns then carry no leaf-qualifier sort mapping.
+type ColumnTyper interface {
+	// ColumnTypes returns type identities aligned with Columns order.
+	// The same error contract as Columns applies.
+	ColumnTypes(schema, name string) ([]string, error)
 }
 
 // ErrRelationNotFound is the sentinel a ColumnResolver wraps when the
@@ -76,7 +89,7 @@ func InjectWitnesses(tree *pg.ParseResult, res ColumnResolver) (*InjectResult, e
 	if sel == nil {
 		return nil, &RejectError{Code: "query_not_allowed", Message: fmt.Sprintf("%v", ErrNotReadOnly)}
 	}
-	in := &injector{res: res, colCache: map[*pg.RangeVar][]string{}, mergedInto: map[*EntityKey]*EntityKey{}}
+	in := &injector{res: res, colCache: map[*pg.RangeVar][]string{}, typCache: map[*pg.RangeVar][]string{}, mergedInto: map[*EntityKey]*EntityKey{}}
 	rep, layout := in.selectStmt(sel, map[string]*itemLayout{}, true)
 	if in.err != nil {
 		return nil, in.err
@@ -125,6 +138,7 @@ func InjectWitnesses(tree *pg.ParseResult, res ColumnResolver) (*InjectResult, e
 type outCol struct {
 	name    string
 	src     string // qualifying RTE alias this column reads from ("" = unqualified)
+	altSrc  string // extra qualifier the ORIGINAL output item was legally nameable through (merged USING column = the picked leaf Var verbatim — set only when types prove no coercion); never used to generate SQL
 	witness bool
 	entity  *EntityKey // set when witness
 }
@@ -147,6 +161,7 @@ type fromItemRef struct {
 type injector struct {
 	res      ColumnResolver
 	colCache map[*pg.RangeVar][]string
+	typCache map[*pg.RangeVar][]string
 	wSeq     int
 	synth    int
 	err      error
@@ -196,6 +211,54 @@ func (in *injector) entityCols(rv *pg.RangeVar) ([]string, error) {
 	}
 	in.colCache[rv] = cols
 	return cols, nil
+}
+
+// entityTypes resolves (cached) per-column type identities for a real
+// relation via the optional ColumnTyper capability. Returns nil when the
+// resolver cannot type — callers treat that as "unknown", never an error.
+func (in *injector) entityTypes(rv *pg.RangeVar) ([]string, error) {
+	typer, ok := in.res.(ColumnTyper)
+	if !ok || rv == nil {
+		return nil, nil
+	}
+	if t, ok := in.typCache[rv]; ok {
+		return t, nil
+	}
+	types, err := typer.ColumnTypes(rv.GetSchemaname(), rv.GetRelname())
+	if err != nil {
+		if errors.Is(err, ErrRelationNotFound) {
+			return nil, &RejectError{Code: "query_object_not_found",
+				Message: fmt.Sprintf("relation %s.%s not found", rv.GetSchemaname(), rv.GetRelname())}
+		}
+		return nil, fmt.Errorf("resolve column types for %s.%s: %w",
+			rv.GetSchemaname(), rv.GetRelname(), err)
+	}
+	in.typCache[rv] = types
+	return types, nil
+}
+
+// leafType reports the type identity of column `name` when the FROM item
+// is a real relation with a typing resolver — "" for CTEs, derived tables,
+// joins, or unresolvable metadata (all treated as "unknown").
+func (in *injector) leafType(it *fromItemRef, name string) (string, error) {
+	if it == nil || it.entity == nil {
+		return "", nil
+	}
+	rv := it.node.GetRangeVar()
+	cols, err := in.entityCols(rv)
+	if err != nil {
+		return "", err
+	}
+	types, err := in.entityTypes(rv)
+	if err != nil || types == nil {
+		return "", err
+	}
+	for i, n := range cols {
+		if n == name && i < len(types) {
+			return types[i], nil
+		}
+	}
+	return "", nil
 }
 
 // materialize fills an entity item's layout from the resolver on demand.
@@ -615,9 +678,14 @@ func (in *injector) joinFreezeAndLayout(j *pg.JoinExpr, l, r *fromItemRef) *item
 				merged = append(merged, c.name)
 			}
 		}
-		// Freeze to USING only when injected columns ride either side —
-		// otherwise the original NATURAL text stays untouched.
-		if hasWitnessCols(l.layout) || hasWitnessCols(r.layout) {
+		// Freeze to USING whenever merged columns exist — unconditionally,
+		// not just when injected columns ride either side: a lateral FROM
+		// item's witness can still force `*` expansion later, and the
+		// join_using_alias the merged columns reference is only declarable
+		// through an explicit USING clause. NATURAL ≡ USING(common cols)
+		// keeps semantics identical; a NATURAL with no common columns
+		// stays untouched (no merged column will ever be referenced).
+		if len(merged) > 0 {
 			j.IsNatural = false
 			j.UsingClause = nil
 			for _, name := range merged {
@@ -656,7 +724,40 @@ func (in *injector) joinFreezeAndLayout(j *pg.JoinExpr, l, r *fromItemRef) *item
 				return nil
 			}
 			using[name] = true
-			out.cols = append(out.cols, outCol{name: name, src: ualias})
+			col := outCol{name: name, src: ualias}
+			// Besides the USING alias, the ORIGINAL output item was also
+			// referenceable through the leaf qualifier whose Var PostgreSQL
+			// kept verbatim (INNER/LEFT pick the left side, RIGHT the
+			// right) — but only when that Var needed no coercion, provable
+			// here only when both sides are real relations with known
+			// equal types. FULL joins and unknown/differing types keep the
+			// merged column reachable solely through the USING alias;
+			// recording leaf references then would wrongly admit sort keys
+			// the original query rejects.
+			var side *outCol
+			var leaf *fromItemRef
+			switch j.GetJointype() {
+			case pg.JoinType_JOIN_INNER, pg.JoinType_JOIN_LEFT:
+				side, leaf = lc, l
+			case pg.JoinType_JOIN_RIGHT:
+				side, leaf = rc, r
+			}
+			if side != nil && side.src != "" {
+				lt, terr := in.leafType(l, name)
+				if terr != nil {
+					in.err = terr
+					return nil
+				}
+				rt, terr := in.leafType(r, name)
+				if terr != nil {
+					in.err = terr
+					return nil
+				}
+				if lt != "" && lt == rt && leaf != nil && leaf.entity != nil {
+					col.altSrc = side.src
+				}
+			}
+			out.cols = append(out.cols, col)
 		}
 	}
 	appendSide := func(layout *itemLayout) {
@@ -700,6 +801,7 @@ func layoutWithAlias(l *itemLayout, alias string) *itemLayout {
 	for i := range out.cols {
 		if !out.cols[i].witness && alias != "" {
 			out.cols[i].src = alias
+			out.cols[i].altSrc = ""
 		}
 	}
 	return out
@@ -1381,8 +1483,8 @@ func (in *injector) wrapDistinct(q *pg.SelectStmt, publics []string, pubStarts [
 	// to the position its expansion produced in Q. Covers `x.*` targets by
 	// alias and bare `*` targets by walking the item layouts — every public
 	// column records the leaf qualifier it is reachable through (merged
-	// USING columns stay under their join_using_alias, which is also how a
-	// user ORDER BY would have to name them).
+	// USING columns answer to the join_using_alias, plus the picked leaf's
+	// qualifier when recorded as altSrc).
 	stars := map[string]map[string]int{}
 	bind := func(alias string, start, end int) {
 		m := stars[alias]
@@ -1406,18 +1508,23 @@ func (in *injector) wrapDistinct(q *pg.SelectStmt, publics []string, pubStarts [
 		if len(cr.GetFields()) == 1 {
 			// Bare `*` — attribute each expanded position to the qualifier
 			// that carries it in the item layouts (leaf alias or
-			// join_using_alias for merged columns).
+			// join_using_alias for merged columns); a merged column also
+			// answers to the picked leaf's qualifier when the original
+			// output item was that Var verbatim (recorded as altSrc).
 			pos := pubStarts[i]
 			for _, it := range items {
 				for _, c := range it.layout.cols {
 					if c.witness {
 						continue
 					}
-					if c.src != "" {
-						m := stars[c.src]
+					for _, src := range [2]string{c.src, c.altSrc} {
+						if src == "" {
+							continue
+						}
+						m := stars[src]
 						if m == nil {
 							m = map[string]int{}
-							stars[c.src] = m
+							stars[src] = m
 						}
 						m[c.name] = pos
 					}

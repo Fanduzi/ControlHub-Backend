@@ -527,6 +527,103 @@ func TestInject_DistinctStarQualifiedOrderBy(t *testing.T) {
 	if !strings.Contains(r.SQL, "ORDER BY 1") {
 		t.Fatalf("qualified sort key not rebound to position: %s", r.SQL)
 	}
+	// Bare `*` must behave identically — the same output position.
+	r = rewriteOK(t, `SELECT DISTINCT * FROM orders o ORDER BY o.id`)
+	reparseable(t, r)
+	if !strings.Contains(r.SQL, "ORDER BY 1") {
+		t.Fatalf("bare-star qualified sort key not rebound: %s", r.SQL)
+	}
+	// Column-alias list: o.x addresses the first exposed column.
+	r = rewriteOK(t, `SELECT DISTINCT * FROM orders o(x,y) ORDER BY o.x`)
+	reparseable(t, r)
+	if !strings.Contains(r.SQL, "ORDER BY 1") {
+		t.Fatalf("aliased-column sort key not rebound: %s", r.SQL)
+	}
+}
+
+// typedStub adds ColumnTyper over stubResolver so merged-column leaf
+// references can be proven coercion-free (equal types on both sides).
+type typedStub struct {
+	stubResolver
+	types map[string][]string // schema.name → type identity per column
+}
+
+func (s typedStub) ColumnTypes(schema, name string) ([]string, error) {
+	key := schema + "." + name
+	if schema == "" {
+		key = name
+	}
+	if tp, ok := s.types[key]; ok {
+		return tp, nil
+	}
+	return nil, fmt.Errorf("%w: %s", ErrRelationNotFound, key)
+}
+
+func TestInject_DistinctMergedLeafSortKey(t *testing.T) {
+	res := typedStub{
+		stubResolver: stubResolver{
+			"app.jl": {"id", "v"},
+			"app.jr": {"id", "w"},
+			"app.mi": {"id"}, // integer
+			"app.mb": {"id"}, // bigint — coerced to int8 on merge
+		},
+		types: map[string][]string{
+			"app.jl": {"int4", "int4"},
+			"app.jr": {"int4", "int4"},
+			"app.mi": {"int4"},
+			"app.mb": {"int8"},
+		},
+	}
+	ok := []string{
+		// Same-type merges: the picked side's Var IS the output item —
+		// its qualifier stays legal (LEFT/INNER left, RIGHT right).
+		`SELECT DISTINCT * FROM app.jl l LEFT JOIN app.jr r USING (id) ORDER BY l.id`,
+		`SELECT DISTINCT * FROM app.jl l JOIN app.jr r USING (id) ORDER BY l.id`,
+		`SELECT DISTINCT * FROM app.jl l RIGHT JOIN app.jr r USING (id) ORDER BY r.id`,
+	}
+	for _, sql := range ok {
+		r, err := Rewrite(sql, "app", res)
+		if err != nil {
+			t.Fatalf("Rewrite(%q) = %v", sql, err)
+		}
+		reparseable(t, r)
+		if strings.Contains(r.SQL, "ORDER BY l.") || strings.Contains(r.SQL, "ORDER BY r.") {
+			t.Fatalf("leaf qualifier leaked into D layer: %s", r.SQL)
+		}
+	}
+	bad := []string{
+		// FULL never keeps a leaf Var as the merged output.
+		`SELECT DISTINCT * FROM app.jl l FULL JOIN app.jr r USING (id) ORDER BY l.id`,
+		// The unpicked side's qualifier was never the output item.
+		`SELECT DISTINCT * FROM app.jl l LEFT JOIN app.jr r USING (id) ORDER BY r.id`,
+		// Different types: the picked side is coerced — the leaf Var no
+		// longer matches the output item.
+		`SELECT DISTINCT * FROM app.mi l LEFT JOIN app.mb r USING (id) ORDER BY l.id`,
+		// Unknown types (non-typing resolver path is covered by testCols
+		// elsewhere); differing types here.
+		`SELECT DISTINCT * FROM app.mb l RIGHT JOIN app.mi r USING (id) ORDER BY r.id`,
+	}
+	for _, sql := range bad {
+		if r, err := Rewrite(sql, "app", res); err == nil {
+			t.Fatalf("Rewrite(%q) should be rejected, got %s", sql, r.SQL)
+		}
+	}
+}
+
+func TestInject_NaturalJoinLateralExpansion(t *testing.T) {
+	// Neither join side carries a witness, so the NATURAL join itself
+	// needs no conversion — but the lateral CTE forces `*` expansion,
+	// which references the generated join_using_alias. The alias is only
+	// declarable if the NATURAL was frozen to an explicit USING.
+	r := rewriteOK(t, `WITH c AS (SELECT a FROM app.t)
+		SELECT * FROM app.orders o NATURAL JOIN app.items i CROSS JOIN c`)
+	reparseable(t, r)
+	if !strings.Contains(r.SQL, `USING`) {
+		t.Fatalf("NATURAL not frozen to USING; generated alias undeclared: %s", r.SQL)
+	}
+	if !strings.Contains(r.SQL, `__chub_uj`) {
+		t.Fatalf("merged column not routed through join_using_alias: %s", r.SQL)
+	}
 }
 
 func TestInject_ResolverErrorNotPublic(t *testing.T) {

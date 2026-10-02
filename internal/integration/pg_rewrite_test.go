@@ -141,6 +141,35 @@ func (r liveResolver) Columns(schema, name string) ([]string, error) {
 	return cols, rows.Err()
 }
 
+// ColumnTypes implements pgsql.ColumnTyper — type identity per column in
+// ordinal order, so the injector can prove whether a merged USING column
+// stayed a verbatim leaf Var (equal types → no coercion → leaf-qualified
+// references remain legal in the original query).
+func (r liveResolver) ColumnTypes(schema, name string) ([]string, error) {
+	if schema == "" {
+		schema = "app"
+	}
+	rows, err := r.c.Query(context.Background(),
+		`SELECT udt_name FROM information_schema.columns
+		 WHERE table_schema=$1 AND table_name=$2 ORDER BY ordinal_position`, schema, name)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var types []string
+	for rows.Next() {
+		var s string
+		if err := rows.Scan(&s); err != nil {
+			return nil, err
+		}
+		types = append(types, s)
+	}
+	if len(types) == 0 {
+		return nil, fmt.Errorf("%w: %s.%s", pgsql.ErrRelationNotFound, schema, name)
+	}
+	return types, rows.Err()
+}
+
 type pgResult struct {
 	names    []string
 	oids     []uint32
@@ -310,6 +339,13 @@ func TestPGRewrite_JoinSemantics(t *testing.T) {
 	assertEquivalentFD(t, c, `SELECT * FROM orders o JOIN items i USING (id)`, false, true)
 	assertEquivalentFD(t, c,
 		`SELECT * FROM t NATURAL JOIN t2 ORDER BY a`, true, true)
+	// NATURAL whose own sides carry no witness still gets expanded when a
+	// LATERAL item does: the generated join_using_alias is only declarable
+	// if the NATURAL froze to USING. Also nested deeper in the join tree.
+	assertEquivalentFD(t, c,
+		`WITH c AS (SELECT a FROM t) SELECT * FROM orders o NATURAL JOIN items i CROSS JOIN c`, false, true)
+	assertEquivalentFD(t, c,
+		`WITH c AS (SELECT a FROM t) SELECT * FROM (orders o NATURAL JOIN items i) JOIN t2 ON t2.a = oid CROSS JOIN c`, false, false)
 	// Same value at different scales: RIGHT JOIN must project the RIGHT
 	// side's representation (1.00), never COALESCE's left preference.
 	assertEquivalentFD(t, c,
@@ -393,6 +429,25 @@ func TestPGRewrite_DistinctAndPagination(t *testing.T) {
 		`SELECT DISTINCT o.* FROM orders o ORDER BY o.id`, true)
 	assertEquivalent(t, c,
 		`SELECT DISTINCT * FROM orders o(x,y) ORDER BY o.x`, true)
+	// Merged-column sort provenance (bare `*` over USING joins): the
+	// picked side's leaf qualifier remains a legal reference when both
+	// sides carry equal types — the merged output IS that Var verbatim.
+	assertEquivalent(t, c,
+		`SELECT DISTINCT * FROM orders o LEFT JOIN items i USING (id) ORDER BY o.id`, true)
+	assertEquivalent(t, c,
+		`SELECT DISTINCT * FROM orders o RIGHT JOIN items i USING (id) ORDER BY i.id`, true)
+	assertEquivalent(t, c,
+		`SELECT DISTINCT * FROM orders o JOIN items i USING (id) ORDER BY o.id`, true)
+	// And the exact reverse shapes must fail the way the original does:
+	// FULL keeps no leaf Var, the unpicked side never was the output
+	// item, and differing types wrap the picked Var in a coercion that
+	// no longer matches a plain leaf reference.
+	assertBothError(t, c,
+		`SELECT DISTINCT * FROM orders o FULL JOIN items i USING (id) ORDER BY o.id`)
+	assertBothError(t, c,
+		`SELECT DISTINCT * FROM orders o LEFT JOIN items i USING (id) ORDER BY i.id`)
+	assertBothError(t, c,
+		`SELECT DISTINCT * FROM l_int l LEFT JOIN r_big r USING (id) ORDER BY l.id`)
 	// Entity column-alias list under DISTINCT.
 	assertEquivalent(t, c, `SELECT DISTINCT * FROM orders AS o(x,y)`, false)
 	// Expression sort key through Q+D.
