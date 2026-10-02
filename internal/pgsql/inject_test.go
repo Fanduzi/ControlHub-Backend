@@ -332,27 +332,49 @@ func TestInject_SetOperationSameEntity(t *testing.T) {
 // layout so injected columns never leak into its row width.
 
 func TestInject_SublinkSuppressesWitnesses(t *testing.T) {
+	// A witness-free CTE (no entity inside) can be referenced from a
+	// suppressed sublink — `*` inside freezes to its public columns only.
 	r := rewriteOK(t,
-		`WITH c AS (SELECT id FROM orders) `+
+		`WITH c AS (SELECT 1 AS x) `+
 			`SELECT * FROM t WHERE EXISTS (SELECT * FROM c)`)
 	reparseable(t, r)
-	// The EXISTS body must freeze `*` to c's public column only — emitting a
-	// witness there would change the sublink's row width (EXISTS ignores
-	// values, but a scalar sublink's width is semantic).
-	if strings.Contains(r.SQL, "EXISTS (SELECT") && strings.Contains(r.SQL[strings.Index(r.SQL, "EXISTS"):], "__chub_") {
-		// witness inside the EXISTS body would appear after "EXISTS"
-		inner := r.SQL[strings.Index(r.SQL, "EXISTS"):]
-		if strings.Contains(inner, "__chub_") {
-			t.Fatalf("witness leaked into EXISTS sublink: %s", r.SQL)
+	inner := r.SQL[strings.Index(r.SQL, "EXISTS"):]
+	if strings.Contains(inner, "__chub_") {
+		t.Fatalf("witness leaked into EXISTS sublink: %s", r.SQL)
+	}
+}
+
+func TestInject_WitnessCoverageRequired(t *testing.T) {
+	// An entity whose only reference lives under witness suppression can
+	// never reach a top-level witness column — the binding would execute
+	// unproven. Reject rather than silently attest nothing.
+	cases := []string{
+		// entity reachable only via a CTE referenced inside EXISTS
+		`WITH c AS (SELECT id FROM orders) SELECT * FROM t WHERE EXISTS (SELECT * FROM c)`,
+		// scalar sublink reading a witnessed CTE
+		`WITH c AS (SELECT id FROM orders) SELECT (SELECT * FROM c) FROM t`,
+		// explicit schema does not bypass the rule (qualified entity)
+		`SELECT (SELECT id FROM app.items LIMIT 1) FROM app.orders`,
+		// sublink hidden in IN's testexpr position
+		`SELECT (SELECT id FROM items LIMIT 1) IN (SELECT 1) FROM orders`,
+		// entity in a FROM-derived inside a suppressed sublink
+		`SELECT * FROM t WHERE EXISTS (SELECT 1 FROM (SELECT id FROM orders) d)`,
+	}
+	for _, q := range cases {
+		_, err := Rewrite(q, "app", testCols)
+		re, ok := err.(*RejectError)
+		if !ok || re.Code != "query_reference_not_witnessable" {
+			t.Fatalf("Rewrite(%q) err = %v, want query_reference_not_witnessable", q, err)
 		}
 	}
-	// Scalar sublink over a single-column CTE keeps width 1 — `*` freezes to
-	// the public column, not public+witness.
-	r2 := rewriteOK(t,
-		`WITH c AS (SELECT id FROM orders) SELECT (SELECT * FROM c) FROM t`)
-	reparseable(t, r2)
-	if !strings.Contains(r2.SQL, "(SELECT c.id FROM c)") {
-		t.Fatalf("scalar sublink `*` not frozen to publics: %s", r2.SQL)
+	// A CTE referenced BOTH in a suppressed position and in the outer FROM
+	// is still covered — the outer reference carries the witness.
+	r := rewriteOK(t,
+		`WITH c AS (SELECT id FROM orders) `+
+			`SELECT * FROM c, t WHERE EXISTS (SELECT * FROM c)`)
+	reparseable(t, r)
+	if len(r.Witnesses) != 2 {
+		t.Fatalf("expected witnesses for orders+t, got %+v", r.Witnesses)
 	}
 }
 

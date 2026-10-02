@@ -237,10 +237,15 @@ func (c *collector) exprWalk(m protoreflect.Message, visible map[string]struct{}
 		}
 		switch v := cur.Interface().(type) {
 		case *pg.SubLink:
+			// testexpr (e.g. the LHS of IN) is a sibling of subselect —
+			// both can hold nested subqueries; handle each, then stop.
+			if te := v.GetTestexpr(); te != nil {
+				c.exprWalk(msgOf(te), visible)
+			}
 			if sub := v.GetSubselect().GetSelectStmt(); sub != nil {
 				c.selectStmt(sub, visible, false)
 			}
-			return false // subselect fully handled
+			return false // both children handled
 		case *pg.RangeVar:
 			// A RangeVar reached through an expression edge is outside every
 			// witnessable carrier — flag it rather than guess.

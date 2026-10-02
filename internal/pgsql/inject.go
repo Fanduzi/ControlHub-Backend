@@ -67,7 +67,7 @@ func InjectWitnesses(tree *pg.ParseResult, res ColumnResolver) (*InjectResult, e
 	if sel == nil {
 		return nil, &RejectError{Code: "query_not_allowed", Message: fmt.Sprintf("%v", ErrNotReadOnly)}
 	}
-	in := &injector{res: res, colCache: map[*pg.RangeVar][]string{}}
+	in := &injector{res: res, colCache: map[*pg.RangeVar][]string{}, mergedInto: map[*EntityKey]*EntityKey{}}
 	rep, layout := in.selectStmt(sel, map[string]*itemLayout{}, true)
 	if in.err != nil {
 		return nil, in.err
@@ -76,14 +76,32 @@ func InjectWitnesses(tree *pg.ParseResult, res ColumnResolver) (*InjectResult, e
 		tree.GetStmts()[0].GetStmt().Node = &pg.Node_SelectStmt{SelectStmt: rep}
 	}
 	out := &InjectResult{Tree: tree}
+	covered := map[*EntityKey]bool{}
 	for i, c := range layout.cols {
 		if c.witness {
 			out.Witnesses = append(out.Witnesses, WitnessRecord{
 				Column: c.name, Entity: *c.entity, Alias: c.src,
 			})
 			out.WitnessPositions = append(out.WitnessPositions, i)
+			covered[c.entity] = true
 		} else {
 			out.Public = append(out.Public, c.name)
+		}
+	}
+	// Coverage: every entity leaf's witness must reach the final output —
+	// a witness generated inside a CTE but referenced only through a
+	// suppressed sublink leaves that entity's binding unproven. Set-op
+	// merges alias the dropped branch's leaf onto the surviving column.
+	for _, leaf := range in.leaves {
+		for alias, ok := leaf, true; ok; {
+			if covered[alias] {
+				break
+			}
+			alias, ok = in.mergedInto[alias]
+			if !ok {
+				return nil, &RejectError{Code: "query_reference_not_witnessable",
+					Message: fmt.Sprintf("%v: witness for entity never reaches the output", ErrNotWitnessable)}
+			}
 		}
 	}
 	return out, nil
@@ -94,7 +112,8 @@ func InjectWitnesses(tree *pg.ParseResult, res ColumnResolver) (*InjectResult, e
 // outCol is one column in a FROM item's or SELECT layer's output.
 type outCol struct {
 	name    string
-	src     string // qualifying RTE alias this column reads from ("" when unknown/merged-free)
+	src     string   // qualifying RTE alias this column reads from ("" when expr set)
+	expr    *pg.Node // non-nil for merged USING columns — a COALESCE tree of both sides
 	witness bool
 	entity  *EntityKey // set when witness
 }
@@ -120,6 +139,11 @@ type injector struct {
 	wSeq     int
 	synth    int
 	err      error
+	// leaves registers every entity leaf's identity pointer in creation
+	// order; mergedInto aliases a set-op branch's leaf key to the surviving
+	// output column's key so coverage can resolve either side.
+	leaves     []*EntityKey
+	mergedInto map[*EntityKey]*EntityKey
 }
 
 // witnessName mints a fresh internal column name outside the avoid set —
@@ -139,7 +163,7 @@ func (in *injector) witnessName(avoid map[string]bool) string {
 // entityCols resolves (cached) column names for a real relation.
 func (in *injector) entityCols(rv *pg.RangeVar) ([]string, error) {
 	if rv == nil {
-		return nil, &RejectError{Code: "query_not_allowed", Message: fmt.Sprintf("%v", ErrLayoutUnfreezable)}
+		return nil, &RejectError{Code: "query_not_allowed", Message: fmt.Sprintf("%v: entity without relation node", ErrLayoutUnfreezable)}
 	}
 	if c, ok := in.colCache[rv]; ok {
 		return c, nil
@@ -149,7 +173,7 @@ func (in *injector) entityCols(rv *pg.RangeVar) ([]string, error) {
 	}
 	cols, err := in.res.Columns(rv.GetSchemaname(), rv.GetRelname())
 	if err != nil {
-		return nil, &RejectError{Code: "query_not_allowed", Message: fmt.Sprintf("%v", ErrLayoutUnfreezable)}
+		return nil, &RejectError{Code: "query_object_not_found", Message: fmt.Sprintf("%v", err)}
 	}
 	in.colCache[rv] = cols
 	return cols, nil
@@ -264,6 +288,21 @@ func (in *injector) selectStmt(sel *pg.SelectStmt, cteLayouts map[string]*itemLa
 		return sel, nil
 	}
 
+	if !emit {
+		// A suppressed subtree (inside a SubLink) can never carry a witness
+		// outward — an entity leaf here would execute unproven. The
+		// collector already rejects these; keep the injector fail-closed
+		// for direct InjectWitnesses callers too.
+		for _, it := range items {
+			for _, leaf := range flattenLeaves(it) {
+				if leaf.entity != nil {
+					in.err = &RejectError{Code: "query_reference_not_witnessable",
+						Message: fmt.Sprintf("%v: entity inside suppressed subquery", ErrNotWitnessable)}
+					return sel, nil
+				}
+			}
+		}
+	}
 	aggregate := isAggregateLayer(sel)
 	var emitted []outCol
 	if emit {
@@ -326,7 +365,7 @@ func (in *injector) setOpLayer(sel *pg.SelectStmt, cteLayouts map[string]*itemLa
 		return nil
 	}
 	if l == nil || r == nil {
-		in.err = &RejectError{Code: "query_not_allowed", Message: fmt.Sprintf("%v", ErrLayoutUnfreezable)}
+		in.err = &RejectError{Code: "query_not_allowed", Message: fmt.Sprintf("%v: set-operation leaf has no layout", ErrLayoutUnfreezable)}
 		return nil
 	}
 	lw, rw := witnessEntities(l), witnessEntities(r)
@@ -340,6 +379,11 @@ func (in *injector) setOpLayer(sel *pg.SelectStmt, cteLayouts map[string]*itemLa
 			in.err = &RejectError{Code: "query_reference_not_witnessable",
 				Message: fmt.Sprintf("%v: set-operation merges different attested sources", ErrNotWitnessable)}
 			return nil
+		}
+		// The merged column carries the left leaf's key; the right leaf's
+		// identical entity is attested by the same merged witness.
+		if lw[i] != rw[i] {
+			in.mergedInto[rw[i]] = lw[i]
 		}
 	}
 	return l // left leaf's names define the set-op's output names
@@ -370,7 +414,9 @@ func (in *injector) fromItem(n *pg.Node, cteLayouts map[string]*itemLayout, emit
 		}
 		if rv.GetSchemaname() == "" && rv.GetCatalogname() == "" {
 			if l, isCTE := cteLayouts[rv.GetRelname()]; isCTE {
-				return &fromItemRef{layout: l, alias: alias, node: n}
+				// Clone per reference — the same CTE may be aliased
+				// differently at each FROM site.
+				return &fromItemRef{layout: layoutWithAlias(l, alias), alias: alias, node: n}
 			}
 		}
 		it := &fromItemRef{
@@ -379,6 +425,7 @@ func (in *injector) fromItem(n *pg.Node, cteLayouts map[string]*itemLayout, emit
 			entity: &EntityKey{Schema: rv.GetSchemaname(), Name: rv.GetRelname()},
 			node:   n,
 		}
+		in.leaves = append(in.leaves, it.entity)
 		// Entity columns materialize eagerly — every downstream step (star
 		// expansion, join merge, public names, DISTINCT keys) treats entity
 		// layouts uniformly with derived ones.
@@ -405,6 +452,11 @@ func (in *injector) fromItem(n *pg.Node, cteLayouts map[string]*itemLayout, emit
 			layout = &itemLayout{opaque: true}
 		}
 		alias := aliasName(sub.GetAlias())
+		// FROM (SELECT ...) d(x,y) renames the subquery's public output
+		// positionally — witnesses keep their internal names.
+		if cn := sub.GetAlias().GetColnames(); len(cn) > 0 {
+			layout = cloneLayoutRenamed(layout, cn)
+		}
 		if alias == "" && hasWitnessCols(layout) {
 			// An unaliased derived table carrying witnesses still needs a
 			// referable name for `x.*` expansion and propagation columns —
@@ -416,9 +468,39 @@ func (in *injector) fromItem(n *pg.Node, cteLayouts map[string]*itemLayout, emit
 			}
 			sub.Alias.Aliasname = alias
 		}
-		return &fromItemRef{layout: layout, alias: alias, node: n}
+		return &fromItemRef{layout: layoutWithAlias(layout, alias), alias: alias, node: n}
 	case *pg.Node_JoinExpr:
 		j := v.JoinExpr
+		if j.GetAlias() != nil {
+			// An aliased join hides its leaf RTE names — leaf whole-row
+			// witnesses can't be referenced from this layer. Wrap the
+			// (unaliased) join in a derived SELECT * layer: freezing expands
+			// the publics inside and the layer machinery emits each leaf
+			// witness where the leaf aliases are still visible. The outer
+			// query then treats `j` as an ordinary derived table.
+			alias := j.GetAlias()
+			j.Alias = nil
+			innerSel := &pg.SelectStmt{
+				Op:         pg.SetOperation_SETOP_NONE,
+				TargetList: []*pg.Node{targetNode(colRefNode("*"), "")},
+				FromClause: []*pg.Node{{Node: &pg.Node_JoinExpr{JoinExpr: j}}},
+			}
+			rep, layout := in.selectStmt(innerSel, cteLayouts, emit)
+			if in.err != nil {
+				return nil
+			}
+			sub := &pg.RangeSubselect{
+				Subquery: &pg.Node{Node: &pg.Node_SelectStmt{SelectStmt: rep}},
+				Alias:    alias,
+			}
+			// n keeps the derived table; the join moved inside it — never
+			// reuse n inside innerSel, which would create a cycle.
+			n.Node = &pg.Node_RangeSubselect{RangeSubselect: sub}
+			if cn := alias.GetColnames(); len(cn) > 0 {
+				layout = cloneLayoutRenamed(layout, cn)
+			}
+			return &fromItemRef{layout: layoutWithAlias(layout, alias.GetAliasname()), alias: alias.GetAliasname(), node: n}
+		}
 		left := in.fromItem(j.GetLarg(), cteLayouts, emit)
 		right := in.fromItem(j.GetRarg(), cteLayouts, emit)
 		if in.err != nil {
@@ -437,13 +519,20 @@ func (in *injector) fromItem(n *pg.Node, cteLayouts map[string]*itemLayout, emit
 	}
 }
 
-// joinFreezeAndLayout freezes a NATURAL join to USING over original common
-// columns (when either side carries injected columns) and returns the merged
-// output layout — common cols once (left-side source), then left remainder,
-// then right remainder — matching PostgreSQL join output order. Each merged
-// col records the leaf alias it reads from so `*` expansion can emit
-// unambiguous qualified references.
+// joinFreezeAndLayout computes the merged output layout of a JOIN from its
+// two child layouts — never from the raw leaf list, so nested joins keep
+// their already-merged columns. Merged USING/NATURAL columns expand as
+// COALESCE(lref, rref) — correct for every join type (INNER equal, LEFT
+// falls back to the left value, RIGHT to the right, FULL to whichever
+// matched) — and unambiguous where a bare name could collide.
 func (in *injector) joinFreezeAndLayout(j *pg.JoinExpr, l, r *fromItemRef) *itemLayout {
+	switch j.GetJointype() {
+	case pg.JoinType_JOIN_SEMI, pg.JoinType_JOIN_ANTI, pg.JoinType_JOIN_RIGHT_ANTI:
+		// Planner-internal join kinds cannot come from user SQL — refuse to
+		// guess their output layout.
+		in.err = &RejectError{Code: "query_not_allowed", Message: fmt.Sprintf("%v: semi/anti join", ErrLayoutUnfreezable)}
+		return nil
+	}
 	needCols := j.GetIsNatural() || len(j.GetUsingClause()) > 0
 	if needCols {
 		in.materializeDeep(l)
@@ -452,69 +541,118 @@ func (in *injector) joinFreezeAndLayout(j *pg.JoinExpr, l, r *fromItemRef) *item
 			return nil
 		}
 	}
-	if j.GetIsNatural() && (hasWitnessCols(l.layout) || hasWitnessCols(r.layout)) {
-		// Common columns = public-name intersection; witnesses excluded by
-		// construction (they are never public).
+	// Merged column set: explicit USING order, or — for NATURAL — the common
+	// public columns in left order. Computed unconditionally: the layout is
+	// needed for `*` expansion even when no witness conversion happens.
+	var merged []string
+	if j.GetIsNatural() {
+		if l.layout.opaque || r.layout.opaque {
+			in.err = &RejectError{Code: "query_not_allowed", Message: fmt.Sprintf("%v: NATURAL join over opaque input", ErrLayoutUnfreezable)}
+			return nil
+		}
 		rpub := map[string]bool{}
 		for _, c := range r.layout.cols {
 			if !c.witness {
 				rpub[c.name] = true
 			}
 		}
-		var common []string
 		for _, c := range l.layout.cols {
 			if !c.witness && rpub[c.name] {
-				common = append(common, c.name)
+				merged = append(merged, c.name)
 			}
 		}
-		j.IsNatural = false
-		j.UsingClause = nil
-		for _, name := range common {
-			j.UsingClause = append(j.UsingClause, strNode(name))
+		// Freeze to USING only when injected columns ride either side —
+		// otherwise the original NATURAL text stays untouched.
+		if hasWitnessCols(l.layout) || hasWitnessCols(r.layout) {
+			j.IsNatural = false
+			j.UsingClause = nil
+			for _, name := range merged {
+				j.UsingClause = append(j.UsingClause, strNode(name))
+			}
+		}
+	} else {
+		for _, u := range j.GetUsingClause() {
+			if s := u.GetString_(); s != nil {
+				merged = append(merged, s.GetSval())
+			}
 		}
 	}
-	// Build merged layout leaf-by-leaf so every column knows its source alias.
 	using := map[string]bool{}
-	var merged []string
-	for _, u := range j.GetUsingClause() {
-		if s := u.GetString_(); s != nil {
-			using[s.GetSval()] = true
-			merged = append(merged, s.GetSval())
-		}
-	}
 	out := &itemLayout{}
-	lLeaves, rLeaves := flattenLeaves(l), flattenLeaves(r)
 	for _, name := range merged {
-		src := ""
-		for _, leaf := range lLeaves {
-			if leafHasPublic(leaf, name) {
-				src = leaf.alias
-				break
-			}
+		lc := findPublic(l.layout, name)
+		rc := findPublic(r.layout, name)
+		if lc == nil || rc == nil {
+			in.err = &RejectError{Code: "query_not_allowed", Message: fmt.Sprintf("%v: USING column absent from a join side", ErrLayoutUnfreezable)}
+			return nil
 		}
-		out.cols = append(out.cols, outCol{name: name, src: src})
+		using[name] = true
+		out.cols = append(out.cols, outCol{
+			name: name,
+			expr: coalesceNode(refNode(lc), refNode(rc)),
+		})
 	}
-	appendRest := func(leaves []*fromItemRef) {
-		for _, leaf := range leaves {
-			for _, c := range leaf.layout.cols {
-				if c.witness {
-					out.cols = append(out.cols, c)
-					continue
-				}
-				if using[c.name] {
-					continue
-				}
-				cc := c
-				if cc.src == "" {
-					cc.src = leaf.alias
-				}
-				out.cols = append(out.cols, cc)
+	appendSide := func(layout *itemLayout) {
+		for _, c := range layout.cols {
+			if c.witness {
+				out.cols = append(out.cols, c)
+				continue
 			}
+			if using[c.name] {
+				continue
+			}
+			out.cols = append(out.cols, c)
 		}
 	}
-	appendRest(lLeaves)
-	appendRest(rLeaves)
+	appendSide(l.layout)
+	appendSide(r.layout)
 	out.opaque = l.layout.opaque || r.layout.opaque
+	return out
+}
+
+// findPublic returns the public column of a layout by output name.
+func findPublic(l *itemLayout, name string) *outCol {
+	for i := range l.cols {
+		if !l.cols[i].witness && l.cols[i].name == name {
+			return &l.cols[i]
+		}
+	}
+	return nil
+}
+
+// refNode renders the reference an expansion must emit for a column:
+// the stored merge expression, or an alias-qualified name.
+func refNode(c *outCol) *pg.Node {
+	if c.expr != nil {
+		return proto.Clone(c.expr).(*pg.Node)
+	}
+	if c.src != "" {
+		return colRefNode(c.src, c.name)
+	}
+	return colRefNode(c.name)
+}
+
+// coalesceNode builds COALESCE(a, b).
+func coalesceNode(a, b *pg.Node) *pg.Node {
+	return &pg.Node{Node: &pg.Node_CoalesceExpr{CoalesceExpr: &pg.CoalesceExpr{
+		Args: []*pg.Node{a, b},
+	}}}
+}
+
+// layoutWithAlias clones a layout stamping the referencing alias as each
+// public column's source qualifier — used when a FROM item's alias is the
+// only name its columns may be reached through. Witness cols keep their
+// recorded src (the attested RTE alias inside the source's own scope).
+func layoutWithAlias(l *itemLayout, alias string) *itemLayout {
+	if l == nil {
+		return &itemLayout{opaque: true}
+	}
+	out := &itemLayout{opaque: l.opaque, cols: append([]outCol(nil), l.cols...)}
+	for i := range out.cols {
+		if !out.cols[i].witness && out.cols[i].src == "" && alias != "" {
+			out.cols[i].src = alias
+		}
+	}
 	return out
 }
 
@@ -685,9 +823,14 @@ func (in *injector) publicExpansion(it *fromItemRef) []*pg.Node {
 			if c.witness {
 				continue
 			}
-			if c.src != "" {
+			switch {
+			case c.expr != nil:
+				// Merged USING column — emit the COALESCE tree and restore
+				// the output name; the plain name form could bind elsewhere.
+				out = append(out, targetNode(refNode(&c), c.name))
+			case c.src != "":
 				out = append(out, targetNode(colRefNode(c.src, c.name), ""))
-			} else {
+			default:
 				out = append(out, targetNode(colRefNode(c.name), ""))
 			}
 		}
@@ -753,7 +896,9 @@ func (in *injector) publicNames(sel *pg.SelectStmt, items []*fromItemRef) ([]str
 	return out, starts, nil
 }
 
-// outputNameOf derives a target's public name the way PostgreSQL does.
+// outputNameOf derives a target's public name the way PostgreSQL's
+// FigureColname does for the node kinds this workbench can emit or receive —
+// a wrong name here would rename a user-visible column after Q+D wrapping.
 func outputNameOf(v *pg.Node) string {
 	switch n := v.GetNode().(type) {
 	case *pg.Node_ColumnRef:
@@ -767,6 +912,38 @@ func outputNameOf(v *pg.Node) string {
 		if name := funcName(n.FuncCall); name != "" {
 			return name
 		}
+	case *pg.Node_TypeCast:
+		// `expr::type` keeps the argument's name when it is a column
+		// reference (SELECT id::text → column "id"); otherwise the output
+		// takes the target type's final name segment.
+		if cr := n.TypeCast.GetArg().GetColumnRef(); cr != nil {
+			f := cr.GetFields()
+			if len(f) > 0 {
+				if s := f[len(f)-1].GetString_(); s != nil {
+					return s.GetSval()
+				}
+			}
+		}
+		if tn := n.TypeCast.GetTypeName(); tn != nil && len(tn.GetNames()) > 0 {
+			if s := tn.GetNames()[len(tn.GetNames())-1].GetString_(); s != nil {
+				return strings.ToLower(s.GetSval())
+			}
+		}
+	case *pg.Node_CaseExpr:
+		return "case"
+	case *pg.Node_CoalesceExpr:
+		return "coalesce"
+	case *pg.Node_MinMaxExpr:
+		if n.MinMaxExpr.GetOp() == pg.MinMaxOp_IS_GREATEST {
+			return "greatest"
+		}
+		return "least"
+	case *pg.Node_SubLink:
+		if n.SubLink.GetSubLinkType() == pg.SubLinkType_EXISTS_SUBLINK {
+			return "exists"
+		}
+	case *pg.Node_XmlExpr:
+		return "xml"
 	}
 	return "?column?"
 }
@@ -1018,13 +1195,17 @@ func (in *injector) sublinksIn(root *pg.Node, layouts map[string]*itemLayout) {
 		if sl == nil {
 			return true
 		}
+		// testexpr can itself contain sublinks (e.g. `(sub) IN (sub)`).
+		if te := sl.GetTestexpr(); te != nil {
+			in.sublinksIn(te, layouts)
+		}
 		if sub := sl.GetSubselect().GetSelectStmt(); sub != nil {
 			rep, _ := in.selectStmt(sub, layouts, false)
 			if rep != sub {
 				sl.Subselect.Node = &pg.Node_SelectStmt{SelectStmt: rep}
 			}
 		}
-		return false // nested sublinks are reached by the recursive call
+		return false // nested sublinks are reached by the recursive calls
 	})
 }
 
@@ -1072,6 +1253,7 @@ func (in *injector) wrapDistinct(q *pg.SelectStmt, publics []string, pubStarts [
 
 	// Q is a fresh node — the caller substitutes D for q in its parent edge.
 	d := &pg.SelectStmt{
+		Op: pg.SetOperation_SETOP_NONE, // proto3 zero is UNDEFINED, not NONE
 		FromClause: []*pg.Node{{Node: &pg.Node_RangeSubselect{RangeSubselect: &pg.RangeSubselect{
 			Subquery: &pg.Node{Node: &pg.Node_SelectStmt{SelectStmt: q}},
 			Alias:    &pg.Alias{Aliasname: "__chub_q", Colnames: colNames},
@@ -1097,8 +1279,17 @@ func (in *injector) wrapDistinct(q *pg.SelectStmt, publics []string, pubStarts [
 	}
 	for _, sk := range sortKeys {
 		if sb := sk.GetSortBy(); sb != nil {
-			if idx := rebindSortKey(sb.GetNode(), publics, targetExprs, exprPublicIdx); idx >= 0 {
+			key := sb.GetNode()
+			if idx := rebindSortKey(key, publics, targetExprs, exprPublicIdx); idx >= 0 {
 				sb.Node = intConst(int64(idx + 1))
+			} else if containsQualifiedRef(key) {
+				// An unrebound key that still names an inner alias (o.id)
+				// would parse against D but fail at name resolution — D's
+				// FROM holds only __chub_q. Reject rather than emit
+				// unrunnable SQL.
+				in.err = &RejectError{Code: "query_not_allowed",
+					Message: fmt.Sprintf("%v: DISTINCT ORDER BY key not resolvable in dedup layer", ErrLayoutUnfreezable)}
+				return nil, nil
 			}
 		}
 		d.SortClause = append(d.SortClause, sk)
@@ -1162,7 +1353,16 @@ func isAggregateLayer(sel *pg.SelectStmt) bool {
 	if len(sel.GetGroupClause()) > 0 || sel.GetHavingClause() != nil {
 		return true
 	}
-	for _, t := range sel.GetTargetList() {
+	// Aggregates anywhere at THIS level collapse the layer's rows — not just
+	// the target list: ORDER BY and named-window definitions evaluate at the
+	// same scope. SubLink bodies carry their own scope and never count;
+	// FuncCall.over is a window function, not a plain aggregate.
+	var roots []*pg.Node
+	roots = append(roots, sel.GetTargetList()...)
+	roots = append(roots, sel.GetSortClause()...)
+	roots = append(roots, sel.GetWindowClause()...)
+	roots = append(roots, sel.GetDistinctClause()...)
+	for _, t := range roots {
 		found := false
 		walkTree(msgOf(t), func(ctx *walkCtx, m protoreflect.Message) bool {
 			if found {
@@ -1255,6 +1455,23 @@ func (in *injector) checkInternalNames(sel *pg.SelectStmt) {
 	for _, f := range sel.GetFromClause() {
 		walkItems(f)
 	}
+}
+
+// containsQualifiedRef reports whether an expression references a qualified
+// (alias.name) column — i.e. an inner-scope RTE name the D layer cannot see.
+func containsQualifiedRef(n *pg.Node) bool {
+	found := false
+	walkTree(msgOf(n), func(_ *walkCtx, m protoreflect.Message) bool {
+		if found {
+			return false
+		}
+		if cr, ok := m.Interface().(*pg.ColumnRef); ok && len(cr.GetFields()) >= 2 && !hasStar(cr.GetFields()) {
+			found = true
+			return false
+		}
+		return true
+	})
+	return found
 }
 
 // ---------- node builders & small helpers ----------
@@ -1402,7 +1619,10 @@ func zeroLocations(m protoreflect.Message) {
 	for i := 0; i < md.Fields().Len(); i++ {
 		fd := md.Fields().Get(i)
 		switch fd.Name() {
-		case "location", "stmt_location", "stmt_len", "expr_location", "expr_len", "indirection":
+		case "location", "stmt_location", "stmt_len", "expr_location", "expr_len":
+			// Position metadata differs between the SELECT target and its
+			// ORDER BY twin — clear, don't skip: a set field still compares.
+			m.Clear(fd)
 			continue
 		}
 		if fd.Kind() != protoreflect.MessageKind {

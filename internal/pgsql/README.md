@@ -20,9 +20,9 @@ Witness columns (`__chub_w<N>`, always NULL, typed as the source relation's `rel
 |------|---------------|
 | walk.go | protoreflect-driven AST walker; path frames record parent message/field/index so visitors know structural position |
 | guard.go | G5 read-only guard: single SELECT, no INTO/locking/data-modifying CTE, recursive forbidden-function denylist; controlled `RejectError` codes |
-| name_resolution.go | scope-aware RangeVar classification (CTE vs entity, WITH visibility, shadowing, ambiguity rejection) + witnessable-position verdicts + canonical byte-offset qualification |
-| inject.go | layout freezing (`*`/`x.*`/NATURAL→USING/ordinals/VALUES/CTE colnames), witness emission (ordinary vs aggregate template), cross-layer propagation, SubLink suppression, set-op merge checks, DISTINCT Q+D wrapper, reserved `__chub_` name enforcement |
-| rewrite.go | pipeline entry: guard → qualify → reparse → inject → deparse → reparse-verify; returns transport SQL, witness records, public output names |
+| name_resolution.go | scope-aware RangeVar classification (CTE vs entity, WITH visibility, shadowing, ambiguity rejection); qualified names always entity; witnessable-position verdicts incl. SubLink testexpr + qualified refs; canonical byte-offset qualification on the untrimmed original |
+| inject.go | layout freezing (`*`/`x.*`/ordinals/VALUES/CTE colnames/derived alias lists), join layout built from child layouts with `COALESCE` merged columns and alias-wrapped derived joins, witness emission (ordinary vs aggregate template — aggregate detection spans targets, ORDER BY, named windows), cross-layer propagation, SubLink suppression, final per-entity witness-coverage rejection, set-op merge checks, DISTINCT Q+D wrapper with location-insensitive sort rebinding, reserved `__chub_` name enforcement |
+| rewrite.go | pipeline entry: guard → qualify → reparse → inject → deparse → reparse-verify; returns transport SQL, witness records, public output names. Semantic equivalence is proved by `internal/integration/pg_rewrite_test.go` against disposable PostgreSQL |
 | name_resolution_test.go | classification/visibility/qualification/guard intent tests |
 | inject_test.go | freeze/injection/propagation/DISTINCT/suppression/set-op intent tests over a stub resolver |
 

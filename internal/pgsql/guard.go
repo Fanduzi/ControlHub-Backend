@@ -85,11 +85,13 @@ type GuardResult struct {
 // contract, then classifies every RangeVar. It is pure analysis — no database
 // access, no mutation.
 func GuardPG(statement string) (*GuardResult, error) {
-	trimmed := strings.TrimSpace(statement)
-	if trimmed == "" {
+	if strings.TrimSpace(statement) == "" {
 		return nil, &RejectError{Code: "query_not_allowed", Message: "statement is empty"}
 	}
-	tree, err := pgquery.Parse(trimmed)
+	// Parse the statement verbatim — recorded RangeVar offsets index into the
+	// caller's exact bytes for the canonical rewrite; trimming here would
+	// shift every offset.
+	tree, err := pgquery.Parse(statement)
 	if err != nil {
 		return nil, &RejectError{Code: "query_not_allowed", Message: fmt.Sprintf("%v", ErrNotReadOnly)}
 	}
@@ -108,7 +110,10 @@ func GuardPG(statement string) (*GuardResult, error) {
 		return nil, err
 	}
 	for _, r := range refs {
-		if r.Kind == RefEntity && !r.Witnessable {
+		// RefQualified is still an entity reference — a schema prefix must
+		// not bypass the witnessable-position rule (it only changes which
+		// name the binding gate resolves).
+		if r.Kind != RefCTE && !r.Witnessable {
 			return nil, &RejectError{Code: "query_reference_not_witnessable", Message: fmt.Sprintf("%v", ErrNotWitnessable)}
 		}
 	}
