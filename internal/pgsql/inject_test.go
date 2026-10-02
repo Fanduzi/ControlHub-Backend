@@ -1,6 +1,6 @@
 // Package pgsql implements the PostgreSQL governed read-only query front half.
 // input: synthetic SQL strings over a stub ColumnResolver
-// output: intent tests for layout freezing, witness injection shape, cross-layer propagation, sublink suppression, DISTINCT Q+D, ordinals, reserved names, set-op merging, reparseability
+// output: intent tests for layout freezing, witness injection shape, cross-layer propagation, sublink suppression, DISTINCT Q+D, ordinals, reserved names, set-op merging, USING merge-source proofs (structured metadata, missing-capability and defect classification), reparseability
 // pos: tests assert on the deparsed transport SQL structure because the contract is semantic — witnesses must be NULL-typed as the source reltype and never enter expansion/join/group/dedup keys
 // note: if this file changes, update header and README.md
 package pgsql
@@ -9,6 +9,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"strings"
 	"testing"
 
@@ -541,39 +542,78 @@ func TestInject_DistinctStarQualifiedOrderBy(t *testing.T) {
 	}
 }
 
-// typedStub adds ColumnTyper over stubResolver so merged-column leaf
-// references can be proven coercion-free (equal types on both sides).
-type typedStub struct {
+type metaStub struct {
 	stubResolver
-	types map[string][]string // schema.name → type identity per column
+	meta   map[string][]ColumnMetadata
+	common map[[2]uint32]uint32
+	err    error
 }
 
-func (s typedStub) ColumnTypes(schema, name string) ([]string, error) {
+const (
+	fixtureInt4 = 1001
+	fixtureInt8 = 1002
+)
+
+func (s metaStub) ColumnMetadata(schema, name string) ([]ColumnMetadata, error) {
 	key := schema + "." + name
 	if schema == "" {
 		key = name
 	}
-	if tp, ok := s.types[key]; ok {
-		return tp, nil
+	if m, ok := s.meta[key]; ok {
+		return m, nil
 	}
 	return nil, fmt.Errorf("%w: %s", ErrRelationNotFound, key)
 }
 
-func TestInject_DistinctMergedLeafSortKey(t *testing.T) {
-	res := typedStub{
+func (s metaStub) CommonType(left, right uint32) (uint32, error) {
+	if s.err != nil {
+		return 0, s.err
+	}
+	if left == right {
+		return left, nil
+	}
+	if c, ok := s.common[[2]uint32{left, right}]; ok {
+		return c, nil
+	}
+	return 0, fmt.Errorf("no common-type fixture for %d/%d", left, right)
+}
+
+func metaCol(name string, oid uint32, typmod int32, rel uint32, att int16) ColumnMetadata {
+	return ColumnMetadata{
+		Name:            name,
+		Type:            ColumnType{OID: oid, Typmod: typmod},
+		RelationOID:     rel,
+		AttributeNumber: att,
+	}
+}
+
+func joinFixtures() metaStub {
+	return metaStub{
 		stubResolver: stubResolver{
 			"app.jl": {"id", "v"},
 			"app.jr": {"id", "w"},
-			"app.mi": {"id"}, // integer
-			"app.mb": {"id"}, // bigint — coerced to int8 on merge
+			"app.mi": {"id"},
+			"app.mb": {"id"},
+			"app.n1": {"id"},
+			"app.n2": {"id"},
 		},
-		types: map[string][]string{
-			"app.jl": {"int4", "int4"},
-			"app.jr": {"int4", "int4"},
-			"app.mi": {"int4"},
-			"app.mb": {"int8"},
+		meta: map[string][]ColumnMetadata{
+			"app.jl": {metaCol("id", fixtureInt4, -1, 101, 1), metaCol("v", fixtureInt4, -1, 101, 2)},
+			"app.jr": {metaCol("id", fixtureInt4, -1, 102, 1), metaCol("w", fixtureInt4, -1, 102, 2)},
+			"app.mi": {metaCol("id", fixtureInt4, -1, 103, 1)},
+			"app.mb": {metaCol("id", fixtureInt8, -1, 104, 1)},
+			"app.n1": {metaCol("id", fixtureInt4, 655366, 105, 1)},
+			"app.n2": {metaCol("id", fixtureInt4, 655367, 106, 1)},
+		},
+		common: map[[2]uint32]uint32{
+			{fixtureInt4, fixtureInt8}: fixtureInt8,
+			{fixtureInt8, fixtureInt4}: fixtureInt8,
 		},
 	}
+}
+
+func TestInject_DistinctMergedLeafSortKey(t *testing.T) {
+	res := joinFixtures()
 	ok := []string{
 		// Same-type merges: the picked side's Var IS the output item —
 		// its qualifier stays legal (LEFT/INNER left, RIGHT right).
@@ -596,16 +636,133 @@ func TestInject_DistinctMergedLeafSortKey(t *testing.T) {
 		`SELECT DISTINCT * FROM app.jl l FULL JOIN app.jr r USING (id) ORDER BY l.id`,
 		// The unpicked side's qualifier was never the output item.
 		`SELECT DISTINCT * FROM app.jl l LEFT JOIN app.jr r USING (id) ORDER BY r.id`,
+		`SELECT DISTINCT * FROM app.jl l JOIN app.jr r USING (id) ORDER BY r.id`,
 		// Different types: the picked side is coerced — the leaf Var no
 		// longer matches the output item.
 		`SELECT DISTINCT * FROM app.mi l LEFT JOIN app.mb r USING (id) ORDER BY l.id`,
-		// Unknown types (non-typing resolver path is covered by testCols
-		// elsewhere); differing types here.
 		`SELECT DISTINCT * FROM app.mb l RIGHT JOIN app.mi r USING (id) ORDER BY r.id`,
+		`SELECT DISTINCT * FROM app.n1 l LEFT JOIN app.n2 r USING (id) ORDER BY l.id`,
 	}
 	for _, sql := range bad {
-		if r, err := Rewrite(sql, "app", res); err == nil {
+		r, err := Rewrite(sql, "app", res)
+		if err == nil {
 			t.Fatalf("Rewrite(%q) should be rejected, got %s", sql, r.SQL)
+		}
+		var re *RejectError
+		if !errors.As(err, &re) {
+			t.Fatalf("Rewrite(%q): expected controlled rejection, got %v", sql, err)
+		}
+	}
+}
+
+func TestInject_MergedLeafProofMissingCapability(t *testing.T) {
+	namesOnly := stubResolver{
+		"app.jl": {"id", "v"},
+		"app.jr": {"id", "w"},
+	}
+	_, err := Rewrite(
+		`SELECT DISTINCT * FROM app.jl l LEFT JOIN app.jr r USING (id) ORDER BY l.id`,
+		"app", namesOnly)
+	if err == nil {
+		t.Fatal("expected missing-evidence failure")
+	}
+	if !errors.Is(err, ErrTypeResolutionUnavailable) {
+		t.Fatalf("expected ErrTypeResolutionUnavailable, got %v", err)
+	}
+	var re *RejectError
+	if errors.As(err, &re) {
+		t.Fatalf("missing type evidence must not become a rejection: %v", re.Code)
+	}
+	r, err := Rewrite(`SELECT v FROM app.jl`, "app", namesOnly)
+	if err != nil {
+		t.Fatalf("name-only query regressed: %v", err)
+	}
+	reparseable(t, r)
+}
+
+func TestInject_MergedLeafProofResolverErrors(t *testing.T) {
+	bad := joinFixtures()
+	bad.err = fmt.Errorf("%w: pg wire dropped", context.DeadlineExceeded)
+	_, err := Rewrite(
+		`SELECT DISTINCT * FROM app.mi l LEFT JOIN app.mb r USING (id) ORDER BY l.id`,
+		"app", bad)
+	if err == nil {
+		t.Fatal("expected CommonType failure to propagate")
+	}
+	var re *RejectError
+	if errors.As(err, &re) {
+		t.Fatalf("backend failure misclassified as governed rejection: %v", re.Code)
+	}
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("CommonType cause lost: %v", err)
+	}
+}
+
+type zeroCommonStub struct{ metaStub }
+
+func (s zeroCommonStub) CommonType(_, _ uint32) (uint32, error) { return 0, nil }
+
+func TestInject_CommonTypeZeroVerdict(t *testing.T) {
+	_, err := Rewrite(
+		`SELECT DISTINCT * FROM app.mi l LEFT JOIN app.mb r USING (id) ORDER BY l.id`,
+		"app", zeroCommonStub{joinFixtures()})
+	if err == nil {
+		t.Fatal("expected provider zero-verdict to fail")
+	}
+	if !errors.Is(err, ErrTypeResolutionUnavailable) {
+		t.Fatalf("expected ErrTypeResolutionUnavailable, got %v", err)
+	}
+	var re *RejectError
+	if errors.As(err, &re) {
+		t.Fatalf("resolver defect must not be a rejection: %v", re.Code)
+	}
+}
+
+func TestInject_DuplicateAliasUndecidedMerge(t *testing.T) {
+	namesOnly := stubResolver{
+		"app.oj": {"id", "v"},
+		"app.ij": {"id", "w"},
+		"app.lj": {"id"},
+	}
+	_, err := Rewrite(
+		`SELECT DISTINCT u.id AS k, v.id AS k FROM app.oj o LEFT JOIN app.ij i USING (id) AS u LEFT JOIN app.lj l USING (id) AS v ORDER BY k`,
+		"app", namesOnly)
+	if err == nil {
+		t.Fatal("expected missing-evidence failure — no ordinal may be guessed from candidates")
+	}
+	if !errors.Is(err, ErrTypeResolutionUnavailable) {
+		t.Fatalf("expected ErrTypeResolutionUnavailable, got %v", err)
+	}
+	var re *RejectError
+	if errors.As(err, &re) {
+		t.Fatalf("missing type evidence must not become a rejection: %v", re.Code)
+	}
+}
+
+func TestInject_ColumnMetadataMismatch(t *testing.T) {
+	base := joinFixtures()
+	cases := map[string]map[string][]ColumnMetadata{
+		"short": {"app.jl": {metaCol("id", fixtureInt4, -1, 101, 1)}},
+		"renamed": {"app.jl": {
+			metaCol("ID", fixtureInt4, -1, 101, 1), metaCol("v", fixtureInt4, -1, 101, 2)}},
+		"zero_oid": {"app.jl": {
+			metaCol("id", 0, -1, 101, 1), metaCol("v", fixtureInt4, -1, 101, 2)}},
+		"zero_att": {"app.jl": {
+			metaCol("id", fixtureInt4, -1, 101, 0), metaCol("v", fixtureInt4, -1, 101, 2)}},
+	}
+	for name, patch := range cases {
+		res := base
+		res.meta = maps.Clone(base.meta)
+		for k, v := range patch {
+			res.meta[k] = v
+		}
+		_, err := Rewrite(`SELECT * FROM app.jl`, "app", res)
+		if err == nil {
+			t.Fatalf("%s: expected metadata mismatch to fail", name)
+		}
+		var re *RejectError
+		if errors.As(err, &re) {
+			t.Fatalf("%s: resolver defect must not be a rejection: %v", name, re.Code)
 		}
 	}
 }

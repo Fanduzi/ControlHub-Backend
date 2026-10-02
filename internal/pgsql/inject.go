@@ -1,8 +1,8 @@
 // Package pgsql implements the PostgreSQL governed read-only query front half
 // (spec G4/G5/G10 stage: parse → guard → classify → qualify → inject).
-// input: qualified *pg.ParseResult, ColumnResolver supplying FROM-position column names (optional ColumnTyper for coercion-free merge proofs)
-// output: InjectWitnesses, InjectResult, WitnessRecord, EntityKey, ColumnResolver — layout-freeze + per-layer witness injection + DISTINCT Q+D transform
-// pos: G10 mechanism 5a — records the original visible layout (* / x.* / ordinals / VALUES / per-reference colnames — NATURAL freezes to USING whenever merged columns exist so the join_using_alias stays declarable) BEFORE appending witnesses; stars stay verbatim unless an injected column forces expansion, and forced USING/NATURAL merges are projected through the join's join_using_alias (generated under the __chub_ prefix when absent) so PostgreSQL computes the merged column natively — common-type coercion included; emits CASE WHEN FALSE THEN alias.* END on ordinary/window-only layers and (array_agg(alias.*) FILTER (WHERE FALSE))[1] on aggregate/grouping layers; propagates through CTEs and derived tables, suppresses inside SubLinks, merges set-op branches through canonical representatives only when attested entities match, and rejects when any entity's witness cannot reach the output; plain SELECT DISTINCT becomes Q+D (D groups by original public columns only and receives ORDER BY/LIMIT/OFFSET exactly once); internal names live under the reserved __chub_ prefix
+// input: qualified *pg.ParseResult, ColumnResolver supplying FROM-position column names (optional ColumnMetadataResolver for structured type/attribute evidence and native common-type verdicts)
+// output: InjectWitnesses, InjectResult, WitnessRecord, EntityKey, ColumnResolver, ColumnType, ColumnMetadata, ColumnMetadataResolver, ErrTypeResolutionUnavailable — layout-freeze + per-layer witness injection + DISTINCT Q+D transform
+// pos: G10 mechanism 5a — records the original visible layout (* / x.* / ordinals / VALUES / per-reference colnames — NATURAL always freezes to the original public-column intersection: explicit USING when nonempty so the join_using_alias stays declarable, ON TRUE keeping the join type when empty) BEFORE appending witnesses; stars stay verbatim unless an injected column forces expansion, and forced USING/NATURAL merges are projected through the join's join_using_alias (generated under the __chub_ prefix when absent) so PostgreSQL computes the merged column natively — common-type coercion included; emits CASE WHEN FALSE THEN alias.* END on ordinary/window-only layers and (array_agg(alias.*) FILTER (WHERE FALSE))[1] on aggregate/grouping layers; propagates through CTEs and derived tables, suppresses inside SubLinks, merges set-op branches through canonical representatives only when attested entities match, and rejects when any entity's witness cannot reach the output; plain SELECT DISTINCT becomes Q+D (D groups by original public columns only and receives ORDER BY/LIMIT/OFFSET exactly once); internal names live under the reserved __chub_ prefix
 // note: if this file changes, update header and README.md
 package pgsql
 
@@ -34,18 +34,24 @@ type ColumnResolver interface {
 	Columns(schema, name string) ([]string, error)
 }
 
-// ColumnTyper is an optional ColumnResolver capability: per-column type
-// identity in Columns order. The injector only compares type identity for
-// equality — never resolves a common type — to decide whether a merged
-// USING column stays legally referenceable through a leaf alias (PostgreSQL
-// keeps the picked side's Var only when it needs no coercion; equal types
-// guarantee that). Resolvers unable to supply types simply do not
-// implement it; merged columns then carry no leaf-qualifier sort mapping.
-type ColumnTyper interface {
-	// ColumnTypes returns type identities aligned with Columns order.
-	// The same error contract as Columns applies.
-	ColumnTypes(schema, name string) ([]string, error)
+type ColumnType struct {
+	OID    uint32
+	Typmod int32
 }
+
+type ColumnMetadata struct {
+	Name            string
+	Type            ColumnType
+	RelationOID     uint32
+	AttributeNumber int16
+}
+
+type ColumnMetadataResolver interface {
+	ColumnMetadata(schema, name string) ([]ColumnMetadata, error)
+	CommonType(leftOID, rightOID uint32) (uint32, error)
+}
+
+var ErrTypeResolutionUnavailable = errors.New("pgsql: type resolution metadata unavailable")
 
 // ErrRelationNotFound is the sentinel a ColumnResolver wraps when the
 // relation is absent — the only resolver outcome mapped to a governed
@@ -89,7 +95,7 @@ func InjectWitnesses(tree *pg.ParseResult, res ColumnResolver) (*InjectResult, e
 	if sel == nil {
 		return nil, &RejectError{Code: "query_not_allowed", Message: fmt.Sprintf("%v", ErrNotReadOnly)}
 	}
-	in := &injector{res: res, colCache: map[*pg.RangeVar][]string{}, typCache: map[*pg.RangeVar][]string{}, mergedInto: map[*EntityKey]*EntityKey{}}
+	in := &injector{res: res, metaCache: map[*pg.RangeVar]*entityMeta{}, mergedInto: map[*EntityKey]*EntityKey{}}
 	rep, layout := in.selectStmt(sel, map[string]*itemLayout{}, true)
 	if in.err != nil {
 		return nil, in.err
@@ -136,11 +142,25 @@ func InjectWitnesses(tree *pg.ParseResult, res ColumnResolver) (*InjectResult, e
 
 // outCol is one column in a FROM item's or SELECT layer's output.
 type outCol struct {
-	name    string
-	src     string // qualifying RTE alias this column reads from ("" = unqualified)
-	altSrc  string // extra qualifier the ORIGINAL output item was legally nameable through (merged USING column = the picked leaf Var verbatim — set only when types prove no coercion); never used to generate SQL
-	witness bool
-	entity  *EntityKey // set when witness
+	name string
+	src  string // qualifier an emitted reference to this column routes through (item alias or join_using_alias); "" = unqualified — never provenance
+	// every scope-local spelling the ORIGINAL output item was legally
+	// nameable through — provenance for ORDER BY rebinding, never SQL
+	refs           []colRef
+	typ            ColumnType
+	relOID         uint32
+	attNum         int16
+	mergeUndecided bool
+	candidates     []colRef
+	witness        bool
+	entity         *EntityKey // set when witness
+}
+
+type colRef struct {
+	item *fromItemRef
+	ord  int
+	qual string
+	name string
 }
 
 // itemLayout describes a FROM item's (or SELECT layer's) output columns.
@@ -151,20 +171,26 @@ type itemLayout struct {
 
 // fromItemRef is one FROM-clause element plus children for join trees.
 type fromItemRef struct {
-	layout   *itemLayout
-	alias    string
-	entity   *EntityKey // non-nil for real relations
-	node     *pg.Node
-	children []*fromItemRef // join leaves
+	layout      *itemLayout
+	alias       string
+	entity      *EntityKey // non-nil for real relations
+	node        *pg.Node
+	children    []*fromItemRef // join leaves
+	usingAlias  string
+	mergedCount int
+}
+
+type entityMeta struct {
+	names []string
+	metas []ColumnMetadata
 }
 
 type injector struct {
-	res      ColumnResolver
-	colCache map[*pg.RangeVar][]string
-	typCache map[*pg.RangeVar][]string
-	wSeq     int
-	synth    int
-	err      error
+	res       ColumnResolver
+	metaCache map[*pg.RangeVar]*entityMeta
+	wSeq      int
+	synth     int
+	err       error
 	// leaves registers every entity leaf's identity pointer in creation
 	// order; mergedInto aliases a set-op branch's leaf key to the surviving
 	// output column's key so coverage can resolve either side.
@@ -186,96 +212,98 @@ func (in *injector) witnessName(avoid map[string]bool) string {
 	}
 }
 
-// entityCols resolves (cached) column names for a real relation.
-func (in *injector) entityCols(rv *pg.RangeVar) ([]string, error) {
+func resolverErr(kind string, rv *pg.RangeVar, err error) error {
+	if errors.Is(err, ErrRelationNotFound) {
+		return &RejectError{Code: "query_object_not_found",
+			Message: fmt.Sprintf("relation %s.%s not found", rv.GetSchemaname(), rv.GetRelname())}
+	}
+	return fmt.Errorf("resolve %s for %s.%s: %w",
+		kind, rv.GetSchemaname(), rv.GetRelname(), err)
+}
+
+// entityMetaFor resolves (cached) column names plus — when the resolver
+// implements ColumnMetadataResolver — aligned structured metadata.
+// Claimed metadata disagreeing with Columns or carrying zero identity is
+// an internal resolver defect, not a query outcome.
+func (in *injector) entityMetaFor(rv *pg.RangeVar) (*entityMeta, error) {
 	if rv == nil {
 		return nil, &RejectError{Code: "query_not_allowed", Message: fmt.Sprintf("%v: entity without relation node", ErrLayoutUnfreezable)}
 	}
-	if c, ok := in.colCache[rv]; ok {
-		return c, nil
+	if m, ok := in.metaCache[rv]; ok {
+		return m, nil
 	}
 	if in.res == nil {
 		return nil, &RejectError{Code: "query_not_allowed", Message: fmt.Sprintf("%v: column metadata unavailable", ErrLayoutUnfreezable)}
 	}
-	cols, err := in.res.Columns(rv.GetSchemaname(), rv.GetRelname())
+	names, err := in.res.Columns(rv.GetSchemaname(), rv.GetRelname())
 	if err != nil {
-		if errors.Is(err, ErrRelationNotFound) {
-			return nil, &RejectError{Code: "query_object_not_found",
-				Message: fmt.Sprintf("relation %s.%s not found", rv.GetSchemaname(), rv.GetRelname())}
-		}
-		// Any other resolver failure (timeout, cancel, backend fault) is an
-		// internal error — never copy its text into an API-visible rejection
-		// or mislabel it as a missing object.
-		return nil, fmt.Errorf("resolve columns for %s.%s: %w",
-			rv.GetSchemaname(), rv.GetRelname(), err)
+		return nil, resolverErr("columns", rv, err)
 	}
-	in.colCache[rv] = cols
-	return cols, nil
+	m := &entityMeta{names: names}
+	if mr, ok := in.res.(ColumnMetadataResolver); ok {
+		metas, err := mr.ColumnMetadata(rv.GetSchemaname(), rv.GetRelname())
+		if err != nil {
+			return nil, resolverErr("column metadata", rv, err)
+		}
+		if len(metas) != len(names) {
+			return nil, fmt.Errorf("column metadata for %s.%s: %d entries for %d columns: %w",
+				rv.GetSchemaname(), rv.GetRelname(), len(metas), len(names), ErrTypeResolutionUnavailable)
+		}
+		for i, md := range metas {
+			if md.Name != names[i] {
+				return nil, fmt.Errorf("column metadata for %s.%s: position %d is %q, Columns says %q: %w",
+					rv.GetSchemaname(), rv.GetRelname(), i, md.Name, names[i], ErrTypeResolutionUnavailable)
+			}
+			if md.Type.OID == 0 || md.RelationOID == 0 || md.AttributeNumber <= 0 {
+				return nil, fmt.Errorf("column metadata for %s.%s.%s: incomplete identity: %w",
+					rv.GetSchemaname(), rv.GetRelname(), md.Name, ErrTypeResolutionUnavailable)
+			}
+		}
+		m.metas = metas
+	}
+	in.metaCache[rv] = m
+	return m, nil
 }
 
-// entityTypes resolves (cached) per-column type identities for a real
-// relation via the optional ColumnTyper capability. Returns nil when the
-// resolver cannot type — callers treat that as "unknown", never an error.
-func (in *injector) entityTypes(rv *pg.RangeVar) ([]string, error) {
-	typer, ok := in.res.(ColumnTyper)
-	if !ok || rv == nil {
-		return nil, nil
-	}
-	if t, ok := in.typCache[rv]; ok {
-		return t, nil
-	}
-	types, err := typer.ColumnTypes(rv.GetSchemaname(), rv.GetRelname())
-	if err != nil {
-		if errors.Is(err, ErrRelationNotFound) {
-			return nil, &RejectError{Code: "query_object_not_found",
-				Message: fmt.Sprintf("relation %s.%s not found", rv.GetSchemaname(), rv.GetRelname())}
-		}
-		return nil, fmt.Errorf("resolve column types for %s.%s: %w",
-			rv.GetSchemaname(), rv.GetRelname(), err)
-	}
-	in.typCache[rv] = types
-	return types, nil
-}
-
-// leafType reports the type identity of column `name` when the FROM item
-// is a real relation with a typing resolver — "" for CTEs, derived tables,
-// joins, or unresolvable metadata (all treated as "unknown").
-func (in *injector) leafType(it *fromItemRef, name string) (string, error) {
-	if it == nil || it.entity == nil {
-		return "", nil
-	}
-	rv := it.node.GetRangeVar()
-	cols, err := in.entityCols(rv)
-	if err != nil {
-		return "", err
-	}
-	types, err := in.entityTypes(rv)
-	if err != nil || types == nil {
-		return "", err
-	}
-	for i, n := range cols {
-		if n == name && i < len(types) {
-			return types[i], nil
-		}
-	}
-	return "", nil
-}
-
-// materialize fills an entity item's layout from the resolver on demand.
+// materialize fills an entity item's layout from the resolver on demand,
+// attaching whatever catalog evidence the resolver supplied.
 func (in *injector) materialize(it *fromItemRef) {
 	if in.err != nil || it == nil || it.entity == nil || !it.layout.opaque {
 		return
 	}
-	cols, err := in.entityCols(it.node.GetRangeVar())
+	m, err := in.entityMetaFor(it.node.GetRangeVar())
 	if err != nil {
 		in.err = err
 		return
 	}
 	it.layout.cols = nil
-	for _, n := range cols {
-		it.layout.cols = append(it.layout.cols, outCol{name: n, src: it.alias})
+	for i, n := range m.names {
+		c := outCol{name: n, src: it.alias}
+		if m.metas != nil {
+			c.typ = m.metas[i].Type
+			c.relOID = m.metas[i].RelationOID
+			c.attNum = m.metas[i].AttributeNumber
+		}
+		it.layout.cols = append(it.layout.cols, c)
 	}
 	it.layout.opaque = false
+}
+
+func stampRefs(l *itemLayout, it *fromItemRef) {
+	if l == nil {
+		return
+	}
+	ord := 0
+	for i := range l.cols {
+		c := &l.cols[i]
+		if c.witness {
+			continue
+		}
+		c.refs = []colRef{{item: it, ord: ord, qual: it.alias, name: c.name}}
+		c.mergeUndecided = false
+		c.candidates = nil
+		ord++
+	}
 }
 
 // ---------- layer processing ----------
@@ -356,14 +384,19 @@ func (in *injector) selectStmt(sel *pg.SelectStmt, cteLayouts map[string]*itemLa
 	if in.err != nil {
 		return sel, nil
 	}
+	sc := buildScope(items)
 	in.freezeTargets(sel, items)
 	if in.err != nil {
 		return sel, nil
 	}
-	publics, pubStarts, err := in.publicNames(sel, items)
+	pubCols, pubStarts, err := in.publicCols(sel, items, sc)
 	if err != nil {
 		in.err = err
 		return sel, nil
+	}
+	var publics []string
+	for _, c := range pubCols {
+		publics = append(publics, c.name)
 	}
 	in.checkOrdinals(sel, len(publics))
 	if in.err != nil {
@@ -418,13 +451,10 @@ func (in *injector) selectStmt(sel *pg.SelectStmt, cteLayouts map[string]*itemLa
 	}
 
 	layout := &itemLayout{}
-	for _, n := range publics {
-		layout.cols = append(layout.cols, outCol{name: n})
-	}
-	layout.cols = append(layout.cols, emitted...)
+	layout.cols = append(cloneCols(pubCols), emitted...)
 
 	if isPlainDistinct(sel) {
-		d, dLayout := in.wrapDistinct(sel, publics, pubStarts, emitted, items)
+		d, dLayout := in.wrapDistinct(sel, pubCols, pubStarts, emitted, sc)
 		return d, dLayout
 	}
 	return sel, layout
@@ -472,7 +502,60 @@ func (in *injector) setOpLayer(sel *pg.SelectStmt, cteLayouts map[string]*itemLa
 	if in.err != nil {
 		return nil
 	}
-	return l // left leaf's names define the set-op's output names
+	out := &itemLayout{opaque: l.opaque, cols: cloneCols(l.cols)}
+	rp := publicColsOf(r)
+	pub := 0
+	for i := range out.cols {
+		if out.cols[i].witness {
+			continue
+		}
+		out.cols[i].refs = nil
+		out.cols[i].mergeUndecided = false
+		out.cols[i].candidates = nil
+		out.cols[i].relOID = 0
+		out.cols[i].attNum = 0
+		lt := out.cols[i].typ
+		out.cols[i].typ = ColumnType{}
+		if pub < len(rp) && lt.OID != 0 && rp[pub].typ.OID != 0 {
+			rt := rp[pub].typ
+			common := lt.OID
+			if lt.OID != rt.OID {
+				if mr, ok := in.res.(ColumnMetadataResolver); ok {
+					co, err := mr.CommonType(lt.OID, rt.OID)
+					if err != nil {
+						in.err = fmt.Errorf("resolve set-op common type of %d/%d: %w", lt.OID, rt.OID, err)
+						return nil
+					}
+					if co == 0 {
+						in.err = fmt.Errorf("set-op common type of %d/%d: provider returned no verdict: %w", lt.OID, rt.OID, ErrTypeResolutionUnavailable)
+						return nil
+					}
+					common = co
+				} else {
+					common = 0
+				}
+			}
+			if common != 0 {
+				tm := int32(-1)
+				if lt.OID == common && rt.OID == common && lt.Typmod == rt.Typmod {
+					tm = lt.Typmod
+				}
+				out.cols[i].typ = ColumnType{OID: common, Typmod: tm}
+			}
+		}
+		pub++
+	}
+	return out
+}
+
+func publicColsOf(l *itemLayout) []*outCol {
+	var out []*outCol
+	for i := range l.cols {
+		if !l.cols[i].witness {
+			out = append(out, &l.cols[i])
+		}
+	}
+	return out
 }
 
 // rep resolves an entity key to its merge representative (union-find root).
@@ -523,7 +606,9 @@ func (in *injector) fromItem(n *pg.Node, cteLayouts map[string]*itemLayout, emit
 				if cn := rv.GetAlias().GetColnames(); len(cn) > 0 {
 					cl = cloneLayoutRenamed(cl, cn)
 				}
-				return &fromItemRef{layout: layoutWithAlias(cl, alias), alias: alias, node: n}
+				it := &fromItemRef{layout: layoutWithAlias(cl, alias), alias: alias, node: n}
+				stampRefs(it.layout, it)
+				return it
 			}
 		}
 		it := &fromItemRef{
@@ -544,6 +629,7 @@ func (in *injector) fromItem(n *pg.Node, cteLayouts map[string]*itemLayout, emit
 				it.layout = cloneLayoutRenamed(it.layout, cn)
 			}
 		}
+		stampRefs(it.layout, it)
 		return it
 	case *pg.Node_RangeSubselect:
 		sub := v.RangeSubselect
@@ -582,7 +668,9 @@ func (in *injector) fromItem(n *pg.Node, cteLayouts map[string]*itemLayout, emit
 			}
 			sub.Alias.Aliasname = alias
 		}
-		return &fromItemRef{layout: layoutWithAlias(layout, alias), alias: alias, node: n}
+		it := &fromItemRef{layout: layoutWithAlias(layout, alias), alias: alias, node: n}
+		stampRefs(it.layout, it)
+		return it
 	case *pg.Node_JoinExpr:
 		j := v.JoinExpr
 		if j.GetAlias() != nil {
@@ -613,15 +701,18 @@ func (in *injector) fromItem(n *pg.Node, cteLayouts map[string]*itemLayout, emit
 			if cn := alias.GetColnames(); len(cn) > 0 {
 				layout = cloneLayoutRenamed(layout, cn)
 			}
-			return &fromItemRef{layout: layoutWithAlias(layout, alias.GetAliasname()), alias: alias.GetAliasname(), node: n}
+			it := &fromItemRef{layout: layoutWithAlias(layout, alias.GetAliasname()), alias: alias.GetAliasname(), node: n}
+			stampRefs(it.layout, it)
+			return it
 		}
 		left := in.fromItem(j.GetLarg(), cteLayouts, emit)
 		right := in.fromItem(j.GetRarg(), cteLayouts, emit)
 		if in.err != nil {
 			return nil
 		}
-		return &fromItemRef{layout: in.joinFreezeAndLayout(j, left, right), node: n,
-			children: []*fromItemRef{left, right}}
+		it := &fromItemRef{node: n, children: []*fromItemRef{left, right}}
+		it.layout = in.joinFreezeAndLayout(j, left, right, it)
+		return it
 	case *pg.Node_RangeTableSample:
 		// TABLESAMPLE wraps the relation; any AS alias lives on the inner
 		// RangeVar itself — the sampled row type is unchanged.
@@ -629,7 +720,9 @@ func (in *injector) fromItem(n *pg.Node, cteLayouts map[string]*itemLayout, emit
 	default:
 		// RangeFunction/RangeTableFunc/VALUES etc.: no entity RangeVars
 		// inside (stray ones were rejected); column set is opaque.
-		return &fromItemRef{layout: &itemLayout{opaque: true}, alias: aliasOf(n), node: n}
+		it := &fromItemRef{layout: &itemLayout{opaque: true}, alias: aliasOf(n), node: n}
+		stampRefs(it.layout, it)
+		return it
 	}
 }
 
@@ -641,7 +734,7 @@ func (in *injector) fromItem(n *pg.Node, cteLayouts map[string]*itemLayout, emit
 // the merged var natively: side selection, common-type coercion, typmod,
 // GROUP BY legality and source FDs all stay server-side. Unforced `*` stays
 // verbatim, so the common path never names the merged column at all.
-func (in *injector) joinFreezeAndLayout(j *pg.JoinExpr, l, r *fromItemRef) *itemLayout {
+func (in *injector) joinFreezeAndLayout(j *pg.JoinExpr, l, r, join *fromItemRef) *itemLayout {
 	switch j.GetJointype() {
 	case pg.JoinType_JOIN_SEMI, pg.JoinType_JOIN_ANTI, pg.JoinType_JOIN_RIGHT_ANTI,
 		pg.JoinType_JOIN_UNIQUE_OUTER, pg.JoinType_JOIN_UNIQUE_INNER:
@@ -678,15 +771,20 @@ func (in *injector) joinFreezeAndLayout(j *pg.JoinExpr, l, r *fromItemRef) *item
 				merged = append(merged, c.name)
 			}
 		}
-		// Freeze to USING whenever merged columns exist — unconditionally,
-		// not just when injected columns ride either side: a lateral FROM
-		// item's witness can still force `*` expansion later, and the
-		// join_using_alias the merged columns reference is only declarable
-		// through an explicit USING clause. NATURAL ≡ USING(common cols)
-		// keeps semantics identical; a NATURAL with no common columns
-		// stays untouched (no merged column will ever be referenced).
-		if len(merged) > 0 {
-			j.IsNatural = false
+		// NATURAL always freezes — injected witness columns must never
+		// become join keys. A nonempty intersection becomes an explicit
+		// USING (unconditionally, not just when injected columns ride
+		// either side: a lateral FROM item's witness can still force `*`
+		// expansion later, and the join_using_alias the merged columns
+		// reference is only declarable through an explicit USING clause).
+		// An empty intersection becomes ON TRUE with the jointype kept —
+		// CROSS-substituting would alter outer-join null-extension.
+		j.IsNatural = false
+		if len(merged) == 0 {
+			j.UsingClause = nil
+			j.JoinUsingAlias = nil
+			j.Quals = boolConst(true)
+		} else {
 			j.UsingClause = nil
 			for _, name := range merged {
 				j.UsingClause = append(j.UsingClause, strNode(name))
@@ -716,6 +814,8 @@ func (in *injector) joinFreezeAndLayout(j *pg.JoinExpr, l, r *fromItemRef) *item
 			}
 			j.JoinUsingAlias.Aliasname = ualias
 		}
+		join.usingAlias = ualias
+		join.mergedCount = len(merged)
 		for _, name := range merged {
 			lc := findPublic(l.layout, name)
 			rc := findPublic(r.layout, name)
@@ -724,38 +824,11 @@ func (in *injector) joinFreezeAndLayout(j *pg.JoinExpr, l, r *fromItemRef) *item
 				return nil
 			}
 			using[name] = true
-			col := outCol{name: name, src: ualias}
-			// Besides the USING alias, the ORIGINAL output item was also
-			// referenceable through the leaf qualifier whose Var PostgreSQL
-			// kept verbatim (INNER/LEFT pick the left side, RIGHT the
-			// right) — but only when that Var needed no coercion, provable
-			// here only when both sides are real relations with known
-			// equal types. FULL joins and unknown/differing types keep the
-			// merged column reachable solely through the USING alias;
-			// recording leaf references then would wrongly admit sort keys
-			// the original query rejects.
-			var side *outCol
-			var leaf *fromItemRef
-			switch j.GetJointype() {
-			case pg.JoinType_JOIN_INNER, pg.JoinType_JOIN_LEFT:
-				side, leaf = lc, l
-			case pg.JoinType_JOIN_RIGHT:
-				side, leaf = rc, r
-			}
-			if side != nil && side.src != "" {
-				lt, terr := in.leafType(l, name)
-				if terr != nil {
-					in.err = terr
-					return nil
-				}
-				rt, terr := in.leafType(r, name)
-				if terr != nil {
-					in.err = terr
-					return nil
-				}
-				if lt != "" && lt == rt && leaf != nil && leaf.entity != nil {
-					col.altSrc = side.src
-				}
+			col := outCol{name: name, src: ualias,
+				refs: []colRef{{item: join, ord: len(out.cols), qual: ualias, name: name}}}
+			in.mergeLeafProof(j.GetJointype(), lc, rc, &col)
+			if in.err != nil {
+				return nil
 			}
 			out.cols = append(out.cols, col)
 		}
@@ -778,6 +851,86 @@ func (in *injector) joinFreezeAndLayout(j *pg.JoinExpr, l, r *fromItemRef) *item
 	return out
 }
 
+// mergeLeafProof applies PostgreSQL's buildMergedJoinVar outcome for one
+// merged USING column: the merged output IS a leaf Var verbatim only when
+// that Var needs no coercion — INNER prefers left then right, LEFT keeps
+// left, RIGHT keeps right, FULL keeps none. "No coercion" follows
+// select_common_type plus select_common_typmod: the shared typmod survives
+// only when both inputs already have the common type and equal typmods.
+// Absent evidence (no metadata capability, untyped column) records the
+// merge undecided — a later sort-key proof must fail with
+// ErrTypeResolutionUnavailable rather than guess.
+func (in *injector) mergeLeafProof(jt pg.JoinType, lc, rc *outCol, col *outCol) {
+	if lc.typ.OID == 0 || rc.typ.OID == 0 {
+		col.mergeUndecided = true
+		col.candidates = mergeCandidates(jt, lc, rc)
+		return
+	}
+	common := lc.typ.OID
+	if common != rc.typ.OID {
+		mr, ok := in.res.(ColumnMetadataResolver)
+		if !ok {
+			col.mergeUndecided = true
+			col.candidates = mergeCandidates(jt, lc, rc)
+			return
+		}
+		co, err := mr.CommonType(lc.typ.OID, rc.typ.OID)
+		if err != nil {
+			in.err = fmt.Errorf("resolve common type of %d/%d: %w",
+				lc.typ.OID, rc.typ.OID, err)
+			return
+		}
+		if co == 0 {
+			in.err = fmt.Errorf("common type of %d/%d: provider returned no verdict: %w",
+				lc.typ.OID, rc.typ.OID, ErrTypeResolutionUnavailable)
+			return
+		}
+		common = co
+	}
+	commonTypmod := int32(-1)
+	if lc.typ.OID == common && rc.typ.OID == common && lc.typ.Typmod == rc.typ.Typmod {
+		commonTypmod = lc.typ.Typmod
+	}
+	col.typ = ColumnType{OID: common, Typmod: commonTypmod}
+	plainL := lc.typ.OID == common && lc.typ.Typmod == commonTypmod
+	plainR := rc.typ.OID == common && rc.typ.Typmod == commonTypmod
+	var keep *outCol
+	switch jt {
+	case pg.JoinType_JOIN_INNER:
+		if plainL {
+			keep = lc
+		} else if plainR {
+			keep = rc
+		}
+	case pg.JoinType_JOIN_LEFT:
+		if plainL {
+			keep = lc
+		}
+	case pg.JoinType_JOIN_RIGHT:
+		if plainR {
+			keep = rc
+		}
+	}
+	if keep != nil {
+		col.refs = append(col.refs, keep.refs...)
+		col.relOID = keep.relOID
+		col.attNum = keep.attNum
+	}
+}
+
+func mergeCandidates(jt pg.JoinType, lc, rc *outCol) []colRef {
+	switch jt {
+	case pg.JoinType_JOIN_LEFT:
+		return append([]colRef(nil), lc.refs...)
+	case pg.JoinType_JOIN_RIGHT:
+		return append([]colRef(nil), rc.refs...)
+	case pg.JoinType_JOIN_INNER:
+		out := append([]colRef(nil), lc.refs...)
+		return append(out, rc.refs...)
+	}
+	return nil
+}
+
 // findPublic returns the public column of a layout by output name.
 func findPublic(l *itemLayout, name string) *outCol {
 	for i := range l.cols {
@@ -797,12 +950,21 @@ func layoutWithAlias(l *itemLayout, alias string) *itemLayout {
 	if l == nil {
 		return &itemLayout{opaque: true}
 	}
-	out := &itemLayout{opaque: l.opaque, cols: append([]outCol(nil), l.cols...)}
+	out := &itemLayout{opaque: l.opaque, cols: cloneCols(l.cols)}
 	for i := range out.cols {
 		if !out.cols[i].witness && alias != "" {
 			out.cols[i].src = alias
-			out.cols[i].altSrc = ""
 		}
+	}
+	return out
+}
+
+func cloneCols(cols []outCol) []outCol {
+	out := make([]outCol, len(cols))
+	for i, c := range cols {
+		c.refs = append([]colRef(nil), c.refs...)
+		c.candidates = append([]colRef(nil), c.candidates...)
+		out[i] = c
 	}
 	return out
 }
@@ -999,21 +1161,148 @@ func (in *injector) publicExpansion(it *fromItemRef) []*pg.Node {
 	}
 }
 
-// publicNames returns the layer's user-visible output names post-freeze,
-// expanding any retained `x.*` target (entity aliases) via the resolver.
-// The second return maps each target node to the public column index where
-// its output begins — needed because a retained `x.*` covers several
-// columns with one node.
-func (in *injector) publicNames(sel *pg.SelectStmt, items []*fromItemRef) ([]string, []int, error) {
-	byAlias := map[string]*fromItemRef{}
-	for _, it := range items {
-		for _, leaf := range flattenLeaves(it) {
-			if leaf.alias != "" {
-				byAlias[leaf.alias] = leaf
+type scopeEntry struct {
+	item *fromItemRef
+	ords []int
+}
+
+type fromScope struct {
+	byQual map[string]*scopeEntry
+	items  []*fromItemRef
+}
+
+func partsKey(parts ...string) string {
+	return strings.Join(parts, "\x00")
+}
+
+func buildScope(items []*fromItemRef) *fromScope {
+	sc := &fromScope{byQual: map[string]*scopeEntry{}, items: items}
+	var walk func(it *fromItemRef)
+	walk = func(it *fromItemRef) {
+		if it == nil {
+			return
+		}
+		for _, ch := range it.children {
+			walk(ch)
+		}
+		if len(it.children) > 0 {
+			if it.usingAlias != "" {
+				e := &scopeEntry{item: it, ords: make([]int, it.mergedCount)}
+				for i := range e.ords {
+					e.ords[i] = i
+				}
+				sc.byQual[partsKey(it.usingAlias)] = e
 			}
+			return
+		}
+		e := &scopeEntry{item: it}
+		if it.alias != "" {
+			sc.byQual[partsKey(it.alias)] = e
+		}
+		if it.entity != nil && it.entity.Schema != "" &&
+			it.node.GetRangeVar().GetAlias() == nil {
+			sc.byQual[partsKey(it.entity.Schema, it.entity.Name)] = e
 		}
 	}
-	var out []string
+	for _, it := range items {
+		walk(it)
+	}
+	return sc
+}
+
+func (e *scopeEntry) lookup(qual, name string) (colRef, bool) {
+	var found colRef
+	n := 0
+	pub := 0
+	for i := range e.item.layout.cols {
+		c := &e.item.layout.cols[i]
+		if c.witness {
+			continue
+		}
+		if (e.ords == nil || ordIn(e.ords, pub)) && c.name == name {
+			found = colRef{item: e.item, ord: pub, qual: qual, name: name}
+			n++
+		}
+		pub++
+	}
+	if n == 1 {
+		return found, true
+	}
+	return colRef{}, false
+}
+
+func (s *fromScope) lookupBare(name string) (colRef, bool) {
+	var found colRef
+	n := 0
+	for _, it := range s.items {
+		pub := 0
+		for i := range it.layout.cols {
+			c := &it.layout.cols[i]
+			if c.witness {
+				continue
+			}
+			if c.name == name {
+				found = colRef{item: it, ord: pub, name: name}
+				n++
+			}
+			pub++
+		}
+	}
+	if n == 1 {
+		return found, true
+	}
+	return colRef{}, false
+}
+
+func (s *fromScope) resolveFields(fields []*pg.Node) (colRef, bool) {
+	var parts []string
+	for _, f := range fields {
+		sv := f.GetString_()
+		if sv == nil {
+			return colRef{}, false
+		}
+		parts = append(parts, sv.GetSval())
+	}
+	if len(parts) == 1 {
+		return s.lookupBare(parts[0])
+	}
+	e := s.byQual[partsKey(parts[:len(parts)-1]...)]
+	if e == nil {
+		return colRef{}, false
+	}
+	return e.lookup(strings.Join(parts[:len(parts)-1], "."), parts[len(parts)-1])
+}
+
+func ordIn(ords []int, ord int) bool {
+	for _, o := range ords {
+		if o == ord {
+			return true
+		}
+	}
+	return false
+}
+
+func colAtPublic(it *fromItemRef, ord int) *outCol {
+	pub := 0
+	for i := range it.layout.cols {
+		if it.layout.cols[i].witness {
+			continue
+		}
+		if pub == ord {
+			return &it.layout.cols[i]
+		}
+		pub++
+	}
+	return nil
+}
+
+// publicCols builds the layer's user-visible output columns post-freeze —
+// names plus each column's type/attribute evidence and provenance
+// references resolved in the ORIGINAL FROM scope. The second return maps
+// each target node to the public index where its output begins — a
+// retained `x.*` covers several columns with one node.
+func (in *injector) publicCols(sel *pg.SelectStmt, items []*fromItemRef, sc *fromScope) ([]outCol, []int, error) {
+	var out []outCol
 	var starts []int
 	for _, t := range sel.GetTargetList() {
 		rt := t.GetResTarget()
@@ -1021,56 +1310,66 @@ func (in *injector) publicNames(sel *pg.SelectStmt, items []*fromItemRef) ([]str
 			return nil, nil, fmt.Errorf("res-target missing value")
 		}
 		starts = append(starts, len(out))
-		if rt.GetName() != "" {
-			out = append(out, rt.GetName())
-			continue
-		}
 		if cr := rt.GetVal().GetColumnRef(); cr != nil && hasStar(cr.GetFields()) {
 			// A retained star target contributes its referenced columns —
 			// enumerate them from the item layouts (which already carry
 			// per-reference column aliases).
-			names, err := in.starNames(cr.GetFields(), items, byAlias)
+			cols, err := in.starCols(cr.GetFields(), items, sc)
 			if err != nil {
 				return nil, nil, err
 			}
-			out = append(out, names...)
+			out = append(out, cols...)
 			continue
 		}
-		out = append(out, outputNameOf(rt.GetVal()))
+		oc := outCol{name: rt.GetName()}
+		if oc.name == "" {
+			oc.name = outputNameOf(rt.GetVal())
+		}
+		if cr := rt.GetVal().GetColumnRef(); cr != nil {
+			if ref, ok := sc.resolveFields(cr.GetFields()); ok {
+				if src := colAtPublic(ref.item, ref.ord); src != nil {
+					oc.typ = src.typ
+					oc.relOID = src.relOID
+					oc.attNum = src.attNum
+					oc.mergeUndecided = src.mergeUndecided
+					oc.refs = append([]colRef(nil), src.refs...)
+					oc.candidates = append([]colRef(nil), src.candidates...)
+				}
+			}
+		}
+		out = append(out, oc)
 	}
 	return out, starts, nil
 }
 
-// starNames enumerates the public column names a retained `*`/`x.*` target
-// expands to — the item layouts already carry per-reference column aliases,
-// so this list matches what PostgreSQL will emit. Retained stars are only
+// starCols enumerates the public columns a retained `*`/`x.*` target
+// expands to — item layouts carry per-reference aliases and provenance,
+// so the list matches what PostgreSQL will emit. Retained stars are only
 // kept over witness-free items, so no internal names can appear here.
-func (in *injector) starNames(fields []*pg.Node, items []*fromItemRef, byAlias map[string]*fromItemRef) ([]string, error) {
-	publicNames := func(l *itemLayout) ([]string, error) {
+func (in *injector) starCols(fields []*pg.Node, items []*fromItemRef, sc *fromScope) ([]outCol, error) {
+	publics := func(l *itemLayout) ([]outCol, error) {
 		if l == nil || l.opaque {
 			return nil, fmt.Errorf("%v: cannot enumerate star columns of opaque item", ErrLayoutUnfreezable)
 		}
-		var names []string
+		var cols []outCol
 		for _, c := range l.cols {
 			if !c.witness {
-				names = append(names, c.name)
+				cols = append(cols, c)
 			}
 		}
-		return names, nil
+		return cloneCols(cols), nil
 	}
 	if len(fields) == 1 {
-		var out []string
+		var out []outCol
 		for _, it := range items {
-			names, err := publicNames(it.layout)
+			cols, err := publics(it.layout)
 			if err != nil {
 				return nil, err
 			}
-			out = append(out, names...)
+			out = append(out, cols...)
 		}
 		return out, nil
 	}
-	// Qualified star: fields[:-1] address a FROM item — by alias first, then
-	// by a real relation's schema.name (schema.t.* stays legal SQL).
 	var q []string
 	for _, f := range fields[:len(fields)-1] {
 		if s := f.GetString_(); s == nil {
@@ -1079,22 +1378,24 @@ func (in *injector) starNames(fields []*pg.Node, items []*fromItemRef, byAlias m
 			q = append(q, s.GetSval())
 		}
 	}
-	qual := strings.Join(q, ".")
-	if it := byAlias[qual]; it != nil {
-		return publicNames(it.layout)
+	e := sc.byQual[partsKey(q...)]
+	if e == nil {
+		return nil, fmt.Errorf("%v: star qualifier %q resolves to no FROM item", ErrLayoutUnfreezable, strings.Join(q, "."))
 	}
-	for _, top := range items {
-		for _, leaf := range flattenLeaves(top) {
-			if leaf.entity == nil {
-				continue
-			}
-			if leaf.entity.Schema+"."+leaf.entity.Name == qual ||
-				(leaf.entity.Schema == "" && leaf.entity.Name == qual) {
-				return publicNames(leaf.layout)
-			}
+	cols, err := publics(e.item.layout)
+	if err != nil {
+		return nil, err
+	}
+	if e.ords == nil {
+		return cols, nil
+	}
+	var out []outCol
+	for i, c := range cols {
+		if ordIn(e.ords, i) {
+			out = append(out, c)
 		}
 	}
-	return nil, fmt.Errorf("%v: star qualifier %q resolves to no FROM item", ErrLayoutUnfreezable, qual)
+	return out, nil
 }
 
 // outputNameOf derives a target's public name the way PostgreSQL's
@@ -1296,7 +1597,7 @@ func filterAggSubscript(inner *pg.Node) *pg.Node {
 // columns renamed positionally (WITH c(a,b) semantics: a shorter list renames
 // a prefix, trailing names survive).
 func cloneLayoutRenamed(l *itemLayout, colnames []*pg.Node) *itemLayout {
-	out := &itemLayout{opaque: l.opaque, cols: append([]outCol(nil), l.cols...)}
+	out := &itemLayout{opaque: l.opaque, cols: cloneCols(l.cols)}
 	pub := 0
 	for i := range out.cols {
 		if out.cols[i].witness {
@@ -1418,16 +1719,22 @@ func (in *injector) sublinksIn(root *pg.Node, layouts map[string]*itemLayout) {
 // user columns (never global aggregation → empty input yields zero rows),
 // carries witnesses via the aggregate template, restores original public
 // names (duplicates included), and receives ORDER BY/LIMIT/OFFSET once.
-func (in *injector) wrapDistinct(q *pg.SelectStmt, publics []string, pubStarts []int, emitted []outCol, items []*fromItemRef) (*pg.SelectStmt, *itemLayout) {
+func (in *injector) wrapDistinct(q *pg.SelectStmt, pubCols []outCol, pubStarts []int, emitted []outCol, sc *fromScope) (*pg.SelectStmt, *itemLayout) {
 	sortKeys := q.GetSortClause()
 	limitCount, limitOffset := q.GetLimitCount(), q.GetLimitOffset()
 	limitOption := q.GetLimitOption()
 
+	publics := make([]string, 0, len(pubCols))
+	for _, c := range pubCols {
+		publics = append(publics, c.name)
+	}
+
 	// Original public target expressions — for rebinding non-positional
 	// ORDER BY keys. Witness targets always sit at the tail, so the matchable
 	// prefix is exactly the non-witness slice (a retained `x.*` node simply
-	// never proto-equals an ORDER key). Positional/name keys bind against
-	// `publics` (the expanded column list), expression keys against these.
+	// never proto-equals an ORDER key). ColumnRef keys bind through the
+	// ORIGINAL FROM scope's reference identities, expression keys against
+	// these target exprs.
 	targets := q.GetTargetList()
 	var targetExprs []*pg.Node
 	var exprPublicIdx []int
@@ -1478,72 +1785,15 @@ func (in *injector) wrapDistinct(q *pg.SelectStmt, publics []string, pubStarts [
 			filterAggSubscript(colRefNode("__chub_q", w.name)), fresh))
 		newEmitted = append(newEmitted, outCol{name: fresh, witness: true, entity: w.entity, src: w.src})
 	}
-	// Retained star targets: map each referencing alias's expanded columns
-	// to their public positions so a qualified ORDER BY key (o.id) rebinds
-	// to the position its expansion produced in Q. Covers `x.*` targets by
-	// alias and bare `*` targets by walking the item layouts — every public
-	// column records the leaf qualifier it is reachable through (merged
-	// USING columns answer to the join_using_alias, plus the picked leaf's
-	// qualifier when recorded as altSrc).
-	stars := map[string]map[string]int{}
-	bind := func(alias string, start, end int) {
-		m := stars[alias]
-		if m == nil {
-			m = map[string]int{}
-			stars[alias] = m
-		}
-		for j := start; j < end && j < len(publics); j++ {
-			m[publics[j]] = j
-		}
-	}
-	for i, t := range targetExprs {
-		cr := t.GetColumnRef()
-		if cr == nil || !hasStar(cr.GetFields()) {
-			continue
-		}
-		end := len(publics)
-		if i+1 < len(pubStarts) {
-			end = pubStarts[i+1]
-		}
-		if len(cr.GetFields()) == 1 {
-			// Bare `*` — attribute each expanded position to the qualifier
-			// that carries it in the item layouts (leaf alias or
-			// join_using_alias for merged columns); a merged column also
-			// answers to the picked leaf's qualifier when the original
-			// output item was that Var verbatim (recorded as altSrc).
-			pos := pubStarts[i]
-			for _, it := range items {
-				for _, c := range it.layout.cols {
-					if c.witness {
-						continue
-					}
-					for _, src := range [2]string{c.src, c.altSrc} {
-						if src == "" {
-							continue
-						}
-						m := stars[src]
-						if m == nil {
-							m = map[string]int{}
-							stars[src] = m
-						}
-						m[c.name] = pos
-					}
-					pos++
-				}
-			}
-			continue
-		}
-		if len(cr.GetFields()) == 2 {
-			if s := cr.GetFields()[0].GetString_(); s != nil {
-				bind(s.GetSval(), pubStarts[i], end)
-			}
-		}
-	}
 	for _, sk := range sortKeys {
 		if sb := sk.GetSortBy(); sb != nil {
 			key := sb.GetNode()
-			if idx := rebindSortKey(key, publics, targetExprs, exprPublicIdx, stars); idx >= 0 {
+			idx, missing := rebindSortKey(key, pubCols, targetExprs, exprPublicIdx, sc)
+			if idx >= 0 {
 				sb.Node = intConst(int64(idx + 1))
+			} else if missing {
+				in.err = fmt.Errorf("%w: DISTINCT ORDER BY key requires USING merge-source proof", ErrTypeResolutionUnavailable)
+				return nil, nil
 			} else if containsQualifiedRef(key) {
 				// An unrebound key that still names an inner alias (o.id)
 				// would parse against D but fail at name resolution — D's
@@ -1556,55 +1806,195 @@ func (in *injector) wrapDistinct(q *pg.SelectStmt, publics []string, pubStarts [
 		}
 		d.SortClause = append(d.SortClause, sk)
 	}
-	out := &itemLayout{}
-	for _, n := range publics {
-		out.cols = append(out.cols, outCol{name: n})
-	}
+	out := &itemLayout{cols: cloneCols(pubCols)}
 	out.cols = append(out.cols, newEmitted...)
 	return d, out
 }
 
+func hasRef(refs []colRef, ref colRef) bool {
+	for _, r := range refs {
+		if r.item == ref.item && r.ord == ref.ord {
+			return true
+		}
+	}
+	return false
+}
+
+func appendRefs(dst []colRef, src []colRef) []colRef {
+	for _, r := range src {
+		if !hasRef(dst, r) {
+			dst = append(dst, r)
+		}
+	}
+	return dst
+}
+
+func refSetsShare(a, b []colRef) bool {
+	for _, r := range a {
+		if hasRef(b, r) {
+			return true
+		}
+	}
+	return false
+}
+
+func refSetEqual(a, b []colRef) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for _, r := range a {
+		if !hasRef(b, r) {
+			return false
+		}
+	}
+	return true
+}
+
+func possibleLeafsOf(r colRef) (leafs []colRef, open bool) {
+	if r.item == nil {
+		return nil, false
+	}
+	if len(r.item.children) == 0 {
+		return []colRef{r}, false
+	}
+	c := colAtPublic(r.item, r.ord)
+	if c == nil {
+		return nil, false
+	}
+	return possibleLeafs(c, r.item, r.ord)
+}
+
+func possibleLeafs(c *outCol, join *fromItemRef, ord int) (leafs []colRef, open bool) {
+	src := c.refs
+	if c.mergeUndecided {
+		src = c.candidates
+		open = true
+	}
+	for _, r := range src {
+		if join != nil && r.item == join && r.ord == ord {
+			continue
+		}
+		sub, o := possibleLeafsOf(r)
+		leafs = appendRefs(leafs, sub)
+		open = open || o
+	}
+	return leafs, open
+}
+
+func colLeafs(c *outCol) (leafs []colRef, open bool) {
+	if c.mergeUndecided {
+		var out []colRef
+		for _, cand := range c.candidates {
+			sub, _ := possibleLeafsOf(cand)
+			out = appendRefs(out, sub)
+		}
+		return out, true
+	}
+	var out []colRef
+	open = false
+	for _, r := range c.refs {
+		sub, o := possibleLeafsOf(r)
+		out = appendRefs(out, sub)
+		open = open || o
+	}
+	return out, open
+}
+
+func matchPublicRef(publics []outCol, ref colRef) (int, bool) {
+	for i := range publics {
+		if hasRef(publics[i].refs, ref) {
+			return i, false
+		}
+	}
+	keyLeafs, keyOpen := possibleLeafsOf(ref)
+	for i := range publics {
+		colLeafs, colOpen := colLeafs(&publics[i])
+		if !refSetsShare(keyLeafs, colLeafs) {
+			continue
+		}
+		if keyOpen || colOpen {
+			return -1, true
+		}
+		return i, false
+	}
+	return -1, false
+}
+
+func samePublicOutputs(publics []outCol, match []int, exprAt map[int]*pg.Node) (equal, missing bool) {
+	f0, open0 := colLeafs(&publics[match[0]])
+	e0 := exprAt[match[0]]
+	for _, m := range match[1:] {
+		fm, openM := colLeafs(&publics[m])
+		if !open0 && !openM && len(f0) > 0 && refSetEqual(f0, fm) {
+			continue
+		}
+		if e0 != nil && exprAt[m] != nil && protoEqualIgnoringLocations(e0, exprAt[m]) {
+			continue
+		}
+		if open0 || openM {
+			return false, true
+		}
+		return false, false
+	}
+	return true, false
+}
+
 // rebindSortKey maps an original ORDER BY key to the 0-based user-column
-// index it denotes, or -1 when it matches nothing (already-invalid queries
-// keep their verbatim key and still fail against the internal columns).
-func rebindSortKey(key *pg.Node, publics []string, exprs []*pg.Node, exprPublicIdx []int, stars map[string]map[string]int) int {
+// index it denotes. A bare identifier binds output names first (SQL92 —
+// output columns shadow same-named inputs); qualified keys resolve in the
+// ORIGINAL FROM scope and match publics by surviving-Var identity, so leaf
+// qualifiers, bare merged names, and join_using_alias spellings all bind
+// when they denote the same Var. The second return flags the missing-
+// evidence case: only an unproven USING merge could make the key denote
+// an output.
+func rebindSortKey(key *pg.Node, publics []outCol, exprs []*pg.Node, exprPublicIdx []int, sc *fromScope) (int, bool) {
 	if n, ok := ordinalConst(key); ok {
 		if n >= 1 && n <= int64(len(publics)) {
-			return int(n - 1)
+			return int(n - 1), false
 		}
-		return -1
+		return -1, false
 	}
-	if cr := key.GetColumnRef(); cr != nil {
+	exprAt := map[int]*pg.Node{}
+	for i, e := range exprs {
+		if cr := e.GetColumnRef(); cr != nil && hasStar(cr.GetFields()) {
+			continue
+		}
+		exprAt[exprPublicIdx[i]] = e
+	}
+	if cr := key.GetColumnRef(); cr != nil && !hasStar(cr.GetFields()) {
 		f := cr.GetFields()
 		if len(f) == 1 {
 			if s := f[0].GetString_(); s != nil {
-				for i, name := range publics {
-					if name == s.GetSval() {
-						return i
+				var match []int
+				for i := range publics {
+					if publics[i].name == s.GetSval() {
+						match = append(match, i)
 					}
+				}
+				switch {
+				case len(match) == 1:
+					return match[0], false
+				case len(match) > 1:
+					eq, miss := samePublicOutputs(publics, match, exprAt)
+					if eq {
+						return match[0], false
+					}
+					return -1, miss
 				}
 			}
 		}
-		if len(f) == 2 {
-			// `alias.col` — bind through a retained `alias.*` expansion; the
-			// named column is exactly what the original target projected.
-			if a := f[0].GetString_(); a != nil {
-				if c := f[1].GetString_(); c != nil {
-					if m, ok := stars[a.GetSval()]; ok {
-						if idx, ok := m[c.GetSval()]; ok {
-							return idx
-						}
-					}
-				}
+		if ref, ok := sc.resolveFields(f); ok {
+			if idx, missing := matchPublicRef(publics, ref); idx >= 0 || missing {
+				return idx, missing
 			}
 		}
 	}
 	for i, e := range exprs {
 		if protoEqualIgnoringLocations(key, e) {
-			return exprPublicIdx[i]
+			return exprPublicIdx[i], false
 		}
 	}
-	return -1
+	return -1, false
 }
 
 // ---------- classification helpers ----------

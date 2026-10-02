@@ -1,7 +1,7 @@
 //go:build integration
 
 // Package integration provides real-PostgreSQL rewrite-equivalence proofs.
-// input: disposable PostgreSQL container, live information_schema resolver, pgsql.Rewrite
+// input: disposable PostgreSQL container, live pg_attribute resolver (ColumnMetadataResolver incl. SQL-backed CommonType), pgsql.Rewrite
 // output: original-vs-rewritten result/ordering/pagination equivalence and witness reltype proofs
 // pos: T4 acceptance — generated transport SQL executes correctly against real PostgreSQL
 // note: if this file changes, update this header and module README.md.
@@ -112,67 +112,74 @@ func seedPGLab(ctx context.Context, c *pgx.Conn) error {
 	return nil
 }
 
-// liveResolver backs pgsql.ColumnResolver with real information_schema — the
+// liveResolver backs pgsql.ColumnResolver with real pg_attribute reads — the
 // same metadata shape the binding gate will feed after relation touch.
+// atttypid preserves domain identity (udt_name would not), and atttypmod
+// keeps the declared modifier so coerced merges stay provable.
 type liveResolver struct{ c *pgx.Conn }
 
 func (r liveResolver) Columns(schema, name string) ([]string, error) {
-	if schema == "" {
-		schema = "app"
-	}
-	rows, err := r.c.Query(context.Background(),
-		`SELECT column_name FROM information_schema.columns
-		 WHERE table_schema=$1 AND table_name=$2 ORDER BY ordinal_position`, schema, name)
+	metas, err := r.ColumnMetadata(schema, name)
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
-	var cols []string
-	for rows.Next() {
-		var s string
-		if err := rows.Scan(&s); err != nil {
-			return nil, err
-		}
-		cols = append(cols, s)
+	cols := make([]string, len(metas))
+	for i, m := range metas {
+		cols[i] = m.Name
 	}
-	if len(cols) == 0 {
-		return nil, fmt.Errorf("%w: %s.%s", pgsql.ErrRelationNotFound, schema, name)
-	}
-	return cols, rows.Err()
+	return cols, nil
 }
 
-// ColumnTypes implements pgsql.ColumnTyper — type identity per column in
-// ordinal order, so the injector can prove whether a merged USING column
-// stayed a verbatim leaf Var (equal types → no coercion → leaf-qualified
-// references remain legal in the original query).
-func (r liveResolver) ColumnTypes(schema, name string) ([]string, error) {
+func (r liveResolver) ColumnMetadata(schema, name string) ([]pgsql.ColumnMetadata, error) {
 	if schema == "" {
 		schema = "app"
 	}
 	rows, err := r.c.Query(context.Background(),
-		`SELECT udt_name FROM information_schema.columns
-		 WHERE table_schema=$1 AND table_name=$2 ORDER BY ordinal_position`, schema, name)
+		`SELECT a.attname, a.atttypid, a.atttypmod, a.attrelid, a.attnum
+		 FROM pg_catalog.pg_attribute a
+		 JOIN pg_catalog.pg_class c ON c.oid = a.attrelid
+		 JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
+		 WHERE n.nspname=$1 AND c.relname=$2 AND a.attnum>0 AND NOT a.attisdropped
+		 ORDER BY a.attnum`, schema, name)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	var types []string
+	var metas []pgsql.ColumnMetadata
 	for rows.Next() {
-		var s string
-		if err := rows.Scan(&s); err != nil {
+		var m pgsql.ColumnMetadata
+		if err := rows.Scan(&m.Name, &m.Type.OID, &m.Type.Typmod,
+			&m.RelationOID, &m.AttributeNumber); err != nil {
 			return nil, err
 		}
-		types = append(types, s)
+		metas = append(metas, m)
 	}
-	if len(types) == 0 {
+	if len(metas) == 0 {
 		return nil, fmt.Errorf("%w: %s.%s", pgsql.ErrRelationNotFound, schema, name)
 	}
-	return types, rows.Err()
+	return metas, rows.Err()
+}
+
+func (r liveResolver) CommonType(leftOID, rightOID uint32) (uint32, error) {
+	var lt, rt string
+	if err := r.c.QueryRow(context.Background(),
+		`SELECT pg_catalog.format_type($1::pg_catalog.oid, NULL), pg_catalog.format_type($2::pg_catalog.oid, NULL)`,
+		leftOID, rightOID).Scan(&lt, &rt); err != nil {
+		return 0, err
+	}
+	var oid uint32
+	if err := r.c.QueryRow(context.Background(), fmt.Sprintf(
+		`SELECT pg_catalog.pg_typeof((SELECT id FROM (SELECT NULL::%s AS id) AS l INNER JOIN (SELECT NULL::%s AS id) AS r USING (id) LIMIT 0))::pg_catalog.oid`,
+		lt, rt)).Scan(&oid); err != nil {
+		return 0, err
+	}
+	return oid, nil
 }
 
 type pgResult struct {
 	names    []string
 	oids     []uint32
+	typmods  []int32
 	tableOID []uint32
 	attNum   []uint16
 	rows     [][]any
@@ -189,6 +196,7 @@ func runPG(t *testing.T, c *pgx.Conn, sql string) pgResult {
 	for _, fd := range rows.FieldDescriptions() {
 		res.names = append(res.names, fd.Name)
 		res.oids = append(res.oids, fd.DataTypeOID)
+		res.typmods = append(res.typmods, fd.TypeModifier)
 		res.tableOID = append(res.tableOID, fd.TableOID)
 		res.attNum = append(res.attNum, fd.TableAttributeNumber)
 	}
@@ -262,6 +270,10 @@ func assertEquivalentFD(t *testing.T, c *pgx.Conn, orig string, ordered, checkFD
 	if !reflect.DeepEqual(after.oids[:nPub], before.oids) {
 		t.Fatalf("public column type OIDs differ: orig %v rewritten %v\nsql: %s",
 			before.oids, after.oids[:nPub], rw.SQL)
+	}
+	if !reflect.DeepEqual(after.typmods[:nPub], before.typmods) {
+		t.Fatalf("public column type modifiers differ: orig %v rewritten %v\nsql: %s",
+			before.typmods, after.typmods[:nPub], rw.SQL)
 	}
 	if checkFD {
 		if !reflect.DeepEqual(after.tableOID[:nPub], before.tableOID) ||
@@ -558,6 +570,37 @@ func assertBothError(t *testing.T, c *pgx.Conn, orig string) {
 	}
 }
 
+func assertSortRejected(t *testing.T, c *pgx.Conn, orig string) {
+	t.Helper()
+	assertCodeMirrored(t, c, orig, "42P10")
+}
+
+func assertCodeMirrored(t *testing.T, c *pgx.Conn, orig, wantCode string) {
+	t.Helper()
+	var oerr *pgconn.PgError
+	if _, err := c.Exec(context.Background(), orig); err == nil {
+		t.Fatalf("fixture expected %s, query succeeded: %s", wantCode, orig)
+	} else if !errors.As(err, &oerr) || oerr.Code != wantCode {
+		t.Fatalf("original must fail with %s, got %v", wantCode, err)
+	}
+	rw, err := pgsql.Rewrite(orig, "app", liveResolver{c})
+	if err != nil {
+		var re *pgsql.RejectError
+		if !errors.As(err, &re) || re.Code != "query_not_allowed" {
+			t.Fatalf("rewrite must reject query_not_allowed or fail %s, got %v", wantCode, err)
+		}
+		return
+	}
+	if _, err := c.Exec(context.Background(), rw.SQL); err == nil {
+		t.Fatalf("rewrite succeeded where original fails %s: %s", wantCode, rw.SQL)
+	} else {
+		var rerr *pgconn.PgError
+		if !errors.As(err, &rerr) || rerr.Code != wantCode {
+			t.Fatalf("rewrite error must be %s, got %v\nsql: %s", wantCode, err, rw.SQL)
+		}
+	}
+}
+
 func TestPGRewrite_AggregateLayers(t *testing.T) {
 	c := sharedPG(t)
 	assertEquivalent(t, c, `SELECT count(*), sum(amt) FROM orders`, false)
@@ -640,4 +683,195 @@ func TestPGRewrite_Rejections(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestPGRewrite_JoinReview5_NaturalNoCommon(t *testing.T) {
+	c := sharedPG(t)
+	const lLive, rLive = `c AS l(x)`, `c AS r(y)`
+	const lDead, rDead = `(SELECT id FROM c WHERE false) AS l(x)`,
+		`(SELECT id FROM c WHERE false) AS r(y)`
+	cases := []struct {
+		name              string
+		left, right, join string
+		want              int
+	}{
+		{"inner", lLive, rLive, `NATURAL JOIN`, 9},
+		{"left", lLive, rLive, `NATURAL LEFT JOIN`, 9},
+		{"right", lLive, rLive, `NATURAL RIGHT JOIN`, 9},
+		{"full", lLive, rLive, `NATURAL FULL JOIN`, 9},
+		{"inner_right_empty", lLive, rDead, `NATURAL JOIN`, 0},
+		{"left_right_empty", lLive, rDead, `NATURAL LEFT JOIN`, 3},
+		{"right_right_empty", lLive, rDead, `NATURAL RIGHT JOIN`, 0},
+		{"full_right_empty", lLive, rDead, `NATURAL FULL JOIN`, 3},
+		{"inner_left_empty", lDead, rLive, `NATURAL JOIN`, 0},
+		{"left_left_empty", lDead, rLive, `NATURAL LEFT JOIN`, 0},
+		{"right_left_empty", lDead, rLive, `NATURAL RIGHT JOIN`, 3},
+		{"full_left_empty", lDead, rLive, `NATURAL FULL JOIN`, 3},
+		{"inner_both_empty", lDead, rDead, `NATURAL JOIN`, 0},
+		{"left_both_empty", lDead, rDead, `NATURAL LEFT JOIN`, 0},
+		{"right_both_empty", lDead, rDead, `NATURAL RIGHT JOIN`, 0},
+		{"full_both_empty", lDead, rDead, `NATURAL FULL JOIN`, 0},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			sql := `WITH c AS (SELECT id FROM app.orders) SELECT l.x, r.y FROM ` +
+				tc.left + ` ` + tc.join + ` ` + tc.right
+			orig := runPG(t, c, sql)
+			if len(orig.rows) != tc.want {
+				t.Fatalf("expected %d rows, got %d\nsql: %s", tc.want, len(orig.rows), sql)
+			}
+			assertEquivalent(t, c, sql, false)
+		})
+	}
+}
+
+func TestPGRewrite_JoinReview5_SortProvenance(t *testing.T) {
+	c := sharedPG(t)
+	t.Run("picked_leaf_already_common_type", func(t *testing.T) {
+		assertEquivalent(t, c,
+			`SELECT DISTINCT * FROM app.r_big AS l LEFT JOIN app.l_int AS r USING (id) ORDER BY l.id`, true)
+	})
+	t.Run("cte_join_side", func(t *testing.T) {
+		assertEquivalent(t, c,
+			`WITH r AS (SELECT id FROM app.items) SELECT DISTINCT * FROM app.orders AS o LEFT JOIN r USING (id) ORDER BY o.id`, true)
+	})
+	t.Run("column_alias_list_using", func(t *testing.T) {
+		assertEquivalent(t, c,
+			`SELECT DISTINCT * FROM app.orders AS o(x,y) LEFT JOIN app.items AS i(x,z) USING (x) ORDER BY o.x`, true)
+	})
+	t.Run("inner_coerced_keeps_right", func(t *testing.T) {
+		assertEquivalent(t, c,
+			`SELECT DISTINCT * FROM app.l_int l JOIN app.r_big r USING (id) ORDER BY r.id`, true)
+	})
+	t.Run("right_join_bigint_preserved", func(t *testing.T) {
+		assertEquivalent(t, c,
+			`SELECT DISTINCT * FROM app.l_int l RIGHT JOIN app.r_big r USING (id) ORDER BY r.id`, true)
+	})
+	t.Run("derived_join_side", func(t *testing.T) {
+		assertEquivalent(t, c,
+			`SELECT DISTINCT * FROM app.orders o LEFT JOIN (SELECT id FROM app.items) r USING (id) ORDER BY o.id`, true)
+	})
+	t.Run("cte_definition_alias_list", func(t *testing.T) {
+		assertEquivalent(t, c,
+			`WITH r(x) AS (SELECT id FROM app.items) SELECT DISTINCT * FROM app.orders AS o(x,y) LEFT JOIN r USING (x) ORDER BY o.x`, true)
+	})
+	t.Run("partial_entity_alias_lists", func(t *testing.T) {
+		assertEquivalent(t, c,
+			`SELECT DISTINCT * FROM app.orders AS o(x) LEFT JOIN app.items AS i(x) USING (x) ORDER BY o.x`, true)
+	})
+	t.Run("repeated_cte_references", func(t *testing.T) {
+		assertEquivalent(t, c,
+			`WITH r AS (SELECT id FROM app.items) SELECT DISTINCT * FROM r AS a LEFT JOIN r AS b USING (id) ORDER BY a.id`, true)
+	})
+	t.Run("forced_expansion_cte_side", func(t *testing.T) {
+		assertEquivalent(t, c,
+			`WITH r AS (SELECT id FROM app.items) SELECT DISTINCT * FROM app.orders o LEFT JOIN r USING (id) ORDER BY o.id`, true)
+	})
+	t.Run("explicit_merged_projection", func(t *testing.T) {
+		assertEquivalent(t, c,
+			`WITH r AS (SELECT id FROM app.items) SELECT DISTINCT id, o.amt FROM app.orders o LEFT JOIN r USING (id) ORDER BY o.id`, true)
+	})
+	t.Run("user_using_alias_key", func(t *testing.T) {
+		assertEquivalent(t, c,
+			`SELECT DISTINCT * FROM app.orders o LEFT JOIN app.items i USING (id) AS u ORDER BY u.id`, true)
+	})
+	t.Run("negative_typmod", func(t *testing.T) {
+		for _, s := range []string{
+			`CREATE TABLE IF NOT EXISTS app.numeric_scale1 (id numeric(10,1))`,
+			`CREATE TABLE IF NOT EXISTS app.numeric_scale2 (id numeric(10,2))`,
+			`INSERT INTO app.numeric_scale1 VALUES (1.0)`,
+			`INSERT INTO app.numeric_scale2 VALUES (1.00)`,
+		} {
+			if _, err := c.Exec(context.Background(), s); err != nil {
+				t.Fatalf("typmod fixture %q: %v", s, err)
+			}
+		}
+		assertSortRejected(t, c,
+			`SELECT DISTINCT * FROM app.numeric_scale1 AS l LEFT JOIN app.numeric_scale2 AS r USING (id) ORDER BY l.id`)
+	})
+	t.Run("negative_merge_keys", func(t *testing.T) {
+		for _, sql := range []string{
+			`SELECT DISTINCT * FROM app.orders o FULL JOIN app.items i USING (id) ORDER BY o.id`,
+			`SELECT DISTINCT * FROM app.orders o LEFT JOIN app.items i USING (id) ORDER BY i.id`,
+			`SELECT DISTINCT * FROM app.l_int l LEFT JOIN app.r_big r USING (id) ORDER BY l.id`,
+			`SELECT DISTINCT * FROM app.l_int l JOIN app.r_big r USING (id) ORDER BY l.id`,
+		} {
+			assertSortRejected(t, c, sql)
+		}
+	})
+	t.Run("domain_evidence", func(t *testing.T) {
+		for _, s := range []string{
+			`CREATE DOMAIN app.merge_domain1 AS integer`,
+			`CREATE DOMAIN app.merge_domain2 AS integer`,
+			`CREATE TABLE app.domain1_key (id app.merge_domain1)`,
+			`CREATE TABLE app.domain1_key_other (id app.merge_domain1)`,
+			`CREATE TABLE app.domain2_key (id app.merge_domain2)`,
+			`INSERT INTO app.domain1_key VALUES (1)`,
+			`INSERT INTO app.domain1_key_other VALUES (1)`,
+			`INSERT INTO app.domain2_key VALUES (1)`,
+		} {
+			if _, err := c.Exec(context.Background(), s); err != nil {
+				t.Fatalf("domain fixture %q: %v", s, err)
+			}
+		}
+		assertEquivalent(t, c,
+			`SELECT DISTINCT * FROM app.domain1_key l LEFT JOIN app.domain1_key_other r USING (id) ORDER BY l.id`, true)
+		assertSortRejected(t, c,
+			`SELECT DISTINCT * FROM app.domain1_key l LEFT JOIN app.domain2_key r USING (id) ORDER BY l.id`)
+		assertEquivalent(t, c,
+			`SELECT DISTINCT * FROM app.l_int l LEFT JOIN app.domain1_key r USING (id) ORDER BY l.id`, true)
+	})
+}
+
+func TestPGRewrite_JoinReview5_ScopeRebind(t *testing.T) {
+	c := sharedPG(t)
+
+	t.Run("output_name_shadows_input", func(t *testing.T) {
+		assertEquivalent(t, c,
+			`SELECT DISTINCT id AS original_id, -amt AS id FROM app.orders ORDER BY id`, true)
+	})
+	t.Run("duplicate_output_name_identical", func(t *testing.T) {
+		assertEquivalent(t, c,
+			`SELECT DISTINCT id AS k, id AS k FROM app.orders ORDER BY k`, true)
+	})
+	t.Run("duplicate_output_name_ambiguous", func(t *testing.T) {
+		assertCodeMirrored(t, c,
+			`SELECT DISTINCT id AS k, -amt AS k FROM app.orders ORDER BY k`, "42702")
+	})
+	t.Run("bare_key_top_level_only", func(t *testing.T) {
+		assertEquivalent(t, c,
+			`SELECT DISTINCT id FROM (app.orders o FULL JOIN app.items i USING (id)) RIGHT JOIN app.l_int l USING (id) ORDER BY l.id`, true)
+	})
+	t.Run("bare_key_ambiguous_siblings", func(t *testing.T) {
+		assertCodeMirrored(t, c,
+			`SELECT DISTINCT * FROM app.orders o LEFT JOIN app.items i USING (id), app.l_int l ORDER BY id`, "42702")
+	})
+	t.Run("key_join_alias_vs_leaf_output", func(t *testing.T) {
+		assertEquivalent(t, c,
+			`SELECT DISTINCT o.id AS out_id FROM app.orders o LEFT JOIN app.items i USING (id) AS u ORDER BY u.id`, true)
+	})
+	t.Run("key_bare_merged_vs_leaf_output", func(t *testing.T) {
+		assertEquivalent(t, c,
+			`SELECT DISTINCT o.id AS out_id FROM app.orders o LEFT JOIN app.items i USING (id) ORDER BY id`, true)
+	})
+	t.Run("key_join_alias_full_merge", func(t *testing.T) {
+		assertSortRejected(t, c,
+			`SELECT DISTINCT o.id AS out_id FROM app.orders o FULL JOIN app.items i USING (id) AS u ORDER BY u.id`)
+	})
+	t.Run("duplicate_alias_same_underlying_var", func(t *testing.T) {
+		assertEquivalent(t, c,
+			`SELECT DISTINCT u.id AS k, v.id AS k FROM app.orders o LEFT JOIN app.items i USING (id) AS u LEFT JOIN app.l_int l USING (id) AS v ORDER BY k`, true)
+	})
+	t.Run("qualified_key_ambiguous_in_item", func(t *testing.T) {
+		assertCodeMirrored(t, c,
+			`SELECT DISTINCT o.* FROM app.orders AS o(x,x) ORDER BY o.x`, "42702")
+	})
+	t.Run("dotted_alias_not_schema_path", func(t *testing.T) {
+		assertEquivalent(t, c,
+			`SELECT DISTINCT * FROM app.orders AS "app.items" CROSS JOIN app.items ORDER BY "app.items".id, app.items.id`, true)
+	})
+	t.Run("alias_hides_schema_path", func(t *testing.T) {
+		assertCodeMirrored(t, c,
+			`SELECT DISTINCT orders.* FROM app.orders AS orders ORDER BY app.orders.id`, "42P01")
+	})
 }
