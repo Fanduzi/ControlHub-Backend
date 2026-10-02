@@ -9,6 +9,7 @@ package integration
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"reflect"
 	"sort"
@@ -17,6 +18,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/testcontainers/testcontainers-go"
 	pgc "github.com/testcontainers/testcontainers-go/modules/postgres"
 	"github.com/testcontainers/testcontainers-go/wait"
@@ -82,12 +84,24 @@ func seedPGLab(ctx context.Context, c *pgx.Conn) error {
 		`INSERT INTO app.t2 VALUES (2,'p'),(5,'q'),(7,'r')`,
 		`CREATE TABLE app.big (seq int)`,
 		`INSERT INTO app.big SELECT generate_series(1,30)`,
+		// 40 distinct values each duplicated — DISTINCT paging over dupes.
+		`CREATE TABLE app.dup (seq int)`,
+		`INSERT INTO app.dup SELECT g FROM generate_series(1,40) g UNION ALL SELECT g FROM generate_series(1,40) g`,
 		// Same-valued USING keys at different numeric scales — the merged
 		// column must surface the join-correct side's representation.
 		`CREATE TABLE app.njl (id numeric)`,
 		`CREATE TABLE app.njr (id numeric)`,
 		`INSERT INTO app.njl VALUES (1.0), (2.0)`,
 		`INSERT INTO app.njr VALUES (1.00), (3.00)`,
+		// Mixed-type USING keys — merged column takes the common type.
+		`CREATE TABLE app.l_int (id integer)`,
+		`CREATE TABLE app.r_big (id bigint)`,
+		`INSERT INTO app.l_int VALUES (1), (2)`,
+		`INSERT INTO app.r_big VALUES (1), (3)`,
+		// json payload is not comparable — DISTINCT on other cols must
+		// still succeed while the entity stays witnessed.
+		`CREATE TABLE app.jt (id int, payload json)`,
+		`INSERT INTO app.jt VALUES (1,'{"a":1}'), (1,'{"b":2}'), (2,'{"c":3}')`,
 		`SET search_path = app`,
 	}
 	for _, s := range ddl {
@@ -300,12 +314,23 @@ func TestPGRewrite_JoinSemantics(t *testing.T) {
 	// side's representation (1.00), never COALESCE's left preference.
 	assertEquivalentFD(t, c,
 		`SELECT * FROM njl RIGHT JOIN njr USING (id) ORDER BY id`, true, true)
-	// Forced expansion path (witness-carrying side): merged column still
-	// follows PostgreSQL's per-type rule — the right Var verbatim.
+	// Forced expansion path (witness-carrying side): merged column must
+	// still be PostgreSQL's own merged var — routed through the generated
+	// join_using_alias — including its common-type coercion: integer+bigint
+	// merge must keep bigint, not whichever side happened to be picked.
+	assertEquivalentFD(t, c,
+		`WITH r AS (SELECT id FROM r_big) SELECT * FROM l_int l LEFT JOIN r USING (id) ORDER BY id`, true, false)
+	assertEquivalentFD(t, c,
+		`WITH l AS (SELECT id FROM l_int) SELECT * FROM l RIGHT JOIN r_big USING (id) ORDER BY id`, true, false)
+	assertEquivalentFD(t, c,
+		`WITH r AS (SELECT id FROM r_big) SELECT * FROM l_int l JOIN r USING (id) ORDER BY id`, true, false)
 	assertEquivalentFD(t, c,
 		`WITH r AS (SELECT id FROM njr) SELECT * FROM njl RIGHT JOIN r USING (id) ORDER BY id`, true, false)
 	assertEquivalentFD(t, c,
 		`WITH r AS (SELECT id FROM njr) SELECT * FROM njl FULL JOIN r USING (id) ORDER BY id`, true, false)
+	// A user's own join_using_alias is reused, not shadowed.
+	assertEquivalentFD(t, c,
+		`WITH r AS (SELECT id FROM r_big) SELECT * FROM l_int l LEFT JOIN r USING (id) AS u ORDER BY u.id`, true, false)
 	// GROUP BY over the merged column of a RIGHT JOIN — the generated
 	// expression must stay groupable, i.e. be the right-side Var.
 	assertEquivalent(t, c,
@@ -341,6 +366,15 @@ func TestPGRewrite_DistinctAndPagination(t *testing.T) {
 		`SELECT DISTINCT amt, count(*) FROM orders GROUP BY amt`, false)
 	assertEquivalent(t, c,
 		`SELECT DISTINCT amt, count(*) FROM orders GROUP BY amt HAVING count(*) > 0 ORDER BY amt`, true)
+	// HAVING false side and empty inputs — aggregate shape must not
+	// manufacture a global-aggregate row where the original yields none,
+	// and a global aggregate over empty input still yields its single row.
+	assertEquivalent(t, c,
+		`SELECT DISTINCT amt, count(*) FROM orders GROUP BY amt HAVING count(*) > 100`, false)
+	assertEquivalent(t, c, `SELECT DISTINCT amt FROM orders WHERE false`, false)
+	assertEquivalent(t, c, `SELECT DISTINCT count(*) FROM orders WHERE false`, false)
+	assertEquivalent(t, c,
+		`SELECT count(*) FROM orders WHERE false`, false)
 	// DISTINCT + window function in the same layer.
 	assertEquivalent(t, c,
 		`SELECT DISTINCT id, count(*) OVER () AS n FROM orders ORDER BY id`, true)
@@ -352,17 +386,26 @@ func TestPGRewrite_DistinctAndPagination(t *testing.T) {
 	// DISTINCT ON over an aggregate layer — stays unwrapped, still attested.
 	assertEquivalent(t, c,
 		`SELECT DISTINCT ON (amt) amt, count(*) FROM orders GROUP BY amt ORDER BY amt`, true)
-	// Retained entity star + qualified sort key rebinding.
+	// Retained stars + qualified sort keys: every spelling must rebind.
+	assertEquivalent(t, c,
+		`SELECT DISTINCT * FROM orders o ORDER BY o.id`, true)
 	assertEquivalent(t, c,
 		`SELECT DISTINCT o.* FROM orders o ORDER BY o.id`, true)
+	assertEquivalent(t, c,
+		`SELECT DISTINCT * FROM orders o(x,y) ORDER BY o.x`, true)
 	// Entity column-alias list under DISTINCT.
 	assertEquivalent(t, c, `SELECT DISTINCT * FROM orders AS o(x,y)`, false)
 	// Expression sort key through Q+D.
 	assertEquivalent(t, c,
 		`SELECT DISTINCT amt + 1 AS bumped FROM orders ORDER BY amt + 1`, true)
-	// Non-comparable type: original and rewrite must fail identically.
-	assertBothError(t, c,
-		`SELECT DISTINCT v.j FROM (SELECT '{"a":1}'::json AS j) v`)
+	// Entity with a non-comparable (json) payload column — DISTINCT on a
+	// comparable column succeeds and the witness keeps jt's reltype.
+	rw := assertEquivalent(t, c, `SELECT DISTINCT id FROM jt ORDER BY id`, true)
+	if len(rw.Witnesses) != 1 || rw.Witnesses[0].Entity.Name != "jt" {
+		t.Fatalf("jt witness missing: %+v", rw.Witnesses)
+	}
+	// Dedup over the json column itself fails identically on both sides.
+	assertBothError(t, c, `SELECT DISTINCT payload FROM jt`)
 
 	// Zero-row shapes.
 	assertEquivalent(t, c, `SELECT id FROM orders LIMIT 0`, false)
@@ -373,21 +416,90 @@ func TestPGRewrite_DistinctAndPagination(t *testing.T) {
 		assertEquivalentFD(t, c,
 			fmt.Sprintf(`SELECT * FROM big ORDER BY seq LIMIT 10 OFFSET %d`, off), true, true)
 	}
+	assertDistinctPageWindows(t, c)
 }
 
-// assertBothError proves an invalid query fails identically on both sides —
-// the rewrite must neither silently succeed nor fail in a different way.
+// assertDistinctPageWindows drives the spec's two-page G6 window over a
+// DISTINCT result: original `LIMIT 30 OFFSET 10` gives rows 11..40 of the
+// deduped sequence; the rewritten pages are the precomputed G6 windows
+// `LIMIT 26 OFFSET 10` (25 rows + sentinel) and `LIMIT 5 OFFSET 35`.
+func assertDistinctPageWindows(t *testing.T, c *pgx.Conn) {
+	t.Helper()
+	orig := `SELECT DISTINCT seq FROM dup ORDER BY seq LIMIT 30 OFFSET 10`
+	full := runPG(t, c, orig)
+	if len(full.rows) != 30 {
+		t.Fatalf("fixture drift: expected 30-window, got %d", len(full.rows))
+	}
+	page1 := runRewritePublic(t, c,
+		`SELECT DISTINCT seq FROM dup ORDER BY seq LIMIT 26 OFFSET 10`)
+	page2 := runRewritePublic(t, c,
+		`SELECT DISTINCT seq FROM dup ORDER BY seq LIMIT 5 OFFSET 35`)
+	// Page 1 = first 25 window rows; row 26 is the has-more sentinel and
+	// must equal the original window's 26th row without entering the page.
+	if len(page1) != 26 {
+		t.Fatalf("page1 expected 25+sentinel rows, got %d", len(page1))
+	}
+	for i := 0; i < 25; i++ {
+		if !reflect.DeepEqual(page1[i], full.rows[i]) {
+			t.Fatalf("page1 row %d: %v != %v", i, page1[i], full.rows[i])
+		}
+	}
+	if !reflect.DeepEqual(page1[25], full.rows[25]) {
+		t.Fatalf("sentinel row mismatch: %v != %v", page1[25], full.rows[25])
+	}
+	// Page 2 resumes after the sentinel — exactly the original tail.
+	if len(page2) != 5 {
+		t.Fatalf("page2 expected 5 rows, got %d", len(page2))
+	}
+	for i := range page2 {
+		if !reflect.DeepEqual(page2[i], full.rows[25+i]) {
+			t.Fatalf("page2 row %d: %v != %v", i, page2[i], full.rows[25+i])
+		}
+	}
+}
+
+// runRewritePublic executes the rewritten SQL and returns public columns
+// only — witness columns stripped by the recorded positions.
+func runRewritePublic(t *testing.T, c *pgx.Conn, sql string) [][]any {
+	t.Helper()
+	rw, err := pgsql.Rewrite(sql, "app", liveResolver{c})
+	if err != nil {
+		t.Fatalf("Rewrite(%q): %v", sql, err)
+	}
+	res := runPG(t, c, rw.SQL)
+	nPub := len(rw.Public)
+	out := make([][]any, len(res.rows))
+	for i, row := range res.rows {
+		out[i] = row[:nPub]
+	}
+	return out
+}
+
+// assertBothError proves an invalid query fails identically: the ORIGINAL
+// must fail first; then the rewrite must either be rejected up front or
+// fail with the same SQLSTATE at execution.
 func assertBothError(t *testing.T, c *pgx.Conn, orig string) {
 	t.Helper()
+	var oerr *pgconn.PgError
+	if _, err := c.Exec(context.Background(), orig); err == nil {
+		t.Fatalf("invalid-fixture query unexpectedly succeeded: %s", orig)
+	} else if !errors.As(err, &oerr) {
+		t.Fatalf("original error is not a PgError: %v", err)
+	}
 	rw, err := pgsql.Rewrite(orig, "app", liveResolver{c})
 	if err != nil {
-		return // failing at rewrite time is a valid identical outcome
-	}
-	if _, err := c.Exec(context.Background(), orig); err == nil {
-		t.Fatalf("original unexpectedly succeeded: %s", orig)
+		return // rejected at rewrite time — a valid identical outcome
 	}
 	if _, err := c.Exec(context.Background(), rw.SQL); err == nil {
 		t.Fatalf("rewrite succeeded where original fails: %s", rw.SQL)
+	} else {
+		var rerr *pgconn.PgError
+		if !errors.As(err, &rerr) {
+			t.Fatalf("rewrite error is not a PgError: %v", err)
+		}
+		if rerr.Code != oerr.Code {
+			t.Fatalf("error class differs: orig %s rewritten %s\nsql: %s", oerr.Code, rerr.Code, rw.SQL)
+		}
 	}
 }
 

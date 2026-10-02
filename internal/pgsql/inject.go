@@ -2,7 +2,7 @@
 // (spec G4/G5/G10 stage: parse → guard → classify → qualify → inject).
 // input: qualified *pg.ParseResult, ColumnResolver supplying FROM-position column names
 // output: InjectWitnesses, InjectResult, WitnessRecord, EntityKey, ColumnResolver — layout-freeze + per-layer witness injection + DISTINCT Q+D transform
-// pos: G10 mechanism 5a — records the original visible layout (* / x.* / NATURAL join / ordinals / VALUES / per-reference colnames) BEFORE appending witnesses; stars stay verbatim unless an injected column forces expansion, and forced USING/NATURAL merges follow PostgreSQL's side rule (INNER/LEFT left, RIGHT right, FULL COALESCE); emits CASE WHEN FALSE THEN alias.* END on ordinary/window-only layers and (array_agg(alias.*) FILTER (WHERE FALSE))[1] on aggregate/grouping layers; propagates through CTEs and derived tables, suppresses inside SubLinks, merges set-op branches through canonical representatives only when attested entities match, and rejects when any entity's witness cannot reach the output; plain SELECT DISTINCT becomes Q+D (D groups by original public columns only and receives ORDER BY/LIMIT/OFFSET exactly once); internal names live under the reserved __chub_ prefix
+// pos: G10 mechanism 5a — records the original visible layout (* / x.* / NATURAL join / ordinals / VALUES / per-reference colnames) BEFORE appending witnesses; stars stay verbatim unless an injected column forces expansion, and forced USING/NATURAL merges are projected through the join's join_using_alias (generated under the __chub_ prefix when absent) so PostgreSQL computes the merged column natively — common-type coercion included; emits CASE WHEN FALSE THEN alias.* END on ordinary/window-only layers and (array_agg(alias.*) FILTER (WHERE FALSE))[1] on aggregate/grouping layers; propagates through CTEs and derived tables, suppresses inside SubLinks, merges set-op branches through canonical representatives only when attested entities match, and rejects when any entity's witness cannot reach the output; plain SELECT DISTINCT becomes Q+D (D groups by original public columns only and receives ORDER BY/LIMIT/OFFSET exactly once); internal names live under the reserved __chub_ prefix
 // note: if this file changes, update header and README.md
 package pgsql
 
@@ -124,8 +124,7 @@ func InjectWitnesses(tree *pg.ParseResult, res ColumnResolver) (*InjectResult, e
 // outCol is one column in a FROM item's or SELECT layer's output.
 type outCol struct {
 	name    string
-	src     string   // qualifying RTE alias this column reads from ("" when expr set)
-	expr    *pg.Node // non-nil for merged USING columns — a COALESCE tree of both sides
+	src     string // qualifying RTE alias this column reads from ("" = unqualified)
 	witness bool
 	entity  *EntityKey // set when witness
 }
@@ -362,7 +361,7 @@ func (in *injector) selectStmt(sel *pg.SelectStmt, cteLayouts map[string]*itemLa
 	layout.cols = append(layout.cols, emitted...)
 
 	if isPlainDistinct(sel) {
-		d, dLayout := in.wrapDistinct(sel, publics, pubStarts, emitted)
+		d, dLayout := in.wrapDistinct(sel, publics, pubStarts, emitted, items)
 		return d, dLayout
 	}
 	return sel, layout
@@ -574,11 +573,11 @@ func (in *injector) fromItem(n *pg.Node, cteLayouts map[string]*itemLayout, emit
 // joinFreezeAndLayout computes the merged output layout of a JOIN from its
 // two child layouts — never from the raw leaf list, so nested joins keep
 // their already-merged columns. When a merged column must be rendered
-// explicitly (a forced `*` expansion), it follows PostgreSQL's own rule:
-// INNER/LEFT take the left column, RIGHT the right column, and only FULL
-// produces a COALESCE of both sides. Unforced `*` stays verbatim, so the
-// common path lets PostgreSQL compute the merged value natively — including
-// its type coercion — rather than approximating it with an expression.
+// explicitly (a forced `*` expansion), it is referenced through the join's
+// join_using_alias — user-supplied or generated — so PostgreSQL computes
+// the merged var natively: side selection, common-type coercion, typmod,
+// GROUP BY legality and source FDs all stay server-side. Unforced `*` stays
+// verbatim, so the common path never names the merged column at all.
 func (in *injector) joinFreezeAndLayout(j *pg.JoinExpr, l, r *fromItemRef) *itemLayout {
 	switch j.GetJointype() {
 	case pg.JoinType_JOIN_SEMI, pg.JoinType_JOIN_ANTI, pg.JoinType_JOIN_RIGHT_ANTI,
@@ -634,24 +633,31 @@ func (in *injector) joinFreezeAndLayout(j *pg.JoinExpr, l, r *fromItemRef) *item
 	}
 	using := map[string]bool{}
 	out := &itemLayout{}
-	for _, name := range merged {
-		lc := findPublic(l.layout, name)
-		rc := findPublic(r.layout, name)
-		if lc == nil || rc == nil {
-			in.err = &RejectError{Code: "query_not_allowed", Message: fmt.Sprintf("%v: USING column absent from a join side", ErrLayoutUnfreezable)}
-			return nil
+	if len(merged) > 0 {
+		// Name the USING merged-column group so explicit expansion can
+		// reference PostgreSQL's own merged vars — value, common-type
+		// coercion and source FDs stay native instead of approximating
+		// buildMergedJoinVar with side picks or COALESCE. An existing
+		// user alias (`USING(x) AS u`) is reused as-is.
+		ualias := j.GetJoinUsingAlias().GetAliasname()
+		if ualias == "" {
+			in.synth++
+			ualias = fmt.Sprintf("__chub_uj%d", in.synth)
+			if j.JoinUsingAlias == nil {
+				j.JoinUsingAlias = &pg.Alias{}
+			}
+			j.JoinUsingAlias.Aliasname = ualias
 		}
-		using[name] = true
-		col := outCol{name: name}
-		switch j.GetJointype() {
-		case pg.JoinType_JOIN_RIGHT:
-			col.expr = refNode(rc)
-		case pg.JoinType_JOIN_FULL:
-			col.expr = coalesceNode(refNode(lc), refNode(rc))
-		default: // INNER, LEFT — PostgreSQL projects the left column
-			col.expr = refNode(lc)
+		for _, name := range merged {
+			lc := findPublic(l.layout, name)
+			rc := findPublic(r.layout, name)
+			if lc == nil || rc == nil {
+				in.err = &RejectError{Code: "query_not_allowed", Message: fmt.Sprintf("%v: USING column absent from a join side", ErrLayoutUnfreezable)}
+				return nil
+			}
+			using[name] = true
+			out.cols = append(out.cols, outCol{name: name, src: ualias})
 		}
-		out.cols = append(out.cols, col)
 	}
 	appendSide := func(layout *itemLayout) {
 		for _, c := range layout.cols {
@@ -681,36 +687,18 @@ func findPublic(l *itemLayout, name string) *outCol {
 	return nil
 }
 
-// refNode renders the reference an expansion must emit for a column:
-// the stored merge expression, or an alias-qualified name.
-func refNode(c *outCol) *pg.Node {
-	if c.expr != nil {
-		return proto.Clone(c.expr).(*pg.Node)
-	}
-	if c.src != "" {
-		return colRefNode(c.src, c.name)
-	}
-	return colRefNode(c.name)
-}
-
-// coalesceNode builds COALESCE(a, b).
-func coalesceNode(a, b *pg.Node) *pg.Node {
-	return &pg.Node{Node: &pg.Node_CoalesceExpr{CoalesceExpr: &pg.CoalesceExpr{
-		Args: []*pg.Node{a, b},
-	}}}
-}
-
 // layoutWithAlias clones a layout stamping the referencing alias as each
-// public column's source qualifier — used when a FROM item's alias is the
-// only name its columns may be reached through. Witness cols keep their
-// recorded src (the attested RTE alias inside the source's own scope).
+// public column's source qualifier — under an alias the inner qualifiers
+// (leaf aliases, internal USING names) are unreachable, so every public
+// column must route through the alias. Witness cols keep their recorded
+// src (the attested RTE alias inside the source's own scope).
 func layoutWithAlias(l *itemLayout, alias string) *itemLayout {
 	if l == nil {
 		return &itemLayout{opaque: true}
 	}
 	out := &itemLayout{opaque: l.opaque, cols: append([]outCol(nil), l.cols...)}
 	for i := range out.cols {
-		if !out.cols[i].witness && out.cols[i].src == "" && alias != "" {
+		if !out.cols[i].witness && alias != "" {
 			out.cols[i].src = alias
 		}
 	}
@@ -888,14 +876,9 @@ func (in *injector) publicExpansion(it *fromItemRef) []*pg.Node {
 			if c.witness {
 				continue
 			}
-			switch {
-			case c.expr != nil:
-				// Merged USING column — emit the COALESCE tree and restore
-				// the output name; the plain name form could bind elsewhere.
-				out = append(out, targetNode(refNode(&c), c.name))
-			case c.src != "":
+			if c.src != "" {
 				out = append(out, targetNode(colRefNode(c.src, c.name), ""))
-			default:
+			} else {
 				out = append(out, targetNode(colRefNode(c.name), ""))
 			}
 		}
@@ -1333,7 +1316,7 @@ func (in *injector) sublinksIn(root *pg.Node, layouts map[string]*itemLayout) {
 // user columns (never global aggregation → empty input yields zero rows),
 // carries witnesses via the aggregate template, restores original public
 // names (duplicates included), and receives ORDER BY/LIMIT/OFFSET once.
-func (in *injector) wrapDistinct(q *pg.SelectStmt, publics []string, pubStarts []int, emitted []outCol) (*pg.SelectStmt, *itemLayout) {
+func (in *injector) wrapDistinct(q *pg.SelectStmt, publics []string, pubStarts []int, emitted []outCol, items []*fromItemRef) (*pg.SelectStmt, *itemLayout) {
 	sortKeys := q.GetSortClause()
 	limitCount, limitOffset := q.GetLimitCount(), q.GetLimitOffset()
 	limitOption := q.GetLimitOption()
@@ -1393,22 +1376,59 @@ func (in *injector) wrapDistinct(q *pg.SelectStmt, publics []string, pubStarts [
 			filterAggSubscript(colRefNode("__chub_q", w.name)), fresh))
 		newEmitted = append(newEmitted, outCol{name: fresh, witness: true, entity: w.entity, src: w.src})
 	}
-	// Retained `x.*` targets: map each alias's expanded columns to their
-	// public positions so a qualified ORDER BY key (o.id) rebinds to the
-	// position its star expansion produced in Q.
+	// Retained star targets: map each referencing alias's expanded columns
+	// to their public positions so a qualified ORDER BY key (o.id) rebinds
+	// to the position its expansion produced in Q. Covers `x.*` targets by
+	// alias and bare `*` targets by walking the item layouts — every public
+	// column records the leaf qualifier it is reachable through (merged
+	// USING columns stay under their join_using_alias, which is also how a
+	// user ORDER BY would have to name them).
 	stars := map[string]map[string]int{}
+	bind := func(alias string, start, end int) {
+		m := stars[alias]
+		if m == nil {
+			m = map[string]int{}
+			stars[alias] = m
+		}
+		for j := start; j < end && j < len(publics); j++ {
+			m[publics[j]] = j
+		}
+	}
 	for i, t := range targetExprs {
-		if cr := t.GetColumnRef(); cr != nil && hasStar(cr.GetFields()) && len(cr.GetFields()) == 2 {
+		cr := t.GetColumnRef()
+		if cr == nil || !hasStar(cr.GetFields()) {
+			continue
+		}
+		end := len(publics)
+		if i+1 < len(pubStarts) {
+			end = pubStarts[i+1]
+		}
+		if len(cr.GetFields()) == 1 {
+			// Bare `*` — attribute each expanded position to the qualifier
+			// that carries it in the item layouts (leaf alias or
+			// join_using_alias for merged columns).
+			pos := pubStarts[i]
+			for _, it := range items {
+				for _, c := range it.layout.cols {
+					if c.witness {
+						continue
+					}
+					if c.src != "" {
+						m := stars[c.src]
+						if m == nil {
+							m = map[string]int{}
+							stars[c.src] = m
+						}
+						m[c.name] = pos
+					}
+					pos++
+				}
+			}
+			continue
+		}
+		if len(cr.GetFields()) == 2 {
 			if s := cr.GetFields()[0].GetString_(); s != nil {
-				end := len(publics)
-				if i+1 < len(pubStarts) {
-					end = pubStarts[i+1]
-				}
-				m := map[string]int{}
-				for j := pubStarts[i]; j < end && j < len(publics); j++ {
-					m[publics[j]] = j
-				}
-				stars[s.GetSval()] = m
+				bind(s.GetSval(), pubStarts[i], end)
 			}
 		}
 	}
