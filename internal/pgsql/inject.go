@@ -2,7 +2,7 @@
 // (spec G4/G5/G10 stage: parse → guard → classify → qualify → inject).
 // input: qualified *pg.ParseResult, ColumnResolver supplying FROM-position column names (optional ColumnMetadataResolver for structured type/attribute evidence and native common-type verdicts)
 // output: InjectWitnesses, InjectResult, WitnessRecord, EntityKey, ColumnResolver, ColumnType, ColumnMetadata, ColumnMetadataResolver, ErrTypeResolutionUnavailable — layout-freeze + per-layer witness injection + DISTINCT Q+D transform
-// pos: G10 mechanism 5a — records the original visible layout (* / x.* / ordinals / VALUES / per-reference colnames — NATURAL always freezes to the original public-column intersection: explicit USING when nonempty so the join_using_alias stays declarable, ON TRUE keeping the join type when empty) BEFORE appending witnesses; stars stay verbatim unless an injected column forces expansion, and forced USING/NATURAL merges are projected through the join's join_using_alias (generated under the __chub_ prefix when absent) so PostgreSQL computes the merged column natively — common-type coercion included; emits CASE WHEN FALSE THEN alias.* END on ordinary/window-only layers and (array_agg(alias.*) FILTER (WHERE FALSE))[1] on aggregate/grouping layers; propagates through CTEs and derived tables, suppresses inside SubLinks, merges set-op branches through canonical representatives only when attested entities match, and rejects when any entity's witness cannot reach the output; plain SELECT DISTINCT becomes Q+D (D groups by original public columns only and receives ORDER BY/LIMIT/OFFSET exactly once); internal names live under the reserved __chub_ prefix
+// pos: G10 mechanism 5a — records the original visible layout (* / x.* / ordinals / VALUES / per-reference colnames — NATURAL always freezes to the original public-column intersection: explicit USING when nonempty so the join_using_alias stays declarable, ON TRUE keeping the join type when empty) BEFORE appending witnesses; stars stay verbatim unless an injected column forces expansion, and forced USING/NATURAL merges are projected through the join's join_using_alias (generated under the __chub_ prefix when absent) so PostgreSQL computes the merged column natively — common-type coercion included; emits CASE WHEN FALSE THEN alias.* END on ordinary/window-only layers and (array_agg(alias.*) FILTER (WHERE FALSE))[1] on aggregate/grouping layers; propagates through CTEs and derived tables, suppresses inside SubLinks, merges set-op branches through canonical representatives only when attested entities match, and rejects when any entity's witness cannot reach the output; plain SELECT DISTINCT becomes Q+D (D groups by original public columns only and receives ORDER BY/LIMIT/OFFSET exactly once; a decided merged column whose only source reference is itself is a terminal computed JOIN identity and binds to itself); internal names live under the reserved __chub_ prefix
 // note: if this file changes, update header and README.md
 package pgsql
 
@@ -1872,6 +1872,9 @@ func possibleLeafs(c *outCol, join *fromItemRef, ord int) (leafs []colRef, open 
 	}
 	for _, r := range src {
 		if join != nil && r.item == join && r.ord == ord {
+			if !c.mergeUndecided && len(src) == 1 {
+				return []colRef{r}, false
+			}
 			continue
 		}
 		sub, o := possibleLeafsOf(r)

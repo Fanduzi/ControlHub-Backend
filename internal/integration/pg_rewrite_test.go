@@ -2,7 +2,7 @@
 
 // Package integration provides real-PostgreSQL rewrite-equivalence proofs.
 // input: disposable PostgreSQL container, live pg_attribute resolver (ColumnMetadataResolver incl. SQL-backed CommonType), pgsql.Rewrite
-// output: original-vs-rewritten result/ordering/pagination equivalence and witness reltype proofs
+// output: original-vs-rewritten result/ordering/pagination equivalence and witness reltype proofs (incl. JoinReview6 ComputedJoinIdentity forward/reverse/negative terminal computed-JOIN-identity cases)
 // pos: T4 acceptance — generated transport SQL executes correctly against real PostgreSQL
 // note: if this file changes, update this header and module README.md.
 package integration
@@ -873,5 +873,24 @@ func TestPGRewrite_JoinReview5_ScopeRebind(t *testing.T) {
 	t.Run("alias_hides_schema_path", func(t *testing.T) {
 		assertCodeMirrored(t, c,
 			`SELECT DISTINCT orders.* FROM app.orders AS orders ORDER BY app.orders.id`, "42P01")
+	})
+}
+
+func TestPGRewrite_JoinReview6_ComputedJoinIdentity(t *testing.T) {
+	c := sharedPG(t)
+	const from = `FROM app.orders AS o FULL JOIN app.items AS i USING (id) AS u LEFT JOIN app.l_int AS l USING (id) AS v`
+	t.Run("forward", func(t *testing.T) {
+		const orig = `SELECT DISTINCT u.id AS k ` + from + ` ORDER BY v.id`
+		runPG(t, c, orig)
+		assertEquivalent(t, c, orig, true)
+	})
+	t.Run("reverse", func(t *testing.T) {
+		const orig = `SELECT DISTINCT v.id AS k ` + from + ` ORDER BY u.id`
+		runPG(t, c, orig)
+		assertEquivalent(t, c, orig, true)
+	})
+	t.Run("negative", func(t *testing.T) {
+		assertSortRejected(t, c,
+			`SELECT DISTINCT o.id AS k `+from+` ORDER BY u.id`)
 	})
 }
