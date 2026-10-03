@@ -5,6 +5,10 @@
 // object list kind/search/pagination, table and view details, PK/composite
 // index/FK ordering, read-only rejection, binding mismatch, locked target,
 // target DB failure, audit metadata, and no-DSN-in-output invariants.
+// input: shared MySQL fixture, schema metadata APIs, canonical manual-origin target fixtures
+// output: database/object listing, detail, ordering, rejection, audit, and no-DSN invariant tests
+// pos: Real-MySQL boundary for the query schema metadata APIs
+// note: if this file changes, update this header and module README.md.
 package integration
 
 import (
@@ -84,7 +88,7 @@ func setupSchemaSandboxTarget(t *testing.T) (*service.QuerySchemaService, uint64
 		OwnerID:         ownerDBA,
 		LifecycleStatus: model.LifecycleStatusRunning,
 		HealthStatus:    model.HealthStatusHealthy,
-		Source:          "test",
+		Origin:          model.ResourceOriginManual,
 		Labels:          map[string]string{},
 	})
 	if err != nil {
@@ -460,7 +464,7 @@ func TestSchemaAPI_BindingMismatchRejectsAccess(t *testing.T) {
 		OwnerID:         ownerDBA,
 		LifecycleStatus: model.LifecycleStatusRunning,
 		HealthStatus:    model.HealthStatusHealthy,
-		Source:          "test",
+		Origin:          model.ResourceOriginManual,
 		Labels:          map[string]string{},
 	})
 	if err != nil {
@@ -502,7 +506,7 @@ func TestSchemaAPI_LockedTargetRejectsAccess(t *testing.T) {
 		OwnerID:         ownerDBA,
 		LifecycleStatus: model.LifecycleStatusRunning,
 		HealthStatus:    model.HealthStatusHealthy,
-		Source:          "test",
+		Origin:          model.ResourceOriginManual,
 		Labels:          map[string]string{},
 	})
 	if err != nil {
