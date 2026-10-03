@@ -55,4 +55,4 @@ update/delete require ownership), while shared templates are admin-only.
 - Downstream: none
 
 ## Update Rule
-If integration coverage gains a new behavior boundary or shared helper, update this file in the same change.
+If integration coverage gains a new behavior boundary or shared helper, update this file in the same change. Query-target fixtures create resources with the canonical `model.ResourceOriginManual` origin; the production CHECK constraint stays unmodified.
