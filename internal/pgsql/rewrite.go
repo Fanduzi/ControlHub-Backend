@@ -1,8 +1,8 @@
 // Package pgsql implements the PostgreSQL governed read-only query front half
 // (spec G4/G5/G10 stage: parse → guard → classify → qualify → inject).
-// input: user SQL statement, pinned schema, ColumnResolver
-// output: Rewrite, RewriteResult — executable transport SQL + witness records + public output names + entity refs + qualified text
-// pos: the T4 transform pipeline — guard original text, qualify by byte insertion, reparse, witness-inject, deparse once to internal transport, then reparse-verify the deparsed form before it may reach a connection; deparsed SQL is never persisted or displayed
+// input: user SQL statement, pinned schema, ColumnResolver, optional PageOptions (RewritePaginated)
+// output: Rewrite, RewritePaginated, RewriteResult — executable transport SQL + witness records + public output names + entity refs + qualified text (+ PageWindow when paginated)
+// pos: the T4 transform pipeline — guard original text, qualify by byte insertion, reparse, G6-paginate the root window (RewritePaginated only), witness-inject, deparse once to internal transport, then reparse-verify the deparsed form before it may reach a connection; deparsed SQL is never persisted or displayed
 // note: if this file changes, update header and README.md
 package pgsql
 
@@ -25,27 +25,43 @@ type RewriteResult struct {
 // statements that provably need none (a nil resolver still rejects freezes
 // that need names, loudly).
 func Rewrite(statement, pinnedSchema string, res ColumnResolver) (*RewriteResult, error) {
+	r, _, err := rewrite(statement, pinnedSchema, res, nil)
+	return r, err
+}
+
+func RewritePaginated(statement, pinnedSchema string, res ColumnResolver, opts PageOptions) (*RewriteResult, PageWindow, error) {
+	return rewrite(statement, pinnedSchema, res, &opts)
+}
+
+func rewrite(statement, pinnedSchema string, res ColumnResolver, opts *PageOptions) (*RewriteResult, PageWindow, error) {
 	gr, err := GuardPG(statement)
 	if err != nil {
-		return nil, err
+		return nil, PageWindow{}, err
 	}
 	qualified, err := QualifyEntities(statement, pinnedSchema, gr.Refs)
 	if err != nil {
-		return nil, err
+		return nil, PageWindow{}, err
 	}
 	// Reparse the qualified text — the byte rewrite must produce compilable
 	// SQL as written, and injection operates on its fresh tree.
 	reTree, err := pgquery.Parse(qualified)
 	if err != nil {
-		return nil, &RejectError{Code: "query_not_allowed", Message: "pgsql: qualified rewrite failed to reparse"}
+		return nil, PageWindow{}, &RejectError{Code: "query_not_allowed", Message: "pgsql: qualified rewrite failed to reparse"}
+	}
+	var win PageWindow
+	if opts != nil {
+		win, err = PaginatePG(reTree, *opts)
+		if err != nil {
+			return nil, PageWindow{}, err
+		}
 	}
 	inj, err := InjectWitnesses(reTree, res)
 	if err != nil {
-		return nil, err
+		return nil, PageWindow{}, err
 	}
 	deparsed, err := deparseTree(inj.Tree)
 	if err != nil {
-		return nil, &RejectError{Code: "query_not_allowed", Message: "pgsql: injected rewrite failed to deparse"}
+		return nil, PageWindow{}, &RejectError{Code: "query_not_allowed", Message: "pgsql: injected rewrite failed to deparse"}
 	}
 	// The transport text is generated SQL — verify it reparses before it can
 	// reach a connection, so a deparse defect fails closed here, not on the
@@ -53,7 +69,7 @@ func Rewrite(statement, pinnedSchema string, res ColumnResolver) (*RewriteResult
 	// the injected AST.
 	verify, err := pgquery.Parse(deparsed)
 	if err != nil || len(verify.GetStmts()) != 1 {
-		return nil, &RejectError{Code: "query_not_allowed", Message: "pgsql: injected rewrite failed to reparse"}
+		return nil, PageWindow{}, &RejectError{Code: "query_not_allowed", Message: "pgsql: injected rewrite failed to reparse"}
 	}
 	return &RewriteResult{
 		SQL:       deparsed,
@@ -61,7 +77,7 @@ func Rewrite(statement, pinnedSchema string, res ColumnResolver) (*RewriteResult
 		Public:    inj.Public,
 		Refs:      gr.Refs,
 		Qualified: qualified,
-	}, nil
+	}, win, nil
 }
 
 // deparseTree deparses a (possibly injected) parse tree to SQL text.
