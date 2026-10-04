@@ -1,6 +1,6 @@
 // Package pgsql implements the PostgreSQL governed read-only query front half.
 // input: synthetic SQL strings / parse trees plus stub resolvers
-// output: intent tests for PaginatePG window arithmetic, limit-form acceptance, option/tree validation, Result bookkeeping, and RewritePaginated pipeline shape
+// output: intent tests for PaginatePG window arithmetic, limit-form acceptance incl. PG radix/separator integer spellings and int64 boundary, option/tree validation, Result bookkeeping, and RewritePaginated pipeline shape
 // pos: G6 window contract — root LIMIT/OFFSET rewritten once into an execution window; tests assert node forms and deparsed transport, never evaluated rows
 // note: if this file changes, update header and README.md
 package pgsql
@@ -405,5 +405,97 @@ func TestRewrite_UnpaginatedPreservesLimit(t *testing.T) {
 	r := rewriteOK(t, "SELECT id FROM orders ORDER BY id LIMIT 7 OFFSET 2")
 	if !strings.Contains(r.SQL, "LIMIT 7") || !strings.Contains(r.SQL, "OFFSET 2") {
 		t.Fatalf("unpaginated rewrite altered limit: %s", r.SQL)
+	}
+}
+
+func TestPaginatePG_IntegerLiteralForms(t *testing.T) {
+	cases := []struct {
+		literal string
+		value   int64
+	}{
+		{"2_147_483_648", 2147483648},
+		{"2_147_483_647", 2147483647},
+		{"0x7fff_ffff", 2147483647},
+		{"0X_8000_0000", 2147483648},
+		{"0o17_777_777_777", 2147483647},
+		{"0O_20_000_000_000", 2147483648},
+		{"0b1111111111111111111111111111111", 2147483647},
+		{"0B_1000_0000_0000_0000_0000_0000_0000_0000", 2147483648},
+		{"000000002147483648", 2147483648},
+		{"0_000_002_147_483_648", 2147483648},
+		{"010000000000", 10000000000},
+		{"9_223_372_036_854_775_807", math.MaxInt64},
+		{"0x_7fff_ffff_ffff_ffff", math.MaxInt64},
+		{"0o_777_777_777_777_777_777_777", math.MaxInt64},
+		{"0b" + strings.Repeat("1", 63), math.MaxInt64},
+	}
+	for _, tc := range cases {
+		for _, clause := range []string{"LIMIT", "OFFSET"} {
+			t.Run(clause+"_"+tc.literal, func(t *testing.T) {
+				sql := "SELECT 1 " + clause + " " + tc.literal
+				want := windowWant{100, 0, 26, 0, 25, true}
+				if clause == "OFFSET" {
+					want.fetchOffset = tc.value
+				}
+				w, tree := paginate(t, sql, 1, 25, 100)
+				assertWindow(t, w, want)
+				assertRootLimit(t, tree, 26, want.fetchOffset)
+				assertRootLimit(t, parseTree(t, rootLimitText(t, tree)), 26, want.fetchOffset)
+				rw, w, err := RewritePaginated(sql, "app", testCols, PageOptions{Page: 1, PageSize: 25, MaxRows: 100})
+				if err != nil {
+					t.Fatalf("RewritePaginated: %v", err)
+				}
+				assertWindow(t, w, want)
+				assertRootLimit(t, parseTree(t, rw.SQL), 26, want.fetchOffset)
+				if clause == "OFFSET" && tc.value == math.MaxInt64 {
+					_, _, err := RewritePaginated(sql, "app", testCols, PageOptions{Page: 2, PageSize: 25, MaxRows: 100})
+					if rejectCode(err) != "page_out_of_range" {
+						t.Fatalf("offset addition overflow: %v", err)
+					}
+				}
+			})
+		}
+	}
+}
+
+func TestPaginatePG_IntegerLiteralRejections(t *testing.T) {
+	for _, literal := range []string{
+		"9_223_372_036_854_775_808",
+		"0x_8000_0000_0000_0000",
+		"0o_1_000_000_000_000_000_000_000",
+		"0b1" + strings.Repeat("0", 63),
+		"00009223372036854775808",
+		"1_844_674_407_370_955_161_600",
+		"2_147_483_648.0", "2_147_483_648e0",
+		"-0x80000000", "+0x80000000", "'0x80000000'",
+		"(0x80000000 + 0)", "0x80000000::bigint",
+	} {
+		for _, clause := range []string{"LIMIT", "OFFSET"} {
+			t.Run(clause+"_"+literal, func(t *testing.T) {
+				sql := "SELECT 1 " + clause + " " + literal
+				tree := parseTree(t, sql)
+				before := proto.Clone(tree)
+				_, err := PaginatePG(tree, PageOptions{Page: 1, PageSize: 25, MaxRows: 100})
+				if rejectCode(err) != "unsupported_limit_offset_form" || !proto.Equal(before, tree) {
+					t.Fatalf("error=%v or tree mutated", err)
+				}
+				rw, _, err := RewritePaginated(sql, "app", testCols, PageOptions{Page: 1, PageSize: 25, MaxRows: 100})
+				if rejectCode(err) != "unsupported_limit_offset_form" || rw != nil {
+					t.Fatalf("rewrite=%v err=%v", rw, err)
+				}
+			})
+		}
+	}
+}
+
+func TestRewritePaginated_InvalidIntegerSyntax(t *testing.T) {
+	for _, literal := range []string{"2__147_483_648", "2_147_483_648_", "0x__80000000", "0x80000000_", "0x", "0b102", "0o8"} {
+		for _, clause := range []string{"LIMIT", "OFFSET"} {
+			sql := "SELECT 1 " + clause + " " + literal
+			_, _, err := RewritePaginated(sql, "app", testCols, PageOptions{Page: 1, PageSize: 25, MaxRows: 100})
+			if rejectCode(err) != "query_not_allowed" {
+				t.Fatalf("%q: %v", sql, err)
+			}
+		}
 	}
 }

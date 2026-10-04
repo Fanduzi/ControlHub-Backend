@@ -2,7 +2,7 @@
 
 // Package integration provides real-PostgreSQL paginated rewrite proofs.
 // input: disposable PostgreSQL container, live pg_attribute resolver, pgsql.RewritePaginated, 220-row page fixtures
-// output: G6 execution-window proofs — generated paginated SQL returns exactly the user's page slice with witness and FD integrity
+// output: G6 execution-window proofs — generated paginated SQL returns exactly the user's page slice with witness and FD integrity, incl. native LIMIT/OFFSET integer-spelling/int64 boundary acceptance and the unordered final-page AST window
 // pos: T5 acceptance — computed fetch windows execute correctly against real PostgreSQL, incl. DISTINCT Q+D roots
 // note: if this file changes, update this header and module README.md.
 package integration
@@ -10,6 +10,7 @@ package integration
 import (
 	"context"
 	"fmt"
+	"math"
 	"reflect"
 	"strconv"
 	"strings"
@@ -664,6 +665,7 @@ func TestPGPagination_Unordered(t *testing.T) {
 		}
 		rw4, w4, got4 := rewritePage(t, c, orig, 4, 25)
 		checkPagedProjection(t, c, rw4, before, got4)
+		assertRootWindow(t, rootSelOf(t, rw4.SQL), 25, 75)
 		pr4, err := w4.Result(len(got4.rows))
 		if err != nil || pr4.RowCount != 25 || pr4.HasMore || !pr4.BudgetReached {
 			t.Fatalf("p4 Result = %+v, %v", pr4, err)
@@ -673,4 +675,61 @@ func TestPGPagination_Unordered(t *testing.T) {
 		}
 		rewritePageErr(t, c, orig, 5, 25, "page_out_of_range")
 	})
+}
+
+func TestPGPagination_IntegerLiteralForms(t *testing.T) {
+	cases := []struct {
+		literal string
+		value   int64
+	}{
+		{"2_147_483_648", 2147483648},
+		{"2_147_483_647", 2147483647},
+		{"0x7fff_ffff", 2147483647},
+		{"0X_8000_0000", 2147483648},
+		{"0o17_777_777_777", 2147483647},
+		{"0O_20_000_000_000", 2147483648},
+		{"0b1111111111111111111111111111111", 2147483647},
+		{"0B_1000_0000_0000_0000_0000_0000_0000_0000", 2147483648},
+		{"000000002147483648", 2147483648},
+		{"0_000_002_147_483_648", 2147483648},
+		{"010000000000", 10000000000},
+		{"9_223_372_036_854_775_807", math.MaxInt64},
+		{"0x_7fff_ffff_ffff_ffff", math.MaxInt64},
+		{"0o_777_777_777_777_777_777_777", math.MaxInt64},
+		{"0b" + strings.Repeat("1", 63), math.MaxInt64},
+	}
+	c := sharedPG(t)
+	pageTablesPG(t, c)
+	for _, tc := range cases {
+		for _, clause := range []string{"LIMIT", "OFFSET"} {
+			t.Run(clause+"_"+tc.literal, func(t *testing.T) {
+				orig := "SELECT seq FROM app.pg_page_rows ORDER BY seq " + clause + " " + tc.literal
+				before := runPG(t, c, orig)
+				wantOffset, wantRows := int64(0), 26
+				if clause == "OFFSET" {
+					wantOffset, wantRows = tc.value, 0
+				}
+				rw, w, got := rewritePage(t, c, orig, 1, 25)
+				if w.Page != 1 || w.PageSize != 25 || w.Browsable != 100 || w.PageStart != 0 || w.FetchCount != 26 || w.FetchOffset != wantOffset || w.RowLimit != 25 || !w.BudgetLimited {
+					t.Fatalf("window=%+v want offset=%d", w, wantOffset)
+				}
+				assertRootWindow(t, rootSelOf(t, rw.SQL), 26, wantOffset)
+				checkPagedProjection(t, c, rw, before, got)
+				if len(got.rows) != wantRows {
+					t.Fatalf("rows=%d want=%d", len(got.rows), wantRows)
+				}
+				result, err := w.Result(len(got.rows))
+				if err != nil || result.BudgetReached {
+					t.Fatalf("Result=%+v err=%v", result, err)
+				}
+				if clause == "LIMIT" {
+					if len(before.rows) != 220 || !reflect.DeepEqual(publicRows(rw, got), before.rows[:26]) || result.RowCount != 25 || !result.HasMore {
+						t.Fatalf("LIMIT page differs from native window: %+v", result)
+					}
+				} else if len(before.rows) != 0 || result.RowCount != 0 || result.HasMore {
+					t.Fatalf("OFFSET page differs from native window: %+v", result)
+				}
+			})
+		}
+	}
 }

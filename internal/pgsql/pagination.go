@@ -1,7 +1,7 @@
 // Package pgsql implements the PostgreSQL governed read-only query front half.
 // input: guarded+qualified *pg.ParseResult plus caller-resolved PageOptions
 // output: PageOptions, PageWindow, PageResult, PaginatePG, RewritePaginated — G6 execution-window rewrite of root LIMIT/OFFSET
-// pos: G6 execution-window stage (T5) — turns the user's root LIMIT/OFFSET window plus the platform row budget into an execution window (pageSize+1 sentinel fetch at O+(page-1)*pageSize) rewritten once into the root SelectStmt before witness injection; window arithmetic validates fully before the tree is touched; Result reports the delivered page/sentinel/budget boundary without implying additional DB rows exist
+// pos: G6 execution-window stage (T5) — turns the user's root LIMIT/OFFSET window plus the platform row budget into an execution window (pageSize+1 sentinel fetch at O+(page-1)*pageSize) rewritten once into the root SelectStmt before witness injection; accepted root literals are nonnegative int64 integers incl. PG radix prefixes (0x/0o/0b), legal digit separators and decimal leading zeros; window arithmetic validates fully before the tree is touched; Result reports the delivered page/sentinel/budget boundary without implying additional DB rows exist
 // note: if this file changes, update header and README.md
 package pgsql
 
@@ -147,12 +147,9 @@ func limitConstInt(n *pg.Node, allowNull bool) (v int64, null bool, err error) {
 	case *pg.A_Const_Ival:
 		v = int64(val.Ival.GetIval())
 	case *pg.A_Const_Fval:
-		s := val.Fval.GetFval()
-		if s == "" || !asciiDigits(s) {
-			return 0, false, limitUnsupported()
-		}
-		v, err = strconv.ParseInt(s, 10, 64)
-		if err != nil {
+		var ok bool
+		v, ok = pageLiteralInt64(val.Fval.GetFval())
+		if !ok {
 			return 0, false, limitUnsupported()
 		}
 	default:
@@ -164,13 +161,50 @@ func limitConstInt(n *pg.Node, allowNull bool) (v int64, null bool, err error) {
 	return v, false, nil
 }
 
-func asciiDigits(s string) bool {
-	for i := 0; i < len(s); i++ {
-		if s[i] < '0' || s[i] > '9' {
-			return false
+func pageLiteralInt64(s string) (int64, bool) {
+	base, start := int64(10), 0
+	if len(s) >= 2 && s[0] == '0' {
+		switch s[1] {
+		case 'x', 'X':
+			base, start = 16, 2
+		case 'o', 'O':
+			base, start = 8, 2
+		case 'b', 'B':
+			base, start = 2, 2
 		}
 	}
-	return len(s) > 0
+	if start == 2 && start < len(s) && s[start] == '_' {
+		start++
+	}
+	var value int64
+	digit := false
+	for i := start; i < len(s); i++ {
+		c := s[i]
+		if c == '_' {
+			if !digit {
+				return 0, false
+			}
+			digit = false
+			continue
+		}
+		var d int64
+		switch {
+		case c >= '0' && c <= '9':
+			d = int64(c - '0')
+		case c >= 'a' && c <= 'f':
+			d = int64(c-'a') + 10
+		case c >= 'A' && c <= 'F':
+			d = int64(c-'A') + 10
+		default:
+			return 0, false
+		}
+		if d >= base || value > (math.MaxInt64-d)/base {
+			return 0, false
+		}
+		value = value*base + d
+		digit = true
+	}
+	return value, digit
 }
 
 func pageConstInt64(n int64) *pg.Node {
