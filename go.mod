@@ -13,6 +13,7 @@ require (
 	github.com/pressly/goose/v3 v3.27.0
 	github.com/testcontainers/testcontainers-go v0.42.0
 	github.com/testcontainers/testcontainers-go/modules/mysql v0.42.0
+	github.com/testcontainers/testcontainers-go/modules/postgres v0.42.0
 	github.com/wasilibs/go-pgquery v0.0.0-20260721025817-45baeffb0133
 	golang.org/x/crypto v0.50.0
 	golang.org/x/sync v0.20.0
@@ -47,6 +48,7 @@ require (
 	github.com/google/uuid v1.6.0 // indirect
 	github.com/jackc/pgpassfile v1.0.0 // indirect
 	github.com/jackc/pgservicefile v0.0.0-20240606120523-5a60cdf6a761 // indirect
+	github.com/jackc/puddle/v2 v2.2.2 // indirect
 	github.com/josharian/intern v1.0.0 // indirect
 	github.com/klauspost/compress v1.18.5 // indirect
 	github.com/lmittmann/tint v1.1.3 // indirect
@@ -78,7 +80,6 @@ require (
 	github.com/sirupsen/logrus v1.9.4 // indirect
 	github.com/spf13/pflag v1.0.10 // indirect
 	github.com/stretchr/testify v1.11.1 // indirect
-	github.com/testcontainers/testcontainers-go/modules/postgres v0.42.0 // indirect
 	github.com/tetratelabs/wazero v1.12.0 // indirect
 	github.com/tklauser/go-sysconf v0.3.16 // indirect
 	github.com/tklauser/numcpus v0.11.0 // indirect
