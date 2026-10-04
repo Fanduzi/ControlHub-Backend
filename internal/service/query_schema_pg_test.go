@@ -1,7 +1,7 @@
 // Package service proves PostgreSQL schema access without opening a server.
 // input: context, database/sql, errors, strings, sync, testing, time, jackc/pgx/v5, jackc/pgx/v5/pgconn, internal/model
 // output: TestPostgreSQLSchema_* for connection identity, effective-schema cache identity, singleflight boundaries, and unsupported definitions
-// pos: Unit boundary for T6 metadata access; user SQL execution stays outside this file
+// pos: Unit boundary for T6 metadata access; credential and resolver call logs use their own mutexes. User SQL execution stays outside this file
 // note: if this file changes, update header and README.md
 package service
 
@@ -35,11 +35,14 @@ func assertNoUnitSecret(t *testing.T, text string) {
 
 type pgCredStore struct {
 	*fakeExecRepo
+	mu      sync.Mutex
 	rows    map[string]model.QueryCredentialMetadata
 	lookups []string
 }
 
 func (s *pgCredStore) GetCredential(_ context.Context, resourceID uint64, databaseName string) (model.QueryCredentialMetadata, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	s.lookups = append(s.lookups, databaseName)
 	row, ok := s.rows[fmt.Sprintf("%d\x00%s", resourceID, databaseName)]
 	if !ok {
@@ -48,12 +51,23 @@ func (s *pgCredStore) GetCredential(_ context.Context, resourceID uint64, databa
 	return row, nil
 }
 
+func (s *pgCredStore) credentialLookups() []string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := make([]string, len(s.lookups))
+	copy(out, s.lookups)
+	return out
+}
+
 type pgRefResolver struct {
+	mu    sync.Mutex
 	dsns  map[string]string
 	calls []string
 }
 
 func (r *pgRefResolver) Resolve(_ context.Context, ref string) (string, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	r.calls = append(r.calls, ref)
 	if err := model.ValidateCredentialRef(ref); err != nil {
 		return "", err
@@ -63,6 +77,14 @@ func (r *pgRefResolver) Resolve(_ context.Context, ref string) (string, error) {
 		return "", errors.New("credential missing")
 	}
 	return dsn, nil
+}
+
+func (r *pgRefResolver) resolveCalls() []string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	out := make([]string, len(r.calls))
+	copy(out, r.calls)
+	return out
 }
 
 func pgUnitDSN(database, user, password string) string {
@@ -330,8 +352,8 @@ func TestPostgreSQLSchema_ConnectionsDoNotShareIdentity(t *testing.T) {
 	if !env.cat.calls[1].passB || env.cat.calls[1].passA || env.cat.calls[1].cfgUser != "ro_b" {
 		t.Fatal("db_b connection did not keep its own credential")
 	}
-	if env.store.lookups[0] != "db_a" || env.store.lookups[1] != "db_b" {
-		t.Fatalf("lookups = %v", env.store.lookups)
+	if lookups := env.store.credentialLookups(); len(lookups) < 2 || lookups[0] != "db_a" || lookups[1] != "db_b" {
+		t.Fatalf("lookups = %v", lookups)
 	}
 }
 
@@ -348,15 +370,15 @@ func TestPostgreSQLSchema_DisabledAndMissingStopBeforeConnect(t *testing.T) {
 	if !errors.Is(err, ErrSchemaConnectionNotFound) {
 		t.Fatalf("missing = %v", err)
 	}
-	before := len(env.store.lookups)
+	before := len(env.store.credentialLookups())
 	_, err = env.svc.ListSchemas(ctx, 1, 9001, "", "", 1, 20, false)
 	if !errors.Is(err, ErrSchemaValidationFailed) {
 		t.Fatalf("empty database = %v", err)
 	}
-	if len(env.store.lookups) != before {
+	if len(env.store.credentialLookups()) != before {
 		t.Fatal("empty database looked up a credential")
 	}
-	if len(env.resolver.calls) != 0 || len(env.cat.calls) != 0 {
+	if len(env.resolver.resolveCalls()) != 0 || len(env.cat.calls) != 0 {
 		t.Fatal("denied connections reached the resolver or catalog")
 	}
 }
@@ -388,7 +410,7 @@ func TestPostgreSQLSchema_ProductionPolicyBlocksBeforeSecret(t *testing.T) {
 	if !errors.As(err, &denied) || denied.Status != model.QueryCredentialRuntimePolicyBlocked {
 		t.Fatalf("policy = %v", err)
 	}
-	if len(env.resolver.calls) != 0 {
+	if len(env.resolver.resolveCalls()) != 0 {
 		t.Fatal("production policy resolved a secret")
 	}
 	_, err = env.svc.ListSchemas(context.Background(), 1, 9001, "db_a", "", 1, 20, false)
@@ -417,8 +439,8 @@ func TestPostgreSQLSchema_MySQLIgnoresSelectorAndRejectsSchema(t *testing.T) {
 	if _, err := svc.ListDatabases(ctx, 1, 9001, "db_a", "", 1, 20, false, false); err != nil {
 		t.Fatalf("mysql databases: %v", err)
 	}
-	if len(store.lookups) != 1 || store.lookups[0] != "" {
-		t.Fatalf("mysql lookup key = %q", store.lookups)
+	if lookups := store.credentialLookups(); len(lookups) != 1 || lookups[0] != "" {
+		t.Fatalf("mysql lookup key = %q", lookups)
 	}
 	if !inspector.called {
 		t.Fatal("mysql inspector was not called")
