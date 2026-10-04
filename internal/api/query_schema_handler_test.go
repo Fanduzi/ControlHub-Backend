@@ -36,10 +36,13 @@ type stubQuerySchema struct {
 	tableDefErr         error
 	relMapResp          model.RelationshipMapResponse
 	relMapErr           error
+	schemasResp         model.SchemaListResponse
+	schemasErr          error
 	gotActor            uint64
 	gotTargetID         uint64
 	gotQ                string
 	gotDatabase         string
+	gotSchema           string
 	gotName             string
 	gotKind             string
 	tableDefCalled      bool
@@ -53,12 +56,14 @@ type stubQuerySchema struct {
 	objectsCalled       bool
 	detailCalled        bool
 	relMapCalled        bool
+	schemasCalled       bool
 }
 
-func (s *stubQuerySchema) ListDatabases(_ context.Context, actorID, targetID uint64, q string, page, pageSize int, includeSystem, refresh bool) (model.DatabaseListResponse, error) {
+func (s *stubQuerySchema) ListDatabases(_ context.Context, actorID, targetID uint64, database, q string, page, pageSize int, includeSystem, refresh bool) (model.DatabaseListResponse, error) {
 	s.databasesCalled = true
 	s.gotActor = actorID
 	s.gotTargetID = targetID
+	s.gotDatabase = database
 	s.gotQ = q
 	s.gotPage = page
 	s.gotPageSize = pageSize
@@ -67,11 +72,24 @@ func (s *stubQuerySchema) ListDatabases(_ context.Context, actorID, targetID uin
 	return s.databasesResp, s.databasesErr
 }
 
-func (s *stubQuerySchema) ListObjects(_ context.Context, actorID, targetID uint64, database, kind, q string, page, pageSize int, refresh bool) (model.ObjectListResponse, error) {
+func (s *stubQuerySchema) ListSchemas(_ context.Context, actorID, targetID uint64, database, q string, page, pageSize int, refresh bool) (model.SchemaListResponse, error) {
+	s.schemasCalled = true
+	s.gotActor = actorID
+	s.gotTargetID = targetID
+	s.gotDatabase = database
+	s.gotQ = q
+	s.gotPage = page
+	s.gotPageSize = pageSize
+	s.gotRefresh = refresh
+	return s.schemasResp, s.schemasErr
+}
+
+func (s *stubQuerySchema) ListObjects(_ context.Context, actorID, targetID uint64, database, schema, kind, q string, page, pageSize int, refresh bool) (model.ObjectListResponse, error) {
 	s.objectsCalled = true
 	s.gotActor = actorID
 	s.gotTargetID = targetID
 	s.gotDatabase = database
+	s.gotSchema = schema
 	s.gotKind = kind
 	s.gotQ = q
 	s.gotPage = page
@@ -80,31 +98,34 @@ func (s *stubQuerySchema) ListObjects(_ context.Context, actorID, targetID uint6
 	return s.objectsResp, s.objectsErr
 }
 
-func (s *stubQuerySchema) GetObjectDetails(_ context.Context, actorID, targetID uint64, database, name, kind string, refresh bool) (model.ObjectDetailResponse, error) {
+func (s *stubQuerySchema) GetObjectDetails(_ context.Context, actorID, targetID uint64, database, schema, name, kind string, refresh bool) (model.ObjectDetailResponse, error) {
 	s.detailCalled = true
 	s.gotActor = actorID
 	s.gotTargetID = targetID
 	s.gotDatabase = database
+	s.gotSchema = schema
 	s.gotName = name
 	s.gotKind = kind
 	s.gotRefresh = refresh
 	return s.detailResp, s.detailErr
 }
 
-func (s *stubQuerySchema) GetTableDefinition(_ context.Context, actorID, targetID uint64, database, name string) (model.TableDefinitionResponse, error) {
+func (s *stubQuerySchema) GetTableDefinition(_ context.Context, actorID, targetID uint64, database, schema, name string) (model.TableDefinitionResponse, error) {
 	s.tableDefCalled = true
 	s.gotActor = actorID
 	s.gotTargetID = targetID
 	s.gotTableDefDatabase = database
+	s.gotSchema = schema
 	s.gotTableDefName = name
 	return s.tableDefResp, s.tableDefErr
 }
 
-func (s *stubQuerySchema) GetRelationshipMap(_ context.Context, actorID, targetID uint64, database, name string, refresh bool) (model.RelationshipMapResponse, error) {
+func (s *stubQuerySchema) GetRelationshipMap(_ context.Context, actorID, targetID uint64, database, schema, name string, refresh bool) (model.RelationshipMapResponse, error) {
 	s.relMapCalled = true
 	s.gotActor = actorID
 	s.gotTargetID = targetID
 	s.gotDatabase = database
+	s.gotSchema = schema
 	s.gotName = name
 	s.gotRefresh = refresh
 	return s.relMapResp, s.relMapErr
@@ -411,6 +432,14 @@ func TestQuerySchema_SentinelMapping(t *testing.T) {
 		{"ErrSchemaObjectNotFound", service.ErrSchemaObjectNotFound, http.StatusNotFound, "schema_object_not_found"},
 		{"ErrSchemaTimeout", service.ErrSchemaTimeout, http.StatusRequestTimeout, "schema_timeout"},
 		{"ErrSchemaBackendError", service.ErrSchemaBackendError, http.StatusBadGateway, "schema_backend_error"},
+		{"ErrSchemaConnectionDisabled", service.ErrSchemaConnectionDisabled, http.StatusForbidden, "query_connection_disabled"},
+		{"ErrSchemaNotUsable", service.ErrSchemaNotUsable, http.StatusForbidden, "query_schema_not_usable"},
+		{"ErrSchemaBindingMismatch", service.ErrSchemaBindingMismatch, http.StatusForbidden, "dsn_binding_mismatch"},
+		{"ErrSchemaConnectionNotFound", service.ErrSchemaConnectionNotFound, http.StatusNotFound, "query_connection_not_found"},
+		{"ErrSchemaNotFound", service.ErrSchemaNotFound, http.StatusNotFound, "schema_not_found"},
+		{"ErrQueryObjectNotFound", service.ErrQueryObjectNotFound, http.StatusNotFound, "query_object_not_found"},
+		{"ErrSchemaObjectDefinitionUnsupported", service.ErrSchemaObjectDefinitionUnsupported, http.StatusConflict, "query_object_definition_unsupported"},
+		{"ErrPGVersionUnsupported", service.ErrPGVersionUnsupported, http.StatusBadRequest, "pg_version_unsupported"},
 		{"unknown error", fmt.Errorf("boom"), http.StatusInternalServerError, "internal_error"},
 	}
 
@@ -1141,5 +1170,61 @@ func TestQuerySchema_TableDefinitionAuditErrorNoDriverText(t *testing.T) {
 		if strings.Contains(body, marker) {
 			t.Fatalf("response body contains driver marker %q: %s", marker, body)
 		}
+	}
+}
+
+func TestQuerySchema_SchemasRequiresBearer(t *testing.T) {
+	router := newSchemaRouter(&stubQuerySchema{})
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, schemaRequest(http.MethodGet, "/query-targets/22/schema/schemas?database=orders", ""))
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("status = %d, want 401; body=%s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestQuerySchema_SchemasDatabaseRequired(t *testing.T) {
+	router := newSchemaRouter(&stubQuerySchema{})
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, schemaRequest(http.MethodGet, "/query-targets/22/schema/schemas", schemaToken(t)))
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400; body=%s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "validation_failed") {
+		t.Fatalf("body = %s, want validation_failed", rec.Body.String())
+	}
+	if strings.Contains(rec.Body.String(), "schema_validation_failed") {
+		t.Fatalf("missing database must stay validation_failed, body=%s", rec.Body.String())
+	}
+}
+
+func TestQuerySchema_SchemasPassesDatabase(t *testing.T) {
+	stub := &stubQuerySchema{schemasResp: model.SchemaListResponse{TargetResourceID: 22, Database: "orders", Items: []model.SchemaSummary{}}}
+	router := newSchemaRouter(stub)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, schemaRequest(http.MethodGet, "/query-targets/22/schema/schemas?database=orders&q=app", schemaToken(t)))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", rec.Code, rec.Body.String())
+	}
+	if !stub.schemasCalled {
+		t.Fatal("ListSchemas was not called")
+	}
+	if stub.gotDatabase != "orders" {
+		t.Fatalf("database = %q, want orders", stub.gotDatabase)
+	}
+	if !strings.Contains(rec.Body.String(), `"database":"orders"`) {
+		t.Fatalf("body = %s", rec.Body.String())
+	}
+}
+
+func TestQuerySchema_SchemaParamPassedThrough(t *testing.T) {
+	stub := &stubQuerySchema{objectsResp: model.ObjectListResponse{TargetResourceID: 22, Database: "orders"}}
+	router := newSchemaRouter(stub)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, schemaRequest(http.MethodGet, "/query-targets/22/schema/objects?database=orders&schema=CaseSchema", schemaToken(t)))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", rec.Code, rec.Body.String())
+	}
+	if stub.gotSchema != "CaseSchema" {
+		t.Fatalf("schema = %q, want CaseSchema", stub.gotSchema)
 	}
 }

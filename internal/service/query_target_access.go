@@ -3,8 +3,8 @@
 // engine check, credential validation, policy enforcement, secret resolution,
 // and DSN binding validation so Execute and InspectCredentialRuntime can never
 // drift on governance rules.
-// input: context, database/sql, errors, internal/model
-// output: BoundTargetAccess, TargetAccessError, TargetAccessResolver, NewTargetAccessResolver
+// input: context, database/sql, errors, jackc/pgx/v5, internal/model
+// output: BoundTargetAccess, TargetAccessError, TargetAccessResolver, NewTargetAccessResolver, ResolveMetadata
 // pos: Shared governed target access resolution — the single path from target ID to bound DSN
 // note: if this file changes, update header and README.md
 package service
@@ -13,6 +13,8 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+
+	"github.com/jackc/pgx/v5"
 
 	"github.com/fan/controlhub/internal/model"
 )
@@ -24,7 +26,8 @@ import (
 type BoundTargetAccess struct {
 	Target     model.QueryTarget
 	Credential model.QueryCredentialMetadata
-	dsn        string // private to service package; never exported
+	dsn        string          // private to service package; never exported
+	pgConfig   *pgx.ConnConfig // PostgreSQL metadata only; never logged or returned
 }
 
 // TargetAccessError is returned when the target exists but access is denied. It
@@ -170,6 +173,79 @@ func (r *TargetAccessResolver) Resolve(ctx context.Context, actorID uint64, targ
 		Target:     target,
 		Credential: cred,
 		dsn:        dsn,
+	}, nil
+}
+
+// ResolveMetadata resolves a target for schema browsing. MySQL and TiDB keep
+// the execution resolver, including its empty database credential key.
+// PostgreSQL selects the connection row by (target, database) and stores the
+// validated ConnConfig for OpenPostgresPool. It does not mark the target
+// executable. database is not trimmed: it is the connection identity.
+func (r *TargetAccessResolver) ResolveMetadata(ctx context.Context, actorID, targetID uint64, database string) (BoundTargetAccess, error) {
+	target, err := r.findTarget(ctx, targetID)
+	if err != nil {
+		return BoundTargetAccess{}, ErrQueryTargetNotFound
+	}
+	if isPGEngine(target.ConnectionContext.Engine) {
+		return r.resolvePGMetadata(ctx, target, database)
+	}
+	return r.Resolve(ctx, actorID, targetID)
+}
+
+// resolvePGMetadata follows the G1 connection order: the row exists, then
+// enabled and environment policy, then credential_ref, then DSN binding.
+// Failures are bare sentinels or TargetAccessError. The DSN and driver text
+// are never returned.
+func (r *TargetAccessResolver) resolvePGMetadata(ctx context.Context, target model.QueryTarget, database string) (BoundTargetAccess, error) {
+	if target.ConnectionContext.Host == "" || target.ConnectionContext.Port == 0 {
+		return BoundTargetAccess{Target: target}, &TargetAccessError{
+			Status:  model.QueryCredentialRuntimeIncompleteConnection,
+			message: "target connection metadata is incomplete",
+		}
+	}
+	if database == "" {
+		return BoundTargetAccess{Target: target}, ErrSchemaValidationFailed
+	}
+	cred, err := r.credentials.GetCredential(ctx, target.ResourceID, database)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return BoundTargetAccess{Target: target}, ErrSchemaConnectionNotFound
+		}
+		return BoundTargetAccess{Target: target}, &TargetAccessError{
+			Status:  model.QueryCredentialRuntimeInvalidRef,
+			message: "target is not enabled for execution",
+		}
+	}
+	if err := model.ValidateCredentialRef(cred.CredentialRef); err != nil {
+		return BoundTargetAccess{Target: target}, &TargetAccessError{
+			Status:  model.QueryCredentialRuntimeInvalidRef,
+			message: "target is not enabled for execution",
+		}
+	}
+	if !cred.Enabled {
+		return BoundTargetAccess{Target: target}, ErrSchemaConnectionDisabled
+	}
+	if !credentialAllowsExecution(cred, target.ConnectionContext.Engine, target.ConnectionContext.Environment) {
+		return BoundTargetAccess{Target: target}, &TargetAccessError{
+			Status:  model.QueryCredentialRuntimePolicyBlocked,
+			message: "target is not enabled for execution",
+		}
+	}
+	dsn, err := r.resolver.Resolve(ctx, cred.CredentialRef)
+	if err != nil || dsn == "" {
+		return BoundTargetAccess{Target: target}, &TargetAccessError{
+			Status:  model.QueryCredentialRuntimeSecretMissing,
+			message: "credential could not be resolved",
+		}
+	}
+	cfg, err := validatePGDSNBindingForTarget(dsn, target, database)
+	if err != nil {
+		return BoundTargetAccess{Target: target}, ErrSchemaBindingMismatch
+	}
+	return BoundTargetAccess{
+		Target:     target,
+		Credential: cred,
+		pgConfig:   cfg,
 	}, nil
 }
 

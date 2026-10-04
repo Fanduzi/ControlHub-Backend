@@ -1,6 +1,6 @@
 // Package model provides domain entities for the resource management system.
 // input: encoding/json, fmt packages
-// output: ObjectKind type + Validate, DatabaseSummary, ObjectSummary, ColumnDetail, IndexDetail, ForeignKeyDetail, TruncationFlags, DatabaseListResponse, ObjectListResponse, ObjectDetailResponse, TableDefinitionResponse
+// output: ObjectKind type + Validate, DatabaseSummary, SchemaSummary, SchemaListResponse, ObjectSummary, ColumnDetail, IndexDetail, ForeignKeyDetail, TruncationFlags, DatabaseListResponse, ObjectListResponse, ObjectDetailResponse, TableDefinitionResponse
 // pos: Schema metadata response types for the governed query schema introspection API (Phase 38I)
 // note: if this file changes, update header and README.md
 package model
@@ -39,11 +39,27 @@ type DatabaseSummary struct {
 
 // ObjectSummary is a lightweight entry in the object (table/view) list
 // response. It carries the database, object name, and kind — no column
-// or index details.
+// or index details. Schema is the in-database namespace for PostgreSQL;
+// MySQL/TiDB leave it empty and JSON omits it.
 type ObjectSummary struct {
 	Database string     `json:"database"`
+	Schema   string     `json:"schema,omitempty"`
 	Name     string     `json:"name"`
 	Kind     ObjectKind `json:"kind"`
+}
+
+// SchemaSummary is one user schema visible to the selected PostgreSQL connection.
+type SchemaSummary struct {
+	Name string `json:"name"`
+}
+
+// SchemaListResponse is the envelope for GET /query-targets/{id}/schema/schemas.
+// Database is the fixed connection identity, not a catalog of other databases.
+type SchemaListResponse struct {
+	TargetResourceID int64           `json:"targetResourceId"`
+	Database         string          `json:"database"`
+	Items            []SchemaSummary `json:"items"`
+	PageInfo         PageInfo        `json:"pageInfo"`
 }
 
 // ColumnDetail describes one column in an object detail response. It carries
@@ -71,6 +87,7 @@ type ForeignKeyDetail struct {
 	Name               string   `json:"name"`
 	Columns            []string `json:"columns"`
 	ReferencedDatabase string   `json:"referencedDatabase"`
+	ReferencedSchema   string   `json:"referencedSchema,omitempty"`
 	ReferencedObject   string   `json:"referencedObject"`
 	ReferencedColumns  []string `json:"referencedColumns"`
 	OnUpdate           string   `json:"onUpdate"`
@@ -100,6 +117,7 @@ type DatabaseListResponse struct {
 type ObjectListResponse struct {
 	TargetResourceID int64           `json:"targetResourceId"`
 	Database         string          `json:"database"`
+	Schema           string          `json:"schema,omitempty"`
 	Items            []ObjectSummary `json:"items"`
 	PageInfo         PageInfo        `json:"pageInfo"`
 }
@@ -110,6 +128,7 @@ type ObjectListResponse struct {
 type ObjectDetailResponse struct {
 	TargetResourceID int64              `json:"targetResourceId"`
 	Database         string             `json:"database"`
+	Schema           string             `json:"schema,omitempty"`
 	Name             string             `json:"name"`
 	Kind             ObjectKind         `json:"kind"`
 	Columns          []ColumnDetail     `json:"columns"`
@@ -237,6 +256,7 @@ func (d RelationshipMapDirection) Validate() error {
 type RelationshipMapNode struct {
 	ID       string              `json:"id"`
 	Database string              `json:"database"`
+	Schema   string              `json:"schema,omitempty"`
 	Name     string              `json:"name"`
 	Kind     ObjectKind          `json:"kind"`
 	Role     RelationshipMapRole `json:"role"`
@@ -246,14 +266,14 @@ type RelationshipMapNode struct {
 // ID is an opaque request-local token (e0, e1, ...), not parseable by clients.
 // SourceID and TargetID must reference existing node IDs in the same response.
 type RelationshipMapEdge struct {
-	ID                string                  `json:"id"`
+	ID                string                   `json:"id"`
 	Direction         RelationshipMapDirection `json:"direction"`
-	SourceID          string                  `json:"sourceId"`
-	TargetID          string                  `json:"targetId"`
-	Columns           []string                `json:"columns"`
-	ReferencedColumns []string                `json:"referencedColumns"`
-	OnUpdate          string                  `json:"onUpdate"`
-	OnDelete          string                  `json:"onDelete"`
+	SourceID          string                   `json:"sourceId"`
+	TargetID          string                   `json:"targetId"`
+	Columns           []string                 `json:"columns"`
+	ReferencedColumns []string                 `json:"referencedColumns"`
+	OnUpdate          string                   `json:"onUpdate"`
+	OnDelete          string                   `json:"onDelete"`
 }
 
 // RelationshipMapResponse is the envelope for
@@ -261,11 +281,11 @@ type RelationshipMapEdge struct {
 // inbound and outbound foreign-key relationships for one base table.
 // Nodes and edges are always JSON arrays (never null).
 type RelationshipMapResponse struct {
-	TargetResourceID int64                  `json:"targetResourceId"`
-	Root             RelationshipMapNode    `json:"root"`
-	Nodes            []RelationshipMapNode  `json:"nodes"`
-	Edges            []RelationshipMapEdge  `json:"edges"`
-	Truncated        bool                   `json:"truncated"`
+	TargetResourceID int64                 `json:"targetResourceId"`
+	Root             RelationshipMapNode   `json:"root"`
+	Nodes            []RelationshipMapNode `json:"nodes"`
+	Edges            []RelationshipMapEdge `json:"edges"`
+	Truncated        bool                  `json:"truncated"`
 }
 
 // Validate checks structural invariants of the relationship map response.
@@ -299,7 +319,7 @@ func (r RelationshipMapResponse) Validate() error {
 	}
 
 	root := r.Nodes[rootIdx]
-	if root.Database != r.Root.Database || root.Name != r.Root.Name || root.Kind != r.Root.Kind {
+	if root.Database != r.Root.Database || root.Schema != r.Root.Schema || root.Name != r.Root.Name || root.Kind != r.Root.Kind {
 		return fmt.Errorf("root node does not match Root field")
 	}
 

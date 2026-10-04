@@ -1,5 +1,10 @@
 //go:build integration
 
+// Package integration proves MySQL table-definition reads against the schema sandbox.
+// input: shared MySQL fixture, QuerySchemaService.GetTableDefinition, SHOW CREATE TABLE
+// output: base-table definition, view rejection, missing-table rejection, and audit non-disclosure tests
+// pos: Real-MySQL proof that definition SQL stays ephemeral and unsupported objects are rejected
+// note: if this file changes, update this header and module README.md.
 package integration
 
 import (
@@ -19,7 +24,7 @@ func TestInspector_GetTableDefinition_BaseTable(t *testing.T) {
 	ctx := context.Background()
 
 	// When
-	resp, err := svc.GetTableDefinition(ctx, ownerDBA, targetID, "query_e2e_aux", "schema_parent")
+	resp, err := svc.GetTableDefinition(ctx, ownerDBA, targetID, "query_e2e_aux", "", "schema_parent")
 
 	// Then
 	if err != nil {
@@ -54,7 +59,7 @@ func TestInspector_GetTableDefinition_ViewRejected(t *testing.T) {
 	ctx := context.Background()
 
 	// When
-	_, err := svc.GetTableDefinition(ctx, ownerDBA, targetID, "query_e2e_aux", "schema_parent_summary")
+	_, err := svc.GetTableDefinition(ctx, ownerDBA, targetID, "query_e2e_aux", "", "schema_parent_summary")
 
 	// Then
 	if !errors.Is(err, service.ErrSchemaDefinitionNotSupported) {
@@ -68,7 +73,7 @@ func TestInspector_GetTableDefinition_MissingTableRejected(t *testing.T) {
 	ctx := context.Background()
 
 	// When
-	_, err := svc.GetTableDefinition(ctx, ownerDBA, targetID, "query_e2e_aux", "nonexistent_table_xyz")
+	_, err := svc.GetTableDefinition(ctx, ownerDBA, targetID, "query_e2e_aux", "", "nonexistent_table_xyz")
 
 	// Then
 	if !errors.Is(err, service.ErrSchemaObjectNotFound) {
@@ -82,7 +87,7 @@ func TestInspector_GetTableDefinition_AuditFixedEvent(t *testing.T) {
 	ctx := context.Background()
 
 	// When
-	if _, err := svc.GetTableDefinition(ctx, ownerDBA, targetID, "query_e2e_aux", "schema_parent"); err != nil {
+	if _, err := svc.GetTableDefinition(ctx, ownerDBA, targetID, "query_e2e_aux", "", "schema_parent"); err != nil {
 		t.Fatalf("GetTableDefinition: %v", err)
 	}
 
@@ -114,7 +119,7 @@ func TestInspector_GetTableDefinition_NoDefinitionInAuditOrHistory(t *testing.T)
 	ctx := context.Background()
 
 	// When
-	if _, err := svc.GetTableDefinition(ctx, ownerDBA, targetID, "query_e2e_aux", "schema_parent"); err != nil {
+	if _, err := svc.GetTableDefinition(ctx, ownerDBA, targetID, "query_e2e_aux", "", "schema_parent"); err != nil {
 		t.Fatalf("GetTableDefinition: %v", err)
 	}
 

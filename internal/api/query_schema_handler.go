@@ -1,7 +1,7 @@
 // Package api provides HTTP handlers and routing for the ControlHub REST API.
 // input: context, errors, net/http, strconv, chi, internal/model, internal/service
-// output: querySchemaAPI interface, handleListSchemaDatabases, handleListSchemaObjects, handleGetObjectDetails, handleGetTableDefinition, handleGetRelationshipMap, writeQuerySchemaError
-// pos: HTTP handlers for GET /query-targets/{id}/schema/databases, /schema/objects, /schema/object-details, /schema/table-definition (Phase 38I schema metadata)
+// output: querySchemaAPI interface, handleListSchemaDatabases, handleListSchemaSchemas, handleListSchemaObjects, handleGetObjectDetails, handleGetTableDefinition, handleGetRelationshipMap, writeQuerySchemaError
+// pos: HTTP handlers for GET /query-targets/{id}/schema/databases, /schema/schemas, /schema/objects, /schema/object-details, /schema/table-definition, /schema/relationship-map
 // note: if this file changes, update header and README.md
 package api
 
@@ -23,11 +23,12 @@ import (
 // and lets handler tests substitute a stub. The actor is never accepted from
 // query params — it is read from the auth middleware context.
 type querySchemaAPI interface {
-	ListDatabases(ctx context.Context, actorID, targetID uint64, q string, page, pageSize int, includeSystem, refresh bool) (model.DatabaseListResponse, error)
-	ListObjects(ctx context.Context, actorID, targetID uint64, database, kind, q string, page, pageSize int, refresh bool) (model.ObjectListResponse, error)
-	GetObjectDetails(ctx context.Context, actorID, targetID uint64, database, name, kind string, refresh bool) (model.ObjectDetailResponse, error)
-	GetTableDefinition(ctx context.Context, actorID, targetID uint64, database, name string) (model.TableDefinitionResponse, error)
-	GetRelationshipMap(ctx context.Context, actorID, targetID uint64, database, name string, refresh bool) (model.RelationshipMapResponse, error)
+	ListDatabases(ctx context.Context, actorID, targetID uint64, database, q string, page, pageSize int, includeSystem, refresh bool) (model.DatabaseListResponse, error)
+	ListSchemas(ctx context.Context, actorID, targetID uint64, database, q string, page, pageSize int, refresh bool) (model.SchemaListResponse, error)
+	ListObjects(ctx context.Context, actorID, targetID uint64, database, schema, kind, q string, page, pageSize int, refresh bool) (model.ObjectListResponse, error)
+	GetObjectDetails(ctx context.Context, actorID, targetID uint64, database, schema, name, kind string, refresh bool) (model.ObjectDetailResponse, error)
+	GetTableDefinition(ctx context.Context, actorID, targetID uint64, database, schema, name string) (model.TableDefinitionResponse, error)
+	GetRelationshipMap(ctx context.Context, actorID, targetID uint64, database, schema, name string, refresh bool) (model.RelationshipMapResponse, error)
 }
 
 // Schema query parameter length caps. Exceeding these is a 400.
@@ -70,12 +71,65 @@ func handleListSchemaDatabases(svc querySchemaAPI) http.HandlerFunc {
 			writeJSONError(w, http.StatusBadRequest, "validation_failed", err.Error())
 			return
 		}
+		database, err := optionalSchemaIdent(r, "database")
+		if err != nil {
+			writeJSONError(w, http.StatusBadRequest, "validation_failed", err.Error())
+			return
+		}
 		actorUserID, ok := actorUserIDFromContext(r.Context())
 		if !ok {
 			writeJSONError(w, http.StatusInternalServerError, "internal_error", "authenticated actor missing")
 			return
 		}
-		resp, err := svc.ListDatabases(r.Context(), actorUserID, targetID, q, page, pageSize, includeSystem, refresh)
+		resp, err := svc.ListDatabases(r.Context(), actorUserID, targetID, database, q, page, pageSize, includeSystem, refresh)
+		if err != nil {
+			writeQuerySchemaError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, resp)
+	}
+}
+
+// handleListSchemaSchemas handles GET /query-targets/{id}/schema/schemas.
+// Issue #114 named /connections/{id}/schemas. Frozen G1/G2 and this router
+// keep {id} as the target resource and database as the connection selector.
+func handleListSchemaSchemas(svc querySchemaAPI) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		targetID, err := parseUint64IDParam(chi.URLParam(r, "id"), "target id")
+		if err != nil {
+			writeJSONError(w, http.StatusBadRequest, "validation_failed", err.Error())
+			return
+		}
+		database := r.URL.Query().Get("database")
+		if database == "" {
+			writeJSONError(w, http.StatusBadRequest, "validation_failed", "database is required")
+			return
+		}
+		if len(database) > schemaDatabaseMax {
+			writeJSONError(w, http.StatusBadRequest, "validation_failed", "database exceeds maximum length")
+			return
+		}
+		q := r.URL.Query().Get("q")
+		if len(q) > schemaQMaxLen {
+			writeJSONError(w, http.StatusBadRequest, "validation_failed", "q exceeds maximum length")
+			return
+		}
+		page, pageSize, err := parseSchemaPagination(r)
+		if err != nil {
+			writeJSONError(w, http.StatusBadRequest, "validation_failed", err.Error())
+			return
+		}
+		refresh, err := parseBoolParam(r, "refresh")
+		if err != nil {
+			writeJSONError(w, http.StatusBadRequest, "validation_failed", err.Error())
+			return
+		}
+		actorUserID, ok := actorUserIDFromContext(r.Context())
+		if !ok {
+			writeJSONError(w, http.StatusInternalServerError, "internal_error", "authenticated actor missing")
+			return
+		}
+		resp, err := svc.ListSchemas(r.Context(), actorUserID, targetID, database, q, page, pageSize, refresh)
 		if err != nil {
 			writeQuerySchemaError(w, err)
 			return
@@ -101,6 +155,11 @@ func handleListSchemaObjects(svc querySchemaAPI) http.HandlerFunc {
 		}
 		if len(database) > schemaDatabaseMax {
 			writeJSONError(w, http.StatusBadRequest, "validation_failed", "database exceeds maximum length")
+			return
+		}
+		schema, err := optionalSchemaIdent(r, "schema")
+		if err != nil {
+			writeJSONError(w, http.StatusBadRequest, "validation_failed", err.Error())
 			return
 		}
 		kind := r.URL.Query().Get("kind")
@@ -130,7 +189,7 @@ func handleListSchemaObjects(svc querySchemaAPI) http.HandlerFunc {
 			writeJSONError(w, http.StatusInternalServerError, "internal_error", "authenticated actor missing")
 			return
 		}
-		resp, err := svc.ListObjects(r.Context(), actorUserID, targetID, database, kind, q, page, pageSize, refresh)
+		resp, err := svc.ListObjects(r.Context(), actorUserID, targetID, database, schema, kind, q, page, pageSize, refresh)
 		if err != nil {
 			writeQuerySchemaError(w, err)
 			return
@@ -156,6 +215,11 @@ func handleGetObjectDetails(svc querySchemaAPI) http.HandlerFunc {
 		}
 		if len(database) > schemaDatabaseMax {
 			writeJSONError(w, http.StatusBadRequest, "validation_failed", "database exceeds maximum length")
+			return
+		}
+		schema, err := optionalSchemaIdent(r, "schema")
+		if err != nil {
+			writeJSONError(w, http.StatusBadRequest, "validation_failed", err.Error())
 			return
 		}
 		name := r.URL.Query().Get("name")
@@ -186,7 +250,7 @@ func handleGetObjectDetails(svc querySchemaAPI) http.HandlerFunc {
 			writeJSONError(w, http.StatusInternalServerError, "internal_error", "authenticated actor missing")
 			return
 		}
-		resp, err := svc.GetObjectDetails(r.Context(), actorUserID, targetID, database, name, kind, refresh)
+		resp, err := svc.GetObjectDetails(r.Context(), actorUserID, targetID, database, schema, name, kind, refresh)
 		if err != nil {
 			writeQuerySchemaError(w, err)
 			return
@@ -215,6 +279,11 @@ func handleGetTableDefinition(svc querySchemaAPI) http.HandlerFunc {
 			writeJSONError(w, http.StatusBadRequest, "schema_validation_failed", "database exceeds maximum length")
 			return
 		}
+		schema, err := optionalSchemaIdent(r, "schema")
+		if err != nil {
+			writeJSONError(w, http.StatusBadRequest, "schema_validation_failed", err.Error())
+			return
+		}
 		name := r.URL.Query().Get("name")
 		if name == "" {
 			writeJSONError(w, http.StatusBadRequest, "schema_validation_failed", "name is required")
@@ -229,7 +298,7 @@ func handleGetTableDefinition(svc querySchemaAPI) http.HandlerFunc {
 			writeJSONError(w, http.StatusInternalServerError, "internal_error", "authenticated actor missing")
 			return
 		}
-		resp, err := svc.GetTableDefinition(r.Context(), actorUserID, targetID, database, name)
+		resp, err := svc.GetTableDefinition(r.Context(), actorUserID, targetID, database, schema, name)
 		if err != nil {
 			writeQuerySchemaError(w, err)
 			return
@@ -257,6 +326,11 @@ func handleGetRelationshipMap(svc querySchemaAPI) http.HandlerFunc {
 			writeJSONError(w, http.StatusBadRequest, "validation_failed", "database exceeds maximum length")
 			return
 		}
+		schema, err := optionalSchemaIdent(r, "schema")
+		if err != nil {
+			writeJSONError(w, http.StatusBadRequest, "validation_failed", err.Error())
+			return
+		}
 		name := r.URL.Query().Get("name")
 		if name == "" {
 			writeJSONError(w, http.StatusBadRequest, "validation_failed", "name is required")
@@ -276,7 +350,7 @@ func handleGetRelationshipMap(svc querySchemaAPI) http.HandlerFunc {
 			writeJSONError(w, http.StatusInternalServerError, "internal_error", "authenticated actor missing")
 			return
 		}
-		resp, err := svc.GetRelationshipMap(r.Context(), actorUserID, targetID, database, name, refresh)
+		resp, err := svc.GetRelationshipMap(r.Context(), actorUserID, targetID, database, schema, name, refresh)
 		if err != nil {
 			writeQuerySchemaError(w, err)
 			return
@@ -292,14 +366,30 @@ func writeQuerySchemaError(w http.ResponseWriter, err error) {
 		writeJSONError(w, http.StatusBadRequest, "schema_validation_failed", err.Error())
 	case errors.Is(err, service.ErrSchemaNotAllowed):
 		writeJSONError(w, http.StatusForbidden, "schema_not_allowed", err.Error())
+	case errors.Is(err, service.ErrSchemaConnectionDisabled):
+		writeJSONError(w, http.StatusForbidden, "query_connection_disabled", err.Error())
+	case errors.Is(err, service.ErrSchemaNotUsable):
+		writeJSONError(w, http.StatusForbidden, "query_schema_not_usable", err.Error())
+	case errors.Is(err, service.ErrSchemaBindingMismatch):
+		writeJSONError(w, http.StatusForbidden, "dsn_binding_mismatch", err.Error())
 	case errors.Is(err, service.ErrSchemaTargetNotFound):
 		writeJSONError(w, http.StatusNotFound, "schema_target_not_found", err.Error())
+	case errors.Is(err, service.ErrSchemaConnectionNotFound):
+		writeJSONError(w, http.StatusNotFound, "query_connection_not_found", err.Error())
+	case errors.Is(err, service.ErrSchemaNotFound):
+		writeJSONError(w, http.StatusNotFound, "schema_not_found", err.Error())
 	case errors.Is(err, service.ErrSchemaDefinitionNotSupported):
 		writeJSONError(w, http.StatusBadRequest, "schema_definition_not_supported", err.Error())
+	case errors.Is(err, service.ErrPGVersionUnsupported):
+		writeJSONError(w, http.StatusBadRequest, service.PGVersionUnsupportedCode, err.Error())
 	case errors.Is(err, service.ErrSchemaRelationshipNotSupported):
 		writeJSONError(w, http.StatusConflict, "relationship_map_not_supported", err.Error())
+	case errors.Is(err, service.ErrSchemaObjectDefinitionUnsupported):
+		writeJSONError(w, http.StatusConflict, "query_object_definition_unsupported", err.Error())
 	case errors.Is(err, service.ErrSchemaObjectNotFound):
 		writeJSONError(w, http.StatusNotFound, "schema_object_not_found", err.Error())
+	case errors.Is(err, service.ErrQueryObjectNotFound):
+		writeJSONError(w, http.StatusNotFound, "query_object_not_found", err.Error())
 	case errors.Is(err, service.ErrSchemaTimeout):
 		writeJSONError(w, http.StatusRequestTimeout, "schema_timeout", err.Error())
 	case errors.Is(err, service.ErrSchemaBackendError):
@@ -332,6 +422,16 @@ func parseSchemaPagination(r *http.Request) (int, int, error) {
 		pageSize = v
 	}
 	return page, pageSize, nil
+}
+
+// optionalSchemaIdent reads one identity query parameter without trimming.
+// Absence is an empty string. The cap matches the existing database/name byte cap.
+func optionalSchemaIdent(r *http.Request, name string) (string, error) {
+	value := r.URL.Query().Get(name)
+	if len(value) > schemaNameMaxLen {
+		return "", errors.New(name + " exceeds maximum length")
+	}
+	return value, nil
 }
 
 // parseBoolParam parses a query parameter as a boolean. Accepts "true",

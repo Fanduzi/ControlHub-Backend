@@ -127,7 +127,7 @@ func TestSchemaAPI_ListDatabases_ExcludesSystemByDefault(t *testing.T) {
 	svc, targetID, _ := setupSchemaSandboxTarget(t)
 	ctx := context.Background()
 
-	resp, err := svc.ListDatabases(ctx, ownerDBA, targetID, "", 1, 100, false, false)
+	resp, err := svc.ListDatabases(ctx, ownerDBA, targetID, "", "", 1, 100, false, false)
 	if err != nil {
 		t.Fatalf("ListDatabases: %v", err)
 	}
@@ -150,7 +150,7 @@ func TestSchemaAPI_ListDatabases_IncludeSystem(t *testing.T) {
 	svc, targetID, _ := setupSchemaSandboxTarget(t)
 	ctx := context.Background()
 
-	resp, err := svc.ListDatabases(ctx, ownerDBA, targetID, "", 1, 100, true, false)
+	resp, err := svc.ListDatabases(ctx, ownerDBA, targetID, "", "", 1, 100, true, false)
 	if err != nil {
 		t.Fatalf("ListDatabases includeSystem: %v", err)
 	}
@@ -164,7 +164,7 @@ func TestSchemaAPI_ListDatabases_SearchFilter(t *testing.T) {
 	svc, targetID, _ := setupSchemaSandboxTarget(t)
 	ctx := context.Background()
 
-	resp, err := svc.ListDatabases(ctx, ownerDBA, targetID, "aux", 1, 100, false, false)
+	resp, err := svc.ListDatabases(ctx, ownerDBA, targetID, "", "aux", 1, 100, false, false)
 	if err != nil {
 		t.Fatalf("ListDatabases search: %v", err)
 	}
@@ -181,7 +181,7 @@ func TestSchemaAPI_ListDatabases_Pagination(t *testing.T) {
 	svc, targetID, _ := setupSchemaSandboxTarget(t)
 	ctx := context.Background()
 
-	resp, err := svc.ListDatabases(ctx, ownerDBA, targetID, "", 1, 1, false, false)
+	resp, err := svc.ListDatabases(ctx, ownerDBA, targetID, "", "", 1, 1, false, false)
 	if err != nil {
 		t.Fatalf("ListDatabases page 1: %v", err)
 	}
@@ -197,7 +197,7 @@ func TestSchemaAPI_ListObjects_TablesAndViews(t *testing.T) {
 	svc, targetID, _ := setupSchemaSandboxTarget(t)
 	ctx := context.Background()
 
-	resp, err := svc.ListObjects(ctx, ownerDBA, targetID, "query_e2e_aux", "", "", 1, 100, false)
+	resp, err := svc.ListObjects(ctx, ownerDBA, targetID, "query_e2e_aux", "", "", "", 1, 100, false)
 	if err != nil {
 		t.Fatalf("ListObjects: %v", err)
 	}
@@ -217,7 +217,7 @@ func TestSchemaAPI_ListObjects_KindFilter(t *testing.T) {
 	svc, targetID, _ := setupSchemaSandboxTarget(t)
 	ctx := context.Background()
 
-	tables, err := svc.ListObjects(ctx, ownerDBA, targetID, "query_e2e_aux", "table", "", 1, 100, false)
+	tables, err := svc.ListObjects(ctx, ownerDBA, targetID, "query_e2e_aux", "", "table", "", 1, 100, false)
 	if err != nil {
 		t.Fatalf("ListObjects kind=table: %v", err)
 	}
@@ -226,7 +226,7 @@ func TestSchemaAPI_ListObjects_KindFilter(t *testing.T) {
 			t.Fatalf("kind filter leaked %q with kind=%q", o.Name, o.Kind)
 		}
 	}
-	views, err := svc.ListObjects(ctx, ownerDBA, targetID, "query_e2e_aux", "view", "", 1, 100, false)
+	views, err := svc.ListObjects(ctx, ownerDBA, targetID, "query_e2e_aux", "", "view", "", 1, 100, false)
 	if err != nil {
 		t.Fatalf("ListObjects kind=view: %v", err)
 	}
@@ -239,7 +239,7 @@ func TestSchemaAPI_ListObjects_SearchFilter(t *testing.T) {
 	svc, targetID, _ := setupSchemaSandboxTarget(t)
 	ctx := context.Background()
 
-	resp, err := svc.ListObjects(ctx, ownerDBA, targetID, "query_e2e_aux", "", "child", 1, 100, false)
+	resp, err := svc.ListObjects(ctx, ownerDBA, targetID, "query_e2e_aux", "", "", "child", 1, 100, false)
 	if err != nil {
 		t.Fatalf("ListObjects search: %v", err)
 	}
@@ -256,7 +256,7 @@ func TestSchemaAPI_ListObjects_Pagination(t *testing.T) {
 	svc, targetID, _ := setupSchemaSandboxTarget(t)
 	ctx := context.Background()
 
-	resp, err := svc.ListObjects(ctx, ownerDBA, targetID, "query_e2e_aux", "", "", 1, 2, false)
+	resp, err := svc.ListObjects(ctx, ownerDBA, targetID, "query_e2e_aux", "", "", "", 1, 2, false)
 	if err != nil {
 		t.Fatalf("ListObjects pageSize=2: %v", err)
 	}
@@ -272,7 +272,7 @@ func TestSchemaAPI_GetObjectDetails_TableColumns(t *testing.T) {
 	svc, targetID, _ := setupSchemaSandboxTarget(t)
 	ctx := context.Background()
 
-	detail, err := svc.GetObjectDetails(ctx, ownerDBA, targetID, "query_e2e_aux", "schema_parent", "table", false)
+	detail, err := svc.GetObjectDetails(ctx, ownerDBA, targetID, "query_e2e_aux", "", "schema_parent", "table", false)
 	if err != nil {
 		t.Fatalf("GetObjectDetails: %v", err)
 	}
@@ -291,7 +291,7 @@ func TestSchemaAPI_GetObjectDetails_ViewColumns(t *testing.T) {
 	svc, targetID, _ := setupSchemaSandboxTarget(t)
 	ctx := context.Background()
 
-	detail, err := svc.GetObjectDetails(ctx, ownerDBA, targetID, "query_e2e_aux", "schema_parent_summary", "view", false)
+	detail, err := svc.GetObjectDetails(ctx, ownerDBA, targetID, "query_e2e_aux", "", "schema_parent_summary", "view", false)
 	if err != nil {
 		t.Fatalf("GetObjectDetails view: %v", err)
 	}
@@ -310,7 +310,7 @@ func TestSchemaAPI_GetObjectDetails_PrimaryKeyOrdering(t *testing.T) {
 	svc, targetID, _ := setupSchemaSandboxTarget(t)
 	ctx := context.Background()
 
-	detail, err := svc.GetObjectDetails(ctx, ownerDBA, targetID, "query_e2e_aux", "schema_parent", "table", false)
+	detail, err := svc.GetObjectDetails(ctx, ownerDBA, targetID, "query_e2e_aux", "", "schema_parent", "table", false)
 	if err != nil {
 		t.Fatalf("GetObjectDetails: %v", err)
 	}
@@ -329,7 +329,7 @@ func TestSchemaAPI_GetObjectDetails_CompositeIndexOrdering(t *testing.T) {
 	svc, targetID, _ := setupSchemaSandboxTarget(t)
 	ctx := context.Background()
 
-	detail, err := svc.GetObjectDetails(ctx, ownerDBA, targetID, "query_e2e_aux", "schema_child", "table", false)
+	detail, err := svc.GetObjectDetails(ctx, ownerDBA, targetID, "query_e2e_aux", "", "schema_child", "table", false)
 	if err != nil {
 		t.Fatalf("GetObjectDetails: %v", err)
 	}
@@ -361,7 +361,7 @@ func TestSchemaAPI_GetObjectDetails_FKOrdering(t *testing.T) {
 	svc, targetID, _ := setupSchemaSandboxTarget(t)
 	ctx := context.Background()
 
-	detail, err := svc.GetObjectDetails(ctx, ownerDBA, targetID, "query_e2e_aux", "schema_child", "table", false)
+	detail, err := svc.GetObjectDetails(ctx, ownerDBA, targetID, "query_e2e_aux", "", "schema_child", "table", false)
 	if err != nil {
 		t.Fatalf("GetObjectDetails: %v", err)
 	}
@@ -390,7 +390,7 @@ func TestSchemaAPI_GetObjectDetails_UniqueIndexFlagged(t *testing.T) {
 	svc, targetID, _ := setupSchemaSandboxTarget(t)
 	ctx := context.Background()
 
-	detail, err := svc.GetObjectDetails(ctx, ownerDBA, targetID, "query_e2e_aux", "schema_parent", "table", false)
+	detail, err := svc.GetObjectDetails(ctx, ownerDBA, targetID, "query_e2e_aux", "", "schema_parent", "table", false)
 	if err != nil {
 		t.Fatalf("GetObjectDetails: %v", err)
 	}
@@ -441,7 +441,7 @@ func TestSchemaAPI_ReadOnlyFixtureUserCannotInsert(t *testing.T) {
 		t.Fatal("expected INSERT to fail for read-only user, got nil")
 	}
 
-	resp, err := svc.ListDatabases(ctx, ownerDBA, targetID, "", 1, 100, false, true)
+	resp, err := svc.ListDatabases(ctx, ownerDBA, targetID, "", "", 1, 100, false, true)
 	if err != nil {
 		t.Fatalf("ListDatabases after rejected write: %v", err)
 	}
@@ -486,7 +486,7 @@ func TestSchemaAPI_BindingMismatchRejectsAccess(t *testing.T) {
 		wallClock{},
 	)
 
-	_, err = svc.ListDatabases(ctx, ownerDBA, res.ID, "", 1, 100, false, false)
+	_, err = svc.ListDatabases(ctx, ownerDBA, res.ID, "", "", 1, 100, false, false)
 	if !errors.Is(err, service.ErrSchemaNotAllowed) {
 		t.Fatalf("ListDatabases mismatch error = %v, want ErrSchemaNotAllowed", err)
 	}
@@ -530,7 +530,7 @@ func TestSchemaAPI_LockedTargetRejectsAccess(t *testing.T) {
 		wallClock{},
 	)
 
-	_, err = svc.ListDatabases(ctx, ownerDBA, res.ID, "", 1, 100, false, false)
+	_, err = svc.ListDatabases(ctx, ownerDBA, res.ID, "", "", 1, 100, false, false)
 	if !errors.Is(err, service.ErrSchemaNotAllowed) {
 		t.Fatalf("ListDatabases locked target error = %v, want ErrSchemaNotAllowed", err)
 	}
@@ -540,7 +540,7 @@ func TestSchemaAPI_NonexistentTargetReturnsNotFound(t *testing.T) {
 	svc, _, _ := setupSchemaSandboxTarget(t)
 	ctx := context.Background()
 
-	_, err := svc.ListDatabases(ctx, ownerDBA, 999999, "", 1, 100, false, false)
+	_, err := svc.ListDatabases(ctx, ownerDBA, 999999, "", "", 1, 100, false, false)
 	if !errors.Is(err, service.ErrSchemaTargetNotFound) {
 		t.Fatalf("ListDatabases nonexistent target error = %v, want ErrSchemaTargetNotFound", err)
 	}
@@ -550,7 +550,7 @@ func TestSchemaAPI_NonexistentDatabaseReturnsEmptyList(t *testing.T) {
 	svc, targetID, _ := setupSchemaSandboxTarget(t)
 	ctx := context.Background()
 
-	resp, err := svc.ListObjects(ctx, ownerDBA, targetID, "nonexistent_db_xyz", "", "", 1, 100, false)
+	resp, err := svc.ListObjects(ctx, ownerDBA, targetID, "nonexistent_db_xyz", "", "", "", 1, 100, false)
 	if err != nil {
 		t.Fatalf("ListObjects nonexistent db: %v", err)
 	}
@@ -566,13 +566,13 @@ func TestSchemaAPI_AuditRowsContainFixedMetadata(t *testing.T) {
 	svc, targetID, db := setupSchemaSandboxTarget(t)
 	ctx := context.Background()
 
-	if _, err := svc.ListDatabases(ctx, ownerDBA, targetID, "", 1, 100, false, false); err != nil {
+	if _, err := svc.ListDatabases(ctx, ownerDBA, targetID, "", "", 1, 100, false, false); err != nil {
 		t.Fatalf("ListDatabases: %v", err)
 	}
-	if _, err := svc.ListObjects(ctx, ownerDBA, targetID, "query_e2e_aux", "", "", 1, 100, false); err != nil {
+	if _, err := svc.ListObjects(ctx, ownerDBA, targetID, "query_e2e_aux", "", "", "", 1, 100, false); err != nil {
 		t.Fatalf("ListObjects: %v", err)
 	}
-	if _, err := svc.GetObjectDetails(ctx, ownerDBA, targetID, "query_e2e_aux", "schema_parent", "table", false); err != nil {
+	if _, err := svc.GetObjectDetails(ctx, ownerDBA, targetID, "query_e2e_aux", "", "schema_parent", "table", false); err != nil {
 		t.Fatalf("GetObjectDetails: %v", err)
 	}
 
@@ -609,7 +609,7 @@ func TestSchemaAPI_NoDSNInResponseBody(t *testing.T) {
 	svc, targetID, _ := setupSchemaSandboxTarget(t)
 	ctx := context.Background()
 
-	resp, err := svc.ListDatabases(ctx, ownerDBA, targetID, "", 1, 100, false, false)
+	resp, err := svc.ListDatabases(ctx, ownerDBA, targetID, "", "", 1, 100, false, false)
 	if err != nil {
 		t.Fatalf("ListDatabases: %v", err)
 	}
@@ -620,7 +620,7 @@ func TestSchemaAPI_AutoIncrementColumnFlagged(t *testing.T) {
 	svc, targetID, _ := setupSchemaSandboxTarget(t)
 	ctx := context.Background()
 
-	detail, err := svc.GetObjectDetails(ctx, ownerDBA, targetID, "query_e2e_aux", "schema_parent", "table", false)
+	detail, err := svc.GetObjectDetails(ctx, ownerDBA, targetID, "query_e2e_aux", "", "schema_parent", "table", false)
 	if err != nil {
 		t.Fatalf("GetObjectDetails: %v", err)
 	}
@@ -639,7 +639,7 @@ func TestSchemaAPI_NullableColumnFlagged(t *testing.T) {
 	svc, targetID, _ := setupSchemaSandboxTarget(t)
 	ctx := context.Background()
 
-	detail, err := svc.GetObjectDetails(ctx, ownerDBA, targetID, "query_e2e_aux", "schema_child", "table", false)
+	detail, err := svc.GetObjectDetails(ctx, ownerDBA, targetID, "query_e2e_aux", "", "schema_child", "table", false)
 	if err != nil {
 		t.Fatalf("GetObjectDetails: %v", err)
 	}

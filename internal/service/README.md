@@ -32,7 +32,7 @@ Business logic layer with interface-based repository dependencies. Each service 
 | relation_type_service.go | Relation type dictionary listing |
 | lifecycle_status_service.go | Lifecycle status dictionary listing |
 | health_status_service.go | Health status dictionary listing |
-| query_schema_service.go | QuerySchemaService.GetTableDefinition returns governed MySQL table definitions; ObjectDetails is actor+target Schema Inspection without a caller DSN |
+| query_schema_service.go | QuerySchemaService metadata for MySQL/TiDB and PostgreSQL. PostgreSQL uses (resource, database) and ListSchemas; table definition stays unsupported. ObjectDetails remains actor+target Schema Inspection without a caller DSN. User SQL execution stays closed |
 | query_guard.go | AST-backed read-only validation for execute, paginated results, explain, and saved-query entry points |
 | query_template_compiler.go | Server-owned AST placeholder compiler and guarded positional binding seam |
 | query_template_compiler_declaration.go | Declaration-only placeholder validation shared by saved-statement persistence and runtime compilation |
@@ -46,6 +46,7 @@ Business logic layer with interface-based repository dependencies. Each service 
 | pg_pool_factory.go | PostgreSQL connection factory (G4 front): installs a T2-validated `*pgx.ConnConfig` copy on a `pgxpool.ParseConfig` shell (the shell's own ConnConfig is not dialed; the user DSN is not parsed again), MaxConns=1. `AfterConnect` accepts only `SHOW server_version_num` in `[140000, 180000)` on every new physical connection. That read has its own finite budget (validated `ConnectTimeout`, or two minutes when unset) so a canceled Acquire cannot leave the single pool slot constructing. The first Acquire runs before return. The pool is closed on shell-init, dial, cancel, timeout, version-read, or version-reject failure. Does not open query execution |
 | pg_pool_factory_test.go | Factory unit tests: version boundaries, version-probe budget, config/TLS/fallback preservation under hostile env, shell-init failure redaction, refused dial, context cancel, and connect deadline |
 | pg_pool_factory_integration_test.go | Disposable PostgreSQL 16 proof of `OpenPostgresPool`: live `server_version_num`, native `PgConn().ExecParams`, constructed version-gate cleanup, same-pool Reset reconnect checks, stalled version-probe recovery, and version-read failure cleanup (`//go:build integration`) |
+| pg_schema_inspector.go | PostgreSQL catalog reads through `OpenPostgresPool`: one fixed database, USAGE-filtered schemas, relkind r/p/v objects, OID-keyed columns/indexes/foreign keys. Bind parameters only. Each call closes its pool |
 | navigate_related_records_test.go | Related-record navigation service tests: governance, parameter binding, history/audit, Apply-path exclusive `ErrQueryDisclosureBlocked` (Issue #48), and inspector-phase cancellation/deadline evidence (Issue #40) |
 | query_execution_service_test.go | Query execution service tests, including successful-User full SQL, owner-only retrieval and history restore eligibility, machine/non-success omission, governed paging, disclosure, atomic persistence, and cancellation durability |
 | query_execution_evidence_pair_test.go | persistEvidencePair tests: detached two-second window, fixed audit event type, verbatim identity, and fail-closed rollback |

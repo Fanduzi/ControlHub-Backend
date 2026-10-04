@@ -1,5 +1,10 @@
 //go:build integration
 
+// Package integration proves MySQL relationship-map edges against the schema sandbox.
+// input: shared MySQL fixture, QuerySchemaService.GetRelationshipMap, parent/child foreign key
+// output: inbound, outbound, empty, history-free, and audit relationship-map tests
+// pos: Real-MySQL proof that a relationship map stays on one table and does not write query history
+// note: if this file changes, update this header and module README.md.
 package integration
 
 import (
@@ -19,7 +24,7 @@ func TestRelationshipMap_SchemaParentInbound(t *testing.T) {
 	ctx := context.Background()
 
 	// When
-	resp, err := svc.GetRelationshipMap(ctx, ownerDBA, targetID, "query_e2e_aux", "schema_parent", false)
+	resp, err := svc.GetRelationshipMap(ctx, ownerDBA, targetID, "query_e2e_aux", "", "schema_parent", false)
 
 	// Then
 	if err != nil {
@@ -81,7 +86,7 @@ func TestRelationshipMap_SchemaChildOutbound(t *testing.T) {
 	ctx := context.Background()
 
 	// When
-	resp, err := svc.GetRelationshipMap(ctx, ownerDBA, targetID, "query_e2e_aux", "schema_child", false)
+	resp, err := svc.GetRelationshipMap(ctx, ownerDBA, targetID, "query_e2e_aux", "", "schema_child", false)
 
 	// Then
 	if err != nil {
@@ -145,7 +150,7 @@ func TestRelationshipMap_EmptyMap(t *testing.T) {
 	ctx := context.Background()
 
 	// When
-	resp, err := svc.GetRelationshipMap(ctx, ownerDBA, targetID, "query_e2e", "query_e2e_items", false)
+	resp, err := svc.GetRelationshipMap(ctx, ownerDBA, targetID, "query_e2e", "", "query_e2e_items", false)
 
 	// Then
 	if err != nil {
@@ -182,7 +187,7 @@ func TestRelationshipMap_NoQueryExecutionsRow(t *testing.T) {
 	}
 
 	// When
-	if _, err := svc.GetRelationshipMap(ctx, ownerDBA, targetID, "query_e2e_aux", "schema_parent", false); err != nil {
+	if _, err := svc.GetRelationshipMap(ctx, ownerDBA, targetID, "query_e2e_aux", "", "schema_parent", false); err != nil {
 		t.Fatalf("GetRelationshipMap: %v", err)
 	}
 
@@ -205,7 +210,7 @@ func TestRelationshipMap_AuditEvent(t *testing.T) {
 	ctx := context.Background()
 
 	// When
-	if _, err := svc.GetRelationshipMap(ctx, ownerDBA, targetID, "query_e2e_aux", "schema_parent", false); err != nil {
+	if _, err := svc.GetRelationshipMap(ctx, ownerDBA, targetID, "query_e2e_aux", "", "schema_parent", false); err != nil {
 		t.Fatalf("GetRelationshipMap: %v", err)
 	}
 

@@ -18,7 +18,7 @@ HTTP handlers, chi routing, CORS middleware, and fake-repo test infrastructure.
 | machine_credential_middleware.go | Independent opaque machine authentication and the shared user-or-machine scope guard |
 | machine_principal_handler.go | Admin-only machine principal create/list and credential rotate/revoke handlers |
 | dictionary_handler.go | Dictionary list handlers (environments, owners, roles, resource-types, relation-types, lifecycle-statuses, health-statuses) |
-| query_schema_handler.go | handleGetTableDefinition for MySQL table-definition requests |
+| query_schema_handler.go | Schema metadata handlers, including PostgreSQL schema list and the unsupported table-definition response |
 | query_execution_handler.go | User-or-machine POST ordinary execute plus fresh-User saved-statement execution, related-record navigation, execution history, and exact owner-only successful statement detail handlers; migration-29 contract fields (database, schema, clientExecutionId, source.schema) fail closed until their owning tickets wire them |
 | query_workspace_handler.go | User-only singular query workspace GET/strict bounded PUT with controlled OCC conflict mapping |
 | query_credential_handler.go | Phase 38A credential metadata handlers (GET/PUT/DELETE) with the composite `?database=` connection selector |
@@ -76,7 +76,8 @@ HTTP handlers, chi routing, CORS middleware, and fake-repo test infrastructure.
 | POST | /resources/bulk-mutations/confirm | Admin-only reviewed bulk mutation confirmation; current-state or fingerprint conflicts return 409 |
 | GET | /resources/{id}/topology | Get a rooted topology graph; depth defaults to 2, hop count is capped at 32, and output is bounded by node/edge caps |
 | GET | /environments/{id}/topology | Get an environment-scoped topology workspace; `rootResourceId` is optional |
-| GET | /query-targets/{id}/schema/table-definition | Get MySQL table definition (base tables only) |
+| GET | /query-targets/{id}/schema/schemas | List schemas for one PostgreSQL connection (`database` selects the connection) |
+| GET | /query-targets/{id}/schema/table-definition | Get MySQL table definition (base tables only). PostgreSQL returns query_object_definition_unsupported |
 | POST | /query-targets/{id}/execute | Execute a governed read-only statement as a fresh user or `governed-select` machine principal, with optional page-number result paging for SELECT |
 | POST | /query-targets/{id}/related-records | Governed FK related-record navigation (Issue #36: records through the same atomic Execution Evidence Pair as execution) |
 | GET | /query-disclosure-policies | List disclosure policies (handler-admin) |

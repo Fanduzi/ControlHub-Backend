@@ -162,23 +162,27 @@ func (boundaryExplainStub) Explain(_ context.Context, _, _ uint64, _ model.Expla
 
 type boundarySchemaStub struct{}
 
-func (boundarySchemaStub) ListDatabases(_ context.Context, _, targetID uint64, _ string, _, _ int, _, _ bool) (model.DatabaseListResponse, error) {
+func (boundarySchemaStub) ListDatabases(_ context.Context, _, targetID uint64, _, _ string, _, _ int, _, _ bool) (model.DatabaseListResponse, error) {
 	return model.DatabaseListResponse{TargetResourceID: int64(targetID), Items: []model.DatabaseSummary{}, PageInfo: model.NewPageInfo(1, 50, 0)}, nil
 }
 
-func (boundarySchemaStub) ListObjects(_ context.Context, _, targetID uint64, database, _, _ string, _, _ int, _ bool) (model.ObjectListResponse, error) {
+func (boundarySchemaStub) ListSchemas(_ context.Context, _, targetID uint64, database, _ string, _, _ int, _ bool) (model.SchemaListResponse, error) {
+	return model.SchemaListResponse{TargetResourceID: int64(targetID), Database: database, Items: []model.SchemaSummary{}, PageInfo: model.NewPageInfo(1, 50, 0)}, nil
+}
+
+func (boundarySchemaStub) ListObjects(_ context.Context, _, targetID uint64, database, _, _, _ string, _, _ int, _ bool) (model.ObjectListResponse, error) {
 	return model.ObjectListResponse{TargetResourceID: int64(targetID), Database: database, Items: []model.ObjectSummary{}, PageInfo: model.NewPageInfo(1, 50, 0)}, nil
 }
 
-func (boundarySchemaStub) GetObjectDetails(_ context.Context, _, targetID uint64, database, name, _ string, _ bool) (model.ObjectDetailResponse, error) {
+func (boundarySchemaStub) GetObjectDetails(_ context.Context, _, targetID uint64, database, _, name, _ string, _ bool) (model.ObjectDetailResponse, error) {
 	return model.ObjectDetailResponse{TargetResourceID: int64(targetID), Database: database, Name: name}, nil
 }
 
-func (boundarySchemaStub) GetTableDefinition(_ context.Context, _, targetID uint64, database, name string) (model.TableDefinitionResponse, error) {
+func (boundarySchemaStub) GetTableDefinition(_ context.Context, _, targetID uint64, database, _, name string) (model.TableDefinitionResponse, error) {
 	return model.TableDefinitionResponse{TargetResourceID: int64(targetID), Database: database, Name: name}, nil
 }
 
-func (boundarySchemaStub) GetRelationshipMap(_ context.Context, _, targetID uint64, database, name string, _ bool) (model.RelationshipMapResponse, error) {
+func (boundarySchemaStub) GetRelationshipMap(_ context.Context, _, targetID uint64, database, _, name string, _ bool) (model.RelationshipMapResponse, error) {
 	return model.RelationshipMapResponse{TargetResourceID: int64(targetID), Root: model.RelationshipMapNode{Database: database, Name: name}}, nil
 }
 

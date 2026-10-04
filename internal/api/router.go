@@ -242,6 +242,7 @@ func NewRouter(deps Dependencies) *chi.Mux {
 		router.Group(func(r chi.Router) {
 			r.Use(requireFreshQueryActor(deps.AuthService, deps.QueryExecutionAuth, emitter))
 			r.Get("/query-targets/{id}/schema/databases", handleListSchemaDatabases(deps.QuerySchemaService))
+			r.Get("/query-targets/{id}/schema/schemas", handleListSchemaSchemas(deps.QuerySchemaService))
 			r.Get("/query-targets/{id}/schema/objects", handleListSchemaObjects(deps.QuerySchemaService))
 			r.Get("/query-targets/{id}/schema/object-details", handleGetObjectDetails(deps.QuerySchemaService))
 			r.Get("/query-targets/{id}/schema/table-definition", handleGetTableDefinition(deps.QuerySchemaService))

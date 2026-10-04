@@ -1,6 +1,6 @@
 // Package operatoraccess describes every protected API operation and authorization class for tests.
 // input: standard library only
-// output: Class, Operation, All (including topology workspace, ingestion preview/confirm, health-observation ingestion, relationship-rule discovery, and admin-only ops metrics)
+// output: Class, Operation, All (including topology workspace, schema metadata, ingestion preview/confirm, health-observation ingestion, relationship-rule discovery, and admin-only ops metrics)
 // pos: Single source of truth shared by router, OpenAPI, and integration boundary tests
 // note: if this file changes, update this header and module README.md.
 package operatoraccess
@@ -99,6 +99,7 @@ func All() []Operation {
 		{FreshAnyRole, "POST", "/query-targets/{id}/related-records", "/query-targets/22/related-records"},
 		{FreshAnyRole, "GET", "/query-targets/{id}/executions", "/query-targets/22/executions"},
 		{FreshAnyRole, "GET", "/query-targets/{id}/schema/databases", "/query-targets/22/schema/databases"},
+		{FreshAnyRole, "GET", "/query-targets/{id}/schema/schemas", "/query-targets/22/schema/schemas?database=orders"},
 		{FreshAnyRole, "GET", "/query-targets/{id}/schema/objects", "/query-targets/22/schema/objects?database=orders"},
 		{FreshAnyRole, "GET", "/query-targets/{id}/schema/object-details", "/query-targets/22/schema/object-details?database=orders&name=users&kind=table"},
 		{FreshAnyRole, "GET", "/query-targets/{id}/schema/table-definition", "/query-targets/22/schema/table-definition?database=orders&name=users"},

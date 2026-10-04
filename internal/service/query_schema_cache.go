@@ -24,28 +24,32 @@ const (
 )
 
 // schemaCacheKey uniquely identifies a schema metadata request. It includes
-// target_id, credential_ref, scope, database, kind, query, page, pageSize, and
-// includeSystem. It intentionally excludes DSN, password, and database username.
+// target_id, credential_ref, scope, database, schema, kind, query, page,
+// pageSize, and includeSystem. Database and schema keep two PostgreSQL
+// connections, or two namespaces in one database, from sharing an entry.
+// The key intentionally excludes DSN, password, and database username.
 type schemaCacheKey struct {
-	Scope          string // "databases", "objects", "object_details"
-	TargetID       uint64
-	CredentialRef  string // non-secret reference only
-	Database       string
-	Kind           string
-	Query          string
-	Page           int
-	PageSize       int
-	IncludeSystem  bool
+	Scope         string // "databases", "schemas", "objects", "object_details"
+	TargetID      uint64
+	CredentialRef string // non-secret reference only
+	Database      string
+	Schema        string
+	Kind          string
+	Query         string
+	Page          int
+	PageSize      int
+	IncludeSystem bool
 }
 
 // cacheKey builds a schemaCacheKey from request parameters. The credentialRef
 // is the non-secret reference (e.g. "ORDER_MYSQL_RO"), never a DSN or password.
-func cacheKey(scope string, targetID uint64, credentialRef, database, kind, query string, page, pageSize int, includeSystem bool) schemaCacheKey {
+func cacheKey(scope string, targetID uint64, credentialRef, database, schema, kind, query string, page, pageSize int, includeSystem bool) schemaCacheKey {
 	return schemaCacheKey{
 		Scope:         scope,
 		TargetID:      targetID,
 		CredentialRef: credentialRef,
 		Database:      database,
+		Schema:        schema,
 		Kind:          kind,
 		Query:         query,
 		Page:          page,
@@ -57,9 +61,9 @@ func cacheKey(scope string, targetID uint64, credentialRef, database, kind, quer
 // schemaCacheEntry holds a cached value with its insertion time and whether it
 // represents an empty result (for negative TTL).
 type schemaCacheEntry struct {
-	value     any
+	value      any
 	insertedAt time.Time
-	isEmpty   bool
+	isEmpty    bool
 }
 
 // QuerySchemaCache is a bounded, concurrency-safe, in-memory cache for schema

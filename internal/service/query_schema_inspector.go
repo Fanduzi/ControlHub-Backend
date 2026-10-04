@@ -47,9 +47,10 @@ type ObjectSummary struct {
 }
 
 // ObjectDetail holds the full column, index, and foreign-key metadata for a
-// single table or view.
+// single table or view. Schema is empty for MySQL/TiDB.
 type ObjectDetail struct {
 	Name        string          `json:"name"`
+	Schema      string          `json:"schema,omitempty"`
 	Kind        string          `json:"kind"`
 	Columns     []ColumnSummary `json:"columns"`
 	Indexes     []IndexSummary  `json:"indexes"`
@@ -80,6 +81,7 @@ type ColumnSummary struct {
 type IndexSummary struct {
 	Name      string        `json:"name"`
 	NonUnique bool          `json:"nonUnique"`
+	Primary   bool          `json:"primary,omitempty"`
 	Columns   []IndexColumn `json:"columns"`
 }
 
@@ -100,10 +102,11 @@ type FKSummary struct {
 
 // FKColumn is one column mapping within a foreign key.
 type FKColumn struct {
-	Column           string `json:"column"`
-	ReferencedSchema string `json:"referencedSchema"`
-	ReferencedTable  string `json:"referencedTable"`
-	ReferencedColumn string `json:"referencedColumn"`
+	Column              string `json:"column"`
+	ReferencedSchema    string `json:"referencedSchema"`
+	ReferencedNamespace string `json:"referencedNamespace,omitempty"`
+	ReferencedTable     string `json:"referencedTable"`
+	ReferencedColumn    string `json:"referencedColumn"`
 }
 
 // RelationshipMapResult holds the inbound and outbound foreign-key
@@ -118,6 +121,7 @@ type RelationshipMapResult struct {
 type RelationshipMapNodeResult struct {
 	ID       string
 	Database string
+	Schema   string
 	Name     string
 	Kind     string
 	Role     string
@@ -402,10 +406,10 @@ func (s *MySQLSchemaInspector) GetTableDefinition(ctx context.Context, dsn strin
 // (without column-level detail).
 type constraintIdentity struct {
 	constraintName string
-	srcSchema     string
-	srcTable      string
-	refSchema     string
-	refTable      string
+	srcSchema      string
+	srcTable       string
+	refSchema      string
+	refTable       string
 }
 
 // constraintColumn holds one column mapping fetched for a selected constraint.
@@ -813,7 +817,6 @@ func fetchConstraintColumns(ctx context.Context, tx *sql.Tx, database, tableName
 
 	return cols, nil
 }
-
 
 // loadColumns queries COLUMNS for the given table, capped at schemaMaxColumns.
 func (s *MySQLSchemaInspector) loadColumns(ctx context.Context, tx *sql.Tx, database, name string, detail *ObjectDetail) error {

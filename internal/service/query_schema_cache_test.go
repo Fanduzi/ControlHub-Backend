@@ -1,6 +1,8 @@
-// Package service provides RED tests for the bounded in-memory schema metadata
-// cache. These tests pin the TTL, eviction, key-safety, audit, singleflight,
-// and refresh-bypass behaviour that the QuerySchemaService depends on.
+// Package service tests the bounded schema metadata cache: TTL, eviction, key safety, singleflight, and refresh.
+// input: testing, time, sync, internal/model, QuerySchemaCache
+// output: cache lifetime, eviction, secret-free keys, singleflight, and refresh-bypass tests
+// pos: Unit proof for the schema metadata cache used by QuerySchemaService
+// note: if this file changes, update this header and module README.md.
 package service
 
 import (
@@ -22,7 +24,7 @@ func TestQuerySchemaCache_PositiveCacheLasts5Minutes(t *testing.T) {
 	clock := &fakeClock{t: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)}
 	cache := NewQuerySchemaCache(100, clock)
 
-	key := cacheKey("databases", 9001, "ORDER_MYSQL_RO", "", "", "", 1, 20, false)
+	key := cacheKey("databases", 9001, "ORDER_MYSQL_RO", "", "", "", "", 1, 20, false)
 	resp := model.DatabaseListResponse{
 		TargetResourceID: 9001,
 		Items:            []model.DatabaseSummary{{Name: "orders"}},
@@ -56,7 +58,7 @@ func TestQuerySchemaCache_EmptyResultCacheLasts30Seconds(t *testing.T) {
 	clock := &fakeClock{t: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)}
 	cache := NewQuerySchemaCache(100, clock)
 
-	key := cacheKey("objects", 9001, "ORDER_MYSQL_RO", "orders", "", "", 1, 20, false)
+	key := cacheKey("objects", 9001, "ORDER_MYSQL_RO", "orders", "", "", "", 1, 20, false)
 	resp := model.ObjectListResponse{
 		TargetResourceID: 9001,
 		Database:         "orders",
@@ -88,8 +90,8 @@ func TestQuerySchemaCache_RefreshBypassesAndReplacesOnlyRequestedKey(t *testing.
 	clock := &fakeClock{t: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)}
 	cache := NewQuerySchemaCache(100, clock)
 
-	keyA := cacheKey("databases", 9001, "ORDER_MYSQL_RO", "", "", "", 1, 20, false)
-	keyB := cacheKey("objects", 9001, "ORDER_MYSQL_RO", "orders", "", "", 1, 20, false)
+	keyA := cacheKey("databases", 9001, "ORDER_MYSQL_RO", "", "", "", "", 1, 20, false)
+	keyB := cacheKey("objects", 9001, "ORDER_MYSQL_RO", "orders", "", "", "", 1, 20, false)
 	respA := model.DatabaseListResponse{TargetResourceID: 9001, Items: []model.DatabaseSummary{{Name: "orders"}}}
 	respB := model.ObjectListResponse{TargetResourceID: 9001, Database: "orders", Items: []model.ObjectSummary{{Name: "users", Kind: model.ObjectKindTable}}}
 	cache.Set(keyA, respA)
@@ -128,7 +130,7 @@ func TestQuerySchemaCache_OldestEntriesEvictedAtCapacity(t *testing.T) {
 
 	keys := make([]schemaCacheKey, 4)
 	for i := range keys {
-		keys[i] = cacheKey("databases", uint64(i+1), "CRED", "", "", "", 1, 20, false)
+		keys[i] = cacheKey("databases", uint64(i+1), "CRED", "", "", "", "", 1, 20, false)
 		resp := model.DatabaseListResponse{TargetResourceID: int64(i + 1)}
 		cache.Set(keys[i], resp)
 		clock.t = clock.t.Add(time.Second) // ensure insertion order
@@ -158,7 +160,7 @@ func TestQuerySchemaCache_KeysNeverContainSensitiveFields(t *testing.T) {
 		"tcp(", "3306", "@",
 	}
 	// Build a key with realistic values.
-	key := cacheKey("databases", 9001, "ORDER_MYSQL_RO", "mydb", "table", "users", 1, 20, false)
+	key := cacheKey("databases", 9001, "ORDER_MYSQL_RO", "mydb", "", "table", "users", 1, 20, false)
 	s := fmt.Sprintf("%+v", key)
 	for _, leak := range sensitive {
 		if strings.Contains(strings.ToLower(s), strings.ToLower(leak)) {
@@ -179,7 +181,7 @@ func TestQuerySchemaCache_HitStillWritesAudit(t *testing.T) {
 	clock := &fakeClock{t: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)}
 	cache := NewQuerySchemaCache(100, clock)
 
-	key := cacheKey("databases", 9001, "ORDER_MYSQL_RO", "", "", "", 1, 20, false)
+	key := cacheKey("databases", 9001, "ORDER_MYSQL_RO", "", "", "", "", 1, 20, false)
 	resp := model.DatabaseListResponse{TargetResourceID: 9001, Items: []model.DatabaseSummary{{Name: "orders"}}}
 	cache.Set(key, resp)
 
@@ -205,7 +207,7 @@ func TestQuerySchemaCache_AuditFailureDoesNotReturnSuccess(t *testing.T) {
 	clock := &fakeClock{t: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)}
 	cache := NewQuerySchemaCache(100, clock)
 
-	key := cacheKey("databases", 9001, "ORDER_MYSQL_RO", "", "", "", 1, 20, false)
+	key := cacheKey("databases", 9001, "ORDER_MYSQL_RO", "", "", "", "", 1, 20, false)
 	resp := model.DatabaseListResponse{TargetResourceID: 9001}
 	cache.Set(key, resp)
 
@@ -225,7 +227,7 @@ func TestQuerySchemaCache_ConcurrentEqualMissesCoalesce(t *testing.T) {
 	clock := &fakeClock{t: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)}
 	cache := NewQuerySchemaCache(100, clock)
 
-	key := cacheKey("databases", 9001, "ORDER_MYSQL_RO", "", "", "", 1, 20, false)
+	key := cacheKey("databases", 9001, "ORDER_MYSQL_RO", "", "", "", "", 1, 20, false)
 	resp := model.DatabaseListResponse{TargetResourceID: 9001, Items: []model.DatabaseSummary{{Name: "orders"}}}
 
 	var inspectorCalls int

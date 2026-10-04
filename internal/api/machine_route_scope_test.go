@@ -99,6 +99,7 @@ func TestMachineRouteScopeMatrix(t *testing.T) {
 		{"related records stay user only", http.MethodPost, "/query-targets/22/related-records", model.MachineScopeGovernedSelect, http.StatusForbidden, "machine_scope_denied", false},
 		{"explain stays user only", http.MethodPost, "/query-targets/22/explain", model.MachineScopeGovernedSelect, http.StatusForbidden, "machine_scope_denied", false},
 		{"schema stays user only", http.MethodGet, "/query-targets/22/schema/databases", model.MachineScopeGovernedSelect, http.StatusForbidden, "machine_scope_denied", false},
+		{"schema namespaces stay user only", http.MethodGet, "/query-targets/22/schema/schemas?database=orders", model.MachineScopeGovernedSelect, http.StatusForbidden, "machine_scope_denied", false},
 		{"credential stays user only", http.MethodGet, "/query-targets/22/credential", model.MachineScopeGovernedSelect, http.StatusForbidden, "machine_scope_denied", false},
 		{"saved statements stay user only", http.MethodGet, "/query-targets/22/saved-statements", model.MachineScopeGovernedSelect, http.StatusForbidden, "machine_scope_denied", false},
 		{"saved execution stays user only", http.MethodPost, "/query-targets/22/saved-statements/7/execute", model.MachineScopeGovernedSelect, http.StatusForbidden, "machine_scope_denied", false},

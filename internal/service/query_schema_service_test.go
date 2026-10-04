@@ -1,6 +1,8 @@
-// Package service provides RED tests for the QuerySchemaService. These tests
-// pin the governance, audit, error-mapping, and cache-integration behaviour of
-// ListDatabases, ListObjects, and GetObjectDetails.
+// Package service tests QuerySchemaService governance, audit, error mapping, and cache integration.
+// input: context, encoding/json, errors, strings, testing, time, internal/model, fake inspector and access doubles
+// output: database, schema, object, detail, relationship-map, and table-definition service tests
+// pos: Unit proof that schema metadata keeps MySQL behavior and fails closed on access errors
+// note: if this file changes, update this header and module README.md.
 package service
 
 import (
@@ -17,16 +19,16 @@ import (
 // fakeSchemaInspector is a test double for QuerySchemaInspector. It returns
 // pre-configured results and records calls for assertion.
 type fakeSchemaInspector struct {
-	databases      []DatabaseSummary
-	dbPageInfo     model.PageInfo
-	objects        []ObjectSummary
-	objPageInfo    model.PageInfo
-	detail         *ObjectDetail
-	tableDef       *TableDefinition
-	tableDefErr    error
+	databases       []DatabaseSummary
+	dbPageInfo      model.PageInfo
+	objects         []ObjectSummary
+	objPageInfo     model.PageInfo
+	detail          *ObjectDetail
+	tableDef        *TableDefinition
+	tableDefErr     error
 	relationshipMap *RelationshipMapResult
-	err            error
-	called         bool
+	err             error
+	called          bool
 }
 
 func (f *fakeSchemaInspector) ListDatabases(_ context.Context, _ string, _ string, _ bool, _, _ int) ([]DatabaseSummary, model.PageInfo, error) {
@@ -100,7 +102,7 @@ func TestQuerySchemaService_IndependentTargetAccess(t *testing.T) {
 		clock,
 	)
 
-	_, err := svc.ListDatabases(context.Background(), 1, 9999, "", 1, 20, false, false)
+	_, err := svc.ListDatabases(context.Background(), 1, 9999, "", "", 1, 20, false, false)
 	if !errors.Is(err, ErrSchemaTargetNotFound) {
 		t.Fatalf("ListDatabases error = %v, want ErrSchemaTargetNotFound", err)
 	}
@@ -149,7 +151,7 @@ func TestQuerySchemaService_UnsupportedTargetNeverCallsInspector(t *testing.T) {
 				clock,
 			)
 
-			_, err := svc.ListDatabases(context.Background(), 1, 9001, "", 1, 20, false, false)
+			_, err := svc.ListDatabases(context.Background(), 1, 9001, "", "", 1, 20, false, false)
 			if !errors.Is(err, tc.wantErr) {
 				t.Fatalf("error = %v, want %v", err, tc.wantErr)
 			}
@@ -190,7 +192,7 @@ func TestQuerySchemaService_AuditEventStringsAreFixed(t *testing.T) {
 	)
 
 	// ListDatabases
-	if _, err := svc.ListDatabases(context.Background(), 1, 9001, "", 1, 20, false, false); err != nil {
+	if _, err := svc.ListDatabases(context.Background(), 1, 9001, "", "", 1, 20, false, false); err != nil {
 		t.Fatalf("ListDatabases: %v", err)
 	}
 	if len(audit.auditEvents) == 0 {
@@ -214,7 +216,7 @@ func TestQuerySchemaService_AuditEventStringsAreFixed(t *testing.T) {
 	// ListObjects
 	audit.auditEvents = nil
 	inspector.objects = []ObjectSummary{{Name: "users", Kind: string(model.ObjectKindTable)}}
-	if _, err := svc.ListObjects(context.Background(), 1, 9001, "orders", "", "", 1, 20, false); err != nil {
+	if _, err := svc.ListObjects(context.Background(), 1, 9001, "orders", "", "", "", 1, 20, false); err != nil {
 		t.Fatalf("ListObjects: %v", err)
 	}
 	if len(audit.auditEvents) == 0 {
@@ -228,7 +230,7 @@ func TestQuerySchemaService_AuditEventStringsAreFixed(t *testing.T) {
 	// GetObjectDetails
 	audit.auditEvents = nil
 	inspector.detail = &ObjectDetail{Name: "users", Kind: "table"}
-	if _, err := svc.GetObjectDetails(context.Background(), 1, 9001, "orders", "users", "table", false); err != nil {
+	if _, err := svc.GetObjectDetails(context.Background(), 1, 9001, "orders", "", "users", "table", false); err != nil {
 		t.Fatalf("GetObjectDetails: %v", err)
 	}
 	if len(audit.auditEvents) == 0 {
@@ -270,7 +272,7 @@ func TestQuerySchemaService_ObjectListItemsCarryRequestedDatabase(t *testing.T) 
 		clock,
 	)
 
-	resp, err := svc.ListObjects(context.Background(), 1, 9001, "mydb", "", "", 1, 20, false)
+	resp, err := svc.ListObjects(context.Background(), 1, 9001, "mydb", "", "", "", 1, 20, false)
 	if err != nil {
 		t.Fatalf("ListObjects: %v", err)
 	}
@@ -313,7 +315,7 @@ func TestQuerySchemaService_ObjectDetailCarryRequestedDatabase(t *testing.T) {
 		clock,
 	)
 
-	resp, err := svc.GetObjectDetails(context.Background(), 1, 9001, "mydb", "users", "table", false)
+	resp, err := svc.GetObjectDetails(context.Background(), 1, 9001, "mydb", "", "users", "table", false)
 	if err != nil {
 		t.Fatalf("GetObjectDetails: %v", err)
 	}
@@ -351,7 +353,7 @@ func TestQuerySchemaService_EmptyDatabaseRejectedAtService(t *testing.T) {
 	)
 
 	// ListObjects with empty database
-	_, err := svc.ListObjects(context.Background(), 1, 9001, "", "", "", 1, 20, false)
+	_, err := svc.ListObjects(context.Background(), 1, 9001, "", "", "", "", 1, 20, false)
 	if !errors.Is(err, ErrSchemaValidationFailed) {
 		t.Fatalf("ListObjects empty database error = %v, want ErrSchemaValidationFailed", err)
 	}
@@ -361,7 +363,7 @@ func TestQuerySchemaService_EmptyDatabaseRejectedAtService(t *testing.T) {
 
 	// GetObjectDetails with empty database
 	inspector.called = false
-	_, err = svc.GetObjectDetails(context.Background(), 1, 9001, "", "users", "table", false)
+	_, err = svc.GetObjectDetails(context.Background(), 1, 9001, "", "", "users", "table", false)
 	if !errors.Is(err, ErrSchemaValidationFailed) {
 		t.Fatalf("GetObjectDetails empty database error = %v, want ErrSchemaValidationFailed", err)
 	}
@@ -416,7 +418,7 @@ func TestQuerySchemaService_RawInspectorErrorsMapToSentinels(t *testing.T) {
 				clock,
 			)
 
-			_, err := svc.ListDatabases(context.Background(), 1, 9001, "", 1, 20, false, false)
+			_, err := svc.ListDatabases(context.Background(), 1, 9001, "", "", 1, 20, false, false)
 			if !errors.Is(err, tc.wantErr) {
 				t.Fatalf("error = %v, want %v", err, tc.wantErr)
 			}
@@ -482,7 +484,7 @@ func TestQuerySchemaService_TableDefinition_TargetAccessFirst(t *testing.T) {
 		clock,
 	)
 
-	_, err := svc.GetTableDefinition(context.Background(), 1, 9999, "db", "tbl")
+	_, err := svc.GetTableDefinition(context.Background(), 1, 9999, "db", "", "tbl")
 	if !errors.Is(err, ErrSchemaTargetNotFound) {
 		t.Fatalf("error = %v, want ErrSchemaTargetNotFound", err)
 	}
@@ -515,14 +517,14 @@ func TestQuerySchemaService_TableDefinition_EmptyParamsRejected(t *testing.T) {
 	)
 
 	// Empty database
-	_, err := svc.GetTableDefinition(context.Background(), 1, 9001, "", "tbl")
+	_, err := svc.GetTableDefinition(context.Background(), 1, 9001, "", "", "tbl")
 	if !errors.Is(err, ErrSchemaValidationFailed) {
 		t.Fatalf("empty database error = %v, want ErrSchemaValidationFailed", err)
 	}
 
 	// Empty name
 	inspector.called = false
-	_, err = svc.GetTableDefinition(context.Background(), 1, 9001, "db", "")
+	_, err = svc.GetTableDefinition(context.Background(), 1, 9001, "db", "", "")
 	if !errors.Is(err, ErrSchemaValidationFailed) {
 		t.Fatalf("empty name error = %v, want ErrSchemaValidationFailed", err)
 	}
@@ -556,7 +558,7 @@ func TestQuerySchemaService_TableDefinition_Success(t *testing.T) {
 		clock,
 	)
 
-	resp, err := svc.GetTableDefinition(context.Background(), 1, 9001, "orders", "order_items")
+	resp, err := svc.GetTableDefinition(context.Background(), 1, 9001, "orders", "", "order_items")
 	if err != nil {
 		t.Fatalf("GetTableDefinition: %v", err)
 	}
@@ -609,11 +611,11 @@ func TestQuerySchemaService_TableDefinition_NoCache(t *testing.T) {
 	)
 
 	// Call twice
-	if _, err := svc.GetTableDefinition(context.Background(), 1, 9001, "db", "tbl"); err != nil {
+	if _, err := svc.GetTableDefinition(context.Background(), 1, 9001, "db", "", "tbl"); err != nil {
 		t.Fatalf("first call: %v", err)
 	}
 	inspector.called = false
-	if _, err := svc.GetTableDefinition(context.Background(), 1, 9001, "db", "tbl"); err != nil {
+	if _, err := svc.GetTableDefinition(context.Background(), 1, 9001, "db", "", "tbl"); err != nil {
 		t.Fatalf("second call: %v", err)
 	}
 	// Inspector must be called again — no caching.
@@ -645,7 +647,7 @@ func TestQuerySchemaService_TableDefinition_MissingTable(t *testing.T) {
 		clock,
 	)
 
-	_, err := svc.GetTableDefinition(context.Background(), 1, 9001, "db", "missing")
+	_, err := svc.GetTableDefinition(context.Background(), 1, 9001, "db", "", "missing")
 	if !errors.Is(err, ErrSchemaObjectNotFound) {
 		t.Fatalf("error = %v, want ErrSchemaObjectNotFound", err)
 	}
@@ -674,7 +676,7 @@ func TestQuerySchemaService_TableDefinition_ViewRejected(t *testing.T) {
 		clock,
 	)
 
-	_, err := svc.GetTableDefinition(context.Background(), 1, 9001, "db", "my_view")
+	_, err := svc.GetTableDefinition(context.Background(), 1, 9001, "db", "", "my_view")
 	if !errors.Is(err, ErrSchemaDefinitionNotSupported) {
 		t.Fatalf("error = %v, want ErrSchemaDefinitionNotSupported", err)
 	}
@@ -703,7 +705,7 @@ func TestQuerySchemaService_TableDefinition_Timeout(t *testing.T) {
 		clock,
 	)
 
-	_, err := svc.GetTableDefinition(context.Background(), 1, 9001, "db", "tbl")
+	_, err := svc.GetTableDefinition(context.Background(), 1, 9001, "db", "", "tbl")
 	if !errors.Is(err, ErrSchemaTimeout) {
 		t.Fatalf("error = %v, want ErrSchemaTimeout", err)
 	}
@@ -734,7 +736,7 @@ func TestQuerySchemaService_TableDefinition_AuditFixedEvent(t *testing.T) {
 		clock,
 	)
 
-	if _, err := svc.GetTableDefinition(context.Background(), 1, 9001, "db", "tbl"); err != nil {
+	if _, err := svc.GetTableDefinition(context.Background(), 1, 9001, "db", "", "tbl"); err != nil {
 		t.Fatalf("GetTableDefinition: %v", err)
 	}
 	if len(audit.auditEvents) == 0 {
@@ -786,7 +788,7 @@ func TestQuerySchemaService_TableDefinition_AuditErrorNeverExposesDriverText(t *
 		clock,
 	)
 
-	_, err := svc.GetTableDefinition(context.Background(), 1, 9001, "db", "tbl")
+	_, err := svc.GetTableDefinition(context.Background(), 1, 9001, "db", "", "tbl")
 	if !errors.Is(err, ErrSchemaBackendError) {
 		t.Fatalf("error = %v, want ErrSchemaBackendError", err)
 	}
@@ -824,7 +826,7 @@ func TestGetRelationshipMap_AccessFirstGovernance(t *testing.T) {
 		clock,
 	)
 
-	_, err := svc.GetRelationshipMap(context.Background(), 1, 9999, "db", "tbl", false)
+	_, err := svc.GetRelationshipMap(context.Background(), 1, 9999, "db", "", "tbl", false)
 	if !errors.Is(err, ErrSchemaTargetNotFound) {
 		t.Fatalf("error = %v, want ErrSchemaTargetNotFound", err)
 	}
@@ -865,13 +867,13 @@ func TestGetRelationshipMap_CacheIdentity(t *testing.T) {
 	)
 
 	// First call — cache miss, inspector called.
-	if _, err := svc.GetRelationshipMap(context.Background(), 1, 9001, "db", "tbl", false); err != nil {
+	if _, err := svc.GetRelationshipMap(context.Background(), 1, 9001, "db", "", "tbl", false); err != nil {
 		t.Fatalf("first call: %v", err)
 	}
 	inspector.called = false
 
 	// Second call with same params — cache hit, inspector not called.
-	if _, err := svc.GetRelationshipMap(context.Background(), 1, 9001, "db", "tbl", false); err != nil {
+	if _, err := svc.GetRelationshipMap(context.Background(), 1, 9001, "db", "", "tbl", false); err != nil {
 		t.Fatalf("second call: %v", err)
 	}
 	if inspector.called {
@@ -910,13 +912,13 @@ func TestGetRelationshipMap_CacheHitStillAudits(t *testing.T) {
 	)
 
 	// First call populates cache.
-	if _, err := svc.GetRelationshipMap(context.Background(), 1, 9001, "db", "tbl", false); err != nil {
+	if _, err := svc.GetRelationshipMap(context.Background(), 1, 9001, "db", "", "tbl", false); err != nil {
 		t.Fatalf("first call: %v", err)
 	}
 	auditEventsBefore := len(audit.auditEvents)
 
 	// Second call is a cache hit — must still write audit.
-	if _, err := svc.GetRelationshipMap(context.Background(), 1, 9001, "db", "tbl", false); err != nil {
+	if _, err := svc.GetRelationshipMap(context.Background(), 1, 9001, "db", "", "tbl", false); err != nil {
 		t.Fatalf("second call: %v", err)
 	}
 	if len(audit.auditEvents) <= auditEventsBefore {
@@ -954,7 +956,7 @@ func TestGetRelationshipMap_InspectorCalled(t *testing.T) {
 		clock,
 	)
 
-	if _, err := svc.GetRelationshipMap(context.Background(), 1, 9001, "orders", "users", false); err != nil {
+	if _, err := svc.GetRelationshipMap(context.Background(), 1, 9001, "orders", "", "users", false); err != nil {
 		t.Fatalf("GetRelationshipMap: %v", err)
 	}
 	if !inspector.called {
@@ -1019,7 +1021,7 @@ func TestGetRelationshipMap_InspectorErrorMapsToSentinel(t *testing.T) {
 				clock,
 			)
 
-			_, err := svc.GetRelationshipMap(context.Background(), 1, 9001, "db", "tbl", false)
+			_, err := svc.GetRelationshipMap(context.Background(), 1, 9001, "db", "", "tbl", false)
 			if !errors.Is(err, tc.wantErr) {
 				t.Fatalf("error = %v, want %v", err, tc.wantErr)
 			}
@@ -1058,7 +1060,7 @@ func TestGetRelationshipMap_ViewReturnsNotFound(t *testing.T) {
 		clock,
 	)
 
-	_, err := svc.GetRelationshipMap(context.Background(), 1, 9001, "db", "my_view", false)
+	_, err := svc.GetRelationshipMap(context.Background(), 1, 9001, "db", "", "my_view", false)
 	if !errors.Is(err, ErrSchemaObjectNotFound) {
 		t.Fatalf("error = %v, want ErrSchemaObjectNotFound", err)
 	}
@@ -1094,7 +1096,7 @@ func TestGetRelationshipMap_AuditEvent(t *testing.T) {
 		clock,
 	)
 
-	if _, err := svc.GetRelationshipMap(context.Background(), 1, 9001, "db", "tbl", false); err != nil {
+	if _, err := svc.GetRelationshipMap(context.Background(), 1, 9001, "db", "", "tbl", false); err != nil {
 		t.Fatalf("GetRelationshipMap: %v", err)
 	}
 	if len(audit.auditEvents) == 0 {
@@ -1156,7 +1158,7 @@ func TestGetRelationshipMap_Success(t *testing.T) {
 		clock,
 	)
 
-	resp, err := svc.GetRelationshipMap(context.Background(), 1, 9001, "orders", "users", false)
+	resp, err := svc.GetRelationshipMap(context.Background(), 1, 9001, "orders", "", "users", false)
 	if err != nil {
 		t.Fatalf("GetRelationshipMap: %v", err)
 	}
@@ -1227,13 +1229,13 @@ func TestGetRelationshipMap_RefreshBypassesCache(t *testing.T) {
 	)
 
 	// First call populates cache.
-	if _, err := svc.GetRelationshipMap(context.Background(), 1, 9001, "db", "tbl", false); err != nil {
+	if _, err := svc.GetRelationshipMap(context.Background(), 1, 9001, "db", "", "tbl", false); err != nil {
 		t.Fatalf("first call: %v", err)
 	}
 	inspector.called = false
 
 	// Second call with refresh=true must bypass cache.
-	if _, err := svc.GetRelationshipMap(context.Background(), 1, 9001, "db", "tbl", true); err != nil {
+	if _, err := svc.GetRelationshipMap(context.Background(), 1, 9001, "db", "", "tbl", true); err != nil {
 		t.Fatalf("refresh call: %v", err)
 	}
 	if !inspector.called {

@@ -1387,6 +1387,16 @@ paths:
             format: int64
             minimum: 1
           description: Query target resource ID.
+        - name: database
+          in: query
+          required: false
+          schema:
+            type: string
+            maxLength: 128
+          description: >
+            PostgreSQL connection selector. Required for a postgresql target,
+            where the response is that one fixed database. Ignored by
+            MySQL/TiDB database listing.
         - name: page
           in: query
           schema:
@@ -1452,6 +1462,119 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/ErrorResponse"
+  /query-targets/{id}/schema/schemas:
+    get:
+      summary: List schemas for a PostgreSQL connection
+      operationId: listQueryTargetSchemas
+      description: >
+        Lists user schemas visible to the selected PostgreSQL connection.
+        database selects the connection row (target resource id, database)
+        and is not a command to switch databases. System schemas
+        pg_catalog, pg_toast, and information_schema are excluded. Schemas
+        without USAGE for the connection role are excluded. MySQL and TiDB
+        targets reject this operation. Requires a fresh Bearer token.
+        Never returns credentials or DSNs.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+            format: int64
+            minimum: 1
+          description: Query target resource ID.
+        - name: database
+          in: query
+          required: true
+          schema:
+            type: string
+            minLength: 1
+            maxLength: 128
+          description: PostgreSQL connection database. Selects the credential row.
+        - name: q
+          in: query
+          schema:
+            type: string
+            maxLength: 200
+          description: Optional case-insensitive schema name filter.
+        - name: page
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            default: 1
+          description: Page number (1-based).
+        - name: pageSize
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            default: 50
+            maximum: 100
+          description: Items per page. Defaults to 50, capped at 100.
+        - name: refresh
+          in: query
+          schema:
+            type: boolean
+            default: false
+          description: Bypass the metadata cache for this request.
+      responses:
+        "200":
+          description: Schema list for the selected connection
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SchemaListResponse"
+              example:
+                targetResourceId: 616
+                database: orders
+                items:
+                  - name: app
+                pageInfo:
+                  page: 1
+                  pageSize: 50
+                  totalItems: 1
+                  totalPages: 1
+                  hasNextPage: false
+                  hasPreviousPage: false
+        "400":
+          description: Invalid parameters, or the target engine has no schema list
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "401":
+          description: Missing or invalid Bearer token
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "403":
+          description: Schema access denied by policy
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "404":
+          description: Query target or PostgreSQL connection not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "408":
+          description: Schema query timed out
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "502":
+          description: Target database rejected or connection failed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
   /query-targets/{id}/schema/objects:
     get:
       summary: List tables and views in a database
@@ -1477,7 +1600,16 @@ paths:
           schema:
             type: string
             minLength: 1
-          description: Database name to list objects from.
+          description: Database name to list objects from. For PostgreSQL this also selects the connection row.
+        - name: schema
+          in: query
+          required: false
+          schema:
+            type: string
+            maxLength: 128
+          description: >
+            PostgreSQL namespace. Omitted means the connection default_schema.
+            A non-empty value is rejected for MySQL and TiDB. The value is not trimmed.
         - name: page
           in: query
           schema:
@@ -1571,7 +1703,16 @@ paths:
           schema:
             type: string
             minLength: 1
-          description: Database name.
+          description: Database name. For PostgreSQL this also selects the connection row.
+        - name: schema
+          in: query
+          required: false
+          schema:
+            type: string
+            maxLength: 128
+          description: >
+            PostgreSQL namespace. Omitted means the connection default_schema.
+            A non-empty value is rejected for MySQL and TiDB.
         - name: object
           in: query
           required: true
@@ -1670,7 +1811,18 @@ paths:
             type: string
             minLength: 1
             maxLength: 128
-          description: Database name.
+          description: Database name. For PostgreSQL this also selects the connection row.
+        - name: schema
+          in: query
+          required: false
+          schema:
+            type: string
+            maxLength: 128
+          description: >
+            PostgreSQL namespace. Omitted means the connection default_schema.
+            PostgreSQL does not return definition SQL; a reachable pinned schema
+            yields query_object_definition_unsupported. A non-empty value is
+            rejected for MySQL and TiDB.
         - name: name
           in: query
           required: true
@@ -1729,6 +1881,15 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/ErrorResponse"
+        "409":
+          description: >
+            PostgreSQL does not return definition SQL in v1
+            (query_object_definition_unsupported). This is not a connection
+            failure or an unknown server error.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
         "502":
           description: Backend database error
           content:
@@ -1763,7 +1924,16 @@ paths:
             type: string
             minLength: 1
             maxLength: 128
-          description: Database name.
+          description: Database name. For PostgreSQL this also selects the connection row.
+        - name: schema
+          in: query
+          required: false
+          schema:
+            type: string
+            maxLength: 128
+          description: >
+            PostgreSQL namespace of the root table. Omitted means the connection
+            default_schema. A non-empty value is rejected for MySQL and TiDB.
         - name: name
           in: query
           required: true
@@ -5003,11 +5173,37 @@ components:
         database:
           type: string
           description: Parent database name.
+        schema:
+          type: string
+          description: PostgreSQL namespace. Omitted for MySQL and TiDB.
         name:
           type: string
           description: Object (table/view) name.
         kind:
           $ref: "#/components/schemas/ObjectKind"
+    SchemaSummary:
+      type: object
+      required: [name]
+      properties:
+        name:
+          type: string
+          description: Schema name visible to the connection role.
+    SchemaListResponse:
+      type: object
+      required: [targetResourceId, database, items, pageInfo]
+      properties:
+        targetResourceId:
+          type: integer
+          format: int64
+        database:
+          type: string
+          description: Fixed database of the selected PostgreSQL connection.
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/SchemaSummary"
+        pageInfo:
+          $ref: "#/components/schemas/PageInfo"
     ColumnDetail:
       type: object
       required: [name, databaseType, ordinalPosition, nullable, primaryKey, autoIncrement]
@@ -5054,6 +5250,11 @@ components:
           description: Ordered list of local column names in the FK.
         referencedDatabase:
           type: string
+        referencedSchema:
+          type: string
+          description: >
+            PostgreSQL namespace of the referenced object. Omitted for MySQL
+            and TiDB, where the referenced database is referencedDatabase.
         referencedObject:
           type: string
         referencedColumns:
@@ -5108,6 +5309,12 @@ components:
         database:
           type: string
           description: The database these objects belong to.
+        schema:
+          type: string
+          description: >
+            PostgreSQL namespace that was listed. Present when the request
+            omitted schema and the connection default was used, and when schema
+            was explicit. Omitted for MySQL and TiDB.
         items:
           type: array
           items:
@@ -5123,6 +5330,9 @@ components:
           format: int64
         database:
           type: string
+        schema:
+          type: string
+          description: PostgreSQL namespace of the object. Omitted for MySQL and TiDB.
         name:
           type: string
         kind:
@@ -5191,6 +5401,9 @@ components:
           type: string
         database:
           type: string
+        schema:
+          type: string
+          description: PostgreSQL namespace of the table. Omitted for MySQL.
         name:
           type: string
         kind:
