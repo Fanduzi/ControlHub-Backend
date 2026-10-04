@@ -1,7 +1,7 @@
 // Package service provides the PostgreSQL connection factory for the governed query workbench.
 // input: context, errors, fmt, strconv, strings, sync, time, jackc/pgx/v5, jackc/pgx/v5/pgxpool
 // output: OpenPostgresPool, PGPoolErrorCode, ErrPGVersionUnsupported, ErrPGConnectFailed, ErrPGVersionReadFailed, PGVersionUnsupportedCode
-// pos: Builds one native pgxpool from a T2-validated ConnConfig, checks SHOW server_version_num on every new physical connection, and closes the pool on every failure
+// pos: Builds one native pgxpool from a T2-validated ConnConfig, checks SHOW server_version_num on every new physical connection within a finite probe budget, and closes the pool on every failure
 // note: if this file changes, update this header and module README.md.
 package service
 
@@ -28,6 +28,13 @@ const (
 	// MaxOpenConns of 1. The other pool periods below are pgxpool v5.11
 	// ParseConfig operational defaults, not a product contract (G4).
 	postgresPoolMaxConns = int32(1)
+
+	// pgVersionProbeDefaultBudget bounds SHOW server_version_num when the
+	// validated config has no ConnectTimeout. pgxpool uses the same two
+	// minutes for a handshake that omitted connect_timeout. That handshake
+	// timer does not cover AfterConnect, so the probe applies the duration
+	// itself. This is not the later user-SQL timeout.
+	pgVersionProbeDefaultBudget = 2 * time.Minute
 
 	// Shell identity is a public-ParseConfig stand-in. It is never dialed.
 	// The validated ConnConfig replaces it before NewWithConfig.
@@ -97,8 +104,14 @@ func openPostgresPoolWithShell(ctx context.Context, cfg *pgx.ConnConfig, readVer
 	if err != nil {
 		return nil, err
 	}
-	poolCfg.AfterConnect = func(ctx context.Context, conn *pgx.Conn) error {
-		version, err := readVersion(ctx, conn)
+	poolCfg.AfterConnect = func(dialCtx context.Context, conn *pgx.Conn) error {
+		// dialCtx is the pool constructor context. It stays alive after the
+		// waiting Acquire gives up, and it carries no deadline. Derive the
+		// probe from dialCtx, not from OpenPostgresPool's request context, so
+		// one finished open cannot cancel a later reconnect's version read.
+		probeCtx, cancel := context.WithTimeout(dialCtx, pgVersionProbeBudget(conn.Config().ConnectTimeout))
+		defer cancel()
+		version, err := readVersion(probeCtx, conn)
 		if err != nil {
 			return classifyPGVersionReadError(err)
 		}
@@ -215,6 +228,16 @@ func parsePGPoolConfigShell() (*pgxpool.Config, error) {
 
 func pgServerVersionSupported(versionNum int) bool {
 	return versionNum >= pgServerVersionMin && versionNum < pgServerVersionMax
+}
+
+// pgVersionProbeBudget is the finite limit for one version read. A positive
+// ConnectTimeout is reused as that limit; it is not assumed to have already
+// timed out the SHOW. An unset timeout still gets a finite default.
+func pgVersionProbeBudget(connectTimeout time.Duration) time.Duration {
+	if connectTimeout > 0 {
+		return connectTimeout
+	}
+	return pgVersionProbeDefaultBudget
 }
 
 func readPGServerVersionNum(ctx context.Context, conn *pgx.Conn) (int, error) {

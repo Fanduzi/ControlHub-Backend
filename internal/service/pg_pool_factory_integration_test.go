@@ -2,7 +2,7 @@
 
 // Package service proves OpenPostgresPool against a disposable PostgreSQL server.
 // input: context, errors, fmt, strconv, strings, sync, testing, time, jackc/pgx/v5, jackc/pgx/v5/pgxpool, testcontainers postgres
-// output: TestPostgresPool_RealServer, TestPostgresPool_ConstructedVersionGate, TestPostgresPool_ReconnectVersionGate, TestPostgresPool_VersionReadFailureCleansUp
+// output: TestPostgresPool_RealServer, TestPostgresPool_ConstructedVersionGate, TestPostgresPool_ReconnectVersionGate, TestPostgresPool_VersionProbeBudget, TestPostgresPool_VersionReadFailureCleansUp
 // pos: T3 acceptance — production factory dial, real server_version_num, native ExecParams, reconnect version gate, and failure cleanup
 // note: if this file changes, update this header and module README.md.
 package service
@@ -329,6 +329,209 @@ func testPostgresPoolReconnect(t *testing.T, ctx context.Context, lab pgPoolLab,
 	}
 	if pool.Stat().AcquiredConns() != 0 || pool.Stat().TotalConns() != 0 {
 		t.Fatalf("pool still holds acquired=%d total=%d after rejecting the new connection", pool.Stat().AcquiredConns(), pool.Stat().TotalConns())
+	}
+}
+
+// TestPostgresPool_VersionProbeBudget stalls the injected reader on the
+// probe context. 160015 below is constructed. The live SHOW only proves the
+// new backend is the disposable PG 16 before the reader waits.
+func TestPostgresPool_VersionProbeBudget(t *testing.T) {
+	lab := postgresPoolLab(t)
+	t.Run("probe_times_out_then_pool_recovers", func(t *testing.T) {
+		testPostgresPoolVersionProbe(t, lab, "ch-t3-probe-own", 0)
+		waitNoPGBackends(t, lab, "ch-t3-probe-own")
+	})
+	t.Run("caller_times_out_first_then_pool_recovers", func(t *testing.T) {
+		testPostgresPoolVersionProbe(t, lab, "ch-t3-probe-waiter", 250*time.Millisecond)
+		waitNoPGBackends(t, lab, "ch-t3-probe-waiter")
+	})
+}
+
+// testPostgresPoolVersionProbe opens a pool, cancels the open context, then
+// Reset forces one new connection whose reader blocks until the version-probe
+// context ends. callerBudget 0 means Acquire waits for that probe. A positive
+// callerBudget is shorter than the probe, so Acquire returns first and the
+// probe must still release the single pool slot. Neither case closes the pool
+// or Resets again before the following Acquire.
+func testPostgresPoolVersionProbe(t *testing.T, lab pgPoolLab, app string, callerBudget time.Duration) {
+	t.Helper()
+	const probeFloor = 700 * time.Millisecond
+	cfg := lab.configTimeout(t, app, 1)
+	if cfg.ConnectTimeout != time.Second {
+		t.Fatalf("ConnectTimeout = %s, want 1s probe budget", cfg.ConnectTimeout)
+	}
+
+	var pids []int32
+	call := 0
+	entered := make(chan struct{})
+	type probeEnd struct {
+		waited time.Duration
+		err    error
+	}
+	finished := make(chan probeEnd, 1)
+	reader := func(ctx context.Context, conn *pgx.Conn) (int, error) {
+		live, liveErr := readPGServerVersionNum(ctx, conn)
+		if liveErr != nil {
+			return 0, liveErr
+		}
+		if live < 160000 || live >= 170000 {
+			return 0, fmt.Errorf("fixture is not the expected live PG 16 (server_version_num=%d)", live)
+		}
+		var pid int32
+		if scanErr := conn.QueryRow(ctx, "SELECT pg_backend_pid()").Scan(&pid); scanErr != nil {
+			return 0, scanErr
+		}
+		call++
+		pids = append(pids, pid)
+		if call != 2 {
+			return 160015, nil
+		}
+		close(entered)
+		started := time.Now()
+		<-ctx.Done()
+		finished <- probeEnd{time.Since(started), ctx.Err()}
+		return 0, ctx.Err()
+	}
+
+	openCtx, openCancel := context.WithCancel(context.Background())
+	pool, err := openPostgresPool(openCtx, cfg, reader)
+	openCancel()
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer pool.Close()
+	if openCtx.Err() == nil {
+		t.Fatal("open context was not canceled before the reconnect probe")
+	}
+	if call != 1 {
+		t.Fatalf("open consumed %d version checks, want 1", call)
+	}
+
+	pool.Reset()
+	acquireCtx := context.Background()
+	acquireCancel := func() {}
+	if callerBudget > 0 {
+		acquireCtx, acquireCancel = context.WithTimeout(context.Background(), callerBudget)
+	} else {
+		acquireCtx, acquireCancel = context.WithTimeout(context.Background(), 4*time.Second)
+	}
+	defer acquireCancel()
+
+	acquireStarted := time.Now()
+	var (
+		stalled  *pgxpool.Conn
+		stallErr error
+	)
+	if callerBudget > 0 {
+		got := make(chan struct{})
+		go func() {
+			stalled, stallErr = pool.Acquire(acquireCtx)
+			close(got)
+		}()
+		select {
+		case <-entered:
+		case <-time.After(3 * time.Second):
+			t.Fatal("stalled version read did not start")
+		}
+		select {
+		case <-got:
+		case <-time.After(2 * time.Second):
+			t.Fatal("Acquire did not return ahead of the version probe")
+		}
+		if elapsed := time.Since(acquireStarted); elapsed >= probeFloor {
+			t.Fatalf("Acquire returned after %s, want it to give up before the probe budget", elapsed)
+		}
+		select {
+		case <-finished:
+			t.Fatal("version probe ended before the waiting Acquire returned")
+		default:
+		}
+		if pool.Stat().ConstructingConns() != 1 {
+			t.Fatalf("ConstructingConns = %d while the probe is still running, want 1", pool.Stat().ConstructingConns())
+		}
+	} else {
+		stalled, stallErr = pool.Acquire(acquireCtx)
+	}
+	if stalled != nil {
+		stalled.Release()
+		t.Fatal("stalled version read delivered a connection")
+	}
+	assertNoSecret(t, stallErr)
+	if callerBudget > 0 {
+		// This Acquire is the caller's own deadline. The probe is still
+		// running, so its ErrQueryTimeout has not surfaced here.
+		if !errors.Is(stallErr, context.DeadlineExceeded) {
+			t.Fatalf("early Acquire error = %v, want the caller's deadline", stallErr)
+		}
+	} else {
+		if !errors.Is(stallErr, ErrQueryTimeout) {
+			t.Fatalf("stall error = %v, want ErrQueryTimeout", stallErr)
+		}
+		if PGPoolErrorCode(stallErr) != "query_timeout" {
+			t.Fatalf("stall code = %q", PGPoolErrorCode(stallErr))
+		}
+		if acquireCtx.Err() != nil {
+			t.Fatal("Acquire context ended; the version probe should have timed out first")
+		}
+	}
+
+	var end probeEnd
+	select {
+	case end = <-finished:
+	case <-time.After(3 * time.Second):
+		t.Fatal("version probe did not end on its own budget")
+	}
+	if end.waited < probeFloor || end.waited > 2*time.Second {
+		t.Fatalf("probe wait = %s, want about the 1s ConnectTimeout", end.waited)
+	}
+	if !errors.Is(end.err, context.DeadlineExceeded) {
+		t.Fatalf("probe context error = %v, want deadline", end.err)
+	}
+	waitPGConstructing(t, pool, 0)
+	t.Logf("constructed gate 160015; probe wait %s; caller budget %s", end.waited, callerBudget)
+
+	recovered, err := pool.Acquire(context.Background())
+	if err != nil {
+		t.Fatalf("acquire after probe timeout: %v", err)
+	}
+	defer recovered.Release()
+	if call != 3 || len(pids) != 3 {
+		t.Fatalf("recovery checks = %d pids %v, want a third backend", call, pids)
+	}
+	if pids[2] == 0 || pids[2] == pids[0] || pids[2] == pids[1] {
+		t.Fatalf("backend pids = %v, want the recovered connection to be a new backend", pids)
+	}
+	if got := execParamsText(t, context.Background(), recovered, "SELECT 1"); got != "1" {
+		t.Fatalf("SELECT 1 = %q", got)
+	}
+}
+
+func (l pgPoolLab) configTimeout(t *testing.T, appName string, connectTimeoutSeconds int) *pgx.ConnConfig {
+	t.Helper()
+	dsn := fmt.Sprintf(
+		"host=%s port=%d dbname=%s user=%s password=%s sslmode=disable connect_timeout=%d application_name=%s",
+		l.host, l.port, l.db, l.user, pgPoolFactoryPassword, connectTimeoutSeconds, appName,
+	)
+	cfg, err := validatePGDSNBinding(dsn, l.host, l.port, l.db)
+	if err != nil {
+		t.Fatalf("validate: %v", err)
+	}
+	return cfg
+}
+
+func waitPGConstructing(t *testing.T, pool *pgxpool.Pool, want int32) {
+	t.Helper()
+	deadline := time.Now().Add(3 * time.Second)
+	var last int32
+	for {
+		last = pool.Stat().ConstructingConns()
+		if last == want {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("ConstructingConns = %d, want %d", last, want)
+		}
+		time.Sleep(10 * time.Millisecond)
 	}
 }
 

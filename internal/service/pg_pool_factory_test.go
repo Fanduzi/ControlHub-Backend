@@ -1,6 +1,6 @@
 // Package service tests the PostgreSQL connection factory without a live server.
 // input: context, errors, fmt, net, path/filepath, strings, testing, time, jackc/pgx/v5, jackc/pgx/v5/pgxpool, validatePGDSNBinding
-// output: boundary, config-preservation, shell-init failure, dial-failure, cancel, and timeout tests for OpenPostgresPool
+// output: boundary, version-probe budget, config-preservation, shell-init failure, dial-failure, cancel, and timeout tests for OpenPostgresPool
 // pos: Unit proof that the factory keeps the T2 config, rejects bad versions by number, and returns no pool on dial or shell-init failure
 // note: if this file changes, update this header and module README.md.
 package service
@@ -52,6 +52,18 @@ func TestParsePGServerVersionNum(t *testing.T) {
 	}
 	if _, err := parsePGServerVersionNum("-1"); err == nil {
 		t.Fatal("negative version was accepted")
+	}
+}
+
+func TestPGVersionProbeBudget_UsesConnectTimeoutOrFiniteDefault(t *testing.T) {
+	t.Parallel()
+	// The version read does not inherit a deadline from Acquire. The budget
+	// has to be finite even when the validated config omitted connect_timeout.
+	if got := pgVersionProbeBudget(7 * time.Second); got != 7*time.Second {
+		t.Fatalf("budget = %s, want the validated ConnectTimeout", got)
+	}
+	if got := pgVersionProbeBudget(0); got != pgVersionProbeDefaultBudget || got <= 0 {
+		t.Fatalf("unset ConnectTimeout budget = %s, want a finite default", got)
 	}
 }
 
