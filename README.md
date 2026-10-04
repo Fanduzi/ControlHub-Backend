@@ -272,7 +272,8 @@ ControlHub is a read-heavy resource management backend exposing dictionary-drive
 | internal/model | Domain structs, taxonomy constants, validation | [README](internal/model/README.md) |
 | internal/config | Environment and .env configuration loading | [README](internal/config/README.md) |
 | internal/openapi | Embedded OpenAPI contract and validation | [README](internal/openapi/README.md) |
-| internal/integration | MySQL-backed Testcontainers coverage | [README](internal/integration/README.md) |
+| internal/integration | MySQL- and PostgreSQL-backed Testcontainers coverage | [README](internal/integration/README.md) |
+| internal/pgsql | PostgreSQL governed read-only query front half: guarded parse-tree transforms, witness injection, G6 pagination window | [README](internal/pgsql/README.md) |
 | internal/testsupport | Test-only shared authorization metadata and fixtures | [README](internal/testsupport/README.md) |
 | internal/cutover | One-shot legacy UUID→bigint data preservation and import | [README](internal/cutover/README.md) |
 
