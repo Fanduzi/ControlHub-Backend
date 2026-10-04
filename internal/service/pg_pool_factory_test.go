@@ -1,7 +1,7 @@
 // Package service tests the PostgreSQL connection factory without a live server.
-// input: context, net, strings, testing, time, jackc/pgx/v5, validatePGDSNBinding
-// output: boundary, config-preservation, dial-failure, cancel, and timeout tests for OpenPostgresPool
-// pos: Unit proof that the factory keeps the T2 config, rejects bad versions by number, and returns no pool on dial failure
+// input: context, errors, fmt, net, path/filepath, strings, testing, time, jackc/pgx/v5, jackc/pgx/v5/pgxpool, validatePGDSNBinding
+// output: boundary, config-preservation, shell-init failure, dial-failure, cancel, and timeout tests for OpenPostgresPool
+// pos: Unit proof that the factory keeps the T2 config, rejects bad versions by number, and returns no pool on dial or shell-init failure
 // note: if this file changes, update this header and module README.md.
 package service
 
@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -97,9 +98,36 @@ func TestOpenPostgresPool_PreservesValidatedConfig(t *testing.T) {
 	}
 	beforeUser, beforePass, beforeHost := cfg.User, cfg.Password, cfg.Host
 	beforeFallbacks := len(cfg.Fallbacks)
+	disabled, err := validatePGDSNBinding(
+		"host=db.internal port=5432 dbname=orders user=ro password=pw sslmode=disable",
+		"db.internal", 5432, "orders")
+	if err != nil {
+		t.Fatalf("disable validate: %v", err)
+	}
 
-	poolCfg := postgresPoolConfig(cfg)
+	// These paths do not exist. They are set after T2 validation so they
+	// cannot fail the user DSN parse. The shell keyword string must still
+	// build without reading them.
+	t.Setenv("PGSSLROOTCERT", filepath.Join(t.TempDir(), "missing-root.crt"))
+	t.Setenv("PGSSLCERT", filepath.Join(t.TempDir(), "missing.crt"))
+	t.Setenv("PGSSLKEY", filepath.Join(t.TempDir(), "missing.key"))
+	t.Setenv("PGPASSFILE", filepath.Join(t.TempDir(), "missing.pgpass"))
+
+	poolCfg, err := postgresPoolConfig(cfg)
+	if err != nil {
+		t.Fatalf("pool config: %v", err)
+	}
+	shell, err := loadPGPoolConfigShell()
+	if err != nil {
+		t.Fatalf("shell: %v", err)
+	}
 	got := poolCfg.ConnConfig
+	if poolCfg == shell || got == shell.ConnConfig {
+		t.Fatal("dial config is the shell or its ConnConfig")
+	}
+	if shell.ConnConfig.Host != pgPoolShellHost || shell.ConnConfig.User != pgPoolShellUser || shell.ConnConfig.Database != pgPoolShellDatabase {
+		t.Fatalf("shell identity host=%s user=%s db=%s", shell.ConnConfig.Host, shell.ConnConfig.User, shell.ConnConfig.Database)
+	}
 	if got == cfg {
 		t.Fatal("pool config aliases the caller's ConnConfig")
 	}
@@ -144,14 +172,95 @@ func TestOpenPostgresPool_PreservesValidatedConfig(t *testing.T) {
 		t.Fatal("pool RuntimeParams aliases the validated map")
 	}
 
-	disabled, err := validatePGDSNBinding(
-		"host=db.internal port=5432 dbname=orders user=ro password=pw sslmode=disable",
+	disabledCfg, err := postgresPoolConfig(disabled)
+	if err != nil {
+		t.Fatalf("disable pool config: %v", err)
+	}
+	if disabledCfg.ConnConfig.TLSConfig != nil {
+		t.Fatal("sslmode=disable gained a TLSConfig")
+	}
+	if disabledCfg.ConnConfig == shell.ConnConfig {
+		t.Fatal("sslmode=disable dials the shell ConnConfig")
+	}
+}
+
+func TestClassifyPGDialError_PreservesVersionGate(t *testing.T) {
+	t.Parallel()
+	// AfterConnect's decision comes back through Acquire. Turning it into
+	// ErrPGConnectFailed would hide an unsupported server.
+	if got := classifyPGDialError(ErrPGVersionUnsupported); !errors.Is(got, ErrPGVersionUnsupported) || got.Error() != ErrPGVersionUnsupported.Error() {
+		t.Fatalf("unsupported = %v", got)
+	}
+	wrappedRead := fmt.Errorf("pool acquire: %w", ErrPGVersionReadFailed)
+	if got := classifyPGDialError(wrappedRead); !errors.Is(got, ErrPGVersionReadFailed) || strings.Contains(got.Error(), "pool acquire") {
+		t.Fatalf("version read = %v", got)
+	}
+	wrappedDial := fmt.Errorf("dial pw-do-not-leak: %w", errors.New("connection refused"))
+	got := classifyPGDialError(wrappedDial)
+	if !errors.Is(got, ErrPGConnectFailed) {
+		t.Fatalf("dial = %v, want ErrPGConnectFailed", got)
+	}
+	assertNoSecret(t, got)
+}
+
+func TestOpenPostgresPool_ShellInitFailureIsSafe(t *testing.T) {
+	t.Parallel()
+	cfg, err := validatePGDSNBinding(
+		"host=db.internal port=5432 dbname=orders user=ro password=pw-do-not-leak sslmode=disable",
 		"db.internal", 5432, "orders")
 	if err != nil {
-		t.Fatalf("disable validate: %v", err)
+		t.Fatalf("validate: %v", err)
 	}
-	if postgresPoolConfig(disabled).ConnConfig.TLSConfig != nil {
-		t.Fatal("sslmode=disable gained a TLSConfig")
+	const leakedPath = "/tmp/pg-shell-missing-root.crt"
+	pool, err := openPostgresPoolWithShell(context.Background(), cfg, nil, func() (*pgxpool.Config, error) {
+		return nil, fmt.Errorf("read %s: password=%s", leakedPath, pgPoolShellPassword)
+	})
+	if pool != nil {
+		pool.Close()
+		t.Fatal("shell init failure returned a pool")
+	}
+	if !errors.Is(err, ErrPGConnectFailed) {
+		t.Fatalf("error = %v, want ErrPGConnectFailed", err)
+	}
+	assertNoSecret(t, err)
+	if strings.Contains(err.Error(), leakedPath) || strings.Contains(err.Error(), pgPoolShellPassword) || strings.Contains(err.Error(), "pg-shell") {
+		t.Fatalf("shell init error leaked: %q", err.Error())
+	}
+}
+
+func TestParsePGPoolConfigShell_ServiceEnvFailsClosed(t *testing.T) {
+	// Not parallel: PGSERVICE is process-wide. The factory must not clear it
+	// to make the shell parse, and must not return the driver text.
+	cfg, err := validatePGDSNBinding(
+		"host=db.internal port=5432 dbname=orders user=ro password=pw-do-not-leak sslmode=disable",
+		"db.internal", 5432, "orders")
+	if err != nil {
+		t.Fatalf("validate: %v", err)
+	}
+	serviceFile := filepath.Join(t.TempDir(), "missing-service.conf")
+	t.Setenv("PGSERVICE", "no-such-service")
+	t.Setenv("PGSERVICEFILE", serviceFile)
+
+	_, parseErr := parsePGPoolConfigShell()
+	if parseErr == nil {
+		t.Fatal("PGSERVICE shell parse succeeded; the service file should have been read")
+	}
+	if !strings.Contains(parseErr.Error(), serviceFile) {
+		t.Fatalf("parse error %q does not mention the service file, so the redaction test is vacuous", parseErr.Error())
+	}
+	pool, err := openPostgresPoolWithShell(context.Background(), cfg, nil, func() (*pgxpool.Config, error) {
+		return nil, parseErr
+	})
+	if pool != nil {
+		pool.Close()
+		t.Fatal("service-file shell failure returned a pool")
+	}
+	if !errors.Is(err, ErrPGConnectFailed) {
+		t.Fatalf("error = %v, want ErrPGConnectFailed", err)
+	}
+	assertNoSecret(t, err)
+	if strings.Contains(err.Error(), serviceFile) || strings.Contains(err.Error(), "no-such-service") || strings.Contains(err.Error(), pgPoolShellPassword) {
+		t.Fatalf("service-file failure leaked: %q", err.Error())
 	}
 }
 
@@ -293,7 +402,7 @@ func pgConfigOn(t *testing.T, port int) *pgx.ConnConfig {
 func assertNoSecret(t *testing.T, err error) {
 	t.Helper()
 	text := err.Error()
-	for _, secret := range []string{"pw-do-not-leak", "postgres://", "password="} {
+	for _, secret := range []string{"pw-do-not-leak", pgPoolShellPassword, "postgres://", "password="} {
 		if strings.Contains(text, secret) {
 			t.Fatalf("error text contains %q", secret)
 		}

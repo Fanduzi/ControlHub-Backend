@@ -2,8 +2,8 @@
 
 // Package service proves OpenPostgresPool against a disposable PostgreSQL server.
 // input: context, errors, fmt, strconv, strings, sync, testing, time, jackc/pgx/v5, jackc/pgx/v5/pgxpool, testcontainers postgres
-// output: TestPostgresPool_RealServer, TestPostgresPool_ConstructedVersionGate, TestPostgresPool_VersionReadFailureCleansUp
-// pos: T3 acceptance — production factory dial, real server_version_num, native ExecParams, and failure cleanup
+// output: TestPostgresPool_RealServer, TestPostgresPool_ConstructedVersionGate, TestPostgresPool_ReconnectVersionGate, TestPostgresPool_VersionReadFailureCleansUp
+// pos: T3 acceptance — production factory dial, real server_version_num, native ExecParams, reconnect version gate, and failure cleanup
 // note: if this file changes, update this header and module README.md.
 package service
 
@@ -179,7 +179,7 @@ func TestPostgresPool_ConstructedVersionGate(t *testing.T) {
 		t.Run(strconv.Itoa(tc.version), func(t *testing.T) {
 			app := fmt.Sprintf("ch-t3-ver-%d", tc.version)
 			cfg := lab.config(t, app)
-			pool, err := openPostgresPool(ctx, cfg, func(ctx context.Context, conn *pgxpool.Conn) (int, error) {
+			pool, err := openPostgresPool(ctx, cfg, func(ctx context.Context, conn *pgx.Conn) (int, error) {
 				// Prove the acquired connection can read the live server, then
 				// return the constructed gate input. The live number is not the
 				// decision input.
@@ -223,6 +223,115 @@ func TestPostgresPool_ConstructedVersionGate(t *testing.T) {
 	}
 }
 
+// TestPostgresPool_ReconnectVersionGate checks the version gate on a new
+// physical connection from a pool the factory already returned. 160015 and
+// 180000 are constructed inputs. The live SHOW inside the reader only proves
+// the disposable server is PG 16; it is not the gate decision.
+func TestPostgresPool_ReconnectVersionGate(t *testing.T) {
+	lab := postgresPoolLab(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 40*time.Second)
+	defer cancel()
+
+	t.Run("reject_after_reset", func(t *testing.T) {
+		testPostgresPoolReconnect(t, ctx, lab, "ch-t3-reset-reject", []int{160015, 180000}, false)
+		waitNoPGBackends(t, lab, "ch-t3-reset-reject")
+	})
+	t.Run("accept_after_reset", func(t *testing.T) {
+		testPostgresPoolReconnect(t, ctx, lab, "ch-t3-reset-accept", []int{160015, 160015}, true)
+		waitNoPGBackends(t, lab, "ch-t3-reset-accept")
+	})
+}
+
+func testPostgresPoolReconnect(t *testing.T, ctx context.Context, lab pgPoolLab, app string, versions []int, acceptSecond bool) {
+	t.Helper()
+	if len(versions) != 2 {
+		t.Fatalf("versions = %v, want two constructed numbers", versions)
+	}
+	t.Logf("constructed gate inputs %v; live SHOW only checks the PG 16 fixture", versions)
+	cfg := lab.config(t, app)
+	var pids []int32
+	call := 0
+	pool, err := openPostgresPool(ctx, cfg, func(ctx context.Context, conn *pgx.Conn) (int, error) {
+		live, liveErr := readPGServerVersionNum(ctx, conn)
+		if liveErr != nil {
+			return 0, liveErr
+		}
+		if live < 160000 || live >= 170000 {
+			return 0, fmt.Errorf("fixture is not the expected live PG 16 (server_version_num=%d)", live)
+		}
+		var pid int32
+		if scanErr := conn.QueryRow(ctx, "SELECT pg_backend_pid()").Scan(&pid); scanErr != nil {
+			return 0, scanErr
+		}
+		if call >= len(versions) {
+			return 0, fmt.Errorf("version gate ran %d times, want %d", call+1, len(versions))
+		}
+		version := versions[call]
+		call++
+		pids = append(pids, pid)
+		return version, nil
+	})
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer pool.Close()
+	if call != 1 || len(pids) != 1 {
+		t.Fatalf("open consumed %d version checks, want the first physical connection only", call)
+	}
+
+	// Re-acquiring the idle connection must not dial a new backend.
+	same, err := pool.Acquire(ctx)
+	if err != nil {
+		t.Fatalf("reacquire idle connection: %v", err)
+	}
+	same.Release()
+	if call != 1 {
+		t.Fatalf("idle reacquire ran the version gate (%d calls)", call)
+	}
+
+	pool.Reset()
+	second, err := pool.Acquire(ctx)
+	if acceptSecond {
+		if err != nil {
+			t.Fatalf("supported reconnect rejected: %v", err)
+		}
+		if second == nil {
+			t.Fatal("supported reconnect returned a nil connection")
+		}
+		defer second.Release()
+		if call != 2 || len(pids) != 2 {
+			t.Fatalf("reconnect checks = %d, want the new physical connection", call)
+		}
+		if pids[0] == pids[1] || pids[0] == 0 {
+			t.Fatalf("backend pids = %v, want two different live backends", pids)
+		}
+		if got := execParamsText(t, ctx, second, "SELECT 1"); got != "1" {
+			t.Fatalf("SELECT 1 = %q", got)
+		}
+		return
+	}
+	if second != nil {
+		second.Release()
+		t.Fatal("unsupported reconnect delivered a connection")
+	}
+	if !errors.Is(err, ErrPGVersionUnsupported) {
+		t.Fatalf("error = %v, want ErrPGVersionUnsupported", err)
+	}
+	if PGPoolErrorCode(err) != "pg_version_unsupported" {
+		t.Fatalf("code = %q", PGPoolErrorCode(err))
+	}
+	assertNoSecret(t, err)
+	if call != 2 || len(pids) != 2 {
+		t.Fatalf("rejected reconnect checks = %d pids %v, want the new backend to be checked before delivery", call, pids)
+	}
+	if pids[0] == pids[1] || pids[0] == 0 {
+		t.Fatalf("backend pids = %v, want the rejected connection to be a different backend", pids)
+	}
+	if pool.Stat().AcquiredConns() != 0 || pool.Stat().TotalConns() != 0 {
+		t.Fatalf("pool still holds acquired=%d total=%d after rejecting the new connection", pool.Stat().AcquiredConns(), pool.Stat().TotalConns())
+	}
+}
+
 func TestPostgresPool_VersionReadFailureCleansUp(t *testing.T) {
 	lab := postgresPoolLab(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
@@ -240,7 +349,7 @@ func TestPostgresPool_VersionReadFailureCleansUp(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			app := "ch-t3-read-" + strings.ReplaceAll(tc.name, " ", "-")
 			cfg := lab.config(t, app)
-			pool, err := openPostgresPool(ctx, cfg, func(context.Context, *pgxpool.Conn) (int, error) {
+			pool, err := openPostgresPool(ctx, cfg, func(context.Context, *pgx.Conn) (int, error) {
 				return 0, tc.err
 			})
 			if pool != nil {
