@@ -720,7 +720,11 @@ func (s *QuerySchemaService) listPGObjects(
 	if bound.Credential.DatabaseName == "" {
 		return model.ObjectListResponse{}, ErrSchemaValidationFailed
 	}
-	key := cacheKey("objects", targetID, bound.Credential.CredentialRef, bound.Credential.DatabaseName, schema, kind, q, page, pageSize, false)
+	schemaName, schemaErr := pgEffectiveSchema(schema, bound.Credential.DefaultSchema)
+	if schemaErr != nil {
+		return model.ObjectListResponse{}, s.auditSchema(ctx, actorID, targetID, auditSchemaObjectsListed, schemaErr)
+	}
+	key := cacheKey("objects", targetID, bound.Credential.CredentialRef, bound.Credential.DatabaseName, schemaName, kind, q, page, pageSize, false)
 	if !refresh {
 		if cached, ok := s.cache.Get(key); ok {
 			if err := s.auditSchema(ctx, actorID, targetID, auditSchemaObjectsListed, nil); err != nil {
@@ -730,7 +734,7 @@ func (s *QuerySchemaService) listPGObjects(
 		}
 	}
 	val, sfErr, _ := s.cache.Do(key, func() (any, error) {
-		pinned, items, pageInfo, err := s.postgresCatalog().ListObjects(ctx, bound.pgConfig, bound.Credential.DatabaseName, schema, bound.Credential.DefaultSchema, kind, q, page, pageSize)
+		pinned, items, pageInfo, err := s.postgresCatalog().ListObjects(ctx, bound.pgConfig, bound.Credential.DatabaseName, schemaName, bound.Credential.DefaultSchema, kind, q, page, pageSize)
 		if err != nil {
 			return nil, err
 		}
@@ -766,7 +770,11 @@ func (s *QuerySchemaService) getPGObjectDetails(
 	if name == "" {
 		return model.ObjectDetailResponse{}, ErrSchemaValidationFailed
 	}
-	key := cacheKey("object_details", targetID, bound.Credential.CredentialRef, bound.Credential.DatabaseName, schema, kind, name, 0, 0, false)
+	schemaName, schemaErr := pgEffectiveSchema(schema, bound.Credential.DefaultSchema)
+	if schemaErr != nil {
+		return model.ObjectDetailResponse{}, s.auditSchema(ctx, actorID, targetID, auditSchemaObjectRead, schemaErr)
+	}
+	key := cacheKey("object_details", targetID, bound.Credential.CredentialRef, bound.Credential.DatabaseName, schemaName, kind, name, 0, 0, false)
 	if !refresh {
 		if cached, ok := s.cache.Get(key); ok {
 			if err := s.auditSchema(ctx, actorID, targetID, auditSchemaObjectRead, nil); err != nil {
@@ -776,7 +784,7 @@ func (s *QuerySchemaService) getPGObjectDetails(
 		}
 	}
 	val, sfErr, _ := s.cache.Do(key, func() (any, error) {
-		resp, err := s.postgresCatalog().GetObjectDetails(ctx, bound.pgConfig, bound.Credential.DatabaseName, schema, bound.Credential.DefaultSchema, name, kind)
+		resp, err := s.postgresCatalog().GetObjectDetails(ctx, bound.pgConfig, bound.Credential.DatabaseName, schemaName, bound.Credential.DefaultSchema, name, kind)
 		if err != nil {
 			return nil, err
 		}
@@ -805,7 +813,11 @@ func (s *QuerySchemaService) getPGRelationshipMap(
 	if bound.pgConfig == nil {
 		return model.RelationshipMapResponse{}, ErrSchemaBackendError
 	}
-	key := cacheKey("relationship_map", targetID, bound.Credential.CredentialRef, bound.Credential.DatabaseName, schema, name, "", 0, 0, false)
+	schemaName, schemaErr := pgEffectiveSchema(schema, bound.Credential.DefaultSchema)
+	if schemaErr != nil {
+		return model.RelationshipMapResponse{}, s.auditSchema(ctx, actorID, targetID, auditSchemaRelationshipMapRead, schemaErr)
+	}
+	key := cacheKey("relationship_map", targetID, bound.Credential.CredentialRef, bound.Credential.DatabaseName, schemaName, name, "", 0, 0, false)
 	if !refresh {
 		if cached, ok := s.cache.Get(key); ok {
 			if err := s.auditSchema(ctx, actorID, targetID, auditSchemaRelationshipMapRead, nil); err != nil {
@@ -815,7 +827,7 @@ func (s *QuerySchemaService) getPGRelationshipMap(
 		}
 	}
 	val, sfErr, _ := s.cache.Do(key, func() (any, error) {
-		resp, err := s.postgresCatalog().GetRelationshipMap(ctx, bound.pgConfig, bound.Credential.DatabaseName, schema, bound.Credential.DefaultSchema, name)
+		resp, err := s.postgresCatalog().GetRelationshipMap(ctx, bound.pgConfig, bound.Credential.DatabaseName, schemaName, bound.Credential.DefaultSchema, name)
 		if err != nil {
 			return nil, err
 		}
@@ -832,6 +844,20 @@ func (s *QuerySchemaService) getPGRelationshipMap(
 		return model.RelationshipMapResponse{}, err
 	}
 	return resp, nil
+}
+
+// pgEffectiveSchema is the namespace used for the cache key, the catalog call,
+// and the response. An omitted schema is the connection default. It is not a
+// stable empty identity, and it does not fall back to public.
+func pgEffectiveSchema(explicit, fallback string) (string, error) {
+	name := explicit
+	if name == "" {
+		name = fallback
+	}
+	if name == "" {
+		return "", ErrSchemaValidationFailed
+	}
+	return name, nil
 }
 
 // pgTableDefinition connects and pins the schema, then refuses definition SQL.

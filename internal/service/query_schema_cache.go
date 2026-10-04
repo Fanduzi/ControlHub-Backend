@@ -1,14 +1,14 @@
 // Package service provides a bounded in-memory cache for schema metadata
 // queries. It reuses the shared Clock interface for testable TTLs and
 // golang.org/x/sync/singleflight for request coalescing.
-// input: sync, time, golang.org/x/sync/singleflight, internal/model
+// input: encoding/json, sync, time, golang.org/x/sync/singleflight, internal/model
 // output: QuerySchemaCache, schemaCacheKey, NewQuerySchemaCache
-// pos: Bounded in-memory schema metadata cache with TTL, eviction, and singleflight
+// pos: Bounded in-memory schema metadata cache with TTL, eviction, and boundary-safe singleflight keys
 // note: if this file changes, update header and README.md
 package service
 
 import (
-	"fmt"
+	"encoding/json"
 	"sync"
 	"time"
 
@@ -151,14 +151,28 @@ func (c *QuerySchemaCache) Set(key schemaCacheKey, value any) {
 	c.order = append(c.order, key)
 }
 
+// schemaSingleflightKey is the in-flight coalescing identity. JSON encoding
+// keeps string fields bounded, so a schema or object name cannot borrow the
+// next field's text and collapse two different requests.
+func schemaSingleflightKey(key schemaCacheKey) (string, error) {
+	raw, err := json.Marshal(key)
+	if err != nil {
+		return "", err
+	}
+	return string(raw), nil
+}
+
 // Do coalesces concurrent calls for the same key through singleflight. The fn
 // is called only once per in-flight key; other callers receive the same result.
 func (c *QuerySchemaCache) Do(key schemaCacheKey, fn func() (any, error)) (any, error, bool) {
-	k := fmt.Sprintf("%+v", key)
-	val, err, shared := c.group.Do(k, func() (any, error) {
+	k, err := schemaSingleflightKey(key)
+	if err != nil {
+		return nil, err, false
+	}
+	val, ferr, shared := c.group.Do(k, func() (any, error) {
 		return fn()
 	})
-	return val, err, shared
+	return val, ferr, shared
 }
 
 // removeKey removes a key from the entries map and order slice. Caller must

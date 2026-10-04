@@ -1,5 +1,5 @@
 // Package service reads PostgreSQL schema metadata through the production pool factory.
-// input: context, errors, strings, time, jackc/pgx/v5, internal/model, OpenPostgresPool
+// input: context, errors, strings, time, jackc/pgx/v5, jackc/pgx/v5/pgconn, internal/model, OpenPostgresPool
 // output: livePGSchemaCatalog, withPGSchema, pgSchemaCatalog
 // pos: Fixed catalog SQL for T6 metadata; user schema and object names are bind parameters, never SQL text
 // note: if this file changes, update this header and module README.md.
@@ -12,9 +12,15 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 
 	"github.com/fan/controlhub/internal/model"
 )
+
+// pgQueryCanceledSQLSTATE is PostgreSQL query_canceled. statement_timeout
+// cancels a catalog statement with this code while the caller context is
+// still active. The metadata path maps it to the existing timeout sentinel.
+const pgQueryCanceledSQLSTATE = "57014"
 
 // pgSchemaBudget bounds one metadata open, version probe wait, and catalog read.
 // The version probe itself still uses the validated ConnConfig ConnectTimeout
@@ -156,9 +162,18 @@ func mapPGQueryError(err error) error {
 		return err
 	case errors.Is(err, context.DeadlineExceeded), errors.Is(err, context.Canceled), errors.Is(err, ErrQueryTimeout):
 		return ErrSchemaTimeout
+	case isPGQueryCanceled(err):
+		return ErrSchemaTimeout
 	default:
 		return ErrSchemaBackendError
 	}
+}
+
+// isPGQueryCanceled reports a PostgreSQL query_canceled error by type and
+// SQLSTATE. Driver text stays off the returned sentinel.
+func isPGQueryCanceled(err error) bool {
+	var pgErr *pgconn.PgError
+	return errors.As(err, &pgErr) && pgErr.Code == pgQueryCanceledSQLSTATE
 }
 
 func mapPGSchemaError(err error) error {
@@ -444,10 +459,11 @@ func pgColumns(ctx context.Context, tx pgx.Tx, oid uint32) ([]model.ColumnDetail
 		SELECT a.attname,
 		       pg_catalog.format_type(a.atttypid, a.atttypmod),
 		       a.attnum,
-		       NOT a.attnotnull,
+		       NOT (a.attnotnull OR (t.typtype = 'd'::"char" AND t.typnotnull)),
 		       a.attidentity::text,
 		       pg_catalog.pg_get_expr(d.adbin, d.adrelid)
 		FROM pg_catalog.pg_attribute a
+		JOIN pg_catalog.pg_type t ON t.oid = a.atttypid
 		LEFT JOIN pg_catalog.pg_attrdef d
 		  ON d.adrelid = a.attrelid AND d.adnum = a.attnum
 		WHERE a.attrelid = $1
@@ -501,7 +517,10 @@ func pgPrimaryAttnums(ctx context.Context, tx pgx.Tx, oid uint32) (map[int16]boo
 		SELECT k.attnum
 		FROM pg_catalog.pg_index i
 		JOIN LATERAL unnest(i.indkey::smallint[]) WITH ORDINALITY AS k(attnum, ord) ON true
-		WHERE i.indrelid = $1 AND i.indisprimary AND k.attnum > 0
+		WHERE i.indrelid = $1
+		  AND i.indisprimary
+		  AND k.attnum > 0
+		  AND k.ord <= i.indnkeyatts
 		ORDER BY k.ord`, oid)
 	if err != nil {
 		return nil, err
@@ -537,7 +556,8 @@ func pgIndexes(ctx context.Context, tx pgx.Tx, oid uint32) ([]model.IndexDetail,
 			  ON a.attrelid = ix.indrelid AND a.attnum = k.attnum AND k.attnum > 0
 		) cols ON true
 		WHERE ix.indrelid = $1
-		ORDER BY ic.relname, cols.ord`, oid)
+		ORDER BY ic.relname, cols.ord
+		LIMIT $2`, oid, schemaMaxIndexColumns+1)
 	if err != nil {
 		return nil, false, err
 	}
@@ -568,13 +588,15 @@ func pgIndexes(ctx context.Context, tx pgx.Tx, oid uint32) ([]model.IndexDetail,
 		if err := rows.Scan(&name, &unique, &pk, &ord, &att, &keydef); err != nil {
 			return nil, false, err
 		}
+		// The extra row is a sentinel. Stop before opening an index that would
+		// have no columns, and do not append past the column budget.
+		if count >= schemaMaxIndexColumns {
+			truncated = true
+			break
+		}
 		if current == nil || current.Name != name {
 			flush()
 			current = &model.IndexDetail{Name: name, Unique: unique, Primary: pk, Columns: []string{}}
-		}
-		if count >= schemaMaxIndexColumns {
-			truncated = true
-			continue
 		}
 		label := keydef
 		if att != nil && *att != "" {

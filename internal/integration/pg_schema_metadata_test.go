@@ -2,7 +2,7 @@
 
 // Package integration proves PostgreSQL schema metadata through the real HTTP handler.
 // input: disposable PostgreSQL 16, production OpenPostgresPool, restricted role, httptest router, MySQL control plane
-// output: TestPostgreSQLSchemaMetadataHTTP acceptance A-J
+// output: TestPostgreSQLSchemaMetadataHTTP acceptance A-J, INCLUDE primary keys, domain nullability, index budget, and statement_timeout
 // pos: T6 vertical proof from fixture through the production pool, metadata service, and schema HTTP routes; user SQL stays rejected
 // note: if this file changes, update this header and module README.md.
 // Issue #114 names GET /connections/{id}/schemas. Frozen G1/G2 and the existing
@@ -647,6 +647,191 @@ func TestPostgreSQLSchemaMetadataHTTP(t *testing.T) {
 			t.Fatal("postgresql credential became execution eligible")
 		}
 	})
+
+	t.Run("primary_key_include_and_domain_nullability", func(t *testing.T) {
+		for _, stmt := range []string{
+			`CREATE TABLE app.pk_include (
+				id bigint,
+				payload text,
+				PRIMARY KEY (id) INCLUDE (payload)
+			)`,
+			`CREATE DOMAIN app.plain_text AS text`,
+			`CREATE DOMAIN app.nn_text AS text NOT NULL`,
+			`CREATE TABLE app.domain_probe (
+				plain text,
+				col_nn text NOT NULL,
+				dom_plain app.plain_text,
+				dom_nn app.nn_text
+			)`,
+			`GRANT SELECT ON app.pk_include, app.domain_probe TO ` + pgMetaRole,
+		} {
+			execPG(t, dbA, stmt)
+		}
+		included := objectDetail(t, handler, token, liveID, "app", "pk_include", "table")
+		id := columnNamed(t, included.Columns, "id")
+		payload := columnNamed(t, included.Columns, "payload")
+		if !id.PrimaryKey || payload.PrimaryKey || payload.DatabaseType != "text" {
+			t.Fatalf("pk include columns = %+v", included.Columns)
+		}
+		events := objectDetail(t, handler, token, liveID, "app", "events", "table")
+		eventID := columnNamed(t, events.Columns, "id")
+		day := columnNamed(t, events.Columns, "day")
+		if !eventID.PrimaryKey || !day.PrimaryKey || eventID.OrdinalPosition != 1 || day.OrdinalPosition != 2 {
+			t.Fatalf("composite primary key = %+v", events.Columns)
+		}
+
+		probe := objectDetail(t, handler, token, liveID, "app", "domain_probe", "table")
+		plain := columnNamed(t, probe.Columns, "plain")
+		colNN := columnNamed(t, probe.Columns, "col_nn")
+		domPlain := columnNamed(t, probe.Columns, "dom_plain")
+		domNN := columnNamed(t, probe.Columns, "dom_nn")
+		plainType := pgFormatType(t, dbA, "app", "domain_probe", "plain")
+		domPlainType := pgFormatType(t, dbA, "app", "domain_probe", "dom_plain")
+		domNNType := pgFormatType(t, dbA, "app", "domain_probe", "dom_nn")
+		if !plain.Nullable || plain.DatabaseType != plainType || colNN.Nullable || colNN.DatabaseType != "text" {
+			t.Fatalf("column nullability = %+v", probe.Columns)
+		}
+		if !domPlain.Nullable || domPlain.DatabaseType != domPlainType || domPlainType == plainType {
+			t.Fatalf("nullable domain = %+v type %s", domPlain, domPlainType)
+		}
+		if domNN.Nullable || domNN.DatabaseType != domNNType || domNNType == plainType {
+			t.Fatalf("not-null domain = %+v type %s", domNN, domNNType)
+		}
+	})
+
+	t.Run("index_column_budget_stops_without_empty_indexes", func(t *testing.T) {
+		for _, stmt := range []string{
+			`CREATE TABLE app.idx_exact (id integer NOT NULL)`,
+			`CREATE TABLE app.idx_over (id integer NOT NULL)`,
+			`CREATE TABLE app.idx_split (id integer NOT NULL, c2 integer NOT NULL, c3 integer NOT NULL)`,
+			`DO $$
+BEGIN
+  FOR i IN 0..255 LOOP
+    EXECUTE format('CREATE INDEX idx_exact_%s ON app.idx_exact (id)', lpad(i::text, 4, '0'));
+    EXECUTE format('CREATE INDEX idx_over_%s ON app.idx_over (id)', lpad(i::text, 4, '0'));
+  END LOOP;
+  EXECUTE 'CREATE INDEX idx_over_0256 ON app.idx_over (id)';
+  FOR i IN 0..254 LOOP
+    EXECUTE format('CREATE INDEX idx_split_%s ON app.idx_split (id)', lpad(i::text, 4, '0'));
+  END LOOP;
+  EXECUTE 'CREATE INDEX idx_split_zzzz ON app.idx_split (id, c2, c3)';
+END $$`,
+			`GRANT SELECT ON app.idx_exact, app.idx_over, app.idx_split TO ` + pgMetaRole,
+		} {
+			execPG(t, dbA, stmt)
+		}
+		exact := objectDetail(t, handler, token, liveID, "app", "idx_exact", "table")
+		if exact.Truncated.Indexes || len(exact.Indexes) != 256 {
+			t.Fatalf("exact indexes = %d truncated=%v", len(exact.Indexes), exact.Truncated.Indexes)
+		}
+		assertIndexColumnsPresent(t, exact.Indexes)
+		over := objectDetail(t, handler, token, liveID, "app", "idx_over", "table")
+		if !over.Truncated.Indexes || len(over.Indexes) != 256 || indexNames(over.Indexes)["idx_over_0256"] {
+			t.Fatalf("over indexes = %d truncated=%v has 0256=%v", len(over.Indexes), over.Truncated.Indexes, indexNames(over.Indexes)["idx_over_0256"])
+		}
+		assertIndexColumnsPresent(t, over.Indexes)
+		split := objectDetail(t, handler, token, liveID, "app", "idx_split", "table")
+		splitIdx := indexNamed(t, split.Indexes, "idx_split_zzzz")
+		if !split.Truncated.Indexes || len(split.Indexes) != 256 || !slices.Equal(splitIdx.Columns, []string{"id"}) {
+			t.Fatalf("split indexes=%d truncated=%v zzzz=%+v", len(split.Indexes), split.Truncated.Indexes, splitIdx)
+		}
+		assertIndexColumnsPresent(t, split.Indexes)
+	})
+
+	t.Run("statement_timeout_is_schema_timeout", func(t *testing.T) {
+		lockCtx := context.Background()
+		tx, err := dbA.Begin(lockCtx)
+		if err != nil {
+			t.Fatalf("begin lock: %s", redactPGMeta(err.Error()))
+		}
+		defer func() { _ = tx.Rollback(lockCtx) }()
+		// pg_namespace is read while a new session starts, before statement_timeout
+		// is set. pg_index is first touched by the column query, after that GUC.
+		if _, err := tx.Exec(lockCtx, `LOCK TABLE pg_catalog.pg_index IN ACCESS EXCLUSIVE MODE`); err != nil {
+			t.Fatalf("lock pg_index: %s", redactPGMeta(err.Error()))
+		}
+		started := time.Now()
+		recCh := make(chan *httptest.ResponseRecorder, 1)
+		go func() {
+			rec := httptest.NewRecorder()
+			req := httptest.NewRequest(http.MethodGet, fmt.Sprintf("/query-targets/%d/schema/object-details?database=db_a&schema=app&name=orders&kind=table&refresh=true", liveID), nil)
+			req.Header.Set("Authorization", "Bearer "+token)
+			handler.ServeHTTP(rec, req)
+			recCh <- rec
+		}()
+		var rec *httptest.ResponseRecorder
+		select {
+		case rec = <-recCh:
+		case <-time.After(12 * time.Second):
+			t.Fatal("metadata did not return before the 15s caller budget")
+		}
+		elapsed := time.Since(started)
+		body := mustPGError(t, rec, http.StatusRequestTimeout, "schema_timeout")
+		if strings.Contains(strings.ToLower(body.Message), "cancel") || strings.Contains(body.Message, "57014") {
+			t.Fatalf("timeout message leaked driver text: %s", redactPGMeta(body.Message))
+		}
+		if elapsed < 3*time.Second || elapsed > 12*time.Second {
+			t.Fatalf("elapsed %s, want the database statement_timeout", elapsed)
+		}
+		deadline := time.Now().Add(5 * time.Second)
+		for {
+			var left int
+			if err := admin.QueryRow(lockCtx, `SELECT count(*) FROM pg_stat_activity WHERE usename = $1 AND datname = 'db_a'`, pgMetaRole).Scan(&left); err != nil {
+				t.Fatalf("activity: %s", redactPGMeta(err.Error()))
+			}
+			if left == 0 {
+				break
+			}
+			if time.Now().After(deadline) {
+				t.Fatalf("restricted backends still open: %d", left)
+			}
+			time.Sleep(50 * time.Millisecond)
+		}
+		_ = tx.Rollback(lockCtx)
+		var detail model.ObjectDetailResponse
+		mustPGBody(t, getSchema(t, handler, token, liveID, "object-details", url.Values{
+			"database": {"db_a"},
+			"schema":   {"app"},
+			"name":     {"orders"},
+			"kind":     {"table"},
+			"refresh":  {"true"},
+		}), http.StatusOK, &detail)
+		if columnNamed(t, detail.Columns, "id").DatabaseType != "bigint" {
+			t.Fatalf("details after timeout = %+v", detail.Columns)
+		}
+	})
+}
+
+func pgFormatType(t *testing.T, conn *pgx.Conn, schema, table, column string) string {
+	t.Helper()
+	var typ string
+	err := conn.QueryRow(context.Background(), `
+		SELECT pg_catalog.format_type(a.atttypid, a.atttypmod)
+		FROM pg_catalog.pg_attribute a
+		JOIN pg_catalog.pg_class c ON c.oid = a.attrelid
+		JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
+		WHERE n.nspname = $1 AND c.relname = $2 AND a.attname = $3`, schema, table, column).Scan(&typ)
+	if err != nil {
+		t.Fatalf("format_type %s.%s: %s", table, column, redactPGMeta(err.Error()))
+	}
+	return typ
+}
+
+func indexNames(indexes []model.IndexDetail) map[string]bool {
+	names := make(map[string]bool, len(indexes))
+	for _, idx := range indexes {
+		names[idx.Name] = true
+	}
+	return names
+}
+
+func assertIndexColumnsPresent(t *testing.T, indexes []model.IndexDetail) {
+	t.Helper()
+	for _, idx := range indexes {
+		if len(idx.Columns) == 0 {
+			t.Fatalf("index %s has no columns", idx.Name)
+		}
+	}
 }
 
 func objectDetail(t *testing.T, h http.Handler, token string, id uint64, schema, name, kind string) model.ObjectDetailResponse {

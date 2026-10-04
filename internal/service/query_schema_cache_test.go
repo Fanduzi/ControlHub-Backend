@@ -1,6 +1,6 @@
-// Package service tests the bounded schema metadata cache: TTL, eviction, key safety, singleflight, and refresh.
-// input: testing, time, sync, internal/model, QuerySchemaCache
-// output: cache lifetime, eviction, secret-free keys, singleflight, and refresh-bypass tests
+// Package service tests the bounded schema metadata cache: TTL, eviction, key safety, singleflight identity, and refresh.
+// input: testing, time, sync, fmt, internal/model, QuerySchemaCache
+// output: cache lifetime, eviction, secret-free keys, distinct singleflight keys, and refresh-bypass tests
 // pos: Unit proof for the schema metadata cache used by QuerySchemaService
 // note: if this file changes, update this header and module README.md.
 package service
@@ -161,11 +161,87 @@ func TestQuerySchemaCache_KeysNeverContainSensitiveFields(t *testing.T) {
 	}
 	// Build a key with realistic values.
 	key := cacheKey("databases", 9001, "ORDER_MYSQL_RO", "mydb", "", "table", "users", 1, 20, false)
-	s := fmt.Sprintf("%+v", key)
+	s, err := schemaSingleflightKey(key)
+	if err != nil {
+		t.Fatalf("singleflight key: %v", err)
+	}
 	for _, leak := range sensitive {
 		if strings.Contains(strings.ToLower(s), strings.ToLower(leak)) {
 			t.Fatalf("cache key contains sensitive value %q: %s", leak, s)
 		}
+	}
+}
+
+// TestQuerySchemaCache_SingleflightKeyKeepsSchemaBoundaries verifies that two
+// structured keys which %+v renders identically still run separately.
+// WHY: a schema or object name may legally contain the text of the next field.
+// Coalescing those requests would store one catalog result under both keys.
+func TestQuerySchemaCache_SingleflightKeyKeepsSchemaBoundaries(t *testing.T) {
+	t.Parallel()
+	a := cacheKey("object_details", 1, "PG_T6_A", "db_a", "app Kind:table Query:x", "table", "orders", 0, 0, false)
+	b := cacheKey("object_details", 1, "PG_T6_A", "db_a", "app", "table", "x Kind:table Query:orders", 0, 0, false)
+	if a == b {
+		t.Fatal("structured keys were equal")
+	}
+	if fmt.Sprintf("%+v", a) != fmt.Sprintf("%+v", b) {
+		t.Fatal("counterexample no longer collides under the old singleflight formatting")
+	}
+	ak, err := schemaSingleflightKey(a)
+	if err != nil {
+		t.Fatalf("key A: %v", err)
+	}
+	bk, err := schemaSingleflightKey(b)
+	if err != nil {
+		t.Fatalf("key B: %v", err)
+	}
+	if ak == bk {
+		t.Fatalf("singleflight keys collided: %s", ak)
+	}
+
+	clock := &fakeClock{t: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)}
+	cache := NewQuerySchemaCache(10, clock)
+	gate := newArriveGate(2)
+	var calls sync.WaitGroup
+	calls.Add(2)
+	run := func(label string) func() (any, error) {
+		return func() (any, error) {
+			defer calls.Done()
+			gate.arrive()
+			return label, nil
+		}
+	}
+	var (
+		gotA, gotB       any
+		errA, errB       error
+		sharedA, sharedB bool
+		wg               sync.WaitGroup
+	)
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		gotA, errA, sharedA = cache.Do(a, run("A"))
+	}()
+	go func() {
+		defer wg.Done()
+		gotB, errB, sharedB = cache.Do(b, run("B"))
+	}()
+	select {
+	case <-gate.arrived:
+	case <-time.After(2 * time.Second):
+		t.Fatal("distinct keys shared one in-flight call")
+	}
+	close(gate.release)
+	wg.Wait()
+	calls.Wait()
+	if errA != nil || errB != nil || sharedA || sharedB || gotA != "A" || gotB != "B" {
+		t.Fatalf("A=%v %v shared=%v B=%v %v shared=%v", gotA, errA, sharedA, gotB, errB, sharedB)
+	}
+	cache.Set(a, gotA)
+	cache.Set(b, gotB)
+	cachedA, okA := cache.Get(a)
+	cachedB, okB := cache.Get(b)
+	if !okA || !okB || cachedA != "A" || cachedB != "B" {
+		t.Fatalf("stored A=%v %v B=%v %v", cachedA, okA, cachedB, okB)
 	}
 }
 

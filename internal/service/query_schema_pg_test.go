@@ -1,6 +1,6 @@
 // Package service proves PostgreSQL schema access without opening a server.
-// input: context, database/sql, errors, strings, testing, time, jackc/pgx/v5, internal/model
-// output: TestPostgreSQLSchema_* for connection identity, schema pin, cache, and unsupported definitions
+// input: context, database/sql, errors, strings, sync, testing, time, jackc/pgx/v5, jackc/pgx/v5/pgconn, internal/model
+// output: TestPostgreSQLSchema_* for connection identity, effective-schema cache identity, singleflight boundaries, and unsupported definitions
 // pos: Unit boundary for T6 metadata access; user SQL execution stays outside this file
 // note: if this file changes, update header and README.md
 package service
@@ -11,10 +11,12 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 
 	"github.com/fan/controlhub/internal/model"
 )
@@ -107,10 +109,12 @@ type pgCatCall struct {
 }
 
 type fakePGCatalog struct {
+	mu       sync.Mutex
 	calls    []pgCatCall
 	schemas  []model.SchemaSummary
 	objects  []ObjectSummary
 	probeErr error
+	hold     *arriveGate
 }
 
 func (f *fakePGCatalog) record(method, database, schema, fallback, name string, cfg *pgx.ConnConfig) {
@@ -121,7 +125,34 @@ func (f *fakePGCatalog) record(method, database, schema, fallback, name string, 
 		call.passA = cfg.Password == pgUnitPassA
 		call.passB = cfg.Password == pgUnitPassB
 	}
+	f.mu.Lock()
 	f.calls = append(f.calls, call)
+	f.mu.Unlock()
+}
+
+func (f *fakePGCatalog) callCount() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return len(f.calls)
+}
+
+// pin mirrors the service's effective schema for the fake catalog. missing and
+// secret are distinct failures so a stale cache cannot satisfy either one.
+func (f *fakePGCatalog) pin(schema, fallback string) (string, error) {
+	name := schema
+	if name == "" {
+		name = fallback
+	}
+	switch name {
+	case "":
+		return "", ErrSchemaValidationFailed
+	case "missing":
+		return "", ErrSchemaNotFound
+	case "secret":
+		return "", ErrSchemaNotUsable
+	default:
+		return name, nil
+	}
 }
 
 func (f *fakePGCatalog) ListFixedDatabase(_ context.Context, cfg *pgx.ConnConfig, database, q string, page, pageSize int) ([]model.DatabaseSummary, model.PageInfo, error) {
@@ -141,15 +172,9 @@ func (f *fakePGCatalog) ListSchemas(_ context.Context, cfg *pgx.ConnConfig, data
 
 func (f *fakePGCatalog) ListObjects(_ context.Context, cfg *pgx.ConnConfig, database, schema, fallback, _, _ string, _, pageSize int) (string, []ObjectSummary, model.PageInfo, error) {
 	f.record("objects", database, schema, fallback, "", cfg)
-	if schema == "missing" {
-		return "", nil, model.PageInfo{}, ErrSchemaNotFound
-	}
-	pinned := schema
-	if pinned == "" {
-		pinned = fallback
-	}
-	if pinned == "" {
-		return "", nil, model.PageInfo{}, ErrSchemaValidationFailed
+	pinned, err := f.pin(schema, fallback)
+	if err != nil {
+		return "", nil, model.PageInfo{}, err
 	}
 	items := f.objects
 	if items == nil {
@@ -158,12 +183,32 @@ func (f *fakePGCatalog) ListObjects(_ context.Context, cfg *pgx.ConnConfig, data
 	return pinned, items, model.NewPageInfo(1, pageSize, len(items)), nil
 }
 
-func (f *fakePGCatalog) GetObjectDetails(context.Context, *pgx.ConnConfig, string, string, string, string, string) (model.ObjectDetailResponse, error) {
-	return model.ObjectDetailResponse{}, nil
+func (f *fakePGCatalog) GetObjectDetails(_ context.Context, cfg *pgx.ConnConfig, database, schema, fallback, name, kind string) (model.ObjectDetailResponse, error) {
+	f.record("details", database, schema, fallback, name, cfg)
+	if f.hold != nil {
+		f.hold.arrive()
+	}
+	pinned, err := f.pin(schema, fallback)
+	if err != nil {
+		return model.ObjectDetailResponse{}, err
+	}
+	return model.ObjectDetailResponse{
+		Database: database,
+		Schema:   pinned,
+		Name:     name,
+		Kind:     model.ObjectKind(kind),
+	}, nil
 }
 
-func (f *fakePGCatalog) GetRelationshipMap(context.Context, *pgx.ConnConfig, string, string, string, string) (model.RelationshipMapResponse, error) {
-	return model.RelationshipMapResponse{}, nil
+func (f *fakePGCatalog) GetRelationshipMap(_ context.Context, cfg *pgx.ConnConfig, database, schema, fallback, name string) (model.RelationshipMapResponse, error) {
+	f.record("relationship", database, schema, fallback, name, cfg)
+	pinned, err := f.pin(schema, fallback)
+	if err != nil {
+		return model.RelationshipMapResponse{}, err
+	}
+	return model.RelationshipMapResponse{
+		Root: model.RelationshipMapNode{Schema: pinned, Name: name},
+	}, nil
 }
 
 func (f *fakePGCatalog) ProbeDefinition(_ context.Context, cfg *pgx.ConnConfig, database, schema, fallback string) error {
@@ -171,17 +216,48 @@ func (f *fakePGCatalog) ProbeDefinition(_ context.Context, cfg *pgx.ConnConfig, 
 	if f.probeErr != nil {
 		return f.probeErr
 	}
-	if schema == "missing" {
-		return ErrSchemaNotFound
+	_, err := f.pin(schema, fallback)
+	return err
+}
+
+// arriveGate blocks each arrival until release is closed. A collapsed
+// singleflight call never reaches the second arrival.
+type arriveGate struct {
+	need    int
+	arrived chan struct{}
+	release chan struct{}
+	mu      sync.Mutex
+	n       int
+}
+
+func newArriveGate(need int) *arriveGate {
+	return &arriveGate{
+		need:    need,
+		arrived: make(chan struct{}),
+		release: make(chan struct{}),
 	}
-	name := schema
-	if name == "" {
-		name = fallback
+}
+
+func (g *arriveGate) arrive() {
+	g.mu.Lock()
+	g.n++
+	if g.n == g.need {
+		close(g.arrived)
 	}
-	if name == "" {
-		return ErrSchemaValidationFailed
-	}
-	return nil
+	g.mu.Unlock()
+	<-g.release
+}
+
+// lockingPGAudit serializes the shared test audit slice for concurrent schema calls.
+type lockingPGAudit struct {
+	mu sync.Mutex
+	*pgCredStore
+}
+
+func (a *lockingPGAudit) InsertAuditEvent(ctx context.Context, actor, target uint64, etype, result string) error {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.pgCredStore.InsertAuditEvent(ctx, actor, target, etype, result)
 }
 
 type pgUnitEnv struct {
@@ -383,7 +459,7 @@ func TestPostgreSQLSchema_PinAndCacheKeepSchemaIdentity(t *testing.T) {
 	if err != nil {
 		t.Fatalf("default schema: %v", err)
 	}
-	if resp.Schema != "app" || env.cat.calls[0].schema != "" || env.cat.calls[0].fallback != "app" {
+	if resp.Schema != "app" || env.cat.calls[0].schema != "app" || env.cat.calls[0].fallback != "app" {
 		t.Fatalf("default pin resp=%q call=%+v", resp.Schema, env.cat.calls[0])
 	}
 	_, err = env.svc.ListObjects(ctx, 1, 9001, "db_a", "missing", "", "", 1, 20, false)
@@ -405,6 +481,156 @@ func TestPostgreSQLSchema_PinAndCacheKeepSchemaIdentity(t *testing.T) {
 	}
 	if len(env.cat.calls) != 2 || env.cat.calls[0].database != "db_a" || env.cat.calls[1].database != "db_b" {
 		t.Fatalf("cache calls = %+v", env.cat.calls)
+	}
+}
+
+func TestPostgreSQLSchema_DefaultSchemaChangeDoesNotReuseCache(t *testing.T) {
+	t.Parallel()
+	env := newPGUnit(t, pgTarget("Staging"), pgRows(), pgDSNs())
+	ctx := context.Background()
+	env.cat.objects = []ObjectSummary{{Name: "orders", Kind: "table"}}
+
+	listed, err := env.svc.ListObjects(ctx, 1, 9001, "db_a", "", "", "", 1, 20, false)
+	if err != nil || listed.Schema != "app" || len(listed.Items) != 1 || listed.Items[0].Name != "orders" {
+		t.Fatalf("default app = %v %+v", err, listed)
+	}
+	setPGDefaultSchema(env, "analytics")
+	listed, err = env.svc.ListObjects(ctx, 1, 9001, "db_a", "", "", "", 1, 20, false)
+	if err != nil || listed.Schema != "analytics" {
+		t.Fatalf("default analytics = %v schema=%q calls=%d", err, listed.Schema, env.cat.callCount())
+	}
+	setPGDefaultSchema(env, "missing")
+	if _, err = env.svc.ListObjects(ctx, 1, 9001, "db_a", "", "", "", 1, 20, false); !errors.Is(err, ErrSchemaNotFound) {
+		t.Fatalf("missing default = %v", err)
+	}
+	setPGDefaultSchema(env, "secret")
+	if _, err = env.svc.ListObjects(ctx, 1, 9001, "db_a", "", "", "", 1, 20, false); !errors.Is(err, ErrSchemaNotUsable) {
+		t.Fatalf("unusable default = %v", err)
+	}
+	explicit, err := env.svc.ListObjects(ctx, 1, 9001, "db_a", "app", "", "", 1, 20, false)
+	if err != nil || explicit.Schema != "app" {
+		t.Fatalf("explicit app = %v %+v", err, explicit)
+	}
+
+	setPGDefaultSchema(env, "app")
+	env.cat.calls = nil
+	detail, err := env.svc.GetObjectDetails(ctx, 1, 9001, "db_a", "", "orders", "table", false)
+	if err != nil || detail.Schema != "app" || detail.Name != "orders" {
+		t.Fatalf("detail app = %v %+v", err, detail)
+	}
+	setPGDefaultSchema(env, "analytics")
+	detail, err = env.svc.GetObjectDetails(ctx, 1, 9001, "db_a", "", "orders", "table", false)
+	if err != nil || detail.Schema != "analytics" || detail.Name != "orders" {
+		t.Fatalf("detail analytics = %v %+v", err, detail)
+	}
+	setPGDefaultSchema(env, "missing")
+	if _, err = env.svc.GetObjectDetails(ctx, 1, 9001, "db_a", "", "orders", "table", false); !errors.Is(err, ErrSchemaNotFound) {
+		t.Fatalf("detail missing = %v", err)
+	}
+	setPGDefaultSchema(env, "secret")
+	if _, err = env.svc.GetObjectDetails(ctx, 1, 9001, "db_a", "", "orders", "table", false); !errors.Is(err, ErrSchemaNotUsable) {
+		t.Fatalf("detail unusable = %v", err)
+	}
+	detail, err = env.svc.GetObjectDetails(ctx, 1, 9001, "db_a", "app", "orders", "table", false)
+	if err != nil || detail.Schema != "app" {
+		t.Fatalf("explicit detail = %v %+v", err, detail)
+	}
+
+	setPGDefaultSchema(env, "app")
+	rel, err := env.svc.GetRelationshipMap(ctx, 1, 9001, "db_a", "", "orders", false)
+	if err != nil || rel.Root.Schema != "app" || rel.Root.Name != "orders" {
+		t.Fatalf("map app = %v %+v", err, rel.Root)
+	}
+	setPGDefaultSchema(env, "analytics")
+	rel, err = env.svc.GetRelationshipMap(ctx, 1, 9001, "db_a", "", "orders", false)
+	if err != nil || rel.Root.Schema != "analytics" {
+		t.Fatalf("map analytics = %v %+v", err, rel.Root)
+	}
+	setPGDefaultSchema(env, "missing")
+	if _, err = env.svc.GetRelationshipMap(ctx, 1, 9001, "db_a", "", "orders", false); !errors.Is(err, ErrSchemaNotFound) {
+		t.Fatalf("map missing = %v", err)
+	}
+	setPGDefaultSchema(env, "secret")
+	if _, err = env.svc.GetRelationshipMap(ctx, 1, 9001, "db_a", "", "orders", false); !errors.Is(err, ErrSchemaNotUsable) {
+		t.Fatalf("map unusable = %v", err)
+	}
+	rel, err = env.svc.GetRelationshipMap(ctx, 1, 9001, "db_a", "app", "orders", false)
+	if err != nil || rel.Root.Schema != "app" {
+		t.Fatalf("explicit map = %v %+v", err, rel.Root)
+	}
+}
+
+func setPGDefaultSchema(env pgUnitEnv, schema string) {
+	row := env.store.rows["9001\x00db_a"]
+	row.DefaultSchema = schema
+	row.CredentialRef = "PG_T6_A"
+	env.store.rows["9001\x00db_a"] = row
+}
+
+func TestPostgreSQLSchema_SingleflightDoesNotShareDistinctObjects(t *testing.T) {
+	t.Parallel()
+	env := newPGUnit(t, pgTarget("Staging"), pgRows(), pgDSNs())
+	env.svc.audit = &lockingPGAudit{pgCredStore: env.store}
+	gate := newArriveGate(2)
+	env.cat.hold = gate
+	ctx := context.Background()
+
+	type result struct {
+		resp model.ObjectDetailResponse
+		err  error
+	}
+	got := make([]result, 2)
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		resp, err := env.svc.GetObjectDetails(ctx, 1, 9001, "db_a", "app Kind:table Query:x", "orders", "table", false)
+		got[0] = result{resp, err}
+	}()
+	go func() {
+		defer wg.Done()
+		resp, err := env.svc.GetObjectDetails(ctx, 1, 9001, "db_a", "app", "x Kind:table Query:orders", "table", false)
+		got[1] = result{resp, err}
+	}()
+	select {
+	case <-gate.arrived:
+	case <-time.After(2 * time.Second):
+		t.Fatal("distinct object requests collapsed onto one catalog call")
+	}
+	close(gate.release)
+	wg.Wait()
+
+	if got[0].err != nil || got[0].resp.Schema != "app Kind:table Query:x" || got[0].resp.Name != "orders" {
+		t.Fatalf("request A = %v %+v", got[0].err, got[0].resp)
+	}
+	if got[1].err != nil || got[1].resp.Schema != "app" || got[1].resp.Name != "x Kind:table Query:orders" {
+		t.Fatalf("request B = %v %+v", got[1].err, got[1].resp)
+	}
+	if env.cat.callCount() != 2 {
+		t.Fatalf("catalog calls = %d", env.cat.callCount())
+	}
+
+	againA, err := env.svc.GetObjectDetails(ctx, 1, 9001, "db_a", "app Kind:table Query:x", "orders", "table", false)
+	againB, errB := env.svc.GetObjectDetails(ctx, 1, 9001, "db_a", "app", "x Kind:table Query:orders", "table", false)
+	if err != nil || errB != nil || againA.Schema != got[0].resp.Schema || againA.Name != "orders" || againB.Schema != "app" || againB.Name != got[1].resp.Name {
+		t.Fatalf("cached identities A=%+v B=%+v err=%v %v", againA, againB, err, errB)
+	}
+	if env.cat.callCount() != 2 {
+		t.Fatalf("cache wrote a shared catalog result, calls=%d", env.cat.callCount())
+	}
+}
+
+func TestMapPGQueryError_StatementTimeoutSQLSTATE(t *testing.T) {
+	t.Parallel()
+	canceled := &pgconn.PgError{Code: pgQueryCanceledSQLSTATE, Message: "canceling statement due to statement timeout"}
+	got := mapPGQueryError(canceled)
+	if got != ErrSchemaTimeout || strings.Contains(got.Error(), "canceling") || strings.Contains(got.Error(), "57014") {
+		t.Fatalf("57014 = %v", got)
+	}
+	other := &pgconn.PgError{Code: "42P01", Message: "relation secret does not exist"}
+	got = mapPGQueryError(other)
+	if got != ErrSchemaBackendError || strings.Contains(got.Error(), "secret") {
+		t.Fatalf("other sqlstate = %v", got)
 	}
 }
 
