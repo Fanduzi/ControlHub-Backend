@@ -2,7 +2,7 @@
 // (spec G4/G5/G10 stage: parse → guard → classify → qualify → inject).
 // input: qualified *pg.ParseResult, ColumnResolver supplying FROM-position column names (optional ColumnMetadataResolver for structured type/attribute evidence and native common-type verdicts)
 // output: InjectWitnesses, InjectResult, WitnessRecord, EntityKey, ColumnResolver, ColumnType, ColumnMetadata, ColumnMetadataResolver, ErrTypeResolutionUnavailable — layout-freeze + per-layer witness injection + DISTINCT Q+D transform + public-column proofs/source catalog
-// pos: G10 mechanism 5a — records the original visible layout (* / x.* / ordinals / VALUES / per-reference colnames — NATURAL always freezes to the original public-column intersection: explicit USING when nonempty so the join_using_alias stays declarable, ON TRUE keeping the join type when empty) BEFORE appending witnesses; stars stay verbatim unless an injected column forces expansion, and forced USING/NATURAL merges are projected through the join's join_using_alias (generated under the __chub_ prefix when absent) so PostgreSQL computes the merged column natively — common-type coercion included; emits CASE WHEN FALSE THEN alias.* END on ordinary/window-only layers and (array_agg(alias.*) FILTER (WHERE FALSE))[1] on aggregate/grouping layers; propagates through CTEs and derived tables, suppresses inside SubLinks, merges set-op branches through canonical representatives only when attested entities match, and rejects when any entity's witness cannot reach the output; plain SELECT DISTINCT becomes Q+D (D groups by original public columns only and receives ORDER BY/LIMIT/OFFSET exactly once; a decided merged column whose only source reference is itself is a terminal computed JOIN identity and binds to itself); internal names live under the reserved __chub_ prefix
+// pos: G10 mechanism 5a — records the original visible layout (* / x.* / ordinals / VALUES / per-reference colnames — NATURAL always freezes to the original public-column intersection: explicit USING when nonempty so the join_using_alias stays declarable, ON TRUE keeping the join type when empty) BEFORE appending witnesses; stars stay verbatim unless an injected column forces expansion, and forced USING/NATURAL merges are projected through the join's join_using_alias (generated under the __chub_ prefix when absent) so PostgreSQL computes the merged column natively — common-type coercion included; emits CASE WHEN FALSE THEN alias.* END on ordinary/window-only layers and (array_agg(alias.*) FILTER (WHERE FALSE))[1] on aggregate/grouping layers; propagates through CTEs and derived tables, suppresses inside SubLinks, merges set-op branches through canonical representatives only when attested entities match, and rejects when any entity's witness cannot reach the output; plain SELECT DISTINCT becomes Q+D (D groups by original public columns only and receives ORDER BY/LIMIT/OFFSET exactly once; a decided merged column whose only source reference is itself is a terminal computed JOIN identity and binds to itself); internal names live under the reserved __chub_ prefix; provenance resolution runs through parent-linked FROM scopes (inner shadows outer, LATERAL sees only preceding same-level items plus enclosing levels), VALUES cells analyze every row per output position, named windows resolve through the layer's own WINDOW clause, and ORDER BY/GROUP BY keys bind per PostgreSQL SQL92 output-name/input-column precedence — cyclic or ambiguous bindings fail closed as unresolved
 // note: if this file changes, update header and README.md
 package pgsql
 
@@ -123,7 +123,7 @@ func injectWitnesses(tree *pg.ParseResult, res ColumnResolver, refs []RangeVarRe
 		}
 		in.sources[occ] = SourceOccurrence{ID: occ, Kind: kind, RefID: ref.RefID, HasRefID: true}
 	}
-	rep, layout := in.selectStmt(sel, map[string]*itemLayout{}, true)
+	rep, layout := in.selectStmt(sel, map[string]*itemLayout{}, true, nil)
 	if in.err != nil {
 		return nil, in.err
 	}
@@ -400,7 +400,11 @@ func stampRefs(l *itemLayout, it *fromItemRef) {
 // subquery inside an expression can never propagate a witness outward, so
 // nothing is appended; freezing still runs so `*`/`x.*` there expand to the
 // original public columns only).
-func (in *injector) selectStmt(sel *pg.SelectStmt, cteLayouts map[string]*itemLayout, emit bool) (*pg.SelectStmt, *itemLayout) {
+//
+// outerScope is the column scope of the immediately enclosing query level —
+// the correlated-reference fallback for names the layer's own FROM items
+// cannot resolve. nil marks the outermost analyzed level.
+func (in *injector) selectStmt(sel *pg.SelectStmt, cteLayouts map[string]*itemLayout, emit bool, outerScope *fromScope) (*pg.SelectStmt, *itemLayout) {
 	if in.err != nil || sel == nil {
 		return sel, nil
 	}
@@ -433,8 +437,10 @@ func (in *injector) selectStmt(sel *pg.SelectStmt, cteLayouts map[string]*itemLa
 			var body *itemLayout
 			if node := cte.GetCtequery(); node != nil {
 				if sub := node.GetSelectStmt(); sub != nil {
+					// CTE bodies see the visible CTE names but never the
+					// enclosing query's columns — nil outer scope.
 					var rep *pg.SelectStmt
-					rep, body = in.selectStmt(sub, bodyLayouts, emit)
+					rep, body = in.selectStmt(sub, bodyLayouts, emit, nil)
 					if rep != sub {
 						node.Node = &pg.Node_SelectStmt{SelectStmt: rep}
 					}
@@ -458,22 +464,28 @@ func (in *injector) selectStmt(sel *pg.SelectStmt, cteLayouts map[string]*itemLa
 	// verify every leaf attests the same entity sequence — a merged witness
 	// column must denote one entity, never two.
 	if sel.GetOp() != pg.SetOperation_SETOP_NONE {
-		return sel, in.setOpLayer(sel, bodyLayouts, emit)
+		return sel, in.setOpLayer(sel, bodyLayouts, emit, outerScope)
 	}
 
 	var items []*fromItemRef
 	for _, n := range sel.GetFromClause() {
-		items = append(items, in.fromItem(n, bodyLayouts, emit))
+		// items collected so far are the LATERAL-visible preceding items.
+		items = append(items, in.fromItem(n, bodyLayouts, emit, items, outerScope))
 	}
 	if in.err != nil {
 		return sel, nil
 	}
 	sc := buildScope(items)
+	sc.parent = outerScope
 	in.freezeTargets(sel, items)
 	if in.err != nil {
 		return sel, nil
 	}
-	pubCols, pubStarts, err := in.publicCols(sel, items, sc, bodyLayouts)
+	dr := &depResolver{
+		in: in, sc: sc, layouts: bodyLayouts, windows: windowIndex(sel),
+		pubExpr: map[int]*pg.Node{}, done: map[int]bool{}, active: map[int]bool{},
+	}
+	pubCols, pubStarts, err := in.publicCols(sel, items, dr)
 	if err != nil {
 		in.err = err
 		return sel, nil
@@ -528,15 +540,16 @@ func (in *injector) selectStmt(sel *pg.SelectStmt, cteLayouts map[string]*itemLa
 	}
 	// Subqueries inside expression positions are processed with witnesses
 	// suppressed — their rows never propagate a witness outward; freezing
-	// there keeps `*`/`x.*` honest against injected inner columns.
-	in.processSublinks(sel, bodyLayouts)
+	// there keeps `*`/`x.*` honest against injected inner columns. They see
+	// this layer's column scope for correlated references.
+	in.processSublinks(sel, bodyLayouts, sc)
 	if in.err != nil {
 		return sel, nil
 	}
 
 	layout := &itemLayout{}
 	layout.cols = append(cloneCols(pubCols), emitted...)
-	in.fillLayerDeps(sel, pubCols, items, sc, bodyLayouts, layout)
+	in.fillLayerDeps(sel, dr, layout)
 	if in.err != nil {
 		return sel, nil
 	}
@@ -556,12 +569,12 @@ func (in *injector) selectStmt(sel *pg.SelectStmt, cteLayouts map[string]*itemLa
 // layouts. Leaves can only reference CTEs/derived sources (the guard rejected
 // direct entity refs); leaves may themselves propagate inner witnesses — the
 // merge is valid only when every leaf attests the SAME entity per position.
-func (in *injector) setOpLayer(sel *pg.SelectStmt, cteLayouts map[string]*itemLayout, emit bool) *itemLayout {
-	lrep, l := in.selectStmt(sel.GetLarg(), cteLayouts, emit)
+func (in *injector) setOpLayer(sel *pg.SelectStmt, cteLayouts map[string]*itemLayout, emit bool, outerScope *fromScope) *itemLayout {
+	lrep, l := in.selectStmt(sel.GetLarg(), cteLayouts, emit, outerScope)
 	if lrep != sel.GetLarg() {
 		sel.Larg = lrep
 	}
-	rrep, r := in.selectStmt(sel.GetRarg(), cteLayouts, emit)
+	rrep, r := in.selectStmt(sel.GetRarg(), cteLayouts, emit, outerScope)
 	if rrep != sel.GetRarg() {
 		sel.Rarg = rrep
 	}
@@ -678,7 +691,11 @@ func witnessCols(l *itemLayout) []*outCol {
 
 // ---------- FROM items ----------
 
-func (in *injector) fromItem(n *pg.Node, cteLayouts map[string]*itemLayout, emit bool) *fromItemRef {
+// fromItem builds one FROM element. preceding lists the FROM items already
+// built in the same clause — visible to this item only under LATERAL;
+// outerScope is the enclosing query level's scope, which every nested
+// subquery may correlate against regardless of LATERAL.
+func (in *injector) fromItem(n *pg.Node, cteLayouts map[string]*itemLayout, emit bool, preceding []*fromItemRef, outerScope *fromScope) *fromItemRef {
 	if in.err != nil {
 		return nil
 	}
@@ -733,14 +750,23 @@ func (in *injector) fromItem(n *pg.Node, cteLayouts map[string]*itemLayout, emit
 		sub := v.RangeSubselect
 		occ := in.syntheticOccurrence(SourceDerived)
 		var layout *itemLayout
-		terminal := false
 		if inner := sub.GetSubquery().GetSelectStmt(); inner != nil {
+			// Without LATERAL the item sees the enclosing query levels but
+			// no same-level siblings; LATERAL adds the preceding FROM items.
+			visible := outerScope
+			if sub.GetLateral() {
+				visible = buildScope(preceding)
+				visible.parent = outerScope
+			}
 			if vl := inner.GetValuesLists(); len(vl) > 0 {
-				layout = valuesLayout(inner, sub.GetAlias())
-				terminal = true
+				dr := &depResolver{
+					in: in, sc: visible, layouts: cteLayouts,
+					pubExpr: map[int]*pg.Node{}, done: map[int]bool{}, active: map[int]bool{},
+				}
+				layout = in.valuesLayout(inner, sub.GetAlias(), dr)
 			} else {
 				var rep *pg.SelectStmt
-				rep, layout = in.selectStmt(inner, cteLayouts, emit)
+				rep, layout = in.selectStmt(inner, cteLayouts, emit, visible)
 				if rep != inner {
 					sub.Subquery.Node = &pg.Node_SelectStmt{SelectStmt: rep}
 				}
@@ -770,9 +796,6 @@ func (in *injector) fromItem(n *pg.Node, cteLayouts map[string]*itemLayout, emit
 			sub.Alias.Aliasname = alias
 		}
 		it := &fromItemRef{layout: layoutWithAlias(layout, alias), alias: alias, occ: occ, node: n}
-		if terminal {
-			in.markTerminalItem(it)
-		}
 		stampRefs(it.layout, it)
 		return it
 	case *pg.Node_JoinExpr:
@@ -791,7 +814,7 @@ func (in *injector) fromItem(n *pg.Node, cteLayouts map[string]*itemLayout, emit
 				TargetList: []*pg.Node{targetNode(colRefNode("*"), "")},
 				FromClause: []*pg.Node{{Node: &pg.Node_JoinExpr{JoinExpr: j}}},
 			}
-			rep, layout := in.selectStmt(innerSel, cteLayouts, emit)
+			rep, layout := in.selectStmt(innerSel, cteLayouts, emit, outerScope)
 			if in.err != nil {
 				return nil
 			}
@@ -810,8 +833,11 @@ func (in *injector) fromItem(n *pg.Node, cteLayouts map[string]*itemLayout, emit
 			stampRefs(it.layout, it)
 			return it
 		}
-		left := in.fromItem(j.GetLarg(), cteLayouts, emit)
-		right := in.fromItem(j.GetRarg(), cteLayouts, emit)
+		left := in.fromItem(j.GetLarg(), cteLayouts, emit, preceding, outerScope)
+		// A LATERAL right side sees every item the join itself follows —
+		// the clause's earlier items plus the join's own left side.
+		rightPreceding := append(append([]*fromItemRef(nil), preceding...), left)
+		right := in.fromItem(j.GetRarg(), cteLayouts, emit, rightPreceding, outerScope)
 		if in.err != nil {
 			return nil
 		}
@@ -821,38 +847,14 @@ func (in *injector) fromItem(n *pg.Node, cteLayouts map[string]*itemLayout, emit
 	case *pg.Node_RangeTableSample:
 		// TABLESAMPLE wraps the relation; any AS alias lives on the inner
 		// RangeVar itself — the sampled row type is unchanged.
-		return in.fromItem(v.RangeTableSample.GetRelation(), cteLayouts, emit)
+		return in.fromItem(v.RangeTableSample.GetRelation(), cteLayouts, emit, preceding, outerScope)
 	default:
 		// RangeFunction/RangeTableFunc/VALUES etc.: no entity RangeVars
 		// inside (stray ones were rejected); column set is opaque.
 		it := &fromItemRef{layout: &itemLayout{opaque: true}, alias: aliasOf(n),
 			occ: in.syntheticOccurrence(SourceNonEntity), node: n}
-		in.markTerminalItem(it)
 		stampRefs(it.layout, it)
 		return it
-	}
-}
-
-// markTerminalItem fills columns that do not already carry an inner proof —
-// VALUES/functions are terminal non-entity sources; propagated derived
-// columns keep their original terminal dependencies.
-func (in *injector) markTerminalItem(it *fromItemRef) {
-	if it == nil || it.layout == nil {
-		return
-	}
-	pub := 0
-	for i := range it.layout.cols {
-		c := &it.layout.cols[i]
-		if c.witness {
-			continue
-		}
-		if !c.depsComplete {
-			src := SourceRef{Occurrence: it.occ, Slot: columnSlot(pub)}
-			c.deps = []SourceRef{src}
-			c.depsComplete = true
-			c.fdOrigin = FDOrigin{Kind: FDOriginNoColumnOrigin}
-		}
-		pub++
 	}
 }
 
@@ -1110,9 +1112,11 @@ func cloneCols(cols []outCol) []outCol {
 
 // valuesLayout computes a `(VALUES ...)` derived table's columns: the row
 // arity comes from the first row; names are the alias column list or PG's
-// columnN defaults. No entity can occur inside VALUES rows' expressions —
-// a SubLink there was already classified non-witnessable.
-func valuesLayout(sel *pg.SelectStmt, alias *pg.Alias) *itemLayout {
+// columnN defaults. Each output position's dependencies are the union of
+// that position's expression across all rows — a LATERAL column reference
+// or a correlated SubLink therefore reaches the real terminal source
+// instead of the derived occurrence's own slot.
+func (in *injector) valuesLayout(sel *pg.SelectStmt, alias *pg.Alias, dr *depResolver) *itemLayout {
 	rows := sel.GetValuesLists()
 	if len(rows) == 0 {
 		return &itemLayout{opaque: true}
@@ -1131,8 +1135,33 @@ func valuesLayout(sel *pg.SelectStmt, alias *pg.Alias) *itemLayout {
 		}
 	}
 	out := &itemLayout{}
-	for _, n := range names {
-		out.cols = append(out.cols, outCol{name: n})
+	for pos := range names {
+		c := outCol{name: names[pos]}
+		var deps []SourceRef
+		complete := true
+		for _, row := range rows {
+			items := row.GetList().GetItems()
+			if pos >= len(items) {
+				// Ragged VALUES lists are a parse-time error upstream; keep
+				// the record unresolved rather than guess.
+				complete = false
+				break
+			}
+			sub, ok := dr.exprDeps(items[pos])
+			deps = unionSourceRefs(deps, sub)
+			complete = complete && ok
+			if in.err != nil {
+				return out
+			}
+		}
+		c.deps = sortSourceRefs(deps)
+		c.depsComplete = complete
+		if complete {
+			c.fdOrigin = FDOrigin{Kind: FDOriginNoColumnOrigin}
+		} else {
+			c.fdOrigin = FDOrigin{Kind: FDOriginUnresolved}
+		}
+		out.cols = append(out.cols, c)
 	}
 	return out
 }
@@ -1308,6 +1337,10 @@ type scopeEntry struct {
 type fromScope struct {
 	byQual map[string]*scopeEntry
 	items  []*fromItemRef
+	// parent is the scope of the immediately enclosing query level —
+	// correlated references resolve innermost-first then walk outward;
+	// nil at the outermost analyzed level.
+	parent *fromScope
 }
 
 func partsKey(parts ...string) string {
@@ -1370,25 +1403,30 @@ func (e *scopeEntry) lookup(qual, name string) (colRef, bool) {
 	return colRef{}, false
 }
 
+// lookupBare resolves an unqualified column name innermost-first: a name
+// that matches anything at the current level never falls through to the
+// parent scope, even when ambiguous (PostgreSQL would report that error).
 func (s *fromScope) lookupBare(name string) (colRef, bool) {
-	var found colRef
-	n := 0
-	for _, it := range s.items {
-		pub := 0
-		for i := range it.layout.cols {
-			c := &it.layout.cols[i]
-			if c.witness {
-				continue
+	for sc := s; sc != nil; sc = sc.parent {
+		var found colRef
+		n := 0
+		for _, it := range sc.items {
+			pub := 0
+			for i := range it.layout.cols {
+				c := &it.layout.cols[i]
+				if c.witness {
+					continue
+				}
+				if c.name == name {
+					found = colRef{item: it, ord: pub, name: name}
+					n++
+				}
+				pub++
 			}
-			if c.name == name {
-				found = colRef{item: it, ord: pub, name: name}
-				n++
-			}
-			pub++
 		}
-	}
-	if n == 1 {
-		return found, true
+		if n > 0 {
+			return found, n == 1
+		}
 	}
 	return colRef{}, false
 }
@@ -1405,11 +1443,14 @@ func (s *fromScope) resolveFields(fields []*pg.Node) (colRef, bool) {
 	if len(parts) == 1 {
 		return s.lookupBare(parts[0])
 	}
-	e := s.byQual[partsKey(parts[:len(parts)-1]...)]
-	if e == nil {
-		return colRef{}, false
+	// A qualifier visible at this level owns the lookup — an absent column
+	// there is an error upstream, not a reason to escape outward.
+	for sc := s; sc != nil; sc = sc.parent {
+		if e := sc.byQual[partsKey(parts[:len(parts)-1]...)]; e != nil {
+			return e.lookup(strings.Join(parts[:len(parts)-1], "."), parts[len(parts)-1])
+		}
 	}
-	return e.lookup(strings.Join(parts[:len(parts)-1], "."), parts[len(parts)-1])
+	return colRef{}, false
 }
 
 // itemByFields resolves a whole-item reference such as `orders` or
@@ -1426,8 +1467,10 @@ func (s *fromScope) itemByFields(fields []*pg.Node) *fromItemRef {
 	if len(parts) == 0 {
 		return nil
 	}
-	if e := s.byQual[partsKey(parts...)]; e != nil {
-		return e.item
+	for sc := s; sc != nil; sc = sc.parent {
+		if e := sc.byQual[partsKey(parts...)]; e != nil {
+			return e.item
+		}
 	}
 	return nil
 }
@@ -1457,10 +1500,13 @@ func colAtPublic(it *fromItemRef, ord int) *outCol {
 
 // publicCols builds the layer's user-visible output columns post-freeze —
 // names plus each column's type/attribute evidence and provenance
-// references resolved in the ORIGINAL FROM scope. The second return maps
-// each target node to the public index where its output begins — a
-// retained `x.*` covers several columns with one node.
-func (in *injector) publicCols(sel *pg.SelectStmt, items []*fromItemRef, sc *fromScope, layouts map[string]*itemLayout) ([]outCol, []int, error) {
+// references resolved in the ORIGINAL FROM scope (walking its correlated
+// parent chain). Names are materialized before expression dependencies run
+// so SQL92 output-name binding (ORDER BY inside and outside window
+// definitions) can reach every target. The second return maps each target
+// node to the public index where its output begins — a retained `x.*`
+// covers several columns with one node.
+func (in *injector) publicCols(sel *pg.SelectStmt, items []*fromItemRef, dr *depResolver) ([]outCol, []int, error) {
 	var out []outCol
 	var starts []int
 	for _, t := range sel.GetTargetList() {
@@ -1473,7 +1519,7 @@ func (in *injector) publicCols(sel *pg.SelectStmt, items []*fromItemRef, sc *fro
 			// A retained star target contributes its referenced columns —
 			// enumerate them from the item layouts (which already carry
 			// per-reference column aliases).
-			cols, err := in.starCols(cr.GetFields(), items, sc)
+			cols, err := in.starCols(cr.GetFields(), items, dr.sc)
 			if err != nil {
 				return nil, nil, err
 			}
@@ -1485,7 +1531,7 @@ func (in *injector) publicCols(sel *pg.SelectStmt, items []*fromItemRef, sc *fro
 			oc.name = outputNameOf(rt.GetVal())
 		}
 		if cr := rt.GetVal().GetColumnRef(); cr != nil {
-			if ref, ok := sc.resolveFields(cr.GetFields()); ok {
+			if ref, ok := dr.sc.resolveFields(cr.GetFields()); ok {
 				if src := colAtPublic(ref.item, ref.ord); src != nil {
 					oc.typ = src.typ
 					oc.relOID = src.relOID
@@ -1497,7 +1543,7 @@ func (in *injector) publicCols(sel *pg.SelectStmt, items []*fromItemRef, sc *fro
 					oc.depsComplete = src.depsComplete
 					oc.fdOrigin = src.fdOrigin
 				}
-			} else if it := sc.itemByFields(cr.GetFields()); it != nil {
+			} else if it := dr.sc.itemByFields(cr.GetFields()); it != nil {
 				deps, complete := in.wholeRowDeps(it)
 				oc.deps = deps
 				oc.depsComplete = complete
@@ -1512,17 +1558,22 @@ func (in *injector) publicCols(sel *pg.SelectStmt, items []*fromItemRef, sc *fro
 				oc.fdOrigin = FDOrigin{Kind: FDOriginUnresolved}
 			}
 		} else {
-			deps, complete := in.expressionDeps(rt.GetVal(), sc, layouts)
-			oc.deps = deps
-			oc.depsComplete = complete
-			oc.fdOrigin = FDOrigin{Kind: FDOriginUnresolved}
-			if complete {
-				oc.fdOrigin.Kind = FDOriginNoColumnOrigin
-			}
+			// Expression deps run in phase two — the resolver must already
+			// know every public name for SQL92 output-column binding.
+			dr.pubExpr[len(out)] = rt.GetVal()
 		}
 		out = append(out, oc)
 	}
-	return out, starts, nil
+	dr.pub = out
+	for i := range dr.pub {
+		if _, isExpr := dr.pubExpr[i]; isExpr {
+			dr.publicDep(i)
+			if in.err != nil {
+				return nil, nil, in.err
+			}
+		}
+	}
+	return dr.pub, starts, nil
 }
 
 // wholeRowDeps returns the terminal dependency for a whole-item reference.
@@ -1548,64 +1599,243 @@ func (in *injector) wholeRowDeps(it *fromItemRef) ([]SourceRef, bool) {
 	return sortSourceRefs(deps), complete
 }
 
-// expressionDeps collects every terminal source slot participating in one
-// expression. SubLinks contribute their suppressed layer summary, never a
-// false empty set.
-func (in *injector) expressionDeps(root *pg.Node, sc *fromScope, layouts map[string]*itemLayout) ([]SourceRef, bool) {
+// depResolver carries one SELECT layer's name-resolution context for
+// terminal-source dependency analysis: the FROM scope (whose parent chain
+// gives correlated references their innermost-first, outward fallback), the
+// visible CTE layouts, this layer's named window definitions, and the
+// public output columns used by SQL92 ORDER BY/GROUP BY binding.
+type depResolver struct {
+	in      *injector
+	sc      *fromScope
+	layouts map[string]*itemLayout
+	windows map[string]*pg.WindowDef
+	// pub is the layer's public column list; pubExpr marks which entries
+	// still owe expression analysis. done/active memoize publicDep so an
+	// output-name reference can reach a not-yet-visited target without
+	// recursing forever through mutually referencing windows.
+	pub     []outCol
+	pubExpr map[int]*pg.Node
+	done    map[int]bool
+	active  map[int]bool
+}
+
+// publicDep returns the terminal dependencies of public column i,
+// computing expression columns on demand. A cyclic output-name binding
+// degrades to incomplete rather than recursing.
+func (d *depResolver) publicDep(i int) ([]SourceRef, bool) {
+	if d.done[i] {
+		return append([]SourceRef(nil), d.pub[i].deps...), d.pub[i].depsComplete
+	}
+	root, isExpr := d.pubExpr[i]
+	if !isExpr {
+		d.done[i] = true
+		return append([]SourceRef(nil), d.pub[i].deps...), d.pub[i].depsComplete
+	}
+	if d.active[i] {
+		return nil, false
+	}
+	d.active[i] = true
+	deps, ok := d.exprDeps(root)
+	delete(d.active, i)
+	d.done[i] = true
+	d.pub[i].deps = sortSourceRefs(deps)
+	d.pub[i].depsComplete = ok
+	if ok {
+		d.pub[i].fdOrigin = FDOrigin{Kind: FDOriginNoColumnOrigin}
+	} else {
+		d.pub[i].fdOrigin = FDOrigin{Kind: FDOriginUnresolved}
+	}
+	return append([]SourceRef(nil), deps...), ok
+}
+
+// publicByName finds the output column a bare SQL92 identifier denotes.
+// idx>=0 is a usable binding; ambiguous=true reports a duplicate output
+// name the caller must not guess at.
+func (d *depResolver) publicByName(name string) (idx int, ambiguous bool) {
+	idx = -1
+	for i := range d.pub {
+		if d.pub[i].name == name {
+			if idx >= 0 {
+				return -1, true
+			}
+			idx = i
+		}
+	}
+	return idx, false
+}
+
+// windowDeps unions the terminal dependencies every clause of one window
+// definition contributes: the inherited base window (refname), partition
+// keys, ordering keys — which bind output names like top-level ORDER BY —
+// and frame offsets. named=true marks an `OVER w`-style inline definition
+// whose name field references a WINDOW-clause member; a member's own name
+// field is its declaration, never a reference.
+func (d *depResolver) windowDeps(wd *pg.WindowDef, seen map[string]bool, named bool) ([]SourceRef, bool) {
+	if wd == nil {
+		return nil, true
+	}
 	var deps []SourceRef
 	complete := true
+	merge := func(sub []SourceRef, ok bool) {
+		deps = unionSourceRefs(deps, sub)
+		complete = complete && ok
+	}
+	refs := []string{wd.GetRefname()}
+	if named {
+		refs = append(refs, wd.GetName())
+	}
+	for _, name := range refs {
+		if name == "" {
+			continue
+		}
+		base := d.windows[name]
+		if base == nil || seen[name] {
+			merge(nil, false) // unknown or cyclic window — evidence stays incomplete
+			continue
+		}
+		seen[name] = true
+		merge(d.windowDeps(base, seen, false))
+		delete(seen, name)
+	}
+	for _, p := range wd.GetPartitionClause() {
+		merge(d.exprDeps(p))
+	}
+	for _, s := range wd.GetOrderClause() {
+		if sb := s.GetSortBy(); sb != nil {
+			merge(d.sortKeyDeps(sb.GetNode()))
+		}
+	}
+	merge(d.exprDeps(wd.GetStartOffset()))
+	merge(d.exprDeps(wd.GetEndOffset()))
+	return sortSourceRefs(deps), complete
+}
+
+// sortKeyDeps resolves an ORDER BY key under SQL92 rules: ordinals and bare
+// identifiers bind the public output column first; anything else resolves
+// as a FROM-scope expression.
+func (d *depResolver) sortKeyDeps(n *pg.Node) ([]SourceRef, bool) {
+	if v, ok := ordinalConst(n); ok {
+		if v >= 1 && v <= int64(len(d.pub)) {
+			return d.publicDep(int(v - 1))
+		}
+		return nil, false
+	}
+	if cr := n.GetColumnRef(); cr != nil && !hasStar(cr.GetFields()) {
+		f := cr.GetFields()
+		if len(f) == 1 {
+			if s := f[0].GetString_(); s != nil {
+				idx, ambiguous := d.publicByName(s.GetSval())
+				if ambiguous {
+					return nil, false
+				}
+				if idx >= 0 {
+					return d.publicDep(idx)
+				}
+			}
+		}
+	}
+	return d.exprDeps(n)
+}
+
+// groupKeyDeps resolves a GROUP BY key: ordinals bind positions, and bare
+// names resolve as input columns BEFORE output names — the reverse of
+// ORDER BY's precedence.
+func (d *depResolver) groupKeyDeps(n *pg.Node) ([]SourceRef, bool) {
+	if v, ok := ordinalConst(n); ok {
+		if v >= 1 && v <= int64(len(d.pub)) {
+			return d.publicDep(int(v - 1))
+		}
+		return nil, false
+	}
+	if cr := n.GetColumnRef(); cr != nil && !hasStar(cr.GetFields()) {
+		if _, ok := d.sc.resolveFields(cr.GetFields()); ok {
+			return d.exprDeps(n) // input column wins over an output name
+		}
+		f := cr.GetFields()
+		if len(f) == 1 {
+			if s := f[0].GetString_(); s != nil {
+				idx, ambiguous := d.publicByName(s.GetSval())
+				if ambiguous {
+					return nil, false
+				}
+				if idx >= 0 {
+					return d.publicDep(idx)
+				}
+			}
+		}
+	}
+	return d.exprDeps(n)
+}
+
+// exprDeps collects every terminal source slot an expression reads.
+// ColumnRefs resolve in the correlated scope chain, SubLinks contribute
+// their suppressed-layer summary (never a false empty set), and FuncCall
+// windows pull in the addressed definition's own clauses.
+func (d *depResolver) exprDeps(root *pg.Node) ([]SourceRef, bool) {
+	var deps []SourceRef
+	complete := true
+	merge := func(sub []SourceRef, ok bool) {
+		deps = unionSourceRefs(deps, sub)
+		complete = complete && ok
+	}
 	walkTree(msgOf(root), func(_ *walkCtx, m protoreflect.Message) bool {
-		if in.err != nil {
+		if d.in.err != nil {
 			return false
 		}
 		switch v := m.Interface().(type) {
 		case *pg.ColumnRef:
 			fields := v.GetFields()
 			if hasStar(fields) {
-				it := sc.itemByFields(fields[:len(fields)-1])
-				sub, ok := in.wholeRowDeps(it)
-				deps = unionSourceRefs(deps, sub)
-				complete = complete && ok
+				it := d.sc.itemByFields(fields[:len(fields)-1])
+				merge(d.in.wholeRowDeps(it))
 				return false
 			}
-			if ref, ok := sc.resolveFields(fields); ok {
+			if ref, ok := d.sc.resolveFields(fields); ok {
 				if src := colAtPublic(ref.item, ref.ord); src != nil {
 					deps = unionSourceRefs(deps, src.deps)
 					complete = complete && src.depsComplete
 				} else {
 					complete = false
 				}
-			} else if it := sc.itemByFields(fields); it != nil {
-				sub, ok := in.wholeRowDeps(it)
-				deps = unionSourceRefs(deps, sub)
-				complete = complete && ok
+			} else if it := d.sc.itemByFields(fields); it != nil {
+				merge(d.in.wholeRowDeps(it))
 			} else {
 				complete = false
 			}
 			return false
+		case *pg.FuncCall:
+			// `over` is the FuncCall's window definition — handle it here
+			// (named/indirect references included) and descend only into the
+			// call's own argument/filter subtrees.
+			merge(d.windowDeps(v.GetOver(), map[string]bool{}, true))
+			for _, a := range v.GetArgs() {
+				merge(d.exprDeps(a))
+			}
+			for _, a := range v.GetAggOrder() {
+				merge(d.exprDeps(a))
+			}
+			merge(d.exprDeps(v.GetAggFilter()))
+			return false
 		case *pg.SubLink:
 			if te := v.GetTestexpr(); te != nil {
-				sub, ok := in.expressionDeps(te, sc, layouts)
-				deps = unionSourceRefs(deps, sub)
-				complete = complete && ok
+				merge(d.exprDeps(te))
 			}
-			sub, ok := in.subLinkDeps(v, layouts)
-			deps = unionSourceRefs(deps, sub)
-			complete = complete && ok
+			merge(d.in.subLinkDeps(v, d))
 			return false
 		}
 		return true
 	})
-	if in.err != nil {
+	if d.in.err != nil {
 		return nil, false
 	}
 	return sortSourceRefs(deps), complete
 }
 
 // subLinkDeps processes the subselect in suppressed mode and returns the
-// layer's complete dependency summary. It runs against the real subtree so
-// RangeVar node → RefID mapping stays pointer-local and exact.
-func (in *injector) subLinkDeps(sl *pg.SubLink, layouts map[string]*itemLayout) ([]SourceRef, bool) {
+// layer's complete dependency summary. The inner layer inherits the
+// enclosing scope as its correlated parent. It runs against the real
+// subtree so RangeVar node → RefID mapping stays pointer-local and exact.
+func (in *injector) subLinkDeps(sl *pg.SubLink, d *depResolver) ([]SourceRef, bool) {
 	if sl == nil || sl.GetSubselect() == nil {
 		return nil, true
 	}
@@ -1615,7 +1845,7 @@ func (in *injector) subLinkDeps(sl *pg.SubLink, layouts map[string]*itemLayout) 
 	}
 	layout, ok := in.subLayouts[sub]
 	if !ok {
-		rep, got := in.selectStmt(sub, layouts, false)
+		rep, got := in.selectStmt(sub, d.layouts, false, d.sc)
 		if rep != sub {
 			sl.Subselect.Node = &pg.Node_SelectStmt{SelectStmt: rep}
 			sub = rep
@@ -1631,66 +1861,104 @@ func (in *injector) subLinkDeps(sl *pg.SubLink, layouts map[string]*itemLayout) 
 	return append([]SourceRef(nil), layout.allDeps...), layout.allDepsComplete
 }
 
-// fillLayerDeps stores the complete dependency summary for one SELECT layer.
-// Public targets plus predicate/sort/group/window/VALUES/join expressions are
-// all part of a SubLink summary when this layer is referenced from one.
-func (in *injector) fillLayerDeps(sel *pg.SelectStmt, pubCols []outCol, items []*fromItemRef, sc *fromScope, layouts map[string]*itemLayout, layout *itemLayout) {
+// fillLayerDeps stores the complete dependency summary for one SELECT
+// layer. Public targets plus predicate/sort/group/window/VALUES/join
+// expressions are all part of a SubLink summary when this layer is
+// referenced from one. Sort keys bind output names like PostgreSQL's
+// ORDER BY; GROUP BY keys prefer input columns over output names.
+func (in *injector) fillLayerDeps(sel *pg.SelectStmt, dr *depResolver, layout *itemLayout) {
 	var deps []SourceRef
 	complete := true
-	for i := range pubCols {
-		deps = unionSourceRefs(deps, pubCols[i].deps)
-		complete = complete && pubCols[i].depsComplete
+	merge := func(sub []SourceRef, ok bool) {
+		deps = unionSourceRefs(deps, sub)
+		complete = complete && ok
 	}
-	var roots []*pg.Node
-	roots = append(roots, sel.GetWhereClause(), sel.GetHavingClause(), sel.GetLimitOffset(), sel.GetLimitCount())
+	for i := range dr.pub {
+		deps = unionSourceRefs(deps, dr.pub[i].deps)
+		complete = complete && dr.pub[i].depsComplete
+	}
+	merge(dr.exprDeps(sel.GetWhereClause()))
+	merge(dr.exprDeps(sel.GetHavingClause()))
+	merge(dr.exprDeps(sel.GetLimitOffset()))
+	merge(dr.exprDeps(sel.GetLimitCount()))
 	for _, n := range sel.GetSortClause() {
-		roots = append(roots, n.GetSortBy().GetNode())
+		if sb := n.GetSortBy(); sb != nil {
+			merge(dr.sortKeyDeps(sb.GetNode()))
+		}
 	}
-	roots = append(roots, sel.GetDistinctClause()...)
-	roots = append(roots, sel.GetGroupClause()...)
-	roots = append(roots, sel.GetWindowClause()...)
-	roots = append(roots, sel.GetValuesLists()...)
+	for _, n := range sel.GetDistinctClause() {
+		merge(dr.exprDeps(n))
+	}
+	for _, n := range sel.GetGroupClause() {
+		merge(dr.groupKeyDeps(n))
+	}
+	for _, n := range sel.GetWindowClause() {
+		merge(dr.windowDeps(n.GetWindowDef(), map[string]bool{}, false))
+	}
+	for _, vl := range sel.GetValuesLists() {
+		merge(dr.exprDeps(vl))
+	}
 	var walkFrom func(n *pg.Node)
 	walkFrom = func(n *pg.Node) {
 		if n == nil {
 			return
 		}
 		if j := n.GetJoinExpr(); j != nil {
-			roots = append(roots, j.GetQuals())
+			merge(dr.exprDeps(j.GetQuals()))
 			walkFrom(j.GetLarg())
 			walkFrom(j.GetRarg())
 			return
 		}
 		if rf := n.GetRangeFunction(); rf != nil {
 			for _, f := range rf.GetFunctions() {
-				roots = append(roots, f.GetList().GetItems()...)
+				for _, arg := range f.GetList().GetItems() {
+					merge(dr.exprDeps(arg))
+				}
 			}
 			return
 		}
 		if rtf := n.GetRangeTableFunc(); rtf != nil {
-			roots = append(roots, rtf.GetRowexpr(), rtf.GetDocexpr())
-			roots = append(roots, rtf.GetNamespaces()...)
-			roots = append(roots, rtf.GetColumns()...)
+			merge(dr.exprDeps(rtf.GetRowexpr()))
+			merge(dr.exprDeps(rtf.GetDocexpr()))
+			for _, ns := range rtf.GetNamespaces() {
+				merge(dr.exprDeps(ns))
+			}
+			for _, c := range rtf.GetColumns() {
+				merge(dr.exprDeps(c))
+			}
 			return
 		}
 		if ts := n.GetRangeTableSample(); ts != nil {
-			roots = append(roots, ts.GetArgs()...)
-			roots = append(roots, ts.GetRepeatable())
+			for _, a := range ts.GetArgs() {
+				merge(dr.exprDeps(a))
+			}
+			merge(dr.exprDeps(ts.GetRepeatable()))
 		}
 	}
 	for _, n := range sel.GetFromClause() {
 		walkFrom(n)
 	}
-	for _, root := range roots {
-		sub, ok := in.expressionDeps(root, sc, layouts)
-		deps = unionSourceRefs(deps, sub)
-		complete = complete && ok
-		if in.err != nil {
-			return
-		}
+	if in.err != nil {
+		return
 	}
 	layout.allDeps = sortSourceRefs(deps)
 	layout.allDepsComplete = complete
+}
+
+// windowIndex maps this layer's WINDOW-clause definitions by name —
+// the namespace `OVER w` and window inheritance (`refname`) resolve in.
+func windowIndex(sel *pg.SelectStmt) map[string]*pg.WindowDef {
+	wc := sel.GetWindowClause()
+	if len(wc) == 0 {
+		return nil
+	}
+	idx := make(map[string]*pg.WindowDef, len(wc))
+	for _, n := range wc {
+		if wd := n.GetWindowDef(); wd != nil && wd.GetName() != "" {
+			idx[wd.GetName()] = wd
+		}
+	}
+	return idx
 }
 
 // starCols enumerates the public columns a retained `*`/`x.*` target
@@ -1729,7 +1997,12 @@ func (in *injector) starCols(fields []*pg.Node, items []*fromItemRef, sc *fromSc
 			q = append(q, s.GetSval())
 		}
 	}
-	e := sc.byQual[partsKey(q...)]
+	var e *scopeEntry
+	for s := sc; s != nil; s = s.parent {
+		if e = s.byQual[partsKey(q...)]; e != nil {
+			break
+		}
+	}
 	if e == nil {
 		return nil, fmt.Errorf("%v: star qualifier %q resolves to no FROM item", ErrLayoutUnfreezable, strings.Join(q, "."))
 	}
@@ -1969,7 +2242,7 @@ func cloneLayoutRenamed(l *itemLayout, colnames []*pg.Node) *itemLayout {
 // rows). Their bodies are processed with witnesses suppressed — a sublink
 // can never carry a witness outward, but `*` inside it must still be frozen
 // so injected inner columns never leak into its row width.
-func (in *injector) processSublinks(sel *pg.SelectStmt, layouts map[string]*itemLayout) {
+func (in *injector) processSublinks(sel *pg.SelectStmt, layouts map[string]*itemLayout, outer *fromScope) {
 	var exprs []*pg.Node
 	collect := func(n *pg.Node) {
 		if n != nil {
@@ -2028,7 +2301,7 @@ func (in *injector) processSublinks(sel *pg.SelectStmt, layouts map[string]*item
 		walkFrom(f)
 	}
 	for _, e := range exprs {
-		in.sublinksIn(e, layouts)
+		in.sublinksIn(e, layouts, outer)
 		if in.err != nil {
 			return
 		}
@@ -2036,8 +2309,9 @@ func (in *injector) processSublinks(sel *pg.SelectStmt, layouts map[string]*item
 }
 
 // sublinksIn finds every SubLink below an expression root and processes its
-// subselect with witness emission suppressed.
-func (in *injector) sublinksIn(root *pg.Node, layouts map[string]*itemLayout) {
+// subselect with witness emission suppressed. The inner layer inherits the
+// enclosing scope as its correlated parent.
+func (in *injector) sublinksIn(root *pg.Node, layouts map[string]*itemLayout, outer *fromScope) {
 	walkTree(msgOf(root), func(_ *walkCtx, m protoreflect.Message) bool {
 		if in.err != nil {
 			return false
@@ -2052,11 +2326,11 @@ func (in *injector) sublinksIn(root *pg.Node, layouts map[string]*itemLayout) {
 		}
 		// testexpr can itself contain sublinks (e.g. `(sub) IN (sub)`).
 		if te := sl.GetTestexpr(); te != nil {
-			in.sublinksIn(te, layouts)
+			in.sublinksIn(te, layouts, outer)
 		}
 		if sub := sl.GetSubselect().GetSelectStmt(); sub != nil {
 			if _, done := in.subLayouts[sub]; !done {
-				rep, layout := in.selectStmt(sub, layouts, false)
+				rep, layout := in.selectStmt(sub, layouts, false, outer)
 				if rep != sub {
 					sl.Subselect.Node = &pg.Node_SelectStmt{SelectStmt: rep}
 					sub = rep

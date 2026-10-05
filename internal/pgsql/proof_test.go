@@ -1,6 +1,6 @@
 // Package pgsql implements the PostgreSQL governed read-only query front half.
 // input: synthetic SQL strings over metadata-capable stub resolvers
-// output: intent tests for RefID/RefPath mapping, public-column proof records, source occurrence catalogs, and witness covered-source/carrier propagation
+// output: intent tests for RefID/RefPath mapping, public-column proof records, source occurrence catalogs, witness covered-source/carrier propagation, VALUES expression dependencies, named-window clause resolution, and correlated-subquery scope handling
 // pos: T7-S1 verification-record tests; asserts rewrite-time evidence coordinates without claiming live PostgreSQL execution semantics
 // note: if this file changes, update header and README.md
 package pgsql
@@ -8,6 +8,8 @@ package pgsql
 import (
 	"errors"
 	"testing"
+
+	pg "github.com/pganalyze/pg_query_go/v6"
 )
 
 func proofFixtures() metaStub {
@@ -219,6 +221,231 @@ func TestProofs_SetOperationMergesCoverageNotOriginalIDs(t *testing.T) {
 	}
 	requireDep(t, proof.Dependencies, 0, 0)
 	requireDep(t, proof.Dependencies, 1, 0)
+}
+
+func TestProofs_ValuesExpressionDependencies(t *testing.T) {
+	res := proofFixtures()
+
+	// Pure constants are terminal — complete with an empty dependency set.
+	r, err := Rewrite(`SELECT v.x FROM (VALUES (1)) v(x)`, "app", res)
+	if err != nil {
+		t.Fatalf("constant VALUES rewrite: %v", err)
+	}
+	proof := requireProof(t, r.PublicProofs, 0)
+	if proof.Resolution != ProofComplete || len(proof.Dependencies) != 0 || proof.FDOrigin.Kind != FDOriginNoColumnOrigin {
+		t.Fatalf("constant VALUES proof = %+v", proof)
+	}
+
+	// A LATERAL VALUES cell references the preceding item's column — the
+	// dependency must reach the entity slot, not the derived carrier.
+	r, err = Rewrite(`SELECT v.x FROM app.orders o CROSS JOIN LATERAL (VALUES (o.id)) v(x)`, "app", res)
+	if err != nil {
+		t.Fatalf("lateral VALUES rewrite: %v", err)
+	}
+	proof = requireProof(t, r.PublicProofs, 0)
+	if proof.Resolution != ProofComplete {
+		t.Fatalf("lateral VALUES proof = %+v", proof)
+	}
+	requireDep(t, proof.Dependencies, 0, 0)
+	for _, dep := range proof.Dependencies {
+		if dep.Occurrence < 0 {
+			t.Fatalf("lateral VALUES dep parked on generated occurrence: %+v", dep)
+		}
+	}
+
+	// Multiple rows feed the same output position — deps union per slot.
+	r, err = Rewrite(`SELECT v.x FROM app.orders o CROSS JOIN LATERAL (VALUES (o.id),(o.amt)) v(x)`, "app", res)
+	if err != nil {
+		t.Fatalf("multi-row lateral VALUES rewrite: %v", err)
+	}
+	proof = requireProof(t, r.PublicProofs, 0)
+	if proof.Resolution != ProofComplete || len(proof.Dependencies) != 2 {
+		t.Fatalf("multi-row VALUES proof = %+v", proof)
+	}
+	requireDep(t, proof.Dependencies, 0, 0)
+	requireDep(t, proof.Dependencies, 0, 1)
+
+	// A correlated SubLink inside a lateral VALUES cell reaches the entity.
+	r, err = Rewrite(`SELECT v.x FROM app.orders o CROSS JOIN LATERAL (VALUES ((SELECT o.id))) v(x)`, "app", res)
+	if err != nil {
+		t.Fatalf("VALUES sublink rewrite: %v", err)
+	}
+	proof = requireProof(t, r.PublicProofs, 0)
+	if proof.Resolution != ProofComplete {
+		t.Fatalf("VALUES sublink proof = %+v", proof)
+	}
+	requireDep(t, proof.Dependencies, 0, 0)
+
+	// A subquery inside a lateral VALUES cell reading a witnessed CTE keeps
+	// the CTE's underlying entity as the terminal source.
+	r, err = Rewrite(`WITH c AS (SELECT id FROM orders) SELECT v.x FROM c CROSS JOIN LATERAL (VALUES ((SELECT id FROM c))) v(x)`, "app", res)
+	if err != nil {
+		t.Fatalf("VALUES CTE-sublink rewrite: %v", err)
+	}
+	proof = requireProof(t, r.PublicProofs, 0)
+	if proof.Resolution != ProofComplete {
+		t.Fatalf("VALUES CTE-sublink proof = %+v", proof)
+	}
+	requireDep(t, proof.Dependencies, 0, 0)
+}
+
+func TestProofs_NamedWindowDependencies(t *testing.T) {
+	res := proofFixtures()
+
+	// Inline and named spellings of the same window produce identical deps.
+	inline, err := Rewrite(`SELECT row_number() OVER (ORDER BY o.amt) AS rn FROM app.orders o`, "app", res)
+	if err != nil {
+		t.Fatalf("inline window rewrite: %v", err)
+	}
+	named, err := Rewrite(`SELECT row_number() OVER w AS rn FROM app.orders o WINDOW w AS (ORDER BY o.amt)`, "app", res)
+	if err != nil {
+		t.Fatalf("named window rewrite: %v", err)
+	}
+	ip := requireProof(t, inline.PublicProofs, 0)
+	np := requireProof(t, named.PublicProofs, 0)
+	if ip.Resolution != ProofComplete || np.Resolution != ProofComplete {
+		t.Fatalf("window proofs unresolved: inline=%+v named=%+v", ip, np)
+	}
+	requireDep(t, np.Dependencies, 0, 1) // orders.amt slot
+	if len(ip.Dependencies) != len(np.Dependencies) || ip.Dependencies[0] != np.Dependencies[0] {
+		t.Fatalf("named window deps diverge from inline: %+v vs %+v", ip.Dependencies, np.Dependencies)
+	}
+
+	// Two named windows each contribute only their own clause's sources.
+	r, err := Rewrite(`SELECT row_number() OVER w1 AS r1, row_number() OVER w2 AS r2 FROM app.orders o WINDOW w1 AS (ORDER BY o.amt), w2 AS (PARTITION BY o.id)`, "app", res)
+	if err != nil {
+		t.Fatalf("two-window rewrite: %v", err)
+	}
+	p1 := requireProof(t, r.PublicProofs, 0)
+	p2 := requireProof(t, r.PublicProofs, 1)
+	requireDep(t, p1.Dependencies, 0, 1)
+	requireDep(t, p2.Dependencies, 0, 0)
+	if len(p1.Dependencies) != 1 || len(p2.Dependencies) != 1 {
+		t.Fatalf("windows leaked each other's deps: p1=%+v p2=%+v", p1.Dependencies, p2.Dependencies)
+	}
+
+	// Inheritance: w2 copies w's partition clause and adds its own order.
+	r, err = Rewrite(`SELECT rank() OVER w2 AS r FROM app.orders o WINDOW w AS (PARTITION BY o.id), w2 AS (w ORDER BY o.amt)`, "app", res)
+	if err != nil {
+		t.Fatalf("inherited window rewrite: %v", err)
+	}
+	p := requireProof(t, r.PublicProofs, 0)
+	if p.Resolution != ProofComplete || len(p.Dependencies) != 2 {
+		t.Fatalf("inherited window proof = %+v", p)
+	}
+	requireDep(t, p.Dependencies, 0, 0)
+	requireDep(t, p.Dependencies, 0, 1)
+
+	// A window with no column references stays a complete empty set.
+	r, err = Rewrite(`SELECT row_number() OVER w AS rn FROM app.orders o WINDOW w AS ()`, "app", res)
+	if err != nil {
+		t.Fatalf("empty window rewrite: %v", err)
+	}
+	p = requireProof(t, r.PublicProofs, 0)
+	if p.Resolution != ProofComplete || len(p.Dependencies) != 0 {
+		t.Fatalf("empty window proof = %+v", p)
+	}
+}
+
+func TestProofs_CorrelatedSubqueryScope(t *testing.T) {
+	res := proofFixtures()
+
+	// A scalar sublink with no FROM of its own resolves the outer column.
+	r, err := Rewrite(`SELECT (SELECT o.id) AS x FROM app.orders o`, "app", res)
+	if err != nil {
+		t.Fatalf("correlated sublink rewrite: %v", err)
+	}
+	proof := requireProof(t, r.PublicProofs, 0)
+	if proof.Resolution != ProofComplete {
+		t.Fatalf("correlated sublink proof = %+v", proof)
+	}
+	requireDep(t, proof.Dependencies, 0, 0)
+
+	// Inner-level columns shadow outer names.
+	r, err = Rewrite(`WITH c AS (SELECT 99 AS id) SELECT (SELECT id FROM c) AS x FROM app.orders o`, "app", res)
+	if err != nil {
+		t.Fatalf("shadowed sublink rewrite: %v", err)
+	}
+	proof = requireProof(t, r.PublicProofs, 0)
+	if proof.Resolution != ProofComplete || len(proof.Dependencies) != 0 {
+		t.Fatalf("inner name must shadow the outer column: %+v", proof)
+	}
+
+	// Two levels of nesting walk the scope chain outward.
+	r, err = Rewrite(`SELECT (SELECT (SELECT o.amt)) AS x FROM app.orders o`, "app", res)
+	if err != nil {
+		t.Fatalf("two-level correlated rewrite: %v", err)
+	}
+	proof = requireProof(t, r.PublicProofs, 0)
+	if proof.Resolution != ProofComplete {
+		t.Fatalf("two-level correlated proof = %+v", proof)
+	}
+	requireDep(t, proof.Dependencies, 0, 1)
+
+	// ORDER BY inside a sublink binds the output alias (SQL92), not the
+	// FROM scope — z names the public column, which tracks orders.id.
+	r, err = Rewrite(`WITH c AS (SELECT id FROM orders) SELECT (SELECT id AS z FROM c ORDER BY z LIMIT 1) AS x FROM c`, "app", res)
+	if err != nil {
+		t.Fatalf("output-alias ORDER BY sublink rewrite: %v", err)
+	}
+	proof = requireProof(t, r.PublicProofs, 0)
+	if proof.Resolution != ProofComplete {
+		t.Fatalf("output-alias ORDER BY proof = %+v", proof)
+	}
+	requireDep(t, proof.Dependencies, 0, 0)
+}
+
+func TestCanonicalRefMapping_PathIndexedNotOrder(t *testing.T) {
+	gr, err := GuardPG(`SELECT a.id, b.id FROM orders a JOIN orders b ON a.id = b.id`)
+	if err != nil {
+		t.Fatalf("guard: %v", err)
+	}
+	if len(gr.Refs) != 2 {
+		t.Fatalf("refs = %+v", gr.Refs)
+	}
+	// Canonical tree: qualified twins of the original refs. RefIDs carry
+	// the same path-to-ID pairing because collection order matches.
+	tree := parseTree(t, `SELECT a.id, b.id FROM "app".orders a JOIN "app".orders b ON a.id = b.id`)
+
+	// Reversing the original slice must not change which node receives
+	// which RefID — mapping keys on structural path, never slice order.
+	rev := []RangeVarRef{gr.Refs[1], gr.Refs[0]}
+	byNode, err := mapCanonicalRefs(rev, tree, "app")
+	if err != nil {
+		t.Fatalf("path-indexed mapping on reversed refs: %v", err)
+	}
+	_, canonicalByNode, err := collectRangeVarRefs(tree)
+	if err != nil {
+		t.Fatalf("canonical collect: %v", err)
+	}
+	for node, canonID := range canonicalByNode {
+		if byNode[node] != canonID {
+			t.Fatalf("node at path %v mapped to RefID %d, want %d", canonicalPathOf(tree, node), byNode[node], canonID)
+		}
+	}
+
+	// A duplicate original structural path fails closed.
+	dup := []RangeVarRef{{RefID: 0, Path: gr.Refs[0].Path, Kind: RefEntity, Name: "orders"},
+		{RefID: 1, Path: gr.Refs[0].Path, Kind: RefEntity, Name: "orders"}}
+	if _, err := mapCanonicalRefs(dup, tree, "app"); !errors.Is(err, ErrEvidenceUnavailable) {
+		t.Fatalf("duplicate path mapping = %v, want ErrEvidenceUnavailable", err)
+	}
+}
+
+func canonicalPathOf(tree *pg.ParseResult, want *pg.RangeVar) string {
+	refs, byNode, err := collectRangeVarRefs(tree)
+	if err != nil {
+		return ""
+	}
+	if id, ok := byNode[want]; ok && int(id) < len(refs) {
+		var b []byte
+		for _, f := range refs[int(id)].Path {
+			b = append(b, f.field...)
+			b = append(b, '/')
+		}
+		return string(b)
+	}
+	return ""
 }
 
 func TestCanonicalRefMapping_FailsClosedOnShapeOrPathChange(t *testing.T) {

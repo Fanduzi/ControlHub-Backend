@@ -9,6 +9,8 @@ package pgsql
 import (
 	"bytes"
 	"fmt"
+	"strconv"
+	"strings"
 
 	pg "github.com/pganalyze/pg_query_go/v6"
 	pgquery "github.com/wasilibs/go-pgquery"
@@ -162,8 +164,8 @@ func refPathEqual(a, b RefPath) bool {
 
 // mapCanonicalRefs aligns the original refs to RangeVar nodes in the
 // canonical reparsed tree by RefPath only. RefEntity → pinned-schema
-// RefQualified is the sole permitted shape change; there is no traversal
-// order or name fallback.
+// RefQualified is the sole permitted shape change; collection order is
+// never consulted — originals are indexed by their structural path.
 func mapCanonicalRefs(original []RangeVarRef, tree *pg.ParseResult, pinnedSchema string) (map[*pg.RangeVar]RefID, error) {
 	canonical, byCanonicalNode, err := collectRangeVarRefs(tree)
 	if err != nil {
@@ -172,29 +174,56 @@ func mapCanonicalRefs(original []RangeVarRef, tree *pg.ParseResult, pinnedSchema
 	if len(canonical) != len(original) {
 		return nil, fmt.Errorf("%w: canonical rewrite has %d RangeVars for %d original refs", ErrEvidenceUnavailable, len(canonical), len(original))
 	}
-	canonicalByID := make(map[RefID]RangeVarRef, len(canonical))
-	for _, ref := range canonical {
-		canonicalByID[ref.RefID] = ref
+	origByPath := make(map[string]RangeVarRef, len(original))
+	for _, o := range original {
+		key := refPathKey(o.Path)
+		if _, dup := origByPath[key]; dup {
+			return nil, fmt.Errorf("%w: original ref set has a duplicate structural path", ErrEvidenceUnavailable)
+		}
+		origByPath[key] = o
 	}
 	out := make(map[*pg.RangeVar]RefID, len(original))
+	used := make(map[RefID]bool, len(original))
 	for node, canonicalID := range byCanonicalNode {
 		idx := int(canonicalID)
-		if idx < 0 || idx >= len(original) {
-			return nil, fmt.Errorf("%w: canonical RangeVar id %d outside original ref set", ErrEvidenceUnavailable, canonicalID)
+		if idx < 0 || idx >= len(canonical) {
+			return nil, fmt.Errorf("%w: canonical RangeVar id %d outside collected ref set", ErrEvidenceUnavailable, canonicalID)
 		}
-		orig, canon := original[idx], canonicalByID[canonicalID]
-		if !refPathEqual(orig.Path, canon.Path) {
-			return nil, fmt.Errorf("%w: RangeVar %d changed structural path during qualification", ErrEvidenceUnavailable, orig.RefID)
+		canon := canonical[idx]
+		orig, ok := origByPath[refPathKey(canon.Path)]
+		if !ok {
+			return nil, fmt.Errorf("%w: canonical RangeVar %d has no matching original structural path", ErrEvidenceUnavailable, canon.RefID)
 		}
 		if !canonicalRefShapeMatches(orig, canon, pinnedSchema) {
 			return nil, fmt.Errorf("%w: RangeVar %d changed shape during qualification", ErrEvidenceUnavailable, orig.RefID)
 		}
+		if used[orig.RefID] {
+			return nil, fmt.Errorf("%w: canonical refs collapse onto original %d", ErrEvidenceUnavailable, orig.RefID)
+		}
+		used[orig.RefID] = true
 		out[node] = orig.RefID
 	}
 	if len(out) != len(original) {
 		return nil, fmt.Errorf("%w: canonical RangeVar mapping is incomplete", ErrEvidenceUnavailable)
 	}
 	return out, nil
+}
+
+// refPathKey encodes a structural path for map lookup. Frames carry only
+// fixed-width ASCII fields and indexes, so NUL separators cannot collide.
+func refPathKey(p RefPath) string {
+	var b strings.Builder
+	for _, f := range p {
+		b.WriteString(f.parent)
+		b.WriteByte(0)
+		b.WriteString(f.field)
+		b.WriteByte(0)
+		b.WriteString(strconv.Itoa(f.index))
+		b.WriteByte(0)
+		b.WriteString(f.child)
+		b.WriteByte(0)
+	}
+	return b.String()
 }
 
 func canonicalRefShapeMatches(orig, canon RangeVarRef, pinnedSchema string) bool {
