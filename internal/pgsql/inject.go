@@ -2,7 +2,7 @@
 // (spec G4/G5/G10 stage: parse → guard → classify → qualify → inject).
 // input: qualified *pg.ParseResult, ColumnResolver supplying FROM-position column names (optional ColumnMetadataResolver for structured type/attribute evidence and native common-type verdicts)
 // output: InjectWitnesses, InjectResult, WitnessRecord, EntityKey, ColumnResolver, ColumnType, ColumnMetadata, ColumnMetadataResolver, ErrTypeResolutionUnavailable — layout-freeze + per-layer witness injection + DISTINCT Q+D transform + public-column proofs/source catalog
-// pos: G10 mechanism 5a — records the original visible layout (* / x.* / ordinals / VALUES / per-reference colnames — NATURAL always freezes to the original public-column intersection: explicit USING when nonempty so the join_using_alias stays declarable, ON TRUE keeping the join type when empty) BEFORE appending witnesses; stars stay verbatim unless an injected column forces expansion, and forced USING/NATURAL merges are projected through the join's join_using_alias (generated under the __chub_ prefix when absent) so PostgreSQL computes the merged column natively — common-type coercion included; emits CASE WHEN FALSE THEN alias.* END on ordinary/window-only layers and (array_agg(alias.*) FILTER (WHERE FALSE))[1] on aggregate/grouping layers; propagates through CTEs and derived tables, suppresses inside SubLinks, merges set-op branches through canonical representatives only when attested entities match, and rejects when any entity's witness cannot reach the output; plain SELECT DISTINCT becomes Q+D (D groups by original public columns only and receives ORDER BY/LIMIT/OFFSET exactly once; a decided merged column whose only source reference is itself is a terminal computed JOIN identity and binds to itself); internal names live under the reserved __chub_ prefix; provenance resolution runs through parent-linked FROM scopes (inner shadows outer, LATERAL sees only preceding same-level items plus enclosing levels), VALUES cells analyze every row per output position, named windows resolve through the layer's own WINDOW clause, and ORDER BY/GROUP BY keys bind per PostgreSQL SQL92 output-name/input-column precedence — cyclic or ambiguous bindings fail closed as unresolved
+// pos: G10 mechanism 5a — records the original visible layout (* / x.* / ordinals / VALUES / per-reference colnames — NATURAL always freezes to the original public-column intersection: explicit USING when nonempty so the join_using_alias stays declarable, ON TRUE keeping the join type when empty) BEFORE appending witnesses; stars stay verbatim unless an injected column forces expansion, and forced USING/NATURAL merges are projected through the join's join_using_alias (generated under the __chub_ prefix when absent) so PostgreSQL computes the merged column natively — common-type coercion included; emits CASE WHEN FALSE THEN alias.* END on ordinary/window-only layers and (array_agg(alias.*) FILTER (WHERE FALSE))[1] on aggregate/grouping layers; propagates through CTEs and derived tables, suppresses inside SubLinks, merges set-op branches through canonical representatives only when attested entities match, and rejects when any entity's witness cannot reach the output; plain SELECT DISTINCT becomes Q+D (D groups by original public columns only and receives ORDER BY/LIMIT/OFFSET exactly once; a decided merged column whose only source reference is itself is a terminal computed JOIN identity and binds to itself); internal names live under the reserved __chub_ prefix; provenance resolution runs through parent-linked FROM scopes (inner shadows outer, LATERAL sees only preceding same-level items plus enclosing levels, CTE bodies inherit the owning query's enclosing scope), VALUES cells analyze every row per output position under the VALUES layer's own WITH namespace, named windows resolve through the layer's own WINDOW clause with SQL99 input-expression sort keys, and top-level ORDER BY/GROUP BY keys bind per PostgreSQL output-name/input-column precedence — cyclic or ambiguous bindings fail closed as unresolved
 // note: if this file changes, update header and README.md
 package pgsql
 
@@ -414,50 +414,9 @@ func (in *injector) selectStmt(sel *pg.SelectStmt, cteLayouts map[string]*itemLa
 	}
 
 	// CTE bodies first — same per-position visibility as the collector.
-	bodyLayouts := map[string]*itemLayout{}
-	for k, v := range cteLayouts {
-		bodyLayouts[k] = v
-	}
-	if wc := sel.GetWithClause(); wc != nil {
-		// Recursive WITH: every sibling name is visible inside every body —
-		// register opaque placeholders first (entities are impossible inside
-		// recursive bodies; `*` over a placeholder rejects unfreezable).
-		if wc.GetRecursive() {
-			for _, n := range wc.GetCtes() {
-				if c := n.GetCommonTableExpr(); c != nil {
-					bodyLayouts[c.GetCtename()] = &itemLayout{opaque: true}
-				}
-			}
-		}
-		for _, n := range wc.GetCtes() {
-			cte := n.GetCommonTableExpr()
-			if cte == nil {
-				continue
-			}
-			var body *itemLayout
-			if node := cte.GetCtequery(); node != nil {
-				if sub := node.GetSelectStmt(); sub != nil {
-					// CTE bodies see the visible CTE names but never the
-					// enclosing query's columns — nil outer scope.
-					var rep *pg.SelectStmt
-					rep, body = in.selectStmt(sub, bodyLayouts, emit, nil)
-					if rep != sub {
-						node.Node = &pg.Node_SelectStmt{SelectStmt: rep}
-					}
-				}
-			}
-			if in.err != nil {
-				return sel, nil
-			}
-			if body == nil {
-				body = &itemLayout{opaque: true}
-			}
-			// WITH c(x, y) renames the body's public output positionally.
-			if cn := cte.GetAliascolnames(); len(cn) > 0 {
-				body = cloneLayoutRenamed(body, cn)
-			}
-			bodyLayouts[cte.GetCtename()] = body
-		}
+	bodyLayouts := in.cteLayoutsFor(sel, cteLayouts, emit, outerScope)
+	if in.err != nil {
+		return sel, nil
 	}
 
 	// Set-operation node: process leaves through the full layer path, then
@@ -563,6 +522,59 @@ func (in *injector) selectStmt(sel *pg.SelectStmt, cteLayouts map[string]*itemLa
 		return d, dLayout
 	}
 	return sel, layout
+}
+
+// cteLayoutsFor processes one layer's WITH clause and returns the visible
+// CTE map: inherited names copied first, local definitions shadowing them.
+// A body runs as an ordinary layer whose outer scope is the OWNING query's
+// enclosing scope — it may correlate to grandparent-or-higher levels but
+// can never see the owning level's own FROM items, which PostgreSQL does
+// not expose to a CTE definition.
+func (in *injector) cteLayoutsFor(sel *pg.SelectStmt, inherited map[string]*itemLayout, emit bool, outerScope *fromScope) map[string]*itemLayout {
+	bodyLayouts := map[string]*itemLayout{}
+	for k, v := range inherited {
+		bodyLayouts[k] = v
+	}
+	if wc := sel.GetWithClause(); wc != nil {
+		// Recursive WITH: every sibling name is visible inside every body —
+		// register opaque placeholders first (entities are impossible inside
+		// recursive bodies; `*` over a placeholder rejects unfreezable).
+		if wc.GetRecursive() {
+			for _, n := range wc.GetCtes() {
+				if c := n.GetCommonTableExpr(); c != nil {
+					bodyLayouts[c.GetCtename()] = &itemLayout{opaque: true}
+				}
+			}
+		}
+		for _, n := range wc.GetCtes() {
+			cte := n.GetCommonTableExpr()
+			if cte == nil {
+				continue
+			}
+			var body *itemLayout
+			if node := cte.GetCtequery(); node != nil {
+				if sub := node.GetSelectStmt(); sub != nil {
+					var rep *pg.SelectStmt
+					rep, body = in.selectStmt(sub, bodyLayouts, emit, outerScope)
+					if rep != sub {
+						node.Node = &pg.Node_SelectStmt{SelectStmt: rep}
+					}
+				}
+			}
+			if in.err != nil {
+				return nil
+			}
+			if body == nil {
+				body = &itemLayout{opaque: true}
+			}
+			// WITH c(x, y) renames the body's public output positionally.
+			if cn := cte.GetAliascolnames(); len(cn) > 0 {
+				body = cloneLayoutRenamed(body, cn)
+			}
+			bodyLayouts[cte.GetCtename()] = body
+		}
+	}
+	return bodyLayouts
 }
 
 // setOpLayer injects into UNION/INTERSECT/EXCEPT leaves and merges their
@@ -759,8 +771,15 @@ func (in *injector) fromItem(n *pg.Node, cteLayouts map[string]*itemLayout, emit
 				visible.parent = outerScope
 			}
 			if vl := inner.GetValuesLists(); len(vl) > 0 {
+				// The VALUES select can carry its own WITH — build its
+				// layouts first so inner CTE names shadow outer ones and
+				// bodies still correlate against the legal outer scope.
+				layouts := in.cteLayoutsFor(inner, cteLayouts, emit, visible)
+				if in.err != nil {
+					return nil
+				}
 				dr := &depResolver{
-					in: in, sc: visible, layouts: cteLayouts,
+					in: in, sc: visible, layouts: layouts,
 					pubExpr: map[int]*pg.Node{}, done: map[int]bool{}, active: map[int]bool{},
 				}
 				layout = in.valuesLayout(inner, sub.GetAlias(), dr)
@@ -1666,10 +1685,11 @@ func (d *depResolver) publicByName(name string) (idx int, ambiguous bool) {
 
 // windowDeps unions the terminal dependencies every clause of one window
 // definition contributes: the inherited base window (refname), partition
-// keys, ordering keys — which bind output names like top-level ORDER BY —
-// and frame offsets. named=true marks an `OVER w`-style inline definition
-// whose name field references a WINDOW-clause member; a member's own name
-// field is its declaration, never a reference.
+// keys, ordering keys, and frame offsets. Window ORDER BY keys are plain
+// input expressions — PostgreSQL forces SQL99 semantics there, so they
+// never bind output names or ordinals. named=true marks an `OVER w`-style
+// inline definition whose name field references a WINDOW-clause member;
+// a member's own name field is its declaration, never a reference.
 func (d *depResolver) windowDeps(wd *pg.WindowDef, seen map[string]bool, named bool) ([]SourceRef, bool) {
 	if wd == nil {
 		return nil, true
@@ -1702,7 +1722,9 @@ func (d *depResolver) windowDeps(wd *pg.WindowDef, seen map[string]bool, named b
 	}
 	for _, s := range wd.GetOrderClause() {
 		if sb := s.GetSortBy(); sb != nil {
-			merge(d.sortKeyDeps(sb.GetNode()))
+			// SQL99 inside a window: bare names are input columns and
+			// integers are constants — no output-name/ordinal binding.
+			merge(d.exprDeps(sb.GetNode()))
 		}
 	}
 	merge(d.exprDeps(wd.GetStartOffset()))

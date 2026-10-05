@@ -395,6 +395,118 @@ func TestProofs_CorrelatedSubqueryScope(t *testing.T) {
 	requireDep(t, proof.Dependencies, 0, 0)
 }
 
+func TestProofs_WindowOrderKeysUseInputColumns(t *testing.T) {
+	res := proofFixtures()
+
+	// Window ORDER BY keys are input expressions (SQL99), never output
+	// names: bare `amt` binds the input column o.amt — not the output
+	// column `o.id AS amt`. Inline and named spellings must agree.
+	for _, sql := range []string{
+		`SELECT o.id AS amt, row_number() OVER (ORDER BY amt) AS rn FROM app.orders o`,
+		`SELECT o.id AS amt, row_number() OVER w AS rn FROM app.orders o WINDOW w AS (ORDER BY amt)`,
+	} {
+		r, err := Rewrite(sql, "app", res)
+		if err != nil {
+			t.Fatalf("window input-key rewrite %q: %v", sql, err)
+		}
+		p := requireProof(t, r.PublicProofs, 1)
+		if p.Resolution != ProofComplete || len(p.Dependencies) != 1 {
+			t.Fatalf("window input-key proof %q = %+v", sql, p)
+		}
+		requireDep(t, p.Dependencies, 0, 1) // o.amt — o.id would be wrong
+	}
+
+	// `ORDER BY 1` inside a window is a constant, not an output ordinal.
+	r, err := Rewrite(`SELECT row_number() OVER (ORDER BY 1) AS rn FROM app.orders`, "app", res)
+	if err != nil {
+		t.Fatalf("window ordinal-constant rewrite: %v", err)
+	}
+	p := requireProof(t, r.PublicProofs, 0)
+	if p.Resolution != ProofComplete || len(p.Dependencies) != 0 {
+		t.Fatalf("window constant-order proof = %+v", p)
+	}
+}
+
+func TestProofs_CTEBodyCorrelatesOuterScope(t *testing.T) {
+	res := proofFixtures()
+
+	// A CTE body inside a subquery may correlate to grandparent-level
+	// columns — the owning level's own FROM is the only scope cut off.
+	r, err := Rewrite(`SELECT (WITH c AS (SELECT o.id AS x) SELECT x FROM c) AS picked FROM app.orders o`, "app", res)
+	if err != nil {
+		t.Fatalf("correlated CTE rewrite: %v", err)
+	}
+	p := requireProof(t, r.PublicProofs, 0)
+	if p.Resolution != ProofComplete {
+		t.Fatalf("correlated CTE proof = %+v", p)
+	}
+	requireDep(t, p.Dependencies, 0, 0)
+
+	// Reverse: a top-level CTE body must not see the owning level's own
+	// FROM items — `o` belongs to the same query, so it stays unresolved
+	// (PostgreSQL rejects the same-level reference outright).
+	r, err = Rewrite(`WITH c AS (SELECT o.id AS x) SELECT x FROM c, app.orders o`, "app", res)
+	if err != nil {
+		var rej *RejectError
+		if !errors.As(err, &rej) {
+			t.Fatalf("same-level CTE ref error = %v, want RejectError", err)
+		}
+		return
+	}
+	p = requireProof(t, r.PublicProofs, 0)
+	if p.Resolution == ProofComplete {
+		t.Fatalf("same-level CTE ref must not resolve: %+v", p)
+	}
+}
+
+func TestProofs_ValuesInnerWithShadowsOuter(t *testing.T) {
+	res := proofFixtures()
+
+	// A lateral VALUES select's own WITH works and correlates legally.
+	r, err := Rewrite(`SELECT v.x FROM app.orders o CROSS JOIN LATERAL (WITH c AS (SELECT o.amt AS x) VALUES ((SELECT x FROM c))) v(x)`, "app", res)
+	if err != nil {
+		t.Fatalf("inner WITH VALUES rewrite: %v", err)
+	}
+	p := requireProof(t, r.PublicProofs, 0)
+	if p.Resolution != ProofComplete || len(p.Dependencies) != 1 {
+		t.Fatalf("inner WITH VALUES proof = %+v", p)
+	}
+	requireDep(t, p.Dependencies, 0, 1) // o.amt
+
+	// An outer same-name CTE must be shadowed — resolving the inner
+	// reference against `SELECT 0` would fabricate a constant source.
+	r, err = Rewrite(`WITH c AS (SELECT 0 AS x) SELECT v.x FROM app.orders o CROSS JOIN LATERAL (WITH c AS (SELECT o.amt AS x) VALUES ((SELECT x FROM c))) v(x)`, "app", res)
+	if err != nil {
+		t.Fatalf("shadowed WITH VALUES rewrite: %v", err)
+	}
+	p = requireProof(t, r.PublicProofs, 0)
+	if p.Resolution != ProofComplete || len(p.Dependencies) != 1 {
+		t.Fatalf("shadowed WITH VALUES proof = %+v", p)
+	}
+	requireDep(t, p.Dependencies, 0, 1)
+
+	// Inner and outer bodies depend on different columns — the dep must
+	// come from the inner definition, not the outer entity's column.
+	r, err = Rewrite(`WITH c AS (SELECT id AS x FROM orders) SELECT v.x FROM c, app.orders o CROSS JOIN LATERAL (WITH c AS (SELECT o.amt AS x) VALUES ((SELECT x FROM c))) v(x)`, "app", res)
+	if err != nil {
+		t.Fatalf("divergent WITH VALUES rewrite: %v", err)
+	}
+	var occOfO SourceOccurrenceID = -1
+	for _, ref := range r.Refs {
+		if ref.Alias == "o" {
+			occOfO = SourceOccurrenceID(ref.RefID)
+		}
+	}
+	if occOfO < 0 {
+		t.Fatalf("refs %+v lack alias o", r.Refs)
+	}
+	p = requireProof(t, r.PublicProofs, 0)
+	if p.Resolution != ProofComplete || len(p.Dependencies) != 1 {
+		t.Fatalf("divergent WITH VALUES proof = %+v", p)
+	}
+	requireDep(t, p.Dependencies, occOfO, 1)
+}
+
 func TestCanonicalRefMapping_PathIndexedNotOrder(t *testing.T) {
 	gr, err := GuardPG(`SELECT a.id, b.id FROM orders a JOIN orders b ON a.id = b.id`)
 	if err != nil {
