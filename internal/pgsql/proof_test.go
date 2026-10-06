@@ -7,6 +7,7 @@ package pgsql
 
 import (
 	"errors"
+	"strings"
 	"testing"
 
 	pg "github.com/pganalyze/pg_query_go/v6"
@@ -505,6 +506,38 @@ func TestProofs_ValuesInnerWithShadowsOuter(t *testing.T) {
 		t.Fatalf("divergent WITH VALUES proof = %+v", p)
 	}
 	requireDep(t, p.Dependencies, occOfO, 1)
+}
+
+func TestProofs_ValuesTailSublinkFrozen(t *testing.T) {
+	res := proofFixtures()
+
+	// A VALUES layer's local WITH now carries propagated witnesses — a `*`
+	// left verbatim in a tail sublink would expand over the injected column
+	// and change the scalar subquery's width. The transport SQL must show
+	// the LIMIT/OFFSET/ORDER BY sublink projecting only the public column.
+	for _, sql := range []string{
+		`WITH a AS (SELECT id FROM app.orders) SELECT v.x FROM a CROSS JOIN LATERAL (WITH c AS (SELECT id FROM a) VALUES (1) LIMIT (SELECT * FROM c LIMIT 1)) AS v(x)`,
+		`WITH a AS (SELECT id FROM app.orders) SELECT v.x FROM a CROSS JOIN LATERAL (WITH c AS (SELECT id FROM a) VALUES (1) OFFSET (SELECT * FROM c LIMIT 1)) AS v(x)`,
+		`WITH a AS (SELECT id FROM app.orders) SELECT v.x FROM a CROSS JOIN LATERAL (WITH c AS (SELECT id FROM a) VALUES (1) ORDER BY (SELECT * FROM c LIMIT 1)) AS v(x)`,
+	} {
+		r, err := Rewrite(sql, "app", res)
+		if err != nil {
+			t.Fatalf("tail-sublink rewrite %q: %v", sql, err)
+		}
+		// Trigger condition: the local CTE really did pick up a witness.
+		if !strings.Contains(r.SQL, "__chub_w") {
+			t.Fatalf("expected propagated witness in transport SQL %q", r.SQL)
+		}
+		// The tail sublink is the only position that ever held a SELECT
+		// star — the `.*` inside witness CASE expressions is legitimate
+		// and stays.
+		if strings.Contains(r.SQL, "SELECT *") {
+			t.Fatalf("unfrozen star survived tail sublink: %q", r.SQL)
+		}
+		if !strings.Contains(r.SQL, "id") {
+			t.Fatalf("tail sublink lost its public column: %q", r.SQL)
+		}
+	}
 }
 
 func TestCanonicalRefMapping_PathIndexedNotOrder(t *testing.T) {
