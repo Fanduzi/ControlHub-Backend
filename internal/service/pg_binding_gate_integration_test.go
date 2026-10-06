@@ -5,11 +5,14 @@
 // input: context, errors, fmt, strings, sync, testing, time, jackc/pgx/v5,
 // jackc/pgx/v5/pgxpool, internal/pgsql
 // output: acceptance tests A–G for the frozen contract — touch-confirmed
-// bindings and RefID preservation, controlled rejections, FD self-proof
-// against same-name replacement, lock-wait timeout under the remaining
-// budget, post-touch DDL blocking, view dependency boundary, recursive
-// pg_inherits collection, native CommonType verdicts, cancellation, and the
-// real resolver wired into RewriteFromGuardPaginated
+// bindings and RefID preservation, controlled rejections (including
+// table-level access denial and vanished names at the touch stage), FD
+// self-proof against same-name replacement, lock-wait timeout under the
+// remaining budget, post-touch DDL blocking, view dependency boundary,
+// recursive pg_inherits collection, relisshared-accurate approved/probe
+// identities, resolver pinned-schema normalization, native CommonType
+// verdicts, cancellation, and the real resolver wired into
+// RewriteFromGuardPaginated
 // pos: T7-S2 real-PostgreSQL acceptance — production OpenPostgresPool,
 // test-owned BEGIN READ ONLY + G4 session settings, production PGBind, then
 // the S1 rewrite seam; transport SQL is never executed in this slice
@@ -20,6 +23,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -84,6 +88,8 @@ func pgBindFixture(t *testing.T) pgPoolLab {
 			`CREATE TABLE IF NOT EXISTS app.swapme (id bigint, val integer)`,
 			`CREATE TABLE IF NOT EXISTS app.swapme_b (other text, num numeric)`,
 			`CREATE TABLE IF NOT EXISTS app.lockme (id integer)`,
+			`CREATE TABLE IF NOT EXISTS app.vanish (id bigint, val integer)`,
+			`CREATE TABLE IF NOT EXISTS app.noselect (id bigint)`,
 			`DO $$ BEGIN
 			    IF NOT EXISTS (SELECT 1 FROM pg_catalog.pg_roles WHERE rolname = 'ro_bind') THEN
 			        CREATE ROLE ro_bind LOGIN PASSWORD '` + pgBindRolePassword + `';
@@ -95,6 +101,9 @@ func pgBindFixture(t *testing.T) pgPoolLab {
 			`GRANT SELECT ON ALL TABLES IN SCHEMA app TO ro_bind`,
 			`GRANT SELECT ON ALL TABLES IN SCHEMA analytics TO ro_bind`,
 			`GRANT SELECT ON nogranted.hidden TO ro_bind`,
+			// Resolvable but not selectable: the touch stage must still return
+			// a controlled object rejection, never an internal failure.
+			`REVOKE SELECT ON app.noselect FROM ro_bind`,
 		}
 		for _, stmt := range stmts {
 			if _, err := admin.Exec(ctx, stmt); err != nil {
@@ -373,6 +382,7 @@ func TestPGBind_ControlledRejections(t *testing.T) {
 		want   string
 	}{
 		{"missing object", `SELECT * FROM nosuch_table`, "app", "query_object_not_found"},
+		{"no table select", `SELECT * FROM noselect`, "app", "query_object_not_found"},
 		{"no pg_catalog fallback", `SELECT * FROM pg_locks`, "app", "query_object_not_found"},
 		{"pinned without usage", `SELECT * FROM hidden`, "nogranted", "query_schema_not_usable"},
 		{"pinned missing", `SELECT * FROM anything`, "schema_never_made", "schema_not_found"},
@@ -449,6 +459,58 @@ func TestPGBind_TouchDetectsReplacement(t *testing.T) {
 	}
 	if code := rejectCodeOf(t, err); code != "query_binding_mismatch" {
 		t.Fatalf("code = %s, want query_binding_mismatch (err %v)", code, err)
+	}
+}
+
+// C2 — when the resolved name simply disappears between resolution and touch
+// (renamed away, no replacement), the touch's own relation-access error is
+// the controlled not-found verdict — not an internal backend failure, and
+// the driver detail never leaks into the message.
+func TestPGBind_TouchDetectsVanishedName(t *testing.T) {
+	lab := pgBindFixture(t)
+	admin := lab.adminConn(t)
+	a := beginPGAttempt(t, lab, "app", 30*time.Second)
+
+	gr := mustGuard(t, `SELECT v.id FROM vanish v`)
+	budget, err := pgAttemptBudgetFromContext(a.ctx)
+	if err != nil {
+		t.Fatalf("budget: %v", err)
+	}
+	var once sync.Once
+	var swapErr error
+	var swapped bool
+	g := newPGBindingGate(a.ctx, PGBindInput{
+		Tx: a.tx, Database: lab.db, PinnedSchema: "app", Guard: gr,
+	}, budget)
+	g.afterEntityResolve = func() {
+		// Rename-only: no replacement occupies the name, so the touch hits a
+		// real "relation does not exist" at its own stage.
+		once.Do(func() {
+			_, swapErr = admin.Exec(a.ctx, `ALTER TABLE app.vanish RENAME TO vanish_x`)
+			if swapErr == nil {
+				swapped = true
+			}
+		})
+	}
+	_, err = g.run()
+	defer func() {
+		if !swapped {
+			return
+		}
+		_ = a.tx.Rollback(context.Background())
+		admin.Exec(context.Background(), `ALTER TABLE app.vanish_x RENAME TO vanish`)
+	}()
+	if swapErr != nil {
+		t.Fatalf("rename ddl: %v", swapErr)
+	}
+	if err == nil {
+		t.Fatal("touch succeeded on a name that no longer exists")
+	}
+	if code := rejectCodeOf(t, err); code != "query_object_not_found" {
+		t.Fatalf("code = %s, want query_object_not_found (err %v)", code, err)
+	}
+	if strings.Contains(err.Error(), "vanish") || strings.Contains(err.Error(), "does not exist") {
+		t.Fatalf("driver detail leaked into rejection: %v", err)
 	}
 }
 
@@ -636,12 +698,114 @@ func TestPGBind_ViewDepsAndInheritance(t *testing.T) {
 }
 
 func inApproved(res *PGBindResult, oid uint32) bool {
-	for _, id := range res.Approved {
-		if id.RelationOID == oid && id.DatabaseOID == res.DatabaseOID {
+	return hasIdentity(res.Approved, PGRelationIdentity{DatabaseOID: res.DatabaseOID, RelationOID: oid})
+}
+
+func hasIdentity(set []PGRelationIdentity, want PGRelationIdentity) bool {
+	for _, id := range set {
+		if id == want {
 			return true
 		}
 	}
 	return false
+}
+
+// E2 — every identity in Approved/Probes derives from the relation's own
+// pg_class.relisshared: a shared catalog and its indexes carry database 0,
+// local relations keep the attempt database OID. Verified against live
+// pg_class, not assumed.
+func TestPGBind_SharedRelationIdentities(t *testing.T) {
+	lab := pgBindFixture(t)
+	admin := lab.adminConn(t)
+	a := beginPGAttempt(t, lab, "app", 30*time.Second)
+
+	// A shared catalog binds at (0, rel) and its indexes at (0, idx).
+	res := a.bind(t, `SELECT d.datname FROM pg_catalog.pg_database d`)
+	for id, b := range res.Refs {
+		if b.Identity.DatabaseOID != 0 {
+			t.Fatalf("ref %d shared catalog identity = %+v, want database 0", id, b.Identity)
+		}
+	}
+	var datnameIdx uint32
+	if err := admin.QueryRow(a.ctx,
+		`SELECT c.oid::pg_catalog.oid FROM pg_catalog.pg_class c
+		  WHERE c.relname = 'pg_database_datname_index'`).Scan(&datnameIdx); err != nil {
+		t.Fatalf("shared index oid: %v", err)
+	}
+	if !hasIdentity(res.Approved, PGRelationIdentity{DatabaseOID: 0, RelationOID: datnameIdx}) {
+		t.Fatalf("approved missing shared index (0,%d): %v", datnameIdx, res.Approved)
+	}
+
+	// A local table's index keeps the attempt database OID.
+	resLocal := a.bind(t, `SELECT o.id FROM orders o`)
+	var ordersPkey uint32
+	if err := admin.QueryRow(a.ctx,
+		`SELECT ('app.orders_pkey'::pg_catalog.regclass)::pg_catalog.oid`).Scan(&ordersPkey); err != nil {
+		t.Fatalf("pkey oid: %v", err)
+	}
+	if !hasIdentity(resLocal.Approved, PGRelationIdentity{DatabaseOID: resLocal.DatabaseOID, RelationOID: ordersPkey}) {
+		t.Fatalf("approved missing local index (%d,%d)", resLocal.DatabaseOID, ordersPkey)
+	}
+
+	// Cross-check every recorded identity's sharedness against pg_class.
+	checkSharedness := func(r *PGBindResult) {
+		t.Helper()
+		all := append(append([]PGRelationIdentity{}, r.Approved...), r.Probes...)
+		for _, id := range all {
+			var shared bool
+			if err := admin.QueryRow(a.ctx,
+				`SELECT c.relisshared FROM pg_catalog.pg_class c WHERE c.oid = $1`,
+				id.RelationOID).Scan(&shared); err != nil {
+				t.Fatalf("relisshared %d: %v", id.RelationOID, err)
+			}
+			if shared != (id.DatabaseOID == 0) {
+				t.Fatalf("identity %+v contradicts relisshared=%v", id, shared)
+			}
+		}
+	}
+	checkSharedness(res)
+	checkSharedness(resLocal)
+}
+
+// G2 — the resolver honors the interface's pinned-schema convention: ""
+// addresses the pinned binding exactly like the explicit schema name, while
+// a different explicit schema stays on its own bound object.
+func TestPGBind_ResolverEmptySchema(t *testing.T) {
+	lab := pgBindFixture(t)
+	a := beginPGAttempt(t, lab, "app", 30*time.Second)
+	res := a.bind(t, `SELECT o.id FROM orders o`)
+
+	colsEmpty, err := res.Resolver.Columns("", "orders")
+	if err != nil {
+		t.Fatalf("Columns(\"\"): %v", err)
+	}
+	colsExplicit, err := res.Resolver.Columns("app", "orders")
+	if err != nil {
+		t.Fatalf("Columns(app): %v", err)
+	}
+	if fmt.Sprint(colsEmpty) != fmt.Sprint(colsExplicit) {
+		t.Fatalf("empty schema = %v, explicit = %v", colsEmpty, colsExplicit)
+	}
+	mr := res.Resolver.(pgsql.ColumnMetadataResolver)
+	mdEmpty, err := mr.ColumnMetadata("", "orders")
+	if err != nil {
+		t.Fatalf("ColumnMetadata(\"\"): %v", err)
+	}
+	mdExplicit, err := mr.ColumnMetadata("app", "orders")
+	if err != nil {
+		t.Fatalf("ColumnMetadata(app): %v", err)
+	}
+	if fmt.Sprint(mdEmpty) != fmt.Sprint(mdExplicit) {
+		t.Fatal("metadata diverged between empty and explicit schema")
+	}
+	// Other schemas and unbound names stay evidence-unavailable — the
+	// resolver never falls back to the catalog.
+	if _, err := res.Resolver.Columns("analytics", "orders"); !errors.Is(err, pgsql.ErrTypeResolutionUnavailable) {
+		t.Fatalf("analytics.orders = %v, want evidence unavailable", err)
+	}
+	if _, err := res.Resolver.Columns("", "nosuch"); !errors.Is(err, pgsql.ErrTypeResolutionUnavailable) {
+		t.Fatalf("unbound = %v, want evidence unavailable", err)
+	}
 }
 
 // F — CommonType is PostgreSQL's own verdict, identity-checked on both

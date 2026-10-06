@@ -1,8 +1,9 @@
 // Package service unit-covers the deterministic parts of the T7-S2 binding
 // gate without a database.
-// input: testing, context, time, errors, jackc/pgx/v5/pgconn
+// input: testing, context, time, errors, fmt, jackc/pgx/v5/pgconn
 // output: unit tests for remaining-budget millisecond math, context deadline
-// derivation, the cancelled/timeout/internal error classifier, and identifier
+// derivation, the cancelled/timeout/internal error classifier, approved-set
+// identity assembly, resolver pinned-schema normalization, and identifier
 // quoting used by probe SQL
 // pos: offline guarantee proofs for T7-S2 — the budget math must never emit a
 // zero/disabling timeout, cancellation must never be reported as a remote
@@ -13,6 +14,7 @@ package service
 import (
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 	"time"
 
@@ -134,7 +136,7 @@ func TestPGIdentifierQuoting(t *testing.T) {
 }
 
 func TestPGBindResultApprovedDedupAndSort(t *testing.T) {
-	g := &pgBindingGate{dbOID: 100}
+	g := &pgBindingGate{dbOID: 100, extraApproved: map[PGRelationIdentity]bool{}}
 	shared := &pgBoundRelation{oid: 7, shared: true}
 	local := &pgBoundRelation{oid: 9}
 	g.refs = map[pgsql.RefID]*PGBoundRef{
@@ -144,12 +146,19 @@ func TestPGBindResultApprovedDedupAndSort(t *testing.T) {
 	}
 	g.deps = []PGViewDependency{{RelationOID: 9}, {RelationOID: 10}}
 	g.inherits = []PGInheritEdge{{ParentOID: 9, ChildOID: 11}}
+	g.indexes = []PGIndexEdge{{RelationOID: 9, IndexOID: 12}, {RelationOID: 7, IndexOID: 13}}
+	g.noteApproved(10, false) // view dep — a local relation
+	g.noteApproved(11, false) // inherit child
+	g.noteApproved(12, false) // local index keeps the database OID
+	g.noteApproved(13, true)  // shared catalog index must keep database 0
 	res := g.result()
 	want := []PGRelationIdentity{
 		{DatabaseOID: 0, RelationOID: 7},
+		{DatabaseOID: 0, RelationOID: 13},
 		{DatabaseOID: 100, RelationOID: 9},
 		{DatabaseOID: 100, RelationOID: 10},
 		{DatabaseOID: 100, RelationOID: 11},
+		{DatabaseOID: 100, RelationOID: 12},
 	}
 	if len(res.Approved) != len(want) {
 		t.Fatalf("approved=%v, want %v", res.Approved, want)
@@ -158,5 +167,47 @@ func TestPGBindResultApprovedDedupAndSort(t *testing.T) {
 		if res.Approved[i] != want[i] {
 			t.Fatalf("approved[%d]=%v, want %v", i, res.Approved[i], want[i])
 		}
+	}
+}
+
+// The ColumnResolver contract makes "" the pinned schema: Columns and
+// ColumnMetadata must normalize it identically, while any other schema only
+// addresses its own bound object — never a catalog fallback.
+func TestPGTxResolverPinnedSchema(t *testing.T) {
+	rel := &pgBoundRelation{columns: []pgsql.ColumnMetadata{{Name: "id"}, {Name: "item"}}}
+	r := &pgTxResolver{
+		pinned: "app",
+		byName: map[pgRelKey]*pgBoundRelation{
+			{schema: "app", name: "orders"}: rel,
+		},
+	}
+	empty, err := r.Columns("", "orders")
+	if err != nil {
+		t.Fatalf("Columns(\"\"): %v", err)
+	}
+	explicit, err := r.Columns("app", "orders")
+	if err != nil {
+		t.Fatalf("Columns(app): %v", err)
+	}
+	if fmt.Sprint(empty) != fmt.Sprint(explicit) || fmt.Sprint(empty) != "[id item]" {
+		t.Fatalf("empty schema = %v, explicit = %v", empty, explicit)
+	}
+	mdEmpty, err := r.ColumnMetadata("", "orders")
+	if err != nil {
+		t.Fatalf("ColumnMetadata(\"\"): %v", err)
+	}
+	mdExplicit, err := r.ColumnMetadata("app", "orders")
+	if err != nil {
+		t.Fatalf("ColumnMetadata(app): %v", err)
+	}
+	if fmt.Sprint(mdEmpty) != fmt.Sprint(mdExplicit) {
+		t.Fatalf("metadata diverged: %v vs %v", mdEmpty, mdExplicit)
+	}
+	// An explicit different schema never falls back to the pinned binding.
+	if _, err := r.Columns("other", "orders"); !errors.Is(err, pgsql.ErrTypeResolutionUnavailable) {
+		t.Fatalf("other-schema lookup = %v, want evidence unavailable", err)
+	}
+	if _, err := r.Columns("", "nosuch"); !errors.Is(err, pgsql.ErrTypeResolutionUnavailable) {
+		t.Fatalf("unbound lookup = %v, want evidence unavailable", err)
 	}
 }

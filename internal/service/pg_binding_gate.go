@@ -144,15 +144,16 @@ func PGBind(ctx context.Context, in PGBindInput) (*PGBindResult, error) {
 
 func newPGBindingGate(ctx context.Context, in PGBindInput, budget pgAttemptBudget) *pgBindingGate {
 	return &pgBindingGate{
-		ctx:      ctx,
-		tx:       in.Tx,
-		database: in.Database,
-		pinned:   in.PinnedSchema,
-		guard:    in.Guard,
-		budget:   budget,
-		byName:   map[pgRelKey]*pgBoundRelation{},
-		byOID:    map[uint32]*pgBoundRelation{},
-		refs:     map[pgsql.RefID]*PGBoundRef{},
+		ctx:           ctx,
+		tx:            in.Tx,
+		database:      in.Database,
+		pinned:        in.PinnedSchema,
+		guard:         in.Guard,
+		budget:        budget,
+		byName:        map[pgRelKey]*pgBoundRelation{},
+		byOID:         map[uint32]*pgBoundRelation{},
+		refs:          map[pgsql.RefID]*PGBoundRef{},
+		extraApproved: map[PGRelationIdentity]bool{},
 	}
 }
 
@@ -178,14 +179,15 @@ type pgBindingGate struct {
 	guard    *pgsql.GuardResult
 	budget   pgAttemptBudget
 
-	dbOID    uint32
-	byName   map[pgRelKey]*pgBoundRelation
-	byOID    map[uint32]*pgBoundRelation
-	refs     map[pgsql.RefID]*PGBoundRef
-	deps     []PGViewDependency
-	inherits []PGInheritEdge
-	indexes  []PGIndexEdge
-	probes   []PGRelationIdentity
+	dbOID         uint32
+	byName        map[pgRelKey]*pgBoundRelation
+	byOID         map[uint32]*pgBoundRelation
+	refs          map[pgsql.RefID]*PGBoundRef
+	extraApproved map[PGRelationIdentity]bool // deps/inherit children/indexes, keyed by their own relisshared
+	deps          []PGViewDependency
+	inherits      []PGInheritEdge
+	indexes       []PGIndexEdge
+	probes        []PGRelationIdentity
 
 	// afterEntityResolve is a test-only seam letting integration tests
 	// interleave a controlled fault (e.g. a namespace swap) between name
@@ -217,12 +219,18 @@ func (g *pgBindingGate) run() (*PGBindResult, error) {
 // query arms the remaining budget and runs one probe statement. The caller
 // must drain and close the returned rows before the next statement.
 func (g *pgBindingGate) query(sql string, args ...any) (pgx.Rows, error) {
+	return g.queryStage(nil, sql, args...)
+}
+
+// queryStage is query with a stage-specific classifier: the stage sees the
+// raw driver error while it is still typed, before fail redacts it.
+func (g *pgBindingGate) queryStage(classify func(error) error, sql string, args ...any) (pgx.Rows, error) {
 	if err := g.arm(); err != nil {
 		return nil, err
 	}
 	rows, err := g.tx.Query(g.ctx, sql, args...)
 	if err != nil {
-		return nil, g.fail(err)
+		return nil, g.failStage(err, classify)
 	}
 	return rows, nil
 }
@@ -248,6 +256,13 @@ func (g *pgBindingGate) arm() error {
 // classify timeout, RejectError passes through, and everything else is the
 // fixed internal failure — driver text never leaks.
 func (g *pgBindingGate) fail(err error) error {
+	return g.failStage(err, nil)
+}
+
+// failStage is fail plus one hook: after the ctx check (cancellation and
+// deadline stay authoritative) the stage classifier may map a still-typed
+// driver error onto its controlled verdict before it is redacted to internal.
+func (g *pgBindingGate) failStage(err error, classify func(error) error) error {
 	if err == nil {
 		return nil
 	}
@@ -260,6 +275,11 @@ func (g *pgBindingGate) fail(err error) error {
 			return context.Canceled
 		}
 		return ErrQueryTimeout
+	}
+	if classify != nil {
+		if classified := classify(err); classified != nil {
+			return classified
+		}
 	}
 	switch {
 	case errors.Is(err, context.Canceled):
@@ -275,12 +295,51 @@ func (g *pgBindingGate) fail(err error) error {
 	}
 }
 
-func (g *pgBindingGate) identityOf(rel *pgBoundRelation) PGRelationIdentity {
-	id := PGRelationIdentity{DatabaseOID: g.dbOID, RelationOID: rel.oid}
-	if rel.shared {
+// classifyPGRelationAccess is the classifier for statements that name a user
+// relation: undefined table/schema or denied access means the object is
+// invisible to this account at this stage — the frozen not-found verdict.
+func classifyPGRelationAccess(err error) error {
+	var pgErr *pgconn.PgError
+	if !errors.As(err, &pgErr) {
+		return nil
+	}
+	switch pgErr.Code {
+	case "42P01", "3F000", "42501":
+		return &pgsql.RejectError{Code: "query_object_not_found", Message: "pgsql: relation not found"}
+	}
+	return nil
+}
+
+// classifyPGNameRemap is the recheck stage's verdict: a name that resolved a
+// moment ago and now fails with a relation-access error moved out from under
+// the binding — the bound object stands proven, so this is a name mismatch.
+func classifyPGNameRemap(err error) error {
+	if classifyPGRelationAccess(err) != nil {
+		return &pgsql.RejectError{Code: "query_binding_mismatch", Message: "pgsql: relation name remapped during binding"}
+	}
+	return nil
+}
+
+// identityFor derives the lock-audit identity from the relation's own
+// pg_class.relisshared — every relation entering Approved (bound entity, view
+// dep, inherit child, or index) goes through here so a shared object always
+// carries database 0, matching how pg_locks attributes its lock.
+func (g *pgBindingGate) identityFor(oid uint32, shared bool) PGRelationIdentity {
+	id := PGRelationIdentity{DatabaseOID: g.dbOID, RelationOID: oid}
+	if shared {
 		id.DatabaseOID = 0
 	}
 	return id
+}
+
+func (g *pgBindingGate) identityOf(rel *pgBoundRelation) PGRelationIdentity {
+	return g.identityFor(rel.oid, rel.shared)
+}
+
+// noteApproved records a derived relation's audit identity — the caller
+// supplies relisshared read alongside the OID, never a guessed database.
+func (g *pgBindingGate) noteApproved(oid uint32, shared bool) {
+	g.extraApproved[g.identityFor(oid, shared)] = true
 }
 
 // stageDatabaseIdentity confirms the transaction's current_database() matches
@@ -393,16 +452,9 @@ func (g *pgBindingGate) bindEntity(ref pgsql.RangeVarRef) error {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return &pgsql.RejectError{Code: "query_object_not_found", Message: "pgsql: relation not found"}
 		}
-		var pgErr *pgconn.PgError
-		if errors.As(err, &pgErr) {
-			switch pgErr.Code {
-			case "42501", "3F000":
-				// to_regclass checks schema USAGE itself: an inaccessible
-				// schema makes the object invisible to this account.
-				return &pgsql.RejectError{Code: "query_object_not_found", Message: "pgsql: relation not found"}
-			}
-		}
-		return g.fail(err)
+		// to_regclass checks schema USAGE itself: an inaccessible schema
+		// makes the object invisible to this account.
+		return g.failStage(err, classifyPGRelationAccess)
 	}
 
 	if g.afterEntityResolve != nil {
@@ -429,7 +481,7 @@ func (g *pgBindingGate) bindEntity(ref pgsql.RangeVarRef) error {
 	}
 	var again *uint32
 	if err := recheck.Scan(&again); err != nil {
-		return g.fail(err)
+		return g.failStage(err, classifyPGNameRemap)
 	}
 	if again == nil || *again != oid {
 		return &pgsql.RejectError{Code: "query_binding_mismatch", Message: "pgsql: relation name remapped during binding"}
@@ -460,21 +512,16 @@ func (g *pgBindingGate) bindEntity(ref pgsql.RangeVarRef) error {
 
 // touch runs the self-proof touch and returns the FD's DataTypeOID. The
 // FieldDescriptions slice aliases the connection buffer, so the OID is copied
-// before the rows are drained and closed.
+// before the rows are drained and closed. Both error exits — the initial
+// query call and the row-read phase — share the relation-access classifier:
+// pgx can surface a server error at either point.
 func (g *pgBindingGate) touch(schema, name string) (uint32, error) {
 	stmt := fmt.Sprintf(
 		`SELECT CASE WHEN FALSE THEN "__chub_lock".* END
 		   FROM %s.%s AS "__chub_lock" LIMIT 0`,
 		pgQuoteIdent(schema), pgQuoteIdent(name))
-	rows, err := g.query(stmt)
+	rows, err := g.queryStage(classifyPGRelationAccess, stmt)
 	if err != nil {
-		var pgErr *pgconn.PgError
-		if errors.As(err, &pgErr) {
-			switch pgErr.Code {
-			case "42P01", "3F000", "42501":
-				return 0, &pgsql.RejectError{Code: "query_object_not_found", Message: "pgsql: relation not found"}
-			}
-		}
 		return 0, err
 	}
 	fds := rows.FieldDescriptions()
@@ -487,7 +534,7 @@ func (g *pgBindingGate) touch(schema, name string) (uint32, error) {
 	drainErr := rows.Err()
 	rows.Close()
 	if drainErr != nil {
-		return 0, g.fail(drainErr)
+		return 0, g.failStage(drainErr, classifyPGRelationAccess)
 	}
 	if len(oids) != 1 {
 		return 0, errPGBindInternal
@@ -594,7 +641,7 @@ func (g *pgBindingGate) viewDeps(view *pgBoundRelation) error {
 		      WHERE d.classid = 'pg_catalog.pg_rewrite'::pg_catalog.regclass
 		        AND d.refclassid = 'pg_catalog.pg_class'::pg_catalog.regclass
 		 )
-		 SELECT dep.relid::pg_catalog.oid, c.relkind::text, n.nspname
+		 SELECT dep.relid::pg_catalog.oid, c.relkind::text, n.nspname, c.relisshared
 		   FROM dep
 		   JOIN pg_catalog.pg_class c ON c.oid = dep.relid
 		   JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace`, view.oid)
@@ -607,8 +654,9 @@ func (g *pgBindingGate) viewDeps(view *pgBoundRelation) error {
 		var (
 			depOID       uint32
 			relkind, nsp string
+			shared       bool
 		)
-		if err := rows.Scan(&depOID, &relkind, &nsp); err != nil {
+		if err := rows.Scan(&depOID, &relkind, &nsp, &shared); err != nil {
 			return g.fail(err)
 		}
 		if depOID == view.oid {
@@ -618,6 +666,7 @@ func (g *pgBindingGate) viewDeps(view *pgBoundRelation) error {
 			return &pgsql.RejectError{Code: "query_dependency_not_approved", Message: "pgsql: relation dependency outside approved schemas"}
 		}
 		g.deps = append(g.deps, PGViewDependency{ViewOID: view.oid, RelationOID: depOID, Schema: nsp, RelKind: relkind})
+		g.noteApproved(depOID, shared)
 	}
 	if err := rows.Err(); err != nil {
 		return g.fail(err)
@@ -654,18 +703,21 @@ func (g *pgBindingGate) stageInheritChildren() error {
 		       FROM pg_catalog.pg_inherits i
 		       JOIN inh ON i.inhparent = inh.oid
 		 )
-		 SELECT inh.oid, inh.parent
-		   FROM inh`, parents)
+		 SELECT inh.oid, inh.parent, c.relisshared
+		   FROM inh
+		   JOIN pg_catalog.pg_class c ON c.oid = inh.oid`, parents)
 	if err != nil {
 		return err
 	}
 	defer rows.Close()
 	for rows.Next() {
 		var child, parent uint32
-		if err := rows.Scan(&child, &parent); err != nil {
+		var shared bool
+		if err := rows.Scan(&child, &parent, &shared); err != nil {
 			return g.fail(err)
 		}
 		g.inherits = append(g.inherits, PGInheritEdge{ParentOID: parent, ChildOID: child})
+		g.noteApproved(child, shared)
 	}
 	if err := rows.Err(); err != nil {
 		return g.fail(err)
@@ -696,8 +748,9 @@ func (g *pgBindingGate) stageEntityIndexes() error {
 		bases = append(bases, int64(oid))
 	}
 	rows, err := g.query(
-		`SELECT i.indexrelid::pg_catalog.oid, i.indrelid::pg_catalog.oid
+		`SELECT i.indexrelid::pg_catalog.oid, i.indrelid::pg_catalog.oid, ic.relisshared
 		   FROM pg_catalog.pg_index i
+		   JOIN pg_catalog.pg_class ic ON ic.oid = i.indexrelid
 		  WHERE i.indrelid::bigint = ANY($1::bigint[])`, bases)
 	if err != nil {
 		return err
@@ -705,10 +758,12 @@ func (g *pgBindingGate) stageEntityIndexes() error {
 	defer rows.Close()
 	for rows.Next() {
 		var indexOID, tableOID uint32
-		if err := rows.Scan(&indexOID, &tableOID); err != nil {
+		var shared bool
+		if err := rows.Scan(&indexOID, &tableOID, &shared); err != nil {
 			return g.fail(err)
 		}
 		g.indexes = append(g.indexes, PGIndexEdge{RelationOID: tableOID, IndexOID: indexOID})
+		g.noteApproved(indexOID, shared)
 	}
 	if err := rows.Err(); err != nil {
 		return g.fail(err)
@@ -753,11 +808,7 @@ func (g *pgBindingGate) stageProbeWhitelist() error {
 		if isTable {
 			foundTables[name] = true
 		}
-		id := PGRelationIdentity{DatabaseOID: g.dbOID, RelationOID: oid}
-		if shared {
-			id.DatabaseOID = 0
-		}
-		probes = append(probes, id)
+		probes = append(probes, g.identityFor(oid, shared))
 	}
 	if err := rows.Err(); err != nil {
 		return g.fail(err)
@@ -784,16 +835,8 @@ func (g *pgBindingGate) result() *PGBindResult {
 	for _, ref := range g.refs {
 		approved[ref.Identity] = true
 	}
-	for _, d := range g.deps {
-		// View deps are local relations (a shared catalog dep would already
-		// have failed the namespace boundary).
-		approved[PGRelationIdentity{DatabaseOID: g.dbOID, RelationOID: d.RelationOID}] = true
-	}
-	for _, e := range g.inherits {
-		approved[PGRelationIdentity{DatabaseOID: g.dbOID, RelationOID: e.ChildOID}] = true
-	}
-	for _, e := range g.indexes {
-		approved[PGRelationIdentity{DatabaseOID: g.dbOID, RelationOID: e.IndexOID}] = true
+	for id := range g.extraApproved {
+		approved[id] = true
 	}
 	set := make([]PGRelationIdentity, 0, len(approved))
 	for id := range approved {
@@ -835,6 +878,7 @@ func (g *pgBindingGate) result() *PGBindResult {
 			ctx:    g.ctx,
 			tx:     g.tx,
 			budget: g.budget,
+			pinned: g.pinned,
 			byName: g.byName,
 			common: map[[2]uint32]uint32{},
 			fail:   g.fail,
@@ -849,6 +893,7 @@ type pgTxResolver struct {
 	ctx    context.Context
 	tx     pgx.Tx
 	budget pgAttemptBudget
+	pinned string
 	byName map[pgRelKey]*pgBoundRelation
 	common map[[2]uint32]uint32
 	fail   func(error) error
@@ -866,13 +911,26 @@ func (r *pgTxResolver) arm() error {
 	return nil
 }
 
-// Columns returns column names in attnum order for a bound relation. A name
-// outside the bound set is an evidence defect — internal failure, never a
-// user-facing not-found.
-func (r *pgTxResolver) Columns(schema, name string) ([]string, error) {
+// bound maps a caller (schema, name) to the bound set: "" means the pinned
+// schema per the ColumnResolver contract, any other schema keeps its value.
+// A name outside the bound set is an evidence defect — internal failure,
+// never a catalog lookup and never a user-facing not-found.
+func (r *pgTxResolver) bound(schema, name string) (*pgBoundRelation, error) {
+	if schema == "" {
+		schema = r.pinned
+	}
 	rel, ok := r.byName[pgRelKey{schema: schema, name: name}]
 	if !ok {
 		return nil, fmt.Errorf("pgsql: resolver has no bound relation for this name: %w", pgsql.ErrTypeResolutionUnavailable)
+	}
+	return rel, nil
+}
+
+// Columns returns column names in attnum order for a bound relation.
+func (r *pgTxResolver) Columns(schema, name string) ([]string, error) {
+	rel, err := r.bound(schema, name)
+	if err != nil {
+		return nil, err
 	}
 	out := make([]string, len(rel.columns))
 	for i, c := range rel.columns {
@@ -885,9 +943,9 @@ func (r *pgTxResolver) Columns(schema, name string) ([]string, error) {
 // attnum-ordered live columns with original attribute numbers, type OIDs, and
 // typmods preserved — no truncation, no display-model filtering.
 func (r *pgTxResolver) ColumnMetadata(schema, name string) ([]pgsql.ColumnMetadata, error) {
-	rel, ok := r.byName[pgRelKey{schema: schema, name: name}]
-	if !ok {
-		return nil, fmt.Errorf("pgsql: resolver has no bound relation for this name: %w", pgsql.ErrTypeResolutionUnavailable)
+	rel, err := r.bound(schema, name)
+	if err != nil {
+		return nil, err
 	}
 	return rel.columns, nil
 }
