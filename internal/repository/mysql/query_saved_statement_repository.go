@@ -145,9 +145,9 @@ func (r *MySQLQuerySavedStatementRepository) CreateWithAudit(ctx context.Context
 	}
 	defer tx.Rollback()
 
-	const insertQ = `INSERT INTO query_saved_statements (target_resource_id, owner_user_id, name, statement, scope)
-		VALUES (?, ?, ?, ?, ?)`
-	res, err := tx.ExecContext(ctx, insertQ, targetResourceID, ownerUserID, req.Name, req.Statement, string(req.Scope))
+	const insertQ = `INSERT INTO query_saved_statements (target_resource_id, owner_user_id, database_name, schema_name, name, statement, scope)
+		VALUES (?, ?, ?, ?, ?, ?, ?)`
+	res, err := tx.ExecContext(ctx, insertQ, targetResourceID, ownerUserID, req.Database, req.Schema, req.Name, req.Statement, string(req.Scope))
 	if err != nil {
 		return model.QuerySavedStatement{}, fmt.Errorf("insert saved statement: %w", err)
 	}
@@ -173,6 +173,8 @@ func (r *MySQLQuerySavedStatementRepository) CreateWithAudit(ctx context.Context
 		ID:               uint64(id),
 		TargetResourceID: targetResourceID,
 		OwnerUserID:      ownerUserID,
+		DatabaseName:     req.Database,
+		SchemaName:       req.Schema,
 		Name:             req.Name,
 		Statement:        req.Statement,
 		Scope:            req.Scope,
@@ -196,15 +198,15 @@ func (r *MySQLQuerySavedStatementRepository) UpdateWithAudit(ctx context.Context
 	var args []any
 	if isAdmin {
 		updateQ = `UPDATE query_saved_statements
-			SET name = ?, statement = ?, updated_at = CURRENT_TIMESTAMP(6)
+			SET database_name = ?, schema_name = ?, name = ?, statement = ?, updated_at = CURRENT_TIMESTAMP(6)
 			WHERE target_resource_id = ? AND id = ?
 			  AND (scope = 'shared_template' OR owner_user_id = ?)`
-		args = []any{req.Name, req.Statement, targetResourceID, statementID, actorUserID}
+		args = []any{req.Database, req.Schema, req.Name, req.Statement, targetResourceID, statementID, actorUserID}
 	} else {
 		updateQ = `UPDATE query_saved_statements
-			SET name = ?, statement = ?, updated_at = CURRENT_TIMESTAMP(6)
+			SET database_name = ?, schema_name = ?, name = ?, statement = ?, updated_at = CURRENT_TIMESTAMP(6)
 			WHERE target_resource_id = ? AND id = ? AND owner_user_id = ?`
-		args = []any{req.Name, req.Statement, targetResourceID, statementID, actorUserID}
+		args = []any{req.Database, req.Schema, req.Name, req.Statement, targetResourceID, statementID, actorUserID}
 	}
 	res, err := tx.ExecContext(ctx, updateQ, args...)
 	if err != nil {

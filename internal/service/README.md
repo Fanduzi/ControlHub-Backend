@@ -55,7 +55,7 @@ Business logic layer with interface-based repository dependencies. Each service 
 | query_disclosure_service.go | QueryDisclosureService — policy lookup, projection resolution, result transformation; governance refusals stay blocked while disclosure machinery failures use a distinct backend sentinel so the execution service records them as terminal failed/timeout/canceled evidence, not policy rejections (Issue #35) |
 | query_disclosure_projection.go | Column provenance resolution from SQL AST and FK metadata |
 | query_disclosure_mask.go | applyDisclosureMask for server-side value redaction |
-| query_saved_statement_service.go | QuerySavedStatementService — authorized target-scoped saved statement CRUD with typed declaration validation and guard validation |
+| query_saved_statement_service.go | QuerySavedStatementService — authorized target-scoped saved statement CRUD with engine-aware declaration validation (Vitess for MySQL/TiDB, the G8 PG scan + GuardPG + real G6 pagination gate for PostgreSQL), (target, database, schema) context persistence checks, and `RestoreContext` — the G12 live revalidation through ResolveMetadata + the T6 schema probe (never falls back to public or a same-named object elsewhere) |
 | named_inventory_view_service.go | NamedInventoryViewService — owner-only personal CRUD, admin-only shared mutation, user-visible listing, and shared-only read seam |
 | machine_credential.go | `crypto/rand` opaque credential generation, stable lookup-ID parsing, and SHA-256 lookup hashing |
 | machine_credential_test.go | Pure opaque-token format, entropy-size, parsing, and hash regression tests |
@@ -67,8 +67,11 @@ Business logic layer with interface-based repository dependencies. Each service 
 | query_disclosure_service_test.go | Disclosure service tests (Preflight, PreflightRelatedRecords, Apply) |
 | query_disclosure_mask_test.go | Disclosure mask unit tests |
 | query_guard_test.go | Query guard allow/reject, limit, explain, and saved-statement tests |
+| query_template_compiler_pg.go | PostgreSQL template dialect (G8): declared `:name` markers become generated `$k` placeholders via the `pgsql` lexical scan; `CompilePG` shares the typed value-binding tail with the Vitess path — values stay driver args, never SQL text; `validatePGDeclarations` is the save-time entry that still owes GuardPG + pagination |
 | query_template_compiler_test.go | Template compiler source-order, guard, rejection, and driver-binding tests |
+| query_template_compiler_pg_test.go | PostgreSQL compiler tests (T11 acceptance B): $k binding order, lexical-construct pass-through, native `$n` rejection, declaration boundaries, exact int64/decimal fidelity, and `LIMIT :n` rejected by the real pagination gate |
 | query_saved_statement_service_test.go | Saved statement service tests (List, Create, Update, Delete authorization and validation) |
+| query_saved_statement_service_pg_test.go | PostgreSQL saved-statement tests: engine-aware context validation, save-time guard/pagination through the real PG path, and the `RestoreContext` revalidation matrix over fake catalog/credential seams |
 
 ## Exports
 - `NewXxxService(repo) *XxxService` constructors for all services
@@ -109,6 +112,7 @@ Business logic layer with interface-based repository dependencies. Each service 
 - `QuerySavedStatementReader`, `QuerySavedStatementWriter`, `SavedStatementGuard` — saved statement data access interfaces
 - Personal parameterized saved statements validate declarations against server-owned compiler placeholders; no parameter values or execution requests enter this service.
 - `QuerySavedStatementService.List/Create/Update/Delete` — authorized CRUD for target-scoped saved statements
+- `QuerySavedStatementService.RestoreContext` — G12 restore revalidation: authorized re-read plus the live (target, database) connection / credential / DSN-binding chain through `ResolveMetadata` and the T6 schema probe for existence + USAGE; controlled failures only, no fallback to another database, `public`, or a same-named object. PostgreSQL create/update require a `database` naming an existing composite connection row (schema may be empty → connection `default_schema` at restore); MySQL/TiDB keep the legacy empty context.
 - `OpenPostgresPool`, `PGPoolErrorCode`, `PGVersionUnsupportedCode`, `ErrPGVersionUnsupported`, `ErrPGConnectFailed`, `ErrPGVersionReadFailed` — native pgxpool factory over a validated PostgreSQL ConnConfig; every new physical connection passes the version gate before it enters the pool, and that read has a finite budget; caller owns `Close`; unsupported servers return `pg_version_unsupported` and no pool
 
 ## Phase 38S governed result paging

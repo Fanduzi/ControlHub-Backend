@@ -76,12 +76,17 @@ type QuerySavedStatement struct {
 }
 
 // QuerySavedStatementCreateRequest is the body for creating a saved statement.
-// TargetResourceID comes from the URL path, not the request body.
+// TargetResourceID comes from the URL path, not the request body. Database and
+// Schema pin the statement to a composite (target, database) connection and
+// schema namespace; both are empty for legacy MySQL/TiDB targets, and whether
+// PostgreSQL requires them is decided by the service after the target lookup.
 type QuerySavedStatementCreateRequest struct {
 	Name       string                                   `json:"name"`
 	Statement  string                                   `json:"statement"`
 	Parameters []QuerySavedStatementParameterDefinition `json:"parameters,omitempty"`
 	Scope      QuerySavedStatementScope                 `json:"scope"`
+	Database   string                                   `json:"database,omitempty"`
+	Schema     string                                   `json:"schema,omitempty"`
 }
 
 // Validate checks all required fields and bounds.
@@ -101,15 +106,24 @@ func (r QuerySavedStatementCreateRequest) Validate() error {
 	if err := validateSavedStatementParameters(r.Parameters); err != nil {
 		return err
 	}
+	if err := validateOptionalConnectionName("database", r.Database); err != nil {
+		return err
+	}
+	if err := validateOptionalConnectionName("schema", r.Schema); err != nil {
+		return err
+	}
 	return nil
 }
 
 // QuerySavedStatementUpdateRequest is the body for updating a saved statement.
-// Scope is immutable and never accepted on update.
+// Scope is immutable and never accepted on update. Database and Schema rewrite
+// the statement's pinned context under the same rules as create.
 type QuerySavedStatementUpdateRequest struct {
 	Name       string                                   `json:"name"`
 	Statement  string                                   `json:"statement"`
 	Parameters []QuerySavedStatementParameterDefinition `json:"parameters,omitempty"`
+	Database   string                                   `json:"database,omitempty"`
+	Schema     string                                   `json:"schema,omitempty"`
 }
 
 // Validate checks all required fields and bounds.
@@ -124,6 +138,12 @@ func (r QuerySavedStatementUpdateRequest) Validate() error {
 		return fmt.Errorf("statement exceeds %d bytes", MaxSavedStatementSize)
 	}
 	if err := validateSavedStatementParameters(r.Parameters); err != nil {
+		return err
+	}
+	if err := validateOptionalConnectionName("database", r.Database); err != nil {
+		return err
+	}
+	if err := validateOptionalConnectionName("schema", r.Schema); err != nil {
 		return err
 	}
 	return nil

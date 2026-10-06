@@ -135,3 +135,13 @@ func ValidateConnectionName(field, value string) error {
 	}
 	return nil
 }
+
+// validateOptionalConnectionName applies the same width bound to an optional
+// connection-identity segment (an empty value is valid at this layer; the
+// service decides whether the target engine requires it).
+func validateOptionalConnectionName(field, value string) error {
+	if value == "" {
+		return nil
+	}
+	return ValidateConnectionName(field, value)
+}

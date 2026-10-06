@@ -257,6 +257,8 @@ func writeSavedStatementError(w http.ResponseWriter, err error) {
 		writeJSONError(w, http.StatusNotFound, "query_target_not_found", err.Error())
 	case errors.Is(err, service.ErrQuerySavedStatementNotFound):
 		writeJSONError(w, http.StatusNotFound, "saved_statement_not_found", err.Error())
+	case errors.Is(err, service.ErrSchemaConnectionNotFound):
+		writeJSONError(w, http.StatusNotFound, "query_connection_not_found", err.Error())
 	case errors.Is(err, service.ErrQueryForbidden):
 		writeJSONError(w, http.StatusForbidden, "forbidden", err.Error())
 	case errors.Is(err, service.ErrQueryValidationFailed):

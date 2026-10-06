@@ -1,6 +1,6 @@
 # pgsql Module
 
-PostgreSQL governed read-only query front half: pure parse-tree transforms — no database access, no execution wiring. Implements spec `2026-09-23-postgresql-query-workbench-v1.md` stages G4/G5/G10-5a (issue #112/T4) plus the G6 execution-window rewrite (issue #113/T5). PostgreSQL execution stays disabled; this package only produces the verified internal transport SQL plus the records the later binding gate and executor consume.
+PostgreSQL governed read-only query front half: pure parse-tree transforms — no database access, no execution wiring. Implements spec `2026-09-23-postgresql-query-workbench-v1.md` stages G4/G5/G10-5a (issue #112/T4), the G6 execution-window rewrite (issue #113/T5), and the G8 template-placeholder lexical scan (issue #119/T11). PostgreSQL execution stays disabled; this package only produces the verified internal transport SQL plus the records the later binding gate and executor consume.
 
 ## Pipeline
 
@@ -34,6 +34,8 @@ Witness columns (`__chub_w<N>`, always NULL, typed as the source relation's `rel
 | name_resolution_test.go | classification/visibility/qualification/guard intent tests |
 | inject_test.go | freeze/injection/propagation/DISTINCT/suppression/set-op intent tests over a stub resolver |
 | pagination_test.go | PaginatePG window matrix, literal-form acceptance/rejection incl. radix/separator spellings and int64 boundary, tree immutability, `PageWindow.Result`, `RewritePaginated` pipeline shape |
+| template.go | G8 single-pass lexical scan (`ScanTemplatePlaceholders`): `:name` markers only in code positions — strings, E''/U&'' bodies, quoted identifiers, line/nested block comments, `$tag$` dollar-quoted bodies, and `[..]` slices never yield placeholders; `::` stays a cast; native `$n` input is rejected (`ErrTemplateNativeParameter`) so generated `$k` bindings can never collide with user text; unterminated constructs fail with `ErrTemplateScanInvalid` |
+| template_test.go | Scanner matrix (T11 acceptance A): casts, quoted identifiers, ordinary/E/U& strings, dollar quoting, nested comments, array slices, non-ASCII adjacency, native `$n` rejection, malformed constructs, and byte-offset fidelity |
 
 ## Boundaries
 

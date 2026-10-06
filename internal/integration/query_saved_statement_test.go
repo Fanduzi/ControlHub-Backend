@@ -1,5 +1,10 @@
 //go:build integration
 
+// Package integration provides Testcontainers-backed tests for governed saved statement persistence.
+// input: shared MySQL fixture, saved-statement repository, target fixtures
+// output: owner-scoped CRUD/visibility lifecycle and the legacy empty-context regression anchor (T11)
+// pos: Real-MySQL persistence boundary for Phase 38R saved statements
+// note: if this file changes, update this header and module README.md.
 package integration
 
 import (
@@ -42,6 +47,11 @@ func TestQuerySavedStatementRepositoryPersonalParameterizedLifecycle(t *testing.
 	}
 	if len(visible.Items) != 1 || len(visible.Items[0].Parameters) != 1 {
 		t.Fatalf("owner list = %+v, want one definition", visible.Items)
+	}
+	// Legacy MySQL/TiDB rows carry the empty composite context — T11 must not
+	// change that shape.
+	if visible.Items[0].DatabaseName != "" || visible.Items[0].SchemaName != "" {
+		t.Fatalf("legacy context = %q/%q, want empty", visible.Items[0].DatabaseName, visible.Items[0].SchemaName)
 	}
 
 	nonOwner, err := repo.ListVisible(ctx, model.QuerySavedStatementListQuery{

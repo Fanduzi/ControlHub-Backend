@@ -1,7 +1,13 @@
+// Package model provides tests for governed saved-statement domain validation.
+// input: fmt, strings, testing
+// output: TestQuerySavedStatement* — scope/declaration/optional connection-name boundaries incl. the database/schema request fields (T11)
+// pos: Unit tests for the saved-statement request validation contract
+// note: if this file changes, update header and README.md
 package model
 
 import (
 	"fmt"
+	"strings"
 	"testing"
 )
 
@@ -102,6 +108,37 @@ func TestQuerySavedStatementCreateRequestValidate(t *testing.T) {
 				Name:      "Recent orders",
 				Statement: "SELECT id FROM orders",
 				Scope:     "public",
+			},
+			wantErr: true,
+		},
+		{
+			name: "database within connection-name width is valid",
+			req: QuerySavedStatementCreateRequest{
+				Name:      "Recent orders",
+				Statement: "SELECT id FROM orders",
+				Scope:     QuerySavedStatementPersonal,
+				Database:  "db_a",
+				Schema:    "app",
+			},
+			wantErr: false,
+		},
+		{
+			name: "database over connection-name width",
+			req: QuerySavedStatementCreateRequest{
+				Name:      "Recent orders",
+				Statement: "SELECT id FROM orders",
+				Scope:     QuerySavedStatementPersonal,
+				Database:  strings.Repeat("d", MaxConnectionNameLength+1),
+			},
+			wantErr: true,
+		},
+		{
+			name: "schema over connection-name width",
+			req: QuerySavedStatementCreateRequest{
+				Name:      "Recent orders",
+				Statement: "SELECT id FROM orders",
+				Scope:     QuerySavedStatementPersonal,
+				Schema:    strings.Repeat("s", MaxConnectionNameLength+1),
 			},
 			wantErr: true,
 		},

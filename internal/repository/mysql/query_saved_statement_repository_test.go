@@ -1,3 +1,8 @@
+// Package mysql provides sqlmock-backed tests for the saved-statement repository.
+// input: database/sql, testing, time, DATA-DOG/go-sqlmock, internal/model
+// output: TestCreateWithAudit*/TestUpdateWithAudit*/read-path tests — exact SQL and argument binding incl. the database_name/schema_name context columns (T11)
+// pos: Write-path SQL shape and atomic audit coverage for governed saved statements
+// note: if this file changes, update header and README.md
 package mysql
 
 import (
@@ -298,7 +303,7 @@ func TestCreateWithAudit_InsertsBoth(t *testing.T) {
 
 	mock.ExpectBegin()
 	mock.ExpectExec("INSERT INTO query_saved_statements").
-		WithArgs(uint64(10), uint64(1), "my query", "SELECT 1", "personal").
+		WithArgs(uint64(10), uint64(1), "", "", "my query", "SELECT 1", "personal").
 		WillReturnResult(sqlmock.NewResult(42, 1))
 	mock.ExpectExec("INSERT INTO audit_events").
 		WithArgs(uint64(1), uint64(10)).
@@ -325,6 +330,41 @@ func TestCreateWithAudit_InsertsBoth(t *testing.T) {
 	}
 }
 
+func TestCreateWithAudit_PersistsDatabaseSchemaContext(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock.New: %v", err)
+	}
+	defer db.Close()
+	repo := NewQuerySavedStatementRepository(db)
+
+	mock.ExpectBegin()
+	mock.ExpectExec("INSERT INTO query_saved_statements").
+		WithArgs(uint64(10), uint64(1), "db_a", "app", "pg query", "SELECT 1", "personal").
+		WillReturnResult(sqlmock.NewResult(42, 1))
+	mock.ExpectExec("INSERT INTO audit_events").
+		WithArgs(uint64(1), uint64(10)).
+		WillReturnResult(sqlmock.NewResult(1, 1))
+	mock.ExpectCommit()
+
+	s, err := repo.CreateWithAudit(t.Context(), 1, 10, model.QuerySavedStatementCreateRequest{
+		Name:      "pg query",
+		Statement: "SELECT 1",
+		Scope:     model.QuerySavedStatementPersonal,
+		Database:  "db_a",
+		Schema:    "app",
+	})
+	if err != nil {
+		t.Fatalf("CreateWithAudit: %v", err)
+	}
+	if s.DatabaseName != "db_a" || s.SchemaName != "app" {
+		t.Errorf("returned context = %q/%q, want db_a/app", s.DatabaseName, s.SchemaName)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Errorf("unmet expectations: %v", err)
+	}
+}
+
 func TestCreateWithAudit_PersistsParameterDefinitionsBeforeAudit(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	if err != nil {
@@ -335,7 +375,7 @@ func TestCreateWithAudit_PersistsParameterDefinitionsBeforeAudit(t *testing.T) {
 
 	mock.ExpectBegin()
 	mock.ExpectExec("INSERT INTO query_saved_statements").
-		WithArgs(uint64(10), uint64(1), "status query", "SELECT 1 WHERE status = :status", "personal").
+		WithArgs(uint64(10), uint64(1), "", "", "status query", "SELECT 1 WHERE status = :status", "personal").
 		WillReturnResult(sqlmock.NewResult(42, 1))
 	mock.ExpectExec("INSERT INTO query_saved_statement_parameters").
 		WithArgs(uint64(42), "status", "string", 0).
@@ -374,7 +414,7 @@ func TestCreateWithAudit_AuditContainsNoStatementNameOwner(t *testing.T) {
 
 	mock.ExpectBegin()
 	mock.ExpectExec("INSERT INTO query_saved_statements").
-		WithArgs(uint64(10), uint64(1), "secret name", "SELECT password FROM users", "personal").
+		WithArgs(uint64(10), uint64(1), "", "", "secret name", "SELECT password FROM users", "personal").
 		WillReturnResult(sqlmock.NewResult(1, 1))
 
 	// The audit INSERT must NOT contain statement text, name, or owner ID.
@@ -408,7 +448,7 @@ func TestCreateWithAudit_AuditFailureRollsBack(t *testing.T) {
 
 	mock.ExpectBegin()
 	mock.ExpectExec("INSERT INTO query_saved_statements").
-		WithArgs(uint64(10), uint64(1), "my query", "SELECT 1", "personal").
+		WithArgs(uint64(10), uint64(1), "", "", "my query", "SELECT 1", "personal").
 		WillReturnResult(sqlmock.NewResult(42, 1))
 	// Audit insert fails
 	mock.ExpectExec("INSERT INTO audit_events").
@@ -442,7 +482,7 @@ func TestUpdateWithAudit_NonOwnerReturnsErrNoRows(t *testing.T) {
 
 	mock.ExpectBegin()
 	mock.ExpectExec("UPDATE query_saved_statements").
-		WithArgs("new name", "SELECT 2", uint64(10), uint64(1), uint64(99)).
+		WithArgs("", "", "new name", "SELECT 2", uint64(10), uint64(1), uint64(99)).
 		WillReturnResult(sqlmock.NewResult(0, 0)) // 0 rows affected = not found or not owned
 	mock.ExpectRollback()
 
@@ -472,7 +512,7 @@ func TestUpdateWithAudit_Success(t *testing.T) {
 
 	mock.ExpectBegin()
 	mock.ExpectExec("UPDATE query_saved_statements").
-		WithArgs("new name", "SELECT 2", uint64(10), uint64(1), uint64(1)).
+		WithArgs("", "", "new name", "SELECT 2", uint64(10), uint64(1), uint64(1)).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectExec("DELETE FROM query_saved_statement_parameters").
 		WithArgs(uint64(1)).
@@ -505,7 +545,7 @@ func TestUpdateWithAudit_AuditFailureRollsBack(t *testing.T) {
 
 	mock.ExpectBegin()
 	mock.ExpectExec("UPDATE query_saved_statements").
-		WithArgs("new name", "SELECT 2", uint64(10), uint64(1), uint64(1)).
+		WithArgs("", "", "new name", "SELECT 2", uint64(10), uint64(1), uint64(1)).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectExec("DELETE FROM query_saved_statement_parameters").
 		WithArgs(uint64(1)).

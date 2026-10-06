@@ -39,6 +39,7 @@ SIGTERM and SIGINT stop accepting new traffic and begin a bounded graceful drain
 
 ## Shared Guards
 - `QueryGuard` is constructed once and reused by execution, explain, and saved-statement services.
+- The saved-statement service additionally wires `WithPGContext(queryExecutionRepo, accessResolver)` (T11): PostgreSQL context validation and the G12 `RestoreContext` revalidation reuse the shared resolver and the composite connection metadata store.
 
 ## Exports
 - (binary entry point, no exported Go symbols)

@@ -1,7 +1,7 @@
 // Package main provides the ControlHub application entry point.
 // input: config.LoadDotEnv/Load/ValidateJWTSecret/ErrQueryExecutionTokenMaxAgeRejected, mysql repositories, api.NewRouter, service constructors, os/signal Notify (SIGTERM/SIGINT), net.Listen
 // output: main() binary entry point; runServer() graceful-drain lifecycle
-// pos: Application bootstrap and lifecycle: validates the signing secret before opening the database, wires resource completeness, governed query, owner workspace/private statement reads, saved-statement template reads, and independent machine credentials, then serves HTTP; SIGTERM/SIGINT stop new traffic and drain in-flight handlers for at most ten seconds (Issue #37)
+// pos: Application bootstrap and lifecycle: validates the signing secret before opening the database, wires resource completeness, governed query, owner workspace/private statement reads, saved-statement template reads (with the T11 PG context resolver for restore revalidation), and independent machine credentials, then serves HTTP; SIGTERM/SIGINT stop new traffic and drain in-flight handlers for at most ten seconds (Issue #37)
 // note: if wiring, startup validation, or the shutdown contract changes, update this header and cmd/server/README.md
 package main
 
@@ -120,13 +120,15 @@ func buildDependencies(db *sql.DB, cfg config.Config) api.Dependencies {
 	)
 
 	// Query saved statement service (Phase 38R) manages governed saved statements
-	// with personal and shared_template scopes.
+	// with personal and shared_template scopes. The PG context wiring (T11)
+	// enables (target, database, schema) persistence checks and the G12
+	// restore revalidation for PostgreSQL targets.
 	querySavedStatementSvc := service.NewQuerySavedStatementService(
 		querySavedStatementRepo,
 		querySavedStatementRepo,
 		queryTargetRepo,
 		queryGuard, // reuse the shared guard
-	)
+	).WithPGContext(queryExecutionRepo, accessResolver)
 	namedInventoryViewSvc := service.NewNamedInventoryViewService(mysql.NewNamedInventoryViewRepository(db))
 	machinePrincipalSvc := service.NewMachinePrincipalService(mysql.NewMachinePrincipalRepository(db))
 

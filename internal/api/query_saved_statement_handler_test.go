@@ -1,3 +1,8 @@
+// Package api provides tests for the saved-statement handlers.
+// input: encoding/json, net/http, net/http/httptest, testing, time, internal/model
+// output: TestSavedStatement* — strict decoding, context field round trip, controlled error mapping
+// pos: HTTP decode/error-mapping regression coverage for CRUD /query-targets/{id}/saved-statements incl. the (database, schema) request fields (T11)
+// note: if this file changes, update header and README.md
 package api
 
 import (
@@ -110,6 +115,49 @@ func TestSavedStatement_CreateSuccess(t *testing.T) {
 		string(body), ssAdminToken(t)))
 	if rec.Code != http.StatusCreated {
 		t.Fatalf("expected 201, got %d: %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestSavedStatement_CreateRoundTripsDatabaseSchemaContext(t *testing.T) {
+	srv := NewTestServer()
+	srv.deps.QuerySavedStatementService = &fakeSavedStatementService{
+		createResp: model.QuerySavedStatement{ID: 1, Name: "Ctx", DatabaseName: "db_a", SchemaName: "app"},
+	}
+	srv.Router = NewRouter(srv.deps)
+
+	rec := httptest.NewRecorder()
+	srv.Router.ServeHTTP(rec, ssRequest(http.MethodPost, "/query-targets/22/saved-statements",
+		`{"name":"Ctx","statement":"SELECT id FROM app.orders WHERE status = :status","scope":"personal","database":"db_a","schema":"app","parameters":[{"name":"status","type":"string"}]}`, ssAdminToken(t)))
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("expected 201, got %d: %s", rec.Code, rec.Body.String())
+	}
+	fake := srv.deps.QuerySavedStatementService.(*fakeSavedStatementService)
+	if fake.createReq.Database != "db_a" || fake.createReq.Schema != "app" {
+		t.Fatalf("decoded context = %q/%q, want db_a/app", fake.createReq.Database, fake.createReq.Schema)
+	}
+	var resp model.QuerySavedStatement
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if resp.DatabaseName != "db_a" || resp.SchemaName != "app" {
+		t.Fatalf("response context = %q/%q, want db_a/app", resp.DatabaseName, resp.SchemaName)
+	}
+}
+
+func TestSavedStatement_UpdateRoundTripsDatabaseSchemaContext(t *testing.T) {
+	srv := NewTestServer()
+	fake := &fakeSavedStatementService{}
+	srv.deps.QuerySavedStatementService = fake
+	srv.Router = NewRouter(srv.deps)
+
+	rec := httptest.NewRecorder()
+	srv.Router.ServeHTTP(rec, ssRequest(http.MethodPut, "/query-targets/22/saved-statements/1",
+		`{"name":"Ctx","statement":"SELECT 1","database":"db_b","schema":"analytics"}`, ssAdminToken(t)))
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("expected 204, got %d: %s", rec.Code, rec.Body.String())
+	}
+	if fake.updateReq.Database != "db_b" || fake.updateReq.Schema != "analytics" {
+		t.Fatalf("decoded context = %q/%q, want db_b/analytics", fake.updateReq.Database, fake.updateReq.Schema)
 	}
 }
 

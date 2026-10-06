@@ -5772,6 +5772,20 @@ components:
             $ref: "#/components/schemas/QuerySavedStatementParameterDefinition"
         scope:
           $ref: "#/components/schemas/QuerySavedStatementScope"
+        database:
+          type: string
+          maxLength: 128
+          description: >
+            Connection database the statement binds to. Required and must name
+            an existing (target, database) connection row for PostgreSQL
+            targets; must be empty for MySQL/TiDB targets.
+        schema:
+          type: string
+          maxLength: 128
+          description: >
+            Pinned schema the statement binds to. Optional for PostgreSQL —
+            empty resolves to the connection's default schema at restore;
+            must be empty for MySQL/TiDB targets.
     QuerySavedStatementUpdateRequest:
       type: object
       description: >
@@ -5795,6 +5809,18 @@ components:
           maxItems: 20
           items:
             $ref: "#/components/schemas/QuerySavedStatementParameterDefinition"
+        database:
+          type: string
+          maxLength: 128
+          description: >
+            Connection database the statement binds to; same target-engine
+            rules as create.
+        schema:
+          type: string
+          maxLength: 128
+          description: >
+            Pinned schema the statement binds to; same target-engine rules as
+            create.
     QuerySavedStatementExecuteRequest:
       type: object
       required: []

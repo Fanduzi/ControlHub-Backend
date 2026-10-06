@@ -1274,17 +1274,21 @@ func (f *fakeQueryDisclosure) DeletePolicy(_ context.Context, _ uint64, _, _, _ 
 type fakeSavedStatementService struct {
 	listResp   model.QuerySavedStatementListResponse
 	createResp model.QuerySavedStatement
+	createReq  model.QuerySavedStatementCreateRequest
+	updateReq  model.QuerySavedStatementUpdateRequest
 }
 
 func (f *fakeSavedStatementService) List(_ context.Context, _ service.AuthenticatedUser, _ uint64, _ string, _, _ int) (model.QuerySavedStatementListResponse, error) {
 	return f.listResp, nil
 }
 
-func (f *fakeSavedStatementService) Create(_ context.Context, _ service.AuthenticatedUser, _ uint64, _ model.QuerySavedStatementCreateRequest) (model.QuerySavedStatement, error) {
+func (f *fakeSavedStatementService) Create(_ context.Context, _ service.AuthenticatedUser, _ uint64, req model.QuerySavedStatementCreateRequest) (model.QuerySavedStatement, error) {
+	f.createReq = req
 	return f.createResp, nil
 }
 
-func (f *fakeSavedStatementService) Update(_ context.Context, _ service.AuthenticatedUser, _, _ uint64, _ model.QuerySavedStatementUpdateRequest) error {
+func (f *fakeSavedStatementService) Update(_ context.Context, _ service.AuthenticatedUser, _, _ uint64, req model.QuerySavedStatementUpdateRequest) error {
+	f.updateReq = req
 	return nil
 }
 

@@ -75,27 +75,38 @@ func (c *TemplateStatementCompiler) Compile(input TemplateStatementInput) (Compi
 	if err != nil {
 		return CompiledTemplateStatement{}, err
 	}
-	for name := range input.Values {
-		if _, ok := declaration.definitions[name]; !ok {
-			return CompiledTemplateStatement{}, fmt.Errorf("%w: unknown parameter %q", ErrTemplateParameterInvalid, name)
-		}
-	}
-	args := make([]any, 0, len(declaration.bindings))
-	for _, definition := range declaration.bindings {
-		value, ok := input.Values[definition.Name]
-		if !ok {
-			return CompiledTemplateStatement{}, fmt.Errorf("%w: missing parameter %q", ErrTemplateParameterInvalid, definition.Name)
-		}
-		bound, err := compileTemplateValue(definition, value)
-		if err != nil {
-			return CompiledTemplateStatement{}, err
-		}
-		args = append(args, bound)
+	args, err := bindTemplateArguments(declaration, input.Values)
+	if err != nil {
+		return CompiledTemplateStatement{}, err
 	}
 	return CompiledTemplateStatement{
 		Statement: declaration.statement,
 		Args:      args,
 	}, nil
+}
+
+// bindTemplateArguments is the shared value-binding tail of Compile and
+// CompilePG: supplied values must exactly cover the declared names, every
+// bound placeholder gets its typed value, and no value enters the SQL text.
+func bindTemplateArguments(declaration templateStatementDeclaration, values map[string]any) ([]any, error) {
+	for name := range values {
+		if _, ok := declaration.definitions[name]; !ok {
+			return nil, fmt.Errorf("%w: unknown parameter %q", ErrTemplateParameterInvalid, name)
+		}
+	}
+	args := make([]any, 0, len(declaration.bindings))
+	for _, definition := range declaration.bindings {
+		value, ok := values[definition.Name]
+		if !ok {
+			return nil, fmt.Errorf("%w: missing parameter %q", ErrTemplateParameterInvalid, definition.Name)
+		}
+		bound, err := compileTemplateValue(definition, value)
+		if err != nil {
+			return nil, err
+		}
+		args = append(args, bound)
+	}
+	return args, nil
 }
 
 func (c *TemplateStatementCompiler) CompileAndGuard(guard *QueryGuard, input TemplateStatementInput, requestedMaxRows int) (GuardedTemplateStatement, error) {
