@@ -1,6 +1,6 @@
 // Package mysql provides MySQL-backed repository implementations.
 // input: database/sql, context, errors, expvar, fmt, log, strconv, internal/model
-// output: NewQueryExecutionRepository, identity-aware atomic InsertExecutionWithAudit with successful-user-only full SQL, owner-only statement lookup, user/machine history with private-statement availability, credential metadata/audit operations, QueryEvidencePersistenceFailures accessor
+// output: NewQueryExecutionRepository, identity-aware atomic keyless-only InsertExecutionWithAudit with successful-user-only full SQL, owner-only statement lookup, user/machine history with private-statement availability, credential metadata/audit operations, QueryEvidencePersistenceFailures accessor
 // pos: MySQL persistence boundary for exactly-one-actor query history, non-disclosing reusable-statement availability, owner-only private statements, and at-most-one-actor audit evidence without credential data
 // note: if this file changes, update header and README.md
 package mysql
@@ -261,8 +261,13 @@ func executionActorArgs(rec model.QueryExecutionRecord) (any, any, error) {
 // dimensionless QueryEvidencePersistenceFailures counter is incremented
 // exactly once, and one fixed safe log line is emitted. The returned sentinel
 // carries no driver/database/statement details; callers surface it as the
-// existing controlled backend error.
+// existing controlled backend error. A non-empty ClientExecutionID must take
+// the keyed path — FinalizeClaimWithAudit links the claim in the same
+// transaction; writing a keyed row here would split that invariant.
 func (r *QueryExecutionRepository) InsertExecutionWithAudit(ctx context.Context, rec model.QueryExecutionRecord, eventType, result string) (uint64, error) {
+	if rec.ClientExecutionID != nil && *rec.ClientExecutionID != "" {
+		return 0, fmt.Errorf("%w: keyed executions must finalize through the claim link", ErrQueryExecutionClaimInvalid)
+	}
 	args, err := executionRecordArgs(rec)
 	if err != nil {
 		return 0, err

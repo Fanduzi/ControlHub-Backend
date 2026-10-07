@@ -516,6 +516,24 @@ backend failure, increments a dimensionless persistence-failure counter once,
 and emits one fixed safe log category containing no actor, target, statement,
 value, credential, DSN, request data, or raw database error.
 
+### Execution Claim
+
+The occupancy record that binds one client-supplied idempotency key to exactly
+one execution attempt, keyed by `(target_resource_id, client_execution_id)`.
+The single atomic INSERT is the only admission gate — the caller whose insert
+persists owns the key. A same-key retry carrying the same `request_digest` is
+a recorded duplicate; a different digest is a conflict; neither writes
+history or audit. The claim stores the typed actor (user or machine — never
+both) and the resolved connection scope (`database_name`, `schema_name`). A
+claim is never released or expired: `execution_id = NULL` means occupied but
+not finalized, and a linked claim stays occupied after its terminal outcome.
+The keyed finalize commits the Execution Evidence Pair and the claim link in
+one transaction — history, audit, and `execution_id` association are
+all-or-nothing — so a point read sees either an unlinked claim or the real
+terminal execution, never a torn pair. Claim storage is a persistence
+protocol only; it executes no SQL and derives no running/dead/remote state
+from `claimed_at`.
+
 ### Query Evidence Persistence Failure
 
 A failed Execution Evidence Pair write. It is observable only through a
