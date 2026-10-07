@@ -12,6 +12,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
 
@@ -399,6 +400,56 @@ func TestDisclosure_DeleteMissingScopeParams(t *testing.T) {
 			}
 			if stub.deleteCalled {
 				t.Fatalf("service must not be called for missing scope params: %s", tc.name)
+			}
+		})
+	}
+}
+
+// TestDisclosure_DeleteInvalidScopeParams proves that a DELETE scope the
+// service rejects (overlong or NUL-bearing names, engine-invalid schema
+// combination) surfaces as 400 validation_failed — not a silent no-op — and
+// that query encoding preserves the bytes verbatim into the service. The stub
+// returns the real service sentinel so the full handler → service → error
+// mapping is exercised; url.Values keeps NUL and length encoding honest.
+func TestDisclosure_DeleteInvalidScopeParams(t *testing.T) {
+	overlong := strings.Repeat("x", model.MaxIdentifierLength+1)
+	cases := []struct {
+		name   string
+		mutate func(url.Values)
+	}{
+		{"database overlong", func(v url.Values) { v.Set("databaseName", overlong) }},
+		{"schema overlong", func(v url.Values) { v.Set("schemaName", overlong) }},
+		{"object overlong", func(v url.Values) { v.Set("objectName", overlong) }},
+		{"column overlong", func(v url.Values) { v.Set("columnName", overlong) }},
+		{"database NUL", func(v url.Values) { v.Set("databaseName", "db\x00x") }},
+		{"object NUL", func(v url.Values) { v.Set("objectName", "orders\x00x") }},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			stub := &stubQueryDisclosure{deleteErr: service.ErrQueryValidationFailed}
+			router := newDisclosureRouter(stub)
+			v := url.Values{
+				"targetResourceId": {"22"},
+				"databaseName":     {"sales_db"},
+				"schemaName":       {"app"},
+				"objectName":       {"orders"},
+				"columnName":       {"email"},
+			}
+			tc.mutate(v)
+			rec := httptest.NewRecorder()
+			router.ServeHTTP(rec, disclosureRequest(http.MethodDelete,
+				"/query-disclosure-policies?"+v.Encode(), "", disclosureAdminToken(t)))
+			if rec.Code != http.StatusBadRequest {
+				t.Fatalf("%s = %d, want 400; body=%s", tc.name, rec.Code, rec.Body.String())
+			}
+			var body struct {
+				Error string `json:"error"`
+			}
+			if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+				t.Fatalf("decode body: %v", err)
+			}
+			if body.Error != "validation_failed" {
+				t.Fatalf("error = %q, want validation_failed", body.Error)
 			}
 		})
 	}

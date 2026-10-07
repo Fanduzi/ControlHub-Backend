@@ -15,6 +15,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
 	"time"
@@ -236,4 +237,108 @@ func TestDisclosurePolicyHTTP_FivePartScopeManagement(t *testing.T) {
 	mustErrorCode(t, disclosureReq(t, router, http.MethodPost, "/query-disclosure-policies",
 		fmt.Sprintf(`{"targetResourceId":%d,"databaseName":"sales_db","schemaName":"app","objectName":"x","columnName":"y","mode":"raw_copy_allowed","extra":1}`, pgTarget),
 		adminToken), http.StatusBadRequest, "validation_failed")
+}
+
+// TestDisclosurePolicyHTTP_TrailingSpaceScopes proves trailing-space canonical
+// names stay distinct end to end over the real HTTP chain (acceptance R1):
+// JSON bodies and url.Values-encoded DELETE queries carry the bytes verbatim,
+// sibling keys coexist and never alias, and operations address exactly one
+// row. WHY: a PAD SPACE collation or a transport-layer trim would silently
+// merge "orders" and "orders " into one policy scope.
+func TestDisclosurePolicyHTTP_TrailingSpaceScopes(t *testing.T) {
+	db := setupTestDB(t)
+	router := disclosureHTTPRouter(t, db)
+	pgTarget := createPGInstance(t, db, "t9a-ts-"+strings.ReplaceAll(t.Name(), "/", "-"), envStaging, "127.0.0.1", 1)
+	insertAuthzTestUser(t, db, "t9a-ts-admin@example.com", "admin")
+	adminToken := mustLogin(t, router, "t9a-ts-admin@example.com", "secret123")
+
+	create := func(schema, object string) *httptest.ResponseRecorder {
+		body, err := json.Marshal(map[string]any{
+			"targetResourceId": pgTarget,
+			"databaseName":     "sales_db",
+			"schemaName":       schema,
+			"objectName":       object,
+			"columnName":       "id",
+			"mode":             "masked_no_copy",
+		})
+		if err != nil {
+			t.Fatalf("marshal body: %v", err)
+		}
+		return disclosureReq(t, router, http.MethodPost, "/query-disclosure-policies", string(body), adminToken)
+	}
+	del := func(schema, object string) *httptest.ResponseRecorder {
+		v := url.Values{
+			"targetResourceId": {fmt.Sprintf("%d", pgTarget)},
+			"databaseName":     {"sales_db"},
+			"schemaName":       {schema},
+			"objectName":       {object},
+			"columnName":       {"id"},
+		}
+		return disclosureReq(t, router, http.MethodDelete, "/query-disclosure-policies?"+v.Encode(), "", adminToken)
+	}
+
+	// 'orders' and 'orders ' are two distinct canonical identities.
+	mustStatus(t, create("app", "orders"), http.StatusCreated)
+	mustStatus(t, create("app", "orders "), http.StatusCreated)
+
+	items := mustPolicyList(t, router, adminToken, pgTarget)
+	if len(items) != 2 {
+		t.Fatalf("trailing-space siblings must coexist: %+v", items)
+	}
+	seen := map[string]bool{}
+	for _, it := range items {
+		seen[it.ObjectName] = true
+	}
+	if !seen["orders"] || !seen["orders "] {
+		t.Fatalf("list must round-trip verbatim names incl. trailing space: %+v", seen)
+	}
+
+	// PUT addresses exactly the trailing-space row; the plain row is untouched.
+	putBody, err := json.Marshal(map[string]any{
+		"targetResourceId": pgTarget,
+		"databaseName":     "sales_db",
+		"schemaName":       "app",
+		"objectName":       "orders ",
+		"columnName":       "id",
+		"mode":             "raw_copy_allowed",
+	})
+	if err != nil {
+		t.Fatalf("marshal put: %v", err)
+	}
+	mustStatus(t, disclosureReq(t, router, http.MethodPut, "/query-disclosure-policies", string(putBody), adminToken), http.StatusNoContent)
+	items = mustPolicyList(t, router, adminToken, pgTarget)
+	for _, it := range items {
+		switch it.ObjectName {
+		case "orders ":
+			if it.Mode != model.ResultDisclosureRawCopyAllowed {
+				t.Fatalf("'orders ' mode = %q, want raw_copy_allowed", it.Mode)
+			}
+		case "orders":
+			if it.Mode != model.ResultDisclosureMaskedNoCopy {
+				t.Fatalf("'orders' mode = %q, want masked_no_copy (sibling must be untouched)", it.Mode)
+			}
+		}
+	}
+
+	// DELETE with the url-encoded trailing-space scope removes exactly that
+	// row; the sibling survives, and re-deleting stays idempotent 204.
+	mustStatus(t, del("app", "orders "), http.StatusNoContent)
+	items = mustPolicyList(t, router, adminToken, pgTarget)
+	if len(items) != 1 || items[0].ObjectName != "orders" {
+		t.Fatalf("after sibling delete: %+v, want only 'orders'", items)
+	}
+	mustStatus(t, del("app", "orders "), http.StatusNoContent)
+
+	// Invalid delete scopes are controlled 400s — never silently applied.
+	v := url.Values{
+		"targetResourceId": {fmt.Sprintf("%d", pgTarget)},
+		"databaseName":     {"sales_db"},
+		"schemaName":       {"app"},
+		"objectName":       {strings.Repeat("x", model.MaxIdentifierLength+1)},
+		"columnName":       {"id"},
+	}
+	mustErrorCode(t, disclosureReq(t, router, http.MethodDelete,
+		"/query-disclosure-policies?"+v.Encode(), "", adminToken), http.StatusBadRequest, "validation_failed")
+	// A valid but absent scope is still the idempotent 204.
+	mustStatus(t, del("app", "never_existed"), http.StatusNoContent)
 }

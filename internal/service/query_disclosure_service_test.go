@@ -9,6 +9,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/fan/controlhub/internal/model"
@@ -995,5 +996,84 @@ func TestDeletePolicy_SchemaGateMatchesWrites(t *testing.T) {
 	}
 	if myWriter.deleteCalled {
 		t.Fatal("writer must not be reached for a schema'd mysql delete")
+	}
+}
+
+// TestDeletePolicy_NameShapeSharedWithWrites proves delete enforces the same
+// engine-agnostic name shape as create/update even though a delete scope
+// carries no mode: every one of the four segments is length-bounded and
+// NUL-free, and database/object/column are required. WHY: T9-A let delete skip
+// the request validator, so malformed names reached the writer unchecked.
+func TestDeletePolicy_NameShapeSharedWithWrites(t *testing.T) {
+	t.Parallel()
+
+	valid := disclosureScopeKey("sales_db", "app", "orders", "email")
+	overlong := strings.Repeat("x", model.MaxIdentifierLength+1)
+	cases := []struct {
+		name   string
+		mutate func(disclosureScopeKeyT) disclosureScopeKeyT
+	}{
+		{"database overlong", func(k disclosureScopeKeyT) disclosureScopeKeyT { k.database = overlong; return k }},
+		{"schema overlong", func(k disclosureScopeKeyT) disclosureScopeKeyT { k.schema = overlong; return k }},
+		{"object overlong", func(k disclosureScopeKeyT) disclosureScopeKeyT { k.object = overlong; return k }},
+		{"column overlong", func(k disclosureScopeKeyT) disclosureScopeKeyT { k.column = overlong; return k }},
+		{"database NUL", func(k disclosureScopeKeyT) disclosureScopeKeyT { k.database = "db\x00x"; return k }},
+		{"schema NUL", func(k disclosureScopeKeyT) disclosureScopeKeyT { k.schema = "app\x00x"; return k }},
+		{"object NUL", func(k disclosureScopeKeyT) disclosureScopeKeyT { k.object = "orders\x00x"; return k }},
+		{"column NUL", func(k disclosureScopeKeyT) disclosureScopeKeyT { k.column = "email\x00x"; return k }},
+		{"database empty", func(k disclosureScopeKeyT) disclosureScopeKeyT { k.database = ""; return k }},
+		{"object empty", func(k disclosureScopeKeyT) disclosureScopeKeyT { k.object = ""; return k }},
+		{"column empty", func(k disclosureScopeKeyT) disclosureScopeKeyT { k.column = ""; return k }},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			writer := &fakeDisclosureWriter{}
+			targets := &fakeTargetRepo{targets: []model.QueryTarget{pgDisclosureTarget(7)}}
+			svc := NewQueryDisclosureService(&fakeDisclosureReader{}, writer, nil, targets)
+			k := tc.mutate(valid)
+			err := svc.DeletePolicy(context.Background(), 7, k.database, k.schema, k.object, k.column)
+			if !errors.Is(err, ErrQueryValidationFailed) {
+				t.Fatalf("DeletePolicy(%+v) error = %v, want ErrQueryValidationFailed", k, err)
+			}
+			if writer.deleteCalled {
+				t.Fatalf("writer must not be reached for invalid delete scope %+v", k)
+			}
+		})
+	}
+}
+
+// TestDeletePolicy_MySQLKeepsStrictIdentifierRule proves delete applies the
+// legacy ASCII identifier rule for MySQL scopes just like create/update, and
+// that a legal trailing-space name is not rejected as a workaround.
+func TestDeletePolicy_MySQLKeepsStrictIdentifierRule(t *testing.T) {
+	t.Parallel()
+
+	for _, database := range []string{"orders; DROP TABLE", "my db", "täble"} {
+		writer := &fakeDisclosureWriter{}
+		targets := &fakeTargetRepo{targets: []model.QueryTarget{mysqlDisclosureTarget(3)}}
+		svc := NewQueryDisclosureService(&fakeDisclosureReader{}, writer, nil, targets)
+		if err := svc.DeletePolicy(context.Background(), 3, database, "", "orders", "email"); !errors.Is(err, ErrQueryValidationFailed) {
+			t.Fatalf("DeletePolicy(%q) error = %v, want ErrQueryValidationFailed", database, err)
+		}
+		if writer.deleteCalled {
+			t.Fatalf("writer must not be reached for invalid mysql database %q", database)
+		}
+	}
+}
+
+// TestDeletePolicy_ValidMissingScopeStaysIdempotent proves a well-formed scope
+// that matches nothing still reaches the writer and stays a nil delete — a
+// missing row is not a validation error.
+func TestDeletePolicy_ValidMissingScopeStaysIdempotent(t *testing.T) {
+	t.Parallel()
+
+	writer := &fakeDisclosureWriter{}
+	targets := &fakeTargetRepo{targets: []model.QueryTarget{pgDisclosureTarget(7)}}
+	svc := NewQueryDisclosureService(&fakeDisclosureReader{}, writer, nil, targets)
+	if err := svc.DeletePolicy(context.Background(), 7, "sales_db", "missing", "orders", "email"); err != nil {
+		t.Fatalf("DeletePolicy of a missing but valid scope error = %v, want nil", err)
+	}
+	if !writer.deleteCalled {
+		t.Fatal("writer must be reached for a valid scope even when no row exists")
 	}
 }

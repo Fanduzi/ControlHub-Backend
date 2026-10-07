@@ -3,7 +3,7 @@
 // Package integration provides Testcontainers tests for disclosure policy repository operations.
 // input: testing, database/sql, internal/model, internal/repository/mysql, internal/service
 // output: TestQueryDisclosureRepository_* integration tests
-// pos: Proves canonical five-part CRUD, conflict/not-found/idempotent semantics, and utf8mb4_bin name fidelity against real MySQL
+// pos: Proves canonical five-part CRUD, conflict/not-found/idempotent semantics, and NO PAD utf8mb4_0900_bin name fidelity (incl. trailing-space sibling keys) against real MySQL
 // note: if this file changes, update header and README.md
 package integration
 
@@ -193,7 +193,7 @@ func TestQueryDisclosureRepository_ListByTarget_MultipleColumns(t *testing.T) {
 	const rid uint64 = 8800000003
 
 	// Insert out of canonical order ('' sorts before any non-empty schema under
-	// utf8mb4_bin, so a_db '' precedes a_db 'analytics').
+	// utf8mb4_0900_bin, so a_db '' precedes a_db 'analytics').
 	for _, req := range []model.ResultDisclosurePolicyUpsertRequest{
 		disclosurePolicyReq(rid, "z_db", "", "z_table", "z_col", model.ResultDisclosureMaskedNoCopy),
 		disclosurePolicyReq(rid, "a_db", "analytics", "a_table", "a_col", model.ResultDisclosureMaskedNoCopy),
@@ -337,7 +337,7 @@ func TestQueryDisclosureRepository_FivePartKeyIsolation(t *testing.T) {
 
 // TestQueryDisclosureRepository_CanonicalNameFidelity proves (acceptance E)
 // that canonical names survive request → insert → lookup byte-identically:
-// case differences are distinct rows (utf8mb4_bin), Unicode and characters
+// case differences are distinct rows (utf8mb4_0900_bin), Unicode and characters
 // only legal inside quoted PostgreSQL identifiers are stored verbatim, and no
 // layer lowercases, trims, or rewrites the value.
 func TestQueryDisclosureRepository_CanonicalNameFidelity(t *testing.T) {
@@ -346,7 +346,7 @@ func TestQueryDisclosureRepository_CanonicalNameFidelity(t *testing.T) {
 	const rid uint64 = 8800000013
 
 	cases := []model.ResultDisclosurePolicyUpsertRequest{
-		// Case-sensitive siblings — utf8mb4_bin keeps them distinct.
+		// Case-sensitive siblings — utf8mb4_0900_bin keeps them distinct.
 		disclosurePolicyReq(rid, "SalesDB", "App", "Orders", "ID", model.ResultDisclosureRawCopyAllowed),
 		disclosurePolicyReq(rid, "salesdb", "app", "orders", "id", model.ResultDisclosureMaskedNoCopy),
 		// Unicode canonical names.
@@ -372,12 +372,141 @@ func TestQueryDisclosureRepository_CanonicalNameFidelity(t *testing.T) {
 		}
 	}
 
-	// Same name differing only by case must miss under the binary collation.
+	// Same name differing only by case must miss under the NO PAD binary collation.
 	if _, err := repo.GetByScope(ctx, rid, "SALESDB", "app", "orders", "id"); !errors.Is(err, sql.ErrNoRows) {
 		t.Fatalf("uppercased database must not match: err = %v, want sql.ErrNoRows", err)
 	}
 	if _, err := repo.GetByScope(ctx, rid, "salesdb", "APP", "orders", "id"); !errors.Is(err, sql.ErrNoRows) {
 		t.Fatalf("uppercased schema must not match: err = %v, want sql.ErrNoRows", err)
+	}
+}
+
+// TestQueryDisclosureRepository_IdentityColumnsAreNoPad proves the four
+// canonical name columns compare under a NO PAD collation: the application's
+// "exact five-part key" claim must match the store's comparison semantics, so
+// this asserts the real column collation and its PAD_ATTRIBUTE from
+// information_schema rather than trusting a Go-level assumption.
+func TestQueryDisclosureRepository_IdentityColumnsAreNoPad(t *testing.T) {
+	db, _ := newDisclosureRepoTestDB(t)
+
+	var version string
+	if err := db.QueryRow(`SELECT VERSION()`).Scan(&version); err != nil {
+		t.Fatalf("version: %v", err)
+	}
+	t.Logf("control-plane MySQL version: %s", version)
+
+	for _, col := range []string{"database_name", "schema_name", "object_name", "column_name"} {
+		var collation string
+		if err := db.QueryRow(`SELECT COLLATION_NAME FROM information_schema.COLUMNS
+			WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'query_result_disclosure_policies' AND COLUMN_NAME = ?`, col).
+			Scan(&collation); err != nil {
+			t.Fatalf("collation for %s: %v", col, err)
+		}
+		var pad string
+		if err := db.QueryRow(`SELECT PAD_ATTRIBUTE FROM information_schema.COLLATIONS WHERE COLLATION_NAME = ?`, collation).
+			Scan(&pad); err != nil {
+			t.Fatalf("PAD_ATTRIBUTE for %s (%s): %v", col, collation, err)
+		}
+		t.Logf("%s collation=%s pad=%s", col, collation, pad)
+		if pad != "NO PAD" {
+			t.Fatalf("%s collation %q has PAD_ATTRIBUTE=%q; trailing spaces would alias distinct canonical names", col, collation, pad)
+		}
+	}
+}
+
+// TestQueryDisclosureRepository_TrailingSpaceIdentity proves that names
+// differing only by trailing spaces are distinct canonical identities end to
+// end: sibling keys insert independently, exact lookups never alias, update
+// and delete reach only the addressed row, and an exact duplicate still
+// conflicts. WHY: disclosure identity is byte-exact; a PAD collation would
+// silently merge "orders" and "orders " into one policy scope.
+func TestQueryDisclosureRepository_TrailingSpaceIdentity(t *testing.T) {
+	_, repo := newDisclosureRepoTestDB(t)
+	ctx := context.Background()
+	const rid uint64 = 8800000014
+
+	type scope struct{ db, schema, object, column string }
+	// Each case varies exactly one segment across three trailing-space
+	// siblings while the other segments stay fixed.
+	cases := []struct {
+		name string
+		base scope
+		vary func(scope, string) scope
+	}{
+		{"database_name", scope{"sales_db", "app", "orders", "id"}, func(s scope, v string) scope { s.db += v; return s }},
+		{"schema_name", scope{"sales_db", "app", "orders", "id"}, func(s scope, v string) scope { s.schema += v; return s }},
+		{"object_name", scope{"sales_db", "app", "orders", "id"}, func(s scope, v string) scope { s.object += v; return s }},
+		{"column_name", scope{"sales_db", "app", "orders", "id"}, func(s scope, v string) scope { s.column += v; return s }},
+	}
+	// Distinct database per case so the four cases never interact.
+	dbNames := map[string]string{"database_name": "tsdb_a", "schema_name": "tsdb_b", "object_name": "tsdb_c", "column_name": "tsdb_d"}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			base := tc.base
+			base.db = dbNames[tc.name]
+			siblings := []scope{base, tc.vary(base, " "), tc.vary(base, "  ")}
+
+			// Only K1 exists: siblings must be fail-closed, never aliased.
+			if _, err := repo.Insert(ctx, disclosurePolicyReq(rid, siblings[0].db, siblings[0].schema, siblings[0].object, siblings[0].column, model.ResultDisclosureRawCopyAllowed)); err != nil {
+				t.Fatalf("insert base: %v", err)
+			}
+			for _, s := range siblings[1:] {
+				if _, err := repo.GetByScope(ctx, rid, s.db, s.schema, s.object, s.column); !errors.Is(err, sql.ErrNoRows) {
+					t.Fatalf("get %+v while only base exists: err = %v, want sql.ErrNoRows", s, err)
+				}
+				if err := repo.Update(ctx, disclosurePolicyReq(rid, s.db, s.schema, s.object, s.column, model.ResultDisclosureMaskedNoCopy)); !errors.Is(err, sql.ErrNoRows) {
+					t.Fatalf("update %+v while only base exists: err = %v, want sql.ErrNoRows", s, err)
+				}
+				if err := repo.Delete(ctx, rid, s.db, s.schema, s.object, s.column); err != nil {
+					t.Fatalf("idempotent delete %+v: %v", s, err)
+				}
+				if _, err := repo.GetByScope(ctx, rid, base.db, base.schema, base.object, base.column); err != nil {
+					t.Fatalf("base row after sibling delete: %v", err)
+				}
+			}
+
+			// All three siblings coexist with independent modes.
+			for i, s := range siblings[1:] {
+				mode := model.ResultDisclosureMaskedNoCopy
+				if i == 1 {
+					mode = model.ResultDisclosureRawCopyAllowed
+				}
+				if _, err := repo.Insert(ctx, disclosurePolicyReq(rid, s.db, s.schema, s.object, s.column, mode)); err != nil {
+					t.Fatalf("insert sibling %+v: %v", s, err)
+				}
+			}
+			for _, s := range siblings {
+				got, err := repo.GetByScope(ctx, rid, s.db, s.schema, s.object, s.column)
+				if err != nil {
+					t.Fatalf("get %+v: %v (trailing spaces must distinguish keys)", s, err)
+				}
+				if got.DatabaseName != s.db || got.SchemaName != s.schema || got.ObjectName != s.object || got.ColumnName != s.column {
+					t.Fatalf("stored %+v, want verbatim %+v", got, s)
+				}
+			}
+
+			// Exact duplicate still conflicts.
+			if _, err := repo.Insert(ctx, disclosurePolicyReq(rid, base.db, base.schema, base.object, base.column, model.ResultDisclosureMaskedNoCopy)); !errors.Is(err, service.ErrQueryDisclosurePolicyConflict) {
+				t.Fatalf("duplicate base insert: err = %v, want conflict", err)
+			}
+
+			// Mutating one sibling leaves the other rows untouched.
+			if err := repo.Update(ctx, disclosurePolicyReq(rid, siblings[1].db, siblings[1].schema, siblings[1].object, siblings[1].column, model.ResultDisclosureRawCopyAllowed)); err != nil {
+				t.Fatalf("update sibling1: %v", err)
+			}
+			if err := repo.Delete(ctx, rid, siblings[2].db, siblings[2].schema, siblings[2].object, siblings[2].column); err != nil {
+				t.Fatalf("delete sibling2: %v", err)
+			}
+			if _, err := repo.GetByScope(ctx, rid, siblings[2].db, siblings[2].schema, siblings[2].object, siblings[2].column); !errors.Is(err, sql.ErrNoRows) {
+				t.Fatalf("sibling2 after delete: err = %v, want sql.ErrNoRows", err)
+			}
+			for _, s := range siblings[:2] {
+				if _, err := repo.GetByScope(ctx, rid, s.db, s.schema, s.object, s.column); err != nil {
+					t.Fatalf("surviving sibling %+v: %v", s, err)
+				}
+			}
+		})
 	}
 }
 

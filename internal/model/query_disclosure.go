@@ -1,6 +1,6 @@
 // Package model provides domain entities for the resource management system.
 // input: fmt, regexp, strings, time packages
-// output: ResultDisclosureMode type, ResultDisclosurePolicy struct, ResultDisclosurePolicyUpsertRequest (five-part canonical key incl. SchemaName), ValidateLegacyScopeIdentifier, ResultDisclosurePolicyListQuery
+// output: ResultDisclosureMode type, ResultDisclosurePolicy struct, ResultDisclosurePolicyUpsertRequest (five-part canonical key incl. SchemaName), ValidateIdentifierShape, ValidateLegacyScopeIdentifier, ResultDisclosurePolicyListQuery
 // pos: Governed result-disclosure policy for per-column query result visibility
 // note: if this file changes, update header and README.md
 package model
@@ -100,7 +100,7 @@ func (r ResultDisclosurePolicyUpsertRequest) Validate() error {
 		{"object_name", r.ObjectName},
 		{"column_name", r.ColumnName},
 	} {
-		if err := validateIdentifierShape(f.name, f.value, f.name != "schema_name"); err != nil {
+		if err := ValidateIdentifierShape(f.name, f.value, f.name != "schema_name"); err != nil {
 			return err
 		}
 	}
@@ -110,9 +110,11 @@ func (r ResultDisclosurePolicyUpsertRequest) Validate() error {
 	return nil
 }
 
-// validateIdentifierShape applies the engine-agnostic identifier contract:
-// required (when mustFill), bounded length, and no embedded NUL byte.
-func validateIdentifierShape(field, value string, mustFill bool) error {
+// ValidateIdentifierShape applies the engine-agnostic identifier contract:
+// required (when mustFill), bounded length, and no embedded NUL byte. It is
+// shared by upsert validation and scope-only paths such as delete, which carry
+// no mode but must enforce the same name shape.
+func ValidateIdentifierShape(field, value string, mustFill bool) error {
 	if value == "" {
 		if mustFill {
 			return fmt.Errorf("%s is required", field)

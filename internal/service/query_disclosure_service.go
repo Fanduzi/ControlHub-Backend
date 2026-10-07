@@ -1,7 +1,7 @@
 // Package service evaluates and applies result-disclosure policies for query results (fail-closed).
 // input: context, database/sql, errors, fmt, mysql DSN, internal/model, QuerySchemaInspector, QueryTargetRepository
 // output: QueryDisclosureService, DisclosurePlan, ColumnDisclosure, QueryDisclosureReader/Writer, ErrQueryDisclosure* sentinels
-// pos: fail-closed disclosure governance (Phase 38Q); policy refusals stay blocked while machinery failures use a distinct backend sentinel (Issue #35); management paths enforce the canonical five-part scope with the engine-conditional schema rule (T9-A)
+// pos: fail-closed disclosure governance (Phase 38Q); policy refusals stay blocked while machinery failures use a distinct backend sentinel (Issue #35); management paths enforce the canonical five-part scope with the engine-conditional schema rule (T9-A) and share one name-shape validation path across create/update/delete (T9-A-R1)
 // note: if this file changes, update header and README.md
 package service
 
@@ -328,26 +328,34 @@ func (s *QueryDisclosureService) buildDisclosurePlan(ctx context.Context, target
 	return plan, nil
 }
 
-// validatePolicyScope enforces the engine-conditional scope contract for the
-// canonical five-part key (G1/G10). A PostgreSQL policy identity must carry an
-// explicit schema — missing schema is a controlled validation error, never
-// silently resolved to public or the connection default_schema. Every other
+// validatePolicyScope is the canonical scope-validation path shared by create,
+// update, and delete (T9-A-R1). It first applies the engine-agnostic name
+// shape every management operation must enforce — requiredness, bounded
+// length, no NUL bytes — via the same model helper upsert requests use, so a
+// scope reaching the writer can never skip checks just because it carries no
+// mode. It then applies the engine-conditional contract for the canonical
+// five-part key (G1/G10): a PostgreSQL policy identity must carry an explicit
+// schema — missing schema is a controlled validation error, never silently
+// resolved to public or the connection default_schema — while every other
 // engine keeps the legacy empty schema and the strict ASCII identifier rule
-// MySQL/TiDB policies have always used; a non-empty schema there is an
-// invalid combination, not a migration of meaning.
+// MySQL/TiDB policies have always used.
 func validatePolicyScope(target model.QueryTarget, schema, database, object, column string) error {
+	for _, f := range []struct {
+		name, value string
+		required    bool
+	}{
+		{"database_name", database, true},
+		{"schema_name", schema, false},
+		{"object_name", object, true},
+		{"column_name", column, true},
+	} {
+		if err := model.ValidateIdentifierShape(f.name, f.value, f.required); err != nil {
+			return err
+		}
+	}
 	if target.ConnectionContext.Engine == "postgresql" {
 		if schema == "" {
 			return fmt.Errorf("schema_name is required for postgresql policy scopes")
-		}
-		for _, f := range []struct{ name, value string }{
-			{"database_name", database},
-			{"object_name", object},
-			{"column_name", column},
-		} {
-			if f.value == "" {
-				return fmt.Errorf("%s is required", f.name)
-			}
 		}
 		return nil
 	}
