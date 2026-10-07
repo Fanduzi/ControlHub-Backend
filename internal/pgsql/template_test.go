@@ -42,6 +42,7 @@ func TestScanTemplatePlaceholdersRecognized(t *testing.T) {
 		{"marker at start of predicate", "SELECT * FROM t WHERE :flag AND id = 1", []string{"flag"}},
 		{"uppercase name collected for declaration check", "SELECT :Name FROM t", []string{"Name"}},
 		{"tab and newline separators", "SELECT *\nFROM t\tWHERE a = :a", []string{"a"}},
+		{"carriage return separates markers", "SELECT :a\r, :b", []string{"a", "b"}},
 	}
 	for _, tc := range cases {
 		tc := tc
@@ -69,10 +70,18 @@ func TestScanTemplatePlaceholdersPreservesConstructs(t *testing.T) {
 		{"E string backslash escape", `SELECT E'esc\':x\'' FROM t WHERE y = :ok`},
 		{"U& string", `SELECT U&'\0061 :x' FROM t WHERE y = :ok`},
 		{"U& dollar quote style escape", `SELECT U&'!0041' UESCAPE '!' FROM t WHERE y = :ok`},
+		{"U& backslash is plain content under custom UESCAPE", `SELECT U&'abc\' UESCAPE '!', :ok`},
+		{"newline string continuation plain", "SELECT 'a'\n':not', :ok"},
+		{"E string continuation keeps escape state", "SELECT E'first'\n'\\' :fake', :ok"},
+		{"continuation over comment holding newline", "SELECT 'a' /* c\n */ ':not', :ok"},
+		{"same-line adjacent quote is a new literal", "SELECT 'a' ':not', :ok"},
 		{"double-quoted identifier", `SELECT "has:colon" FROM t WHERE y = :ok`},
 		{"U& quoted identifier", `SELECT * FROM "sch".U&"ta:ble" WHERE y = :ok`},
 		{"line comment", "SELECT 1 -- :nope\nFROM t WHERE x = :ok"},
 		{"line comment at EOF", "SELECT :ok -- trailing :nope"},
+		{"line comment ended by carriage return", "SELECT 1 -- ignored\r + :ok"},
+		{"line comment ended by CRLF", "SELECT 1 -- ignored\r\n + :ok"},
+		{"carriage return is code whitespace", "SELECT 1\r-- :nope\nFROM t WHERE x = :ok"},
 		{"block comment", "SELECT /* :nope */ :ok"},
 		{"nested block comment", "SELECT /* outer /* inner :deep */ still :nope */ :ok"},
 		{"block comment around string", "SELECT /* ':n' /* :m */ */ :ok"},
@@ -130,6 +139,7 @@ func TestScanTemplatePlaceholdersRejectsNativeParams(t *testing.T) {
 		"SELECT arr[$1]",
 		"SELECT $12 FROM t",
 		"SELECT $0",
+		"SELECT :x -- ignored\r + $1",
 	} {
 		got, err := ScanTemplatePlaceholders(sql)
 		if !errors.Is(err, ErrTemplateNativeParameter) {

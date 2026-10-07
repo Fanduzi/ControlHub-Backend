@@ -84,6 +84,9 @@ func TestTemplateStatementCompilerPG_RejectsNativePositionalParameters(t *testin
 	for _, statement := range []string{
 		`SELECT * FROM t WHERE id = $1`,
 		`SELECT * FROM t WHERE id = $42`,
+		// A carriage return already ends a -- comment for PostgreSQL: the $1
+		// after it is live text, not comment content, and must be rejected.
+		"SELECT :x -- c\r + $1",
 	} {
 		_, err := NewTemplateStatementCompiler().CompilePG(TemplateStatementInput{Statement: statement})
 		if !errors.Is(err, ErrTemplateParameterInvalid) {
@@ -227,6 +230,38 @@ func TestTemplateStatementCompilerPG_DecimalRejectsNonDecimalText(t *testing.T) 
 	})
 	if !errors.Is(err, ErrTemplateParameterInvalid) {
 		t.Fatalf("CompilePG error = %v, want decimal rejection", err)
+	}
+}
+
+func TestTemplateStatementCompilerPG_StringContinuationAndUescape(t *testing.T) {
+	t.Parallel()
+
+	// Lexical regressions: an E literal continuing across a newline keeps its
+	// escape state so the fake marker stays inside the literal, and a custom
+	// UESCAPE makes the backslash plain content so the quote closes normally.
+	// Both compiled outputs must parse under the real pgquery pipeline.
+	compiler := NewTemplateStatementCompiler()
+	for _, tc := range []struct {
+		statement string
+		want      string
+	}{
+		{"SELECT E'first'\n'\\' :fake', :x", "SELECT E'first'\n'\\' :fake', $1"},
+		{`SELECT U&'abc\' UESCAPE '!', :x`, `SELECT U&'abc\' UESCAPE '!', $1`},
+	} {
+		compiled, err := compiler.CompilePG(TemplateStatementInput{
+			Statement:   tc.statement,
+			Definitions: []TemplateParameterDefinition{{Name: "x", Type: TemplateParameterInteger}},
+			Values:      map[string]any{"x": int64(1)},
+		})
+		if err != nil {
+			t.Fatalf("CompilePG(%q): %v", tc.statement, err)
+		}
+		if compiled.Statement != tc.want {
+			t.Fatalf("CompilePG(%q) = %q, want %q", tc.statement, compiled.Statement, tc.want)
+		}
+		if _, err := pgsql.GuardPG(compiled.Statement); err != nil {
+			t.Fatalf("GuardPG(%q): %v", compiled.Statement, err)
+		}
 	}
 }
 

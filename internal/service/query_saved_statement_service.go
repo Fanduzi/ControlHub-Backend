@@ -92,8 +92,13 @@ func (s *QuerySavedStatementService) pgRestoreCatalog() pgSchemaCatalog {
 
 // List returns saved statements visible to the actor for a target.
 // Personal statements are only visible to the owner. Shared templates
-// are visible to all authenticated actors for the target.
-func (s *QuerySavedStatementService) List(ctx context.Context, actor AuthenticatedUser, targetResourceID uint64, q string, page, pageSize int) (model.QuerySavedStatementListResponse, error) {
+// are visible to all authenticated actors for the target. database is the
+// composite connection scope (G1): empty reads the legacy empty-database identity that
+// every MySQL/TiDB statement carries; a non-empty value selects exactly one
+// (target, database) connection's statements. The filter never consults the
+// connection's runtime state — saved statements stay readable when a
+// connection is disabled.
+func (s *QuerySavedStatementService) List(ctx context.Context, actor AuthenticatedUser, targetResourceID uint64, q, database string, page, pageSize int) (model.QuerySavedStatementListResponse, error) {
 	if _, err := s.lookupTarget(ctx, targetResourceID); err != nil {
 		return model.QuerySavedStatementListResponse{}, err
 	}
@@ -101,6 +106,7 @@ func (s *QuerySavedStatementService) List(ctx context.Context, actor Authenticat
 	query := model.QuerySavedStatementListQuery{
 		TargetResourceID: targetResourceID,
 		OwnerUserID:      actor.ID,
+		Database:         database,
 		Page:             page,
 		PageSize:         pageSize,
 		Search:           q,

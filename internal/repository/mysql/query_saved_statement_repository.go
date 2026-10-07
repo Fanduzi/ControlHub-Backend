@@ -42,11 +42,14 @@ func NewQuerySavedStatementRepository(db *sql.DB) *MySQLQuerySavedStatementRepos
 // ListVisible returns saved statements visible to the actor:
 // - All shared_template statements for the target
 // - Only the actor's personal statements for the target
-// Ordered by updated_at DESC, id DESC. Name-only search.
+// Ordered by updated_at DESC, id DESC. Name-only search. The composite
+// connection scope is always applied: an empty Database reads the legacy
+// identity so MySQL/TiDB lists are unchanged, and a non-empty value selects
+// exactly that (target, database) connection's statements.
 func (r *MySQLQuerySavedStatementRepository) ListVisible(ctx context.Context, query model.QuerySavedStatementListQuery) (model.QuerySavedStatementListResponse, error) {
 	// Build WHERE clause
-	where := []string{"target_resource_id = ?"}
-	args := []any{query.TargetResourceID}
+	where := []string{"target_resource_id = ?", "database_name = ?"}
+	args := []any{query.TargetResourceID, query.Database}
 
 	// Visibility: shared OR (personal AND owned by actor)
 	where = append(where, "(scope = 'shared_template' OR (scope = 'personal' AND owner_user_id = ?))")

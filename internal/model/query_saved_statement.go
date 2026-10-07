@@ -201,9 +201,13 @@ func (r QuerySavedStatementExecuteRequest) Validate() error {
 }
 
 // QuerySavedStatementListQuery carries the filter for listing saved statements.
+// Database is the composite connection scope: empty resolves to the legacy
+// empty-database identity — which is every MySQL/TiDB row — and a non-empty
+// value selects exactly one (target, database) connection's statements.
 type QuerySavedStatementListQuery struct {
 	TargetResourceID uint64
 	OwnerUserID      uint64
+	Database         string
 	Page             int
 	PageSize         int
 	Search           string

@@ -13,10 +13,12 @@ import (
 	"io"
 	"net/http"
 	"strconv"
+	"unicode/utf8"
 
 	"github.com/go-chi/chi/v5"
 
 	"github.com/fan/controlhub/internal/model"
+	"github.com/fan/controlhub/internal/pgsql"
 	"github.com/fan/controlhub/internal/service"
 )
 
@@ -34,7 +36,7 @@ func parseOptionalInt(raw string, defaultVal int) (int, error) {
 // querySavedStatementAPI is the handler-level interface the saved statement
 // service satisfies. Actor is taken from the verified token, never from body.
 type querySavedStatementAPI interface {
-	List(ctx context.Context, actor service.AuthenticatedUser, targetResourceID uint64, q string, page, pageSize int) (model.QuerySavedStatementListResponse, error)
+	List(ctx context.Context, actor service.AuthenticatedUser, targetResourceID uint64, q, database string, page, pageSize int) (model.QuerySavedStatementListResponse, error)
 	Create(ctx context.Context, actor service.AuthenticatedUser, targetResourceID uint64, req model.QuerySavedStatementCreateRequest) (model.QuerySavedStatement, error)
 	Update(ctx context.Context, actor service.AuthenticatedUser, targetResourceID, statementID uint64, req model.QuerySavedStatementUpdateRequest) error
 	Delete(ctx context.Context, actor service.AuthenticatedUser, targetResourceID, statementID uint64) error
@@ -56,6 +58,14 @@ func handleListSavedStatements(svc querySavedStatementAPI) http.HandlerFunc {
 		}
 
 		q := r.URL.Query().Get("q")
+		// ?database= is the composite connection scope (G1): absent resolves to
+		// the legacy ('') identity — every MySQL/TiDB statement — unchanged
+		// visibility semantics, no eligibility check.
+		database := r.URL.Query().Get("database")
+		if utf8.RuneCountInString(database) > model.MaxConnectionNameLength {
+			writeJSONError(w, http.StatusBadRequest, "validation_failed", "database exceeds maximum length")
+			return
+		}
 		page, err := parseOptionalInt(r.URL.Query().Get("page"), 1)
 		if err != nil {
 			writeJSONError(w, http.StatusBadRequest, "validation_failed", "invalid page parameter")
@@ -67,7 +77,7 @@ func handleListSavedStatements(svc querySavedStatementAPI) http.HandlerFunc {
 			return
 		}
 
-		resp, err := svc.List(r.Context(), actor, targetResourceID, q, page, pageSize)
+		resp, err := svc.List(r.Context(), actor, targetResourceID, q, database, page, pageSize)
 		if err != nil {
 			writeSavedStatementError(w, err)
 			return
@@ -250,9 +260,16 @@ func handleDeleteSavedStatement(svc querySavedStatementAPI) http.HandlerFunc {
 	}
 }
 
-// writeSavedStatementError maps a service sentinel to a controlled HTTP response.
+// writeSavedStatementError maps a service sentinel to a controlled HTTP
+// response. A pgsql.RejectError anywhere in the chain surfaces its own
+// contract code — save-time PG guard/pagination rejections must not collapse
+// into validation_failed (G8: LIMIT :n compiles, then the pagination gate
+// rejects it as unsupported_limit_offset_form on save exactly as on execute).
 func writeSavedStatementError(w http.ResponseWriter, err error) {
+	var reject *pgsql.RejectError
 	switch {
+	case errors.As(err, &reject):
+		writeJSONError(w, savedStatementRejectStatus(reject.Code), reject.Code, reject.Message)
 	case errors.Is(err, service.ErrQueryTargetNotFound):
 		writeJSONError(w, http.StatusNotFound, "query_target_not_found", err.Error())
 	case errors.Is(err, service.ErrQuerySavedStatementNotFound):
@@ -265,5 +282,19 @@ func writeSavedStatementError(w http.ResponseWriter, err error) {
 		writeJSONError(w, http.StatusBadRequest, "validation_failed", err.Error())
 	default:
 		writeJSONError(w, http.StatusInternalServerError, "internal_error", "an internal error occurred")
+	}
+}
+
+// savedStatementRejectStatus maps a controlled PG guard/pagination code to
+// the status the existing handler tables already publish for it; every other
+// statement-content rejection is a client error and stays 400.
+func savedStatementRejectStatus(code string) int {
+	switch code {
+	case "query_not_allowed", "query_schema_not_usable":
+		return http.StatusForbidden
+	case "query_object_not_found":
+		return http.StatusNotFound
+	default:
+		return http.StatusBadRequest
 	}
 }

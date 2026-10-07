@@ -1,4 +1,8 @@
 // Package service provides tests for QuerySavedStatementService.
+// input: testing, in-memory service repository fakes
+// output: TestSavedStatement* — CRUD authorization, validation, and composite database list-scope propagation
+// pos: service-layer regression coverage for saved statements (T11)
+// note: if this file changes, update header and README.md
 package service
 
 import (
@@ -12,13 +16,15 @@ import (
 
 // fakeSavedStatementReader implements QuerySavedStatementReader for testing.
 type fakeSavedStatementReader struct {
-	listResp model.QuerySavedStatementListResponse
-	listErr  error
-	getResp  model.QuerySavedStatement
-	getErr   error
+	listResp  model.QuerySavedStatementListResponse
+	listErr   error
+	listQuery model.QuerySavedStatementListQuery
+	getResp   model.QuerySavedStatement
+	getErr    error
 }
 
-func (f *fakeSavedStatementReader) ListVisible(_ context.Context, _ model.QuerySavedStatementListQuery) (model.QuerySavedStatementListResponse, error) {
+func (f *fakeSavedStatementReader) ListVisible(_ context.Context, q model.QuerySavedStatementListQuery) (model.QuerySavedStatementListResponse, error) {
+	f.listQuery = q
 	return f.listResp, f.listErr
 }
 
@@ -78,7 +84,7 @@ func TestQuerySavedStatementServiceList(t *testing.T) {
 
 		// When: admin lists saved statements.
 		actor := AuthenticatedUser{ID: 1, Role: "admin"}
-		resp, err := svc.List(context.Background(), actor, 22, "", 1, 20)
+		resp, err := svc.List(context.Background(), actor, 22, "", "", 1, 20)
 
 		// Then: CanManageSharedTemplates is true.
 		if err != nil {
@@ -102,7 +108,7 @@ func TestQuerySavedStatementServiceList(t *testing.T) {
 
 		// When: editor lists saved statements.
 		actor := AuthenticatedUser{ID: 1, Role: "editor"}
-		resp, err := svc.List(context.Background(), actor, 22, "", 1, 20)
+		resp, err := svc.List(context.Background(), actor, 22, "", "", 1, 20)
 
 		// Then: CanManageSharedTemplates is false.
 		if err != nil {
@@ -124,11 +130,35 @@ func TestQuerySavedStatementServiceList(t *testing.T) {
 
 		// When: listing saved statements for a nonexistent target.
 		actor := AuthenticatedUser{ID: 1, Role: "editor"}
-		_, err := svc.List(context.Background(), actor, 999, "", 1, 20)
+		_, err := svc.List(context.Background(), actor, 999, "", "", 1, 20)
 
 		// Then: ErrQueryTargetNotFound is returned.
 		if !errors.Is(err, ErrQueryTargetNotFound) {
 			t.Errorf("expected ErrQueryTargetNotFound, got %v", err)
+		}
+	})
+
+	t.Run("passes the composite database scope through to the reader", func(t *testing.T) {
+		// Given: a PG target and a database-scoped list request.
+		reader := &fakeSavedStatementReader{}
+		svc := NewQuerySavedStatementService(
+			reader,
+			&fakeSavedStatementWriter{},
+			fakeTargetRepo{targets: []model.QueryTarget{{ResourceID: 22, ConnectionContext: model.QueryTargetConnectionContext{Engine: "postgresql"}}}},
+			&fakeSavedStatementGuard{},
+		)
+
+		// When: listing with ?database=db_a.
+		actor := AuthenticatedUser{ID: 1, Role: "editor"}
+		_, err := svc.List(context.Background(), actor, 22, "", "db_a", 1, 20)
+
+		// Then: the scope reaches the repository filter unchanged — no
+		// eligibility check, no re-resolution.
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if reader.listQuery.Database != "db_a" {
+			t.Fatalf("list query database = %q, want db_a", reader.listQuery.Database)
 		}
 	})
 }

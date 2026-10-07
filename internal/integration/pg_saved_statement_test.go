@@ -2,7 +2,7 @@
 
 // Package integration proves PostgreSQL saved-statement context persistence and the G12 restore revalidation against real state.
 // input: disposable PostgreSQL 16, disposable MySQL control plane, production repositories, TargetAccessResolver, livePGSchemaCatalog, pgx native binds
-// output: TestPostgreSQLSavedStatementContext* — context round trip, restore failure matrix (disabled/deleted connection, rebound DSN, dropped schema, revoked USAGE, no cross-database fallback), and a component-level proof that compiled $k statements bind through the real driver
+// output: TestPostgreSQLSavedStatement* — context round trip, restore failure matrix (disabled/deleted connection, rebound DSN, dropped schema, revoked USAGE, no cross-database fallback), ?database= list-scope isolation incl. disabled-connection readability, and a component-level proof that compiled $k statements bind through the real driver
 // pos: T11 vertical evidence (issue #119) — restore probes the LIVE server, so fixture mutations must run through the admin connection, never the restricted role; PG user/execute endpoints stay closed and are not exercised here beyond the fail-closed assertion
 // note: if this file changes, update this header and module README.md.
 package integration
@@ -373,6 +373,62 @@ func TestPostgreSQLTemplateCompilationNativeBinding(t *testing.T) {
 	}
 	if len(ids) != 1 || ids[0] != 1 {
 		t.Fatalf("ids = %v, want [1] — the bound 'paid' value must match only the paid row", ids)
+	}
+}
+
+// G1 list scope: the ?database= filter must isolate rows per (target,
+// database) composite identity, keep disabled connections readable, and never
+// leak PG rows into the legacy empty scope used by MySQL/TiDB.
+func TestPostgreSQLSavedStatementListScopesByDatabase(t *testing.T) {
+	f := newPGStmtFixture(t)
+	ctx := context.Background()
+	actor := service.AuthenticatedUser{ID: ownerDBA, Role: "editor"}
+
+	idA := f.createStatement(t, "db_a", "app", `SELECT id FROM app.orders WHERE status = :status`,
+		[]model.QuerySavedStatementParameterDefinition{{Name: "status", Type: "string"}})
+	idB := f.createStatement(t, "db_b", "app", `SELECT id FROM app.only_b`, nil)
+
+	list := func(database string) model.QuerySavedStatementListResponse {
+		resp, err := f.svc.List(ctx, actor, f.target, "", database, 1, 50)
+		if err != nil {
+			t.Fatalf("list database=%q: %v", database, err)
+		}
+		return resp
+	}
+
+	respA := list("db_a")
+	if len(respA.Items) != 1 || respA.Items[0].ID != idA || respA.PageInfo.TotalItems != 1 {
+		t.Fatalf("db_a list = %+v (total %d), want only statement %d", respA.Items, respA.PageInfo.TotalItems, idA)
+	}
+	if respA.Items[0].DatabaseName != "db_a" || respA.Items[0].SchemaName != "app" {
+		t.Fatalf("db_a row context = %q/%q, want db_a/app", respA.Items[0].DatabaseName, respA.Items[0].SchemaName)
+	}
+
+	respB := list("db_b")
+	if len(respB.Items) != 1 || respB.Items[0].ID != idB || respB.PageInfo.TotalItems != 1 {
+		t.Fatalf("db_b list = %+v (total %d), want only statement %d", respB.Items, respB.PageInfo.TotalItems, idB)
+	}
+
+	// Absent database resolves to the legacy empty scope — PG rows stay out.
+	if resp := list(""); len(resp.Items) != 0 || resp.PageInfo.TotalItems != 0 {
+		t.Fatalf("empty-scope list leaked %d PG rows", len(resp.Items))
+	}
+
+	// A disabled connection row must not make its saved statements unreadable:
+	// list reads do not consult runtime connection eligibility.
+	mustExec(t, f.db, `UPDATE query_target_credentials SET enabled = 0 WHERE resource_id = ? AND database_name = 'db_b'`, f.target)
+	respB = list("db_b")
+	if len(respB.Items) != 1 || respB.Items[0].ID != idB {
+		t.Fatalf("db_b list after disable = %+v, want statement %d still readable", respB.Items, idB)
+	}
+
+	// Visibility is unchanged: a non-owner sees nothing under any scope.
+	resp, err := f.svc.List(ctx, service.AuthenticatedUser{ID: ownerDBA + 900, Role: "editor"}, f.target, "", "db_a", 1, 50)
+	if err != nil {
+		t.Fatalf("non-owner list: %v", err)
+	}
+	if len(resp.Items) != 0 {
+		t.Fatalf("non-owner saw %d personal statements", len(resp.Items))
 	}
 }
 

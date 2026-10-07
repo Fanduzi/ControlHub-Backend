@@ -63,7 +63,7 @@ func TestListVisible_ReturnsSharedAndPersonalForOwner(t *testing.T) {
 
 	// Count query
 	mock.ExpectQuery("SELECT COUNT\\(\\*\\) FROM query_saved_statements").
-		WithArgs(uint64(10), uint64(1)).
+		WithArgs(uint64(10), "", uint64(1)).
 		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(2))
 
 	// Select query
@@ -71,7 +71,7 @@ func TestListVisible_ReturnsSharedAndPersonalForOwner(t *testing.T) {
 		AddRow(1, uint64(10), uint64(1), "", "", "my query", "SELECT 1", "personal", now, now).
 		AddRow(2, uint64(10), uint64(2), "", "", "shared tpl", "SELECT 2", "shared_template", now, now)
 	mock.ExpectQuery("SELECT id, target_resource_id").
-		WithArgs(uint64(10), uint64(1), 20, 0).
+		WithArgs(uint64(10), "", uint64(1), 20, 0).
 		WillReturnRows(rows)
 	mock.ExpectQuery("SELECT statement_id, name, type, ordinal").
 		WithArgs(uint64(1), uint64(2)).
@@ -114,14 +114,14 @@ func TestListVisible_ExcludesOtherUsersPersonal(t *testing.T) {
 
 	// The WHERE clause must include owner_user_id = ? to filter personal scope
 	mock.ExpectQuery("SELECT COUNT\\(\\*\\) FROM query_saved_statements").
-		WithArgs(uint64(10), uint64(1)).
+		WithArgs(uint64(10), "", uint64(1)).
 		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(1))
 
 	now := time.Date(2026, 7, 28, 12, 0, 0, 0, time.UTC)
 	rows := sqlmock.NewRows([]string{"id", "target_resource_id", "owner_user_id", "database_name", "schema_name", "name", "statement", "scope", "created_at", "updated_at"}).
 		AddRow(2, uint64(10), uint64(2), "", "", "shared tpl", "SELECT 2", "shared_template", now, now)
 	mock.ExpectQuery("SELECT id, target_resource_id").
-		WithArgs(uint64(10), uint64(1), 20, 0).
+		WithArgs(uint64(10), "", uint64(1), 20, 0).
 		WillReturnRows(rows)
 	mock.ExpectQuery("SELECT statement_id, name, type, ordinal").
 		WithArgs(uint64(2)).
@@ -159,10 +159,10 @@ func TestListVisible_NameSearchEscapesLike(t *testing.T) {
 
 	// Search term with special LIKE chars: 100% → 100\%
 	mock.ExpectQuery("SELECT COUNT\\(\\*\\) FROM query_saved_statements").
-		WithArgs(uint64(10), uint64(1), `%100\%%`).
+		WithArgs(uint64(10), "", uint64(1), `%100\%%`).
 		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(0))
 	mock.ExpectQuery("SELECT id, target_resource_id").
-		WithArgs(uint64(10), uint64(1), `%100\%%`, 20, 0).
+		WithArgs(uint64(10), "", uint64(1), `%100\%%`, 20, 0).
 		WillReturnRows(sqlmock.NewRows([]string{"id", "target_resource_id", "owner_user_id", "database_name", "schema_name", "name", "statement", "scope", "created_at", "updated_at"}))
 
 	resp, err := repo.ListVisible(t.Context(), model.QuerySavedStatementListQuery{
@@ -193,7 +193,7 @@ func TestListVisible_Pagination(t *testing.T) {
 	repo := NewQuerySavedStatementRepository(db)
 
 	mock.ExpectQuery("SELECT COUNT\\(\\*\\) FROM query_saved_statements").
-		WithArgs(uint64(10), uint64(1)).
+		WithArgs(uint64(10), "", uint64(1)).
 		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(50))
 
 	now := time.Date(2026, 7, 28, 12, 0, 0, 0, time.UTC)
@@ -201,7 +201,7 @@ func TestListVisible_Pagination(t *testing.T) {
 		AddRow(3, uint64(10), uint64(1), "", "", "page2 item", "SELECT 1", "personal", now, now)
 	// Page 2, pageSize 10 → offset 10
 	mock.ExpectQuery("SELECT id, target_resource_id").
-		WithArgs(uint64(10), uint64(1), 10, 10).
+		WithArgs(uint64(10), "", uint64(1), 10, 10).
 		WillReturnRows(rows)
 	mock.ExpectQuery("SELECT statement_id, name, type, ordinal").
 		WithArgs(uint64(3)).
@@ -226,6 +226,45 @@ func TestListVisible_Pagination(t *testing.T) {
 		t.Errorf("expected totalPages 5, got %d", resp.PageInfo.TotalPages)
 	}
 
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Errorf("unmet expectations: %v", err)
+	}
+}
+
+// The composite connection scope is bound into both the COUNT and the page
+// SELECT so ?database= scoping can never return a mixed list (T11).
+func TestListVisible_DatabaseScopeBindsIntoWhere(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock.New: %v", err)
+	}
+	defer db.Close()
+	repo := NewQuerySavedStatementRepository(db)
+
+	mock.ExpectQuery("SELECT COUNT\\(\\*\\) FROM query_saved_statements WHERE target_resource_id = \\? AND database_name = \\?").
+		WithArgs(uint64(10), "db_b", uint64(1)).
+		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(1))
+	mock.ExpectQuery("SELECT id, target_resource_id").
+		WithArgs(uint64(10), "db_b", uint64(1), 20, 0).
+		WillReturnRows(sqlmock.NewRows([]string{"id", "target_resource_id", "owner_user_id", "database_name", "schema_name", "name", "statement", "scope", "created_at", "updated_at"}).
+			AddRow(7, uint64(10), uint64(1), "db_b", "app", "pg stmt", "SELECT 1", "personal", time.Now(), time.Now()))
+	mock.ExpectQuery("SELECT statement_id, name, type, ordinal").
+		WithArgs(uint64(7)).
+		WillReturnRows(sqlmock.NewRows([]string{"statement_id", "name", "type", "ordinal"}))
+
+	resp, err := repo.ListVisible(t.Context(), model.QuerySavedStatementListQuery{
+		TargetResourceID: 10,
+		OwnerUserID:      1,
+		Database:         "db_b",
+		Page:             1,
+		PageSize:         20,
+	})
+	if err != nil {
+		t.Fatalf("ListVisible: %v", err)
+	}
+	if len(resp.Items) != 1 || resp.Items[0].DatabaseName != "db_b" {
+		t.Fatalf("items = %+v, want the db_b row only", resp.Items)
+	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Errorf("unmet expectations: %v", err)
 	}

@@ -1276,9 +1276,13 @@ type fakeSavedStatementService struct {
 	createResp model.QuerySavedStatement
 	createReq  model.QuerySavedStatementCreateRequest
 	updateReq  model.QuerySavedStatementUpdateRequest
+	listQuery  string
+	listDB     string
 }
 
-func (f *fakeSavedStatementService) List(_ context.Context, _ service.AuthenticatedUser, _ uint64, _ string, _, _ int) (model.QuerySavedStatementListResponse, error) {
+func (f *fakeSavedStatementService) List(_ context.Context, _ service.AuthenticatedUser, _ uint64, q, database string, _, _ int) (model.QuerySavedStatementListResponse, error) {
+	f.listQuery = q
+	f.listDB = database
 	return f.listResp, nil
 }
 

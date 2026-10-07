@@ -23,7 +23,7 @@ HTTP handlers, chi routing, CORS middleware, and fake-repo test infrastructure.
 | query_workspace_handler.go | User-only singular query workspace GET/strict bounded PUT with controlled OCC conflict mapping |
 | query_credential_handler.go | Phase 38A credential metadata handlers (GET/PUT/DELETE) with the composite `?database=` connection selector |
 | query_disclosure_handler.go | Phase 38Q disclosure policy CRUD/list handlers (handler-admin) |
-| query_saved_statement_handler.go | Phase 38W saved statement CRUD handlers with strict typed parameter declaration decoding and (database, schema) context fields; `query_connection_not_found` maps an unknown composite connection |
+| query_saved_statement_handler.go | Phase 38W saved statement CRUD handlers with strict typed parameter declaration decoding, (database, schema) context fields, and the composite `?database=` list scope; `query_connection_not_found` maps an unknown composite connection, and a wrapped PG guard/pagination `RejectError` surfaces its own controlled code (e.g. `unsupported_limit_offset_form`) instead of `validation_failed` |
 | named_inventory_view_handler.go | User personal/shared named-view CRUD plus machine-only `ListShared` reads |
 | legacy_hash_handler.go | Admin-only GET /admin/legacy-hash-count — non-identity-bearing legacy password hash count |
 | json_body.go | Shared strict JSON body decoding with unknown-field and multiple-value rejection |
@@ -92,7 +92,7 @@ answers `404` with `disclosure_policy_not_found`. Execute and related-record
 disclosure blocks — including Apply after a successful executor run — publish
 `403` with `query_result_disclosure_blocked`; target-not-enabled refusals
 remain `query_not_allowed`.
-| GET | /query-targets/{id}/saved-statements | List saved statements for a query target |
+| GET | /query-targets/{id}/saved-statements | List saved statements for a query target (`database` selects the composite connection scope; absent reads the legacy empty scope) |
 | POST | /query-targets/{id}/saved-statements | Create a saved statement |
 | PUT | /query-targets/{id}/saved-statements/{statementId} | Update a saved statement |
 | DELETE | /query-targets/{id}/saved-statements/{statementId} | Delete a saved statement |

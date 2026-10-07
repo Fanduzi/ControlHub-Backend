@@ -2510,6 +2510,17 @@ paths:
           schema:
             type: string
           description: Free-text search over statement name.
+        - name: database
+          in: query
+          schema:
+            type: string
+            maxLength: 128
+          description: >
+            Composite connection scope (G1). When supplied, only statements
+            persisted against that (target, database) connection are listed.
+            When absent, the scope resolves to the legacy ('') identity —
+            every MySQL/TiDB statement. Read semantics are unchanged: a
+            disabled connection's statements stay listable.
         - name: page
           in: query
           schema:
