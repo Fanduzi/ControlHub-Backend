@@ -6,7 +6,7 @@ Forward and rollback MySQL schema/data migrations applied in numeric order.
 
 | File | Responsibility |
 |------|---------------|
-| 00030_disclosure_policy_nopad_collation.sql | Re-collates the four disclosure name segments to utf8mb4_0900_bin (NO PAD) so trailing-space canonical names stay distinct under equality and the five-part unique key; rollback refuses while PAD-colliding sibling keys exist |
+| 00030_disclosure_policy_nopad_collation.sql | Re-collates the four disclosure name segments to utf8mb4_0900_bin (NO PAD) so trailing-space canonical names stay distinct under equality and the five-part unique key; rollback refuses while any name segment carries a trailing U+0020 or PAD-colliding sibling keys exist |
 | 00029_pg_query_connections.sql | Widens query connection identity to (resource_id, database_name), adds pinned-schema and PostgreSQL evidence columns plus the per-key claim table; rollback refuses while any new-dimension data exists |
 | 00028_query_workspace_and_execution_statement.sql | Adds one bounded JSON workspace row per owner and nullable private full SQL without backfill; rollback refuses while either contains data |
 | 00027_collector_scan_lifecycle.sql | Adds the idempotent per-principal completed-scan ledger and capped per-principal/per-CI Missing state; rollback refuses while either contains data |
@@ -37,7 +37,7 @@ Forward and rollback MySQL schema/data migrations applied in numeric order.
 - `query_execution_claims(target_resource_id, client_execution_id)` holds at most one occupancy row per key with a request digest and nullable terminal `execution_id` link; exactly one of the two actor columns is populated by the writer.
 - `query_saved_statements` and `query_result_disclosure_policies` carry `database_name`/`schema_name` segments; disclosure uniqueness is the five-part `(target_resource_id, database_name, schema_name, object_name, column_name)` key.
 - Migration 00029 downgrade fails with SQLSTATE `45000` while any claim row or any new-dimension value (`database_name`/`schema_name`/`default_schema` non-empty, `backend_pid`/`remote_state`/`client_execution_id` populated) exists; operators must explicitly export or purge that data first.
-- `query_result_disclosure_policies` name segments compare under `utf8mb4_0900_bin` (case-sensitive, NO PAD): `orders` and `orders ` are distinct canonical identities under equality and the unique key. Migration 00030 downgrade fails with SQLSTATE `45000` before any DDL while rows whose keys differ only by trailing spaces exist; operators must reconcile such siblings explicitly first.
+- `query_result_disclosure_policies` name segments compare under `utf8mb4_0900_bin` (case-sensitive, NO PAD): `orders` and `orders ` are distinct canonical identities under equality and the unique key. Migration 00030 downgrade fails with SQLSTATE `45000` before any DDL while any name segment ends in a U+0020 space — a single such row would widen its match identity under PAD SPACE — or while keys collide under the old semantics; operators must reconcile such rows explicitly first.
 
 ## Dependencies
 

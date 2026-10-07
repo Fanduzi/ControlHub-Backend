@@ -21,14 +21,32 @@ ALTER TABLE query_result_disclosure_policies
 
 -- +goose Down
 
--- Refuse to revert to PAD SPACE while any rows exist whose five-part keys are
--- distinct under NO PAD semantics but equal under PAD SPACE: the old unique
--- key would collide on them and the downgrade would have to merge or drop
--- canonical identities. Export or reconcile such siblings explicitly first.
+-- Refuse to revert to PAD SPACE while it is unsafe. Two hazards, checked
+-- before any DDL:
+--   1. Any name segment carrying a trailing U+0020 space would widen its
+--      identity under PAD SPACE — a stored 'orders ' would then answer
+--      'orders' queries. That is a semantics change even with no second row,
+--      so a single trailing-space policy blocks the downgrade.
+--   2. Keys distinct only under NO PAD but equal under PAD SPACE would
+--      collide on the old unique key; they too must be reconciled first.
+-- Neither check deletes, merges, or rewrites policy data; operators must
+-- export or reconcile such rows explicitly before retrying.
 DROP PROCEDURE IF EXISTS guard_disclosure_nopad_down_30;
 -- +goose StatementBegin
 CREATE PROCEDURE guard_disclosure_nopad_down_30()
 BEGIN
+  IF EXISTS (
+    SELECT 1
+      FROM query_result_disclosure_policies
+     WHERE OCTET_LENGTH(database_name) <> OCTET_LENGTH(TRIM(TRAILING ' ' FROM database_name))
+        OR OCTET_LENGTH(schema_name)   <> OCTET_LENGTH(TRIM(TRAILING ' ' FROM schema_name))
+        OR OCTET_LENGTH(object_name)   <> OCTET_LENGTH(TRIM(TRAILING ' ' FROM object_name))
+        OR OCTET_LENGTH(column_name)   <> OCTET_LENGTH(TRIM(TRAILING ' ' FROM column_name))
+     LIMIT 1
+  ) THEN
+    SIGNAL SQLSTATE '45000'
+      SET MESSAGE_TEXT = 'cannot roll back migration 00030 while disclosure policies carry trailing-space canonical names';
+  END IF;
   IF EXISTS (
     SELECT 1
       FROM (

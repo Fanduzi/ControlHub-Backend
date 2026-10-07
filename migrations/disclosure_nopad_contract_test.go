@@ -24,7 +24,12 @@ func TestDisclosureNoPadMigrationContract(t *testing.T) {
 		"modify object_name varchar(128) not null collate utf8mb4_0900_bin",
 		"modify column_name varchar(128) not null collate utf8mb4_0900_bin",
 		"create procedure guard_disclosure_nopad_down_30()",
+		"octet_length(database_name) <> octet_length(trim(trailing ' ' from database_name))",
+		"octet_length(schema_name) <> octet_length(trim(trailing ' ' from schema_name))",
+		"octet_length(object_name) <> octet_length(trim(trailing ' ' from object_name))",
+		"octet_length(column_name) <> octet_length(trim(trailing ' ' from column_name))",
 		"signal sqlstate '45000'",
+		"cannot roll back migration 00030 while disclosure policies carry trailing-space canonical names",
 		"cannot roll back migration 00030 while disclosure policies distinguish names only by trailing spaces",
 	} {
 		if !strings.Contains(sql, clause) {
