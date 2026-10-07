@@ -1267,7 +1267,7 @@ func (f *fakeQueryDisclosure) UpdatePolicy(_ context.Context, _ model.ResultDisc
 	return nil
 }
 
-func (f *fakeQueryDisclosure) DeletePolicy(_ context.Context, _ uint64, _, _, _ string) error {
+func (f *fakeQueryDisclosure) DeletePolicy(_ context.Context, _ uint64, _, _, _, _ string) error {
 	return nil
 }
 

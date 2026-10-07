@@ -1,6 +1,6 @@
 // Package model provides domain entities for the resource management system.
-// input: fmt, regexp, time packages
-// output: ResultDisclosureMode type, ResultDisclosurePolicy struct, ResultDisclosurePolicyUpsertRequest, ResultDisclosurePolicyListQuery
+// input: fmt, regexp, strings, time packages
+// output: ResultDisclosureMode type, ResultDisclosurePolicy struct, ResultDisclosurePolicyUpsertRequest (five-part canonical key incl. SchemaName), ValidateLegacyScopeIdentifier, ResultDisclosurePolicyListQuery
 // pos: Governed result-disclosure policy for per-column query result visibility
 // note: if this file changes, update header and README.md
 package model
@@ -8,6 +8,7 @@ package model
 import (
 	"fmt"
 	"regexp"
+	"strings"
 	"time"
 )
 
@@ -41,12 +42,16 @@ func (m ResultDisclosureMode) Validate() error {
 	return fmt.Errorf("invalid disclosure mode: %s", m)
 }
 
-// MaxIdentifierLength bounds database_name, object_name, and column_name length,
-// consistent with the VARCHAR(128) columns in the migration.
+// MaxIdentifierLength bounds database_name, schema_name, object_name, and
+// column_name length, consistent with the VARCHAR(128) columns in the
+// migration.
 const MaxIdentifierLength = 128
 
-// identifierSyntax matches [a-zA-Z0-9_]+ — the allowed characters for
-// database, object, and column names in disclosure policies.
+// identifierSyntax matches [a-zA-Z0-9_]+ — the allowed characters for legacy
+// MySQL/TiDB database, object, and column names. PostgreSQL canonical names
+// are intentionally wider (quoted and Unicode identifiers are legal): the
+// engine-conditional gate lives in the service, which applies this stricter
+// rule only to non-schema engines.
 var identifierSyntax = regexp.MustCompile(`^[a-zA-Z0-9_]+$`)
 
 // ResultDisclosurePolicy is the persisted per-column disclosure mode for a
@@ -66,29 +71,38 @@ type ResultDisclosurePolicy struct {
 }
 
 // ResultDisclosurePolicyUpsertRequest is the body for creating or updating a
-// disclosure policy. All fields are required.
+// disclosure policy. SchemaName is optional at the contract level because the
+// engine decides its meaning: PostgreSQL targets require an explicit schema
+// (never defaulted to public or a connection default_schema at write time),
+// while MySQL/TiDB policies keep the legacy empty schema. The service enforces
+// that engine-conditional rule; the model enforces only what is true for every
+// engine.
 type ResultDisclosurePolicyUpsertRequest struct {
 	TargetResourceID uint64               `json:"targetResourceId"`
 	DatabaseName     string               `json:"databaseName"`
+	SchemaName       string               `json:"schemaName,omitempty"`
 	ObjectName       string               `json:"objectName"`
 	ColumnName       string               `json:"columnName"`
 	Mode             ResultDisclosureMode `json:"mode"`
 }
 
-// Validate checks all required fields, identifier lengths, identifier syntax,
-// and mode. It returns the first validation error encountered.
+// Validate checks all required fields, identifier lengths, embedded NUL bytes
+// (unusable as a PostgreSQL identifier and ambiguous in the store), and mode.
+// It returns the first validation error encountered. Engine-specific name
+// syntax is enforced by the service, which knows the target's engine.
 func (r ResultDisclosurePolicyUpsertRequest) Validate() error {
 	if r.TargetResourceID == 0 {
 		return fmt.Errorf("target_resource_id is required")
 	}
-	if err := validateIdentifier("database_name", r.DatabaseName); err != nil {
-		return err
-	}
-	if err := validateIdentifier("object_name", r.ObjectName); err != nil {
-		return err
-	}
-	if err := validateIdentifier("column_name", r.ColumnName); err != nil {
-		return err
+	for _, f := range []struct{ name, value string }{
+		{"database_name", r.DatabaseName},
+		{"schema_name", r.SchemaName},
+		{"object_name", r.ObjectName},
+		{"column_name", r.ColumnName},
+	} {
+		if err := validateIdentifierShape(f.name, f.value, f.name != "schema_name"); err != nil {
+			return err
+		}
 	}
 	if err := r.Mode.Validate(); err != nil {
 		return err
@@ -96,12 +110,32 @@ func (r ResultDisclosurePolicyUpsertRequest) Validate() error {
 	return nil
 }
 
-// validateIdentifier rejects empty, over-length, and syntax-violating identifiers.
-func validateIdentifier(field, value string) error {
+// validateIdentifierShape applies the engine-agnostic identifier contract:
+// required (when mustFill), bounded length, and no embedded NUL byte.
+func validateIdentifierShape(field, value string, mustFill bool) error {
+	if value == "" {
+		if mustFill {
+			return fmt.Errorf("%s is required", field)
+		}
+		return nil
+	}
+	if len([]rune(value)) > MaxIdentifierLength {
+		return fmt.Errorf("%s exceeds %d characters", field, MaxIdentifierLength)
+	}
+	if strings.IndexByte(value, 0) >= 0 {
+		return fmt.Errorf("%s must not contain NUL bytes", field)
+	}
+	return nil
+}
+
+// ValidateLegacyScopeIdentifier applies the strict [a-zA-Z0-9_]+ identifier
+// rule that MySQL/TiDB policy scopes keep (T9-A): PostgreSQL scopes bypass it
+// because quoted and Unicode canonical names are legal there.
+func ValidateLegacyScopeIdentifier(field, value string) error {
 	if value == "" {
 		return fmt.Errorf("%s is required", field)
 	}
-	if len(value) > MaxIdentifierLength {
+	if len([]rune(value)) > MaxIdentifierLength {
 		return fmt.Errorf("%s exceeds %d characters", field, MaxIdentifierLength)
 	}
 	if !identifierSyntax.MatchString(value) {

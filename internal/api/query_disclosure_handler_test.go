@@ -12,6 +12,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/go-chi/chi/v5"
@@ -34,6 +35,7 @@ type stubQueryDisclosure struct {
 	gotTargetID  uint64
 	gotReq       model.ResultDisclosurePolicyUpsertRequest
 	gotDatabase  string
+	gotSchema    string
 	gotObject    string
 	gotColumn    string
 	listCalled   bool
@@ -63,10 +65,11 @@ func (s *stubQueryDisclosure) UpdatePolicy(_ context.Context, req model.ResultDi
 	return s.updateErr
 }
 
-func (s *stubQueryDisclosure) DeletePolicy(_ context.Context, targetResourceID uint64, database, object, column string) error {
+func (s *stubQueryDisclosure) DeletePolicy(_ context.Context, targetResourceID uint64, database, schema, object, column string) error {
 	s.deleteCalled = true
 	s.gotTargetID = targetResourceID
 	s.gotDatabase = database
+	s.gotSchema = schema
 	s.gotObject = object
 	s.gotColumn = column
 	return s.deleteErr
@@ -210,7 +213,9 @@ func TestDisclosure_CreateRejectsUnknownFields(t *testing.T) {
 }
 
 // TestDisclosure_CreateInvalidBody proves an invalid request body (missing
-// required fields or bad mode) returns 400.
+// required fields or bad mode) returns 400. Engine-conditional name rules
+// (ASCII for MySQL/TiDB, required schema for PostgreSQL) are enforced by the
+// service, not the handler, so they are asserted in service tests.
 func TestDisclosure_CreateInvalidBody(t *testing.T) {
 	cases := []struct {
 		name string
@@ -222,7 +227,8 @@ func TestDisclosure_CreateInvalidBody(t *testing.T) {
 		{"missing columnName", `{"targetResourceId":22,"databaseName":"orders","objectName":"users","mode":"raw_copy_allowed"}`},
 		{"missing mode", `{"targetResourceId":22,"databaseName":"orders","objectName":"users","columnName":"email"}`},
 		{"invalid mode", `{"targetResourceId":22,"databaseName":"orders","objectName":"users","columnName":"email","mode":"invalid_mode"}`},
-		{"bad identifier chars", `{"targetResourceId":22,"databaseName":"orders; DROP TABLE","objectName":"users","columnName":"email","mode":"raw_copy_allowed"}`},
+		{"nul byte in databaseName", `{"targetResourceId":22,"databaseName":"ordersx","objectName":"users","columnName":"email","mode":"raw_copy_allowed"}`},
+		{"schemaName too long", `{"targetResourceId":22,"databaseName":"orders","schemaName":"` + strings.Repeat("a", model.MaxIdentifierLength+1) + `","objectName":"users","columnName":"email","mode":"raw_copy_allowed"}`},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -275,14 +281,15 @@ func TestDisclosure_CreateTargetNotFound(t *testing.T) {
 	}
 }
 
-// TestDisclosure_CreateSuccess proves an admin POST returns 201 with the created
-// policy and passes correct fields to the service.
+// TestDisclosure_CreateSuccess proves an admin POST returns 201 with the
+// created policy and passes the canonical five-part scope — schemaName
+// included — to the service.
 func TestDisclosure_CreateSuccess(t *testing.T) {
 	stub := &stubQueryDisclosure{createID: 100}
 	router := newDisclosureRouter(stub)
 	rec := httptest.NewRecorder()
 	router.ServeHTTP(rec, disclosureRequest(http.MethodPost, "/query-disclosure-policies",
-		`{"targetResourceId":22,"databaseName":"orders","objectName":"users","columnName":"email","mode":"raw_copy_allowed"}`,
+		`{"targetResourceId":22,"databaseName":"sales_db","schemaName":"app","objectName":"orders","columnName":"email","mode":"raw_copy_allowed"}`,
 		disclosureAdminToken(t)))
 	if rec.Code != http.StatusCreated {
 		t.Fatalf("admin POST = %d, want 201; body=%s", rec.Code, rec.Body.String())
@@ -293,10 +300,13 @@ func TestDisclosure_CreateSuccess(t *testing.T) {
 	if stub.gotReq.TargetResourceID != 22 {
 		t.Fatalf("req targetResourceId = %d, want 22", stub.gotReq.TargetResourceID)
 	}
-	if stub.gotReq.DatabaseName != "orders" {
+	if stub.gotReq.DatabaseName != "sales_db" {
 		t.Fatalf("req databaseName = %q", stub.gotReq.DatabaseName)
 	}
-	if stub.gotReq.ObjectName != "users" {
+	if stub.gotReq.SchemaName != "app" {
+		t.Fatalf("req schemaName = %q, want %q", stub.gotReq.SchemaName, "app")
+	}
+	if stub.gotReq.ObjectName != "orders" {
 		t.Fatalf("req objectName = %q", stub.gotReq.ObjectName)
 	}
 	if stub.gotReq.ColumnName != "email" {
@@ -304,6 +314,13 @@ func TestDisclosure_CreateSuccess(t *testing.T) {
 	}
 	if stub.gotReq.Mode != model.ResultDisclosureRawCopyAllowed {
 		t.Fatalf("req mode = %q", stub.gotReq.Mode)
+	}
+	var resp model.ResultDisclosurePolicy
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("response JSON: %v", err)
+	}
+	if resp.SchemaName != "app" {
+		t.Fatalf("response schemaName = %q, want %q", resp.SchemaName, "app")
 	}
 }
 
@@ -328,13 +345,13 @@ func TestDisclosure_UpdateSuccess(t *testing.T) {
 }
 
 // TestDisclosure_DeleteSuccess proves an admin DELETE returns 204 and passes
-// correct scope to the service.
+// the canonical five-part scope — schemaName included — to the service.
 func TestDisclosure_DeleteSuccess(t *testing.T) {
 	stub := &stubQueryDisclosure{}
 	router := newDisclosureRouter(stub)
 	rec := httptest.NewRecorder()
 	router.ServeHTTP(rec, disclosureRequest(http.MethodDelete,
-		"/query-disclosure-policies?targetResourceId=22&databaseName=orders&objectName=users&columnName=email",
+		"/query-disclosure-policies?targetResourceId=22&databaseName=sales_db&schemaName=analytics&objectName=users&columnName=email",
 		"", disclosureAdminToken(t)))
 	if rec.Code != http.StatusNoContent {
 		t.Fatalf("admin DELETE = %d, want 204", rec.Code)
@@ -345,8 +362,11 @@ func TestDisclosure_DeleteSuccess(t *testing.T) {
 	if stub.gotTargetID != 22 {
 		t.Fatalf("targetID = %d, want 22", stub.gotTargetID)
 	}
-	if stub.gotDatabase != "orders" {
+	if stub.gotDatabase != "sales_db" {
 		t.Fatalf("database = %q", stub.gotDatabase)
+	}
+	if stub.gotSchema != "analytics" {
+		t.Fatalf("schema = %q, want %q", stub.gotSchema, "analytics")
 	}
 	if stub.gotObject != "users" {
 		t.Fatalf("object = %q", stub.gotObject)

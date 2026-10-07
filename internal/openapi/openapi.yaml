@@ -2101,10 +2101,14 @@ paths:
       operationId: createDisclosurePolicy
       description: >
         Phase 38Q. Admin-only. Creates a new per-column result disclosure
-        policy for a query target. The body is strictly decoded (unknown
-        fields are rejected). The actor is derived from the verified token
-        and is never accepted in the request body. Requires a fresh Bearer
-        token and the admin role.
+        policy under its canonical five-part scope (targetResourceId,
+        databaseName, schemaName, objectName, columnName). The body is
+        strictly decoded (unknown fields are rejected). schemaName is
+        engine-conditional: required for PostgreSQL targets (never defaulted
+        to public or the connection default_schema), required empty for
+        MySQL/TiDB targets. The actor is derived from the verified token and
+        is never accepted in the request body. Requires a fresh Bearer token
+        and the admin role.
       security:
         - bearerAuth: []
       requestBody:
@@ -2177,10 +2181,12 @@ paths:
       operationId: updateDisclosurePolicy
       description: >
         Phase 38Q. Admin-only. Updates an existing per-column result
-        disclosure policy. The body is strictly decoded (unknown fields are
-        rejected). The actor is derived from the verified token and is never
-        accepted in the request body. Requires a fresh Bearer token and the
-        admin role.
+        disclosure policy under its canonical five-part scope (targetResourceId,
+        databaseName, schemaName, objectName, columnName). The body is
+        strictly decoded (unknown fields are rejected). schemaName follows
+        the same engine-conditional rule as create. The actor is derived
+        from the verified token and is never accepted in the request body.
+        Requires a fresh Bearer token and the admin role.
       security:
         - bearerAuth: []
       requestBody:
@@ -2232,8 +2238,10 @@ paths:
       summary: Delete a disclosure policy
       operationId: deleteDisclosurePolicy
       description: >
-        Phase 38Q. Admin-only. Removes a per-column disclosure policy by
-        scope (targetResourceId, databaseName, objectName, columnName).
+        Phase 38Q. Admin-only. Removes a per-column disclosure policy by its
+        canonical five-part scope (targetResourceId, databaseName, schemaName,
+        objectName, columnName). schemaName is engine-conditional: required
+        for PostgreSQL targets, required empty for MySQL/TiDB targets.
         Idempotent. Requires a fresh Bearer token and the admin role.
       security:
         - bearerAuth: []
@@ -2254,6 +2262,15 @@ paths:
             minLength: 1
             maxLength: 128
           description: Database name.
+        - name: schemaName
+          in: query
+          required: false
+          schema:
+            type: string
+            maxLength: 128
+          description: >
+            Schema segment of the canonical policy key. Required for
+            PostgreSQL targets; must be omitted (empty) for MySQL/TiDB.
         - name: objectName
           in: query
           required: true
@@ -5474,9 +5491,13 @@ components:
     DisclosurePolicy:
       type: object
       description: >
-        Per-column result disclosure mode for a query target. Absence of a
-        matching row means the column is blocked (fail-closed). Never carries
-        credentials, DSNs, or secrets.
+        Per-column result disclosure mode for a query target, keyed by the
+        canonical five-part scope (targetResourceId, databaseName, schemaName,
+        objectName, columnName). Absence of a matching row means the column is
+        blocked (fail-closed). Never carries credentials, DSNs, or secrets.
+        Name fields hold canonical identifiers verbatim — PostgreSQL names may
+        contain case, Unicode, and characters only legal inside quoted
+        identifiers, so no ASCII pattern is asserted.
       required: [id, targetResourceId, databaseName, schemaName, objectName, columnName, mode, createdAt, updatedAt]
       properties:
         id:
@@ -5488,25 +5509,22 @@ components:
         databaseName:
           type: string
           maxLength: 128
-          pattern: '^[a-zA-Z0-9_]+$'
-          description: Database name identifier.
+          description: Database name identifier (canonical, unnormalized).
         schemaName:
           type: string
           maxLength: 128
           description: >
-            Schema segment of the canonical policy key. Empty for legacy
-            MySQL/TiDB policies and non-schema engines. Write-side schema
-            support arrives with schema-aware policy matching (T9).
+            Schema segment of the canonical policy key. Empty for MySQL/TiDB
+            policies and other non-schema engines; a concrete schema name for
+            PostgreSQL policies.
         objectName:
           type: string
           maxLength: 128
-          pattern: '^[a-zA-Z0-9_]+$'
-          description: Object (table/view) name identifier.
+          description: Object (table/view) name identifier (canonical, unnormalized).
         columnName:
           type: string
           maxLength: 128
-          pattern: '^[a-zA-Z0-9_]+$'
-          description: Column name identifier.
+          description: Column name identifier (canonical, unnormalized).
         mode:
           $ref: "#/components/schemas/ResultDisclosureMode"
         createdAt:
@@ -5518,10 +5536,13 @@ components:
     DisclosurePolicyUpsertRequest:
       type: object
       description: >
-        Body for creating or updating a disclosure policy. All fields are
-        required. Unknown fields are rejected by strict decoding (additionalProperties
-        is false). The actor is derived from the verified token and must never
-        appear in the body.
+        Body for creating or updating a disclosure policy. Unknown fields are
+        rejected by strict decoding (additionalProperties is false). The actor
+        is derived from the verified token and must never appear in the body.
+        schemaName is engine-conditional: required non-empty for PostgreSQL
+        targets, required empty for MySQL/TiDB targets. Name fields carry
+        canonical identifiers verbatim; the engine-conditional syntax rule is
+        enforced by the service, not this contract.
       required: [targetResourceId, databaseName, objectName, columnName, mode]
       additionalProperties: false
       properties:
@@ -5533,17 +5554,20 @@ components:
           type: string
           minLength: 1
           maxLength: 128
-          pattern: '^[a-zA-Z0-9_]+$'
+        schemaName:
+          type: string
+          maxLength: 128
+          description: >
+            Schema segment of the canonical policy key. Required for
+            PostgreSQL targets; must be omitted (empty) for MySQL/TiDB.
         objectName:
           type: string
           minLength: 1
           maxLength: 128
-          pattern: '^[a-zA-Z0-9_]+$'
         columnName:
           type: string
           minLength: 1
           maxLength: 128
-          pattern: '^[a-zA-Z0-9_]+$'
         mode:
           $ref: "#/components/schemas/ResultDisclosureMode"
     DisclosurePolicyListResponse:

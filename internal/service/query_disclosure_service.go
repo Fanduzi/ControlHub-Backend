@@ -1,10 +1,7 @@
-// Package service evaluates and applies result-disclosure policies for query
-// results. It resolves column provenance from SQL AST or FK metadata, looks up
-// per-column policies, and transforms result rows server-side before
-// serialization. Absence of an exact matching policy is blocked (fail-closed).
+// Package service evaluates and applies result-disclosure policies for query results (fail-closed).
 // input: context, database/sql, errors, fmt, mysql DSN, internal/model, QuerySchemaInspector, QueryTargetRepository
 // output: QueryDisclosureService, DisclosurePlan, ColumnDisclosure, QueryDisclosureReader/Writer, ErrQueryDisclosure* sentinels
-// pos: fail-closed disclosure governance for governed query results (Phase 38Q); preflight policy-refusal errors stay blocked while disclosure machinery failures (inspector/read/parse) use a distinct backend sentinel so the execution service records them as terminal failed/timeout/canceled evidence, not policy rejections (Issue #35)
+// pos: fail-closed disclosure governance (Phase 38Q); policy refusals stay blocked while machinery failures use a distinct backend sentinel (Issue #35); management paths enforce the canonical five-part scope with the engine-conditional schema rule (T9-A)
 // note: if this file changes, update header and README.md
 package service
 
@@ -40,17 +37,23 @@ var ErrQueryDisclosurePolicyConflict = errors.New("disclosure policy already exi
 // with no existing policy.
 var ErrQueryDisclosurePolicyNotFound = errors.New("disclosure policy not found")
 
-// QueryDisclosureReader reads disclosure policies.
+// QueryDisclosureReader reads disclosure policies. GetByScope is the single
+// exact five-part canonical lookup — (target_resource_id, database_name,
+// schema_name, object_name, column_name) — that both the legacy MySQL/TiDB
+// disclosure path (empty-schema identity) and the later PostgreSQL disclosure
+// service consume. There is no fallback: a scope with no row is fail-closed
+// "no policy", and lookup never borrows a same-named policy from another
+// schema or database.
 type QueryDisclosureReader interface {
 	ListByTarget(ctx context.Context, targetResourceID uint64) ([]model.ResultDisclosurePolicy, error)
-	GetByScope(ctx context.Context, targetResourceID uint64, database, object, column string) (model.ResultDisclosurePolicy, error)
+	GetByScope(ctx context.Context, targetResourceID uint64, database, schema, object, column string) (model.ResultDisclosurePolicy, error)
 }
 
 // QueryDisclosureWriter writes disclosure policies.
 type QueryDisclosureWriter interface {
 	Insert(ctx context.Context, req model.ResultDisclosurePolicyUpsertRequest) (uint64, error)
 	Update(ctx context.Context, req model.ResultDisclosurePolicyUpsertRequest) error
-	Delete(ctx context.Context, targetResourceID uint64, database, object, column string) error
+	Delete(ctx context.Context, targetResourceID uint64, database, schema, object, column string) error
 }
 
 // DisclosurePlan is the resolved disclosure decision for a query's columns.
@@ -91,32 +94,40 @@ func NewQueryDisclosureService(
 // ListPolicies returns all disclosure policies for a target. Validates target
 // existence first.
 func (s *QueryDisclosureService) ListPolicies(ctx context.Context, targetResourceID uint64) ([]model.ResultDisclosurePolicy, error) {
-	if err := s.validateTargetExists(ctx, targetResourceID); err != nil {
+	if _, err := s.lookupTarget(ctx, targetResourceID); err != nil {
 		return nil, err
 	}
 	return s.policies.ListByTarget(ctx, targetResourceID)
 }
 
-// CreatePolicy inserts a new disclosure policy. Validates target existence and
-// request fields first.
+// CreatePolicy inserts a new disclosure policy. Validates target existence,
+// request fields, and the engine-conditional scope contract first.
 func (s *QueryDisclosureService) CreatePolicy(ctx context.Context, req model.ResultDisclosurePolicyUpsertRequest) (uint64, error) {
 	if err := req.Validate(); err != nil {
 		return 0, fmt.Errorf("%w: %v", ErrQueryValidationFailed, err)
 	}
-	if err := s.validateTargetExists(ctx, req.TargetResourceID); err != nil {
+	target, err := s.lookupTarget(ctx, req.TargetResourceID)
+	if err != nil {
 		return 0, err
+	}
+	if err := validatePolicyScope(target, req.SchemaName, req.DatabaseName, req.ObjectName, req.ColumnName); err != nil {
+		return 0, fmt.Errorf("%w: %v", ErrQueryValidationFailed, err)
 	}
 	return s.writer.Insert(ctx, req)
 }
 
 // UpdatePolicy modifies an existing disclosure policy. Validates target
-// existence and request fields first.
+// existence, request fields, and the engine-conditional scope contract first.
 func (s *QueryDisclosureService) UpdatePolicy(ctx context.Context, req model.ResultDisclosurePolicyUpsertRequest) error {
 	if err := req.Validate(); err != nil {
 		return fmt.Errorf("%w: %v", ErrQueryValidationFailed, err)
 	}
-	if err := s.validateTargetExists(ctx, req.TargetResourceID); err != nil {
+	target, err := s.lookupTarget(ctx, req.TargetResourceID)
+	if err != nil {
 		return err
+	}
+	if err := validatePolicyScope(target, req.SchemaName, req.DatabaseName, req.ObjectName, req.ColumnName); err != nil {
+		return fmt.Errorf("%w: %v", ErrQueryValidationFailed, err)
 	}
 	if err := s.writer.Update(ctx, req); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
@@ -127,12 +138,19 @@ func (s *QueryDisclosureService) UpdatePolicy(ctx context.Context, req model.Res
 	return nil
 }
 
-// DeletePolicy removes a disclosure policy by scope. It is idempotent.
-func (s *QueryDisclosureService) DeletePolicy(ctx context.Context, targetResourceID uint64, database, object, column string) error {
-	if err := s.validateTargetExists(ctx, targetResourceID); err != nil {
+// DeletePolicy removes a disclosure policy by its exact five-part scope. It is
+// idempotent. The engine-conditional schema contract is the same as writes:
+// PostgreSQL scopes require an explicit schema, other engines keep the
+// empty-schema identity.
+func (s *QueryDisclosureService) DeletePolicy(ctx context.Context, targetResourceID uint64, database, schema, object, column string) error {
+	target, err := s.lookupTarget(ctx, targetResourceID)
+	if err != nil {
 		return err
 	}
-	return s.writer.Delete(ctx, targetResourceID, database, object, column)
+	if err := validatePolicyScope(target, schema, database, object, column); err != nil {
+		return fmt.Errorf("%w: %v", ErrQueryValidationFailed, err)
+	}
+	return s.writer.Delete(ctx, targetResourceID, database, schema, object, column)
 }
 
 // Preflight resolves column provenance from a guarded SQL statement and checks
@@ -288,7 +306,7 @@ func (s *QueryDisclosureService) buildDisclosurePlan(ctx context.Context, target
 			})
 			continue
 		}
-		policy, err := s.policies.GetByScope(ctx, targetResourceID, col.SourceDatabase, col.SourceObject, col.SourceColumn)
+		policy, err := s.policies.GetByScope(ctx, targetResourceID, col.SourceDatabase, col.SourceSchema, col.SourceObject, col.SourceColumn)
 		if err != nil {
 			if errors.Is(err, sql.ErrNoRows) {
 				return DisclosurePlan{}, fmt.Errorf("%w: no policy for %s.%s.%s", ErrQueryDisclosureBlocked, col.SourceDatabase, col.SourceObject, col.SourceColumn)
@@ -310,17 +328,54 @@ func (s *QueryDisclosureService) buildDisclosurePlan(ctx context.Context, target
 	return plan, nil
 }
 
-// validateTargetExists checks that a target resource exists in the query target
-// read model.
-func (s *QueryDisclosureService) validateTargetExists(ctx context.Context, targetResourceID uint64) error {
+// validatePolicyScope enforces the engine-conditional scope contract for the
+// canonical five-part key (G1/G10). A PostgreSQL policy identity must carry an
+// explicit schema — missing schema is a controlled validation error, never
+// silently resolved to public or the connection default_schema. Every other
+// engine keeps the legacy empty schema and the strict ASCII identifier rule
+// MySQL/TiDB policies have always used; a non-empty schema there is an
+// invalid combination, not a migration of meaning.
+func validatePolicyScope(target model.QueryTarget, schema, database, object, column string) error {
+	if target.ConnectionContext.Engine == "postgresql" {
+		if schema == "" {
+			return fmt.Errorf("schema_name is required for postgresql policy scopes")
+		}
+		for _, f := range []struct{ name, value string }{
+			{"database_name", database},
+			{"object_name", object},
+			{"column_name", column},
+		} {
+			if f.value == "" {
+				return fmt.Errorf("%s is required", f.name)
+			}
+		}
+		return nil
+	}
+	if schema != "" {
+		return fmt.Errorf("schema_name must be empty for %q policy scopes", target.ConnectionContext.Engine)
+	}
+	for _, f := range []struct{ name, value string }{
+		{"database_name", database},
+		{"object_name", object},
+		{"column_name", column},
+	} {
+		if err := model.ValidateLegacyScopeIdentifier(f.name, f.value); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// lookupTarget returns the target resource from the query target read model.
+func (s *QueryDisclosureService) lookupTarget(ctx context.Context, targetResourceID uint64) (model.QueryTarget, error) {
 	targets, _, err := s.targets.ListQueryTargets(ctx, model.QueryTargetListQuery{TargetID: targetResourceID})
 	if err != nil {
-		return ErrQueryTargetNotFound
+		return model.QueryTarget{}, ErrQueryTargetNotFound
 	}
 	for _, t := range targets {
 		if t.ResourceID == targetResourceID {
-			return nil
+			return t, nil
 		}
 	}
-	return ErrQueryTargetNotFound
+	return model.QueryTarget{}, ErrQueryTargetNotFound
 }

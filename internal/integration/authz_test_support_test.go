@@ -1,7 +1,6 @@
 //go:build integration
 
-// Package integration provides shared authorization test support consumed by
-// the Authorization Version and operator access boundary integration tests.
+// Package integration provides shared authorization test support for integration tests.
 // input: bytes, context, database/sql, encoding/json, net/http, net/http/httptest, testing, internal/model, internal/service
 // output: shared authz constants, login/bearer/user and execution-identity helpers, and query handler stubs
 // pos: Lets same-package integration tests reuse login, bearer, user-seeding, and query-stub support without duplication
@@ -200,6 +199,6 @@ func (boundaryDisclosureStub) UpdatePolicy(_ context.Context, _ model.ResultDisc
 	return nil
 }
 
-func (boundaryDisclosureStub) DeletePolicy(_ context.Context, _ uint64, _, _, _ string) error {
+func (boundaryDisclosureStub) DeletePolicy(_ context.Context, _ uint64, _, _, _, _ string) error {
 	return nil
 }

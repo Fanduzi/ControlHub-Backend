@@ -1,7 +1,7 @@
 // Package model provides tests for result-disclosure policy domain validators.
 // input: strings, testing
-// output: TestResultDisclosureMode_*, TestResultDisclosurePolicyUpsertRequest_*
-// pos: Unit tests for disclosure mode and upsert-request fail-closed validators
+// output: TestResultDisclosureMode_*, TestResultDisclosurePolicyUpsertRequest_*, TestValidateLegacyScopeIdentifier_*
+// pos: Unit tests for disclosure mode, upsert-request shape validation, and the legacy ASCII scope rule
 // note: if this file changes, update header and README.md
 package model
 
@@ -139,10 +139,12 @@ func TestResultDisclosurePolicyUpsertRequest_IdentifierTooLongRejected(t *testin
 	}
 }
 
-func TestResultDisclosurePolicyUpsertRequest_InvalidIdentifierCharsRejected(t *testing.T) {
+func TestResultDisclosurePolicyUpsertRequest_WideIdentifierCharsAccepted(t *testing.T) {
 	t.Parallel()
-	// WHY: identifiers with spaces, dashes, dots, or special characters would
-	// break SQL queries or cause injection risks. Only [a-zA-Z0-9_] is allowed.
+	// WHY: PostgreSQL canonical names may contain spaces, dashes, dots, quotes,
+	// and Unicode — Validate() is engine-agnostic so it must not reject them.
+	// MySQL/TiDB targets still get the strict ASCII rule at the service layer
+	// via ValidateLegacyScopeIdentifier.
 	base := ResultDisclosurePolicyUpsertRequest{
 		TargetResourceID: 1,
 		DatabaseName:     "db",
@@ -159,16 +161,61 @@ func TestResultDisclosurePolicyUpsertRequest_InvalidIdentifierCharsRejected(t *t
 		{"dot_in_column", func(r *ResultDisclosurePolicyUpsertRequest) { r.ColumnName = "col.name" }},
 		{"special_char", func(r *ResultDisclosurePolicyUpsertRequest) { r.DatabaseName = "db!" }},
 		{"unicode", func(r *ResultDisclosurePolicyUpsertRequest) { r.ObjectName = "täble" }},
+		{"quoted_pg_name", func(r *ResultDisclosurePolicyUpsertRequest) { r.ObjectName = `"Weird Table"` }},
+		{"unicode_schema", func(r *ResultDisclosurePolicyUpsertRequest) { r.SchemaName = "数据" }},
+		{"semicolon_schema", func(r *ResultDisclosurePolicyUpsertRequest) { r.SchemaName = "s; DROP TABLE" }},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 			req := base
 			tt.mutate(&req)
-			if err := req.Validate(); err == nil {
-				t.Errorf("Validate(%s) = nil, want error", tt.name)
+			if err := req.Validate(); err != nil {
+				t.Errorf("Validate(%s) = %v, want nil (engine-agnostic)", tt.name, err)
 			}
 		})
+	}
+}
+
+func TestResultDisclosurePolicyUpsertRequest_NULByteRejected(t *testing.T) {
+	t.Parallel()
+	// WHY: a NUL byte is not representable in a PostgreSQL identifier and is
+	// ambiguous in the store; it is rejected for every engine.
+	base := ResultDisclosurePolicyUpsertRequest{
+		TargetResourceID: 1,
+		DatabaseName:     "db",
+		ObjectName:       "tbl",
+		ColumnName:       "col",
+		Mode:             ResultDisclosureRawCopyAllowed,
+	}
+	for _, mutate := range []func(*ResultDisclosurePolicyUpsertRequest){
+		func(r *ResultDisclosurePolicyUpsertRequest) { r.DatabaseName = "d\x00b" },
+		func(r *ResultDisclosurePolicyUpsertRequest) { r.SchemaName = "s\x00" },
+		func(r *ResultDisclosurePolicyUpsertRequest) { r.ObjectName = "t\x00" },
+		func(r *ResultDisclosurePolicyUpsertRequest) { r.ColumnName = "c\x00" },
+	} {
+		req := base
+		mutate(&req)
+		if err := req.Validate(); err == nil {
+			t.Error("Validate() = nil, want NUL-byte rejection")
+		}
+	}
+}
+
+func TestValidateLegacyScopeIdentifier_ASCIIRule(t *testing.T) {
+	t.Parallel()
+	// WHY: the engine-conditional service gate applies this rule to non-schema
+	// engines so MySQL/TiDB policy scopes keep the exact contract they had
+	// before the schema dimension existed.
+	for _, v := range []string{"my db", "my-table", "col.name", "db!", "täble"} {
+		if err := ValidateLegacyScopeIdentifier("object_name", v); err == nil {
+			t.Errorf("ValidateLegacyScopeIdentifier(%q) = nil, want error", v)
+		}
+	}
+	for _, v := range []string{"orders", "Order_2", "a"} {
+		if err := ValidateLegacyScopeIdentifier("object_name", v); err != nil {
+			t.Errorf("ValidateLegacyScopeIdentifier(%q) = %v, want nil", v, err)
+		}
 	}
 }
 

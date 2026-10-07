@@ -52,7 +52,7 @@ Business logic layer with interface-based repository dependencies. Each service 
 | query_execution_service_test.go | Query execution service tests, including successful-User full SQL, owner-only retrieval and history restore eligibility, machine/non-success omission, governed paging, disclosure, atomic persistence, and cancellation durability |
 | query_execution_evidence_pair_test.go | persistEvidencePair tests: detached two-second window, fixed audit event type, verbatim identity, and fail-closed rollback |
 | query_template_execution_service_test.go | Template-execution tests for reread, authorization, typed values, paging, rejected/failed post-target no-value evidence, cancellation durability, and disclosure wrapping |
-| query_disclosure_service.go | QueryDisclosureService — policy lookup, projection resolution, result transformation; governance refusals stay blocked while disclosure machinery failures use a distinct backend sentinel so the execution service records them as terminal failed/timeout/canceled evidence, not policy rejections (Issue #35) |
+| query_disclosure_service.go | QueryDisclosureService — canonical five-part policy lookup (target, database, schema, object, column) shared by management and the disclosure read seam, projection resolution, result transformation, and the engine-conditional scope gate (PostgreSQL requires an explicit schema, other engines keep '' + ASCII names); governance refusals stay blocked while disclosure machinery failures use a distinct backend sentinel so the execution service records them as terminal failed/timeout/canceled evidence, not policy rejections (Issue #35) |
 | query_disclosure_projection.go | Column provenance resolution from SQL AST and FK metadata |
 | query_disclosure_mask.go | applyDisclosureMask for server-side value redaction |
 | query_saved_statement_service.go | QuerySavedStatementService — authorized target-scoped saved statement CRUD with engine-aware declaration validation (Vitess for MySQL/TiDB, the G8 PG scan + GuardPG + real G6 pagination gate for PostgreSQL), (target, database, schema) context persistence checks, and `RestoreContext` — the G12 live revalidation through ResolveMetadata + the T6 schema probe (never falls back to public or a same-named object elsewhere) |
@@ -64,7 +64,7 @@ Business logic layer with interface-based repository dependencies. Each service 
 | auth_service_test.go | Auth service tests (login, versioned verify, invalidation causes, generic errors) |
 | memory_user_store.go | In-memory UserCredentialRepository for unit/handler tests |
 | dictionary_service_test.go | Dictionary service tests |
-| query_disclosure_service_test.go | Disclosure service tests (Preflight, PreflightRelatedRecords, Apply) |
+| query_disclosure_service_test.go | Disclosure service tests (Preflight, PreflightRelatedRecords, Apply, policy CRUD sentinels, T9-A engine-conditional schema gate and five-part scope propagation) |
 | query_disclosure_mask_test.go | Disclosure mask unit tests |
 | query_guard_test.go | Query guard allow/reject, limit, explain, and saved-statement tests |
 | query_template_compiler_pg.go | PostgreSQL template dialect (G8): declared `:name` markers become generated `$k` placeholders via the `pgsql` lexical scan; `CompilePG` shares the typed value-binding tail with the Vitess path — values stay driver args, never SQL text; `validatePGDeclarations` is the save-time entry that still owes GuardPG + pagination |

@@ -37,7 +37,7 @@ HTTP handlers, chi routing, CORS middleware, and fake-repo test infrastructure.
 | auth_handler_test.go | Auth endpoint tests |
 | dictionary_handler_test.go | Dictionary endpoint tests |
 | query_credential_handler_test.go | Credential metadata handler tests |
-| query_disclosure_handler_test.go | Disclosure policy handler tests, including list `query_result_disclosure_blocked` |
+| query_disclosure_handler_test.go | Disclosure policy handler tests, including list `query_result_disclosure_blocked` and schemaName propagation through create/delete |
 | query_execution_handler_test.go | Query execution handler tests, including authenticated execution identity, per-row restore eligibility, owner-only fresh statement detail, fail-closed unwired contract fields, and controlled error mapping |
 | query_workspace_handler_test.go | Authenticated owner GET/PUT, strict JSON/size, validation, and OCC mapping tests |
 | navigate_related_records_handler_test.go | Related-record navigation handler tests, including Preflight and Apply-path disclosure vs not-allowed Controlled Error Codes and fail-closed unwired contract fields |

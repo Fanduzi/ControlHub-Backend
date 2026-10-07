@@ -1,5 +1,10 @@
 //go:build integration
 
+// Package integration provides real-MySQL saved-statement template-execution tests.
+// input: shared MySQL fixtures, api router, saved-statement/execution services and repositories
+// output: template-execution integration tests (incl. disclosure-change paging regression)
+// pos: Real-DB acceptance boundary for governed saved-statement execution
+// note: if this file changes, update header and README.md
 package integration
 
 import (
@@ -278,7 +283,7 @@ func TestExecuteSavedStatementIntegrationDisclosureChangeAffectsLaterPage(t *tes
 	}
 
 	// A policy change now blocks page 2 before any SQL runs.
-	if err := disclosure.Delete(ctx, targetID, dsnCfgFor(t).DBName, "qe_sandbox_fixtures", "name"); err != nil {
+	if err := disclosure.Delete(ctx, targetID, dsnCfgFor(t).DBName, "", "qe_sandbox_fixtures", "name"); err != nil {
 		t.Fatalf("delete disclosure policy: %v", err)
 	}
 	pageTwo := pageOne

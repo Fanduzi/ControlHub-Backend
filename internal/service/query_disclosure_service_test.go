@@ -1,7 +1,7 @@
 // Package service provides tests for QueryDisclosureService.
 // input: testing, internal/model, fakeDisclosureReader, fakeDisclosureWriter, fakeSchemaInspector, fakeTargetRepo
-// output: TestPreflight*, TestPreflightRelatedRecords*, TestApply*, TestUpdatePolicy*, TestCreatePolicy* functions
-// pos: Verifies fail-closed preflight/apply behavior and policy CRUD sentinel mapping
+// output: TestPreflight*, TestPreflightRelatedRecords*, TestApply*, TestUpdatePolicy*, TestCreatePolicy*, TestDeletePolicy* functions
+// pos: Verifies fail-closed preflight/apply behavior, policy CRUD sentinel mapping, and the T9-A engine-conditional schema gate
 // note: if this file changes, update header and README.md
 package service
 
@@ -17,7 +17,7 @@ import (
 // fakeDisclosureReader implements QueryDisclosureReader with an in-memory
 // policy map keyed by "database.object.column".
 type fakeDisclosureReader struct {
-	policies map[string]model.ResultDisclosurePolicy
+	policies map[disclosureScopeKeyT]model.ResultDisclosurePolicy
 }
 
 func (f *fakeDisclosureReader) ListByTarget(_ context.Context, targetResourceID uint64) ([]model.ResultDisclosurePolicy, error) {
@@ -30,32 +30,53 @@ func (f *fakeDisclosureReader) ListByTarget(_ context.Context, targetResourceID 
 	return out, nil
 }
 
-func (f *fakeDisclosureReader) GetByScope(_ context.Context, _ uint64, database, object, column string) (model.ResultDisclosurePolicy, error) {
-	key := database + "." + object + "." + column
-	p, ok := f.policies[key]
+func (f *fakeDisclosureReader) GetByScope(_ context.Context, _ uint64, database, schema, object, column string) (model.ResultDisclosurePolicy, error) {
+	p, ok := f.policies[disclosureScopeKey(database, schema, object, column)]
 	if !ok {
 		return model.ResultDisclosurePolicy{}, sql.ErrNoRows
 	}
 	return p, nil
 }
 
-func disclosureScopeKey(database, object, column string) string {
-	return database + "." + object + "." + column
+// disclosureScopeKey is a struct (not a joined string) so same-named objects in
+// different schemas can never collide through a separator character.
+type disclosureScopeKeyT struct {
+	database, schema, object, column string
 }
 
-// fakeDisclosureWriter implements QueryDisclosureWriter (no-op for tests).
+func disclosureScopeKey(database, schema, object, column string) disclosureScopeKeyT {
+	return disclosureScopeKeyT{database, schema, object, column}
+}
+
+// fakeDisclosureWriter implements QueryDisclosureWriter. It records the exact
+// scope arguments the service passed so tests can prove the canonical
+// five-part key travels intact.
 type fakeDisclosureWriter struct {
-	insertErr error
-	updateErr error
+	insertErr    error
+	updateErr    error
+	insertCalled bool
+	insertReq    model.ResultDisclosurePolicyUpsertRequest
+	updateCalled bool
+	updateReq    model.ResultDisclosurePolicyUpsertRequest
+	deleteCalled bool
+	deleteTarget uint64
+	deleteScope  disclosureScopeKeyT
 }
 
-func (f *fakeDisclosureWriter) Insert(_ context.Context, _ model.ResultDisclosurePolicyUpsertRequest) (uint64, error) {
+func (f *fakeDisclosureWriter) Insert(_ context.Context, req model.ResultDisclosurePolicyUpsertRequest) (uint64, error) {
+	f.insertCalled = true
+	f.insertReq = req
 	return 1, f.insertErr
 }
-func (f *fakeDisclosureWriter) Update(_ context.Context, _ model.ResultDisclosurePolicyUpsertRequest) error {
+func (f *fakeDisclosureWriter) Update(_ context.Context, req model.ResultDisclosurePolicyUpsertRequest) error {
+	f.updateCalled = true
+	f.updateReq = req
 	return f.updateErr
 }
-func (f *fakeDisclosureWriter) Delete(_ context.Context, _ uint64, _, _, _ string) error {
+func (f *fakeDisclosureWriter) Delete(_ context.Context, targetResourceID uint64, database, schema, object, column string) error {
+	f.deleteCalled = true
+	f.deleteTarget = targetResourceID
+	f.deleteScope = disclosureScopeKey(database, schema, object, column)
 	return nil
 }
 
@@ -139,9 +160,9 @@ func TestPreflight_AllRawCopyAllowed(t *testing.T) {
 		},
 	}
 	reader := &fakeDisclosureReader{
-		policies: map[string]model.ResultDisclosurePolicy{
-			disclosureScopeKey("testdb", "users", "id"):   {TargetResourceID: 1, Mode: model.ResultDisclosureRawCopyAllowed},
-			disclosureScopeKey("testdb", "users", "name"): {TargetResourceID: 1, Mode: model.ResultDisclosureRawCopyAllowed},
+		policies: map[disclosureScopeKeyT]model.ResultDisclosurePolicy{
+			disclosureScopeKey("testdb", "", "users", "id"):   {TargetResourceID: 1, Mode: model.ResultDisclosureRawCopyAllowed},
+			disclosureScopeKey("testdb", "", "users", "name"): {TargetResourceID: 1, Mode: model.ResultDisclosureRawCopyAllowed},
 		},
 	}
 	targets := &fakeTargetRepo{targets: []model.QueryTarget{{ResourceID: 1}}}
@@ -183,8 +204,8 @@ func TestPreflight_MaskedNoCopy(t *testing.T) {
 		},
 	}
 	reader := &fakeDisclosureReader{
-		policies: map[string]model.ResultDisclosurePolicy{
-			disclosureScopeKey("testdb", "users", "ssn"): {TargetResourceID: 1, Mode: model.ResultDisclosureMaskedNoCopy},
+		policies: map[disclosureScopeKeyT]model.ResultDisclosurePolicy{
+			disclosureScopeKey("testdb", "", "users", "ssn"): {TargetResourceID: 1, Mode: model.ResultDisclosureMaskedNoCopy},
 		},
 	}
 	targets := &fakeTargetRepo{targets: []model.QueryTarget{{ResourceID: 1}}}
@@ -223,7 +244,7 @@ func TestPreflight_MissingPolicyBlocks(t *testing.T) {
 			},
 		},
 	}
-	reader := &fakeDisclosureReader{policies: map[string]model.ResultDisclosurePolicy{}}
+	reader := &fakeDisclosureReader{policies: map[disclosureScopeKeyT]model.ResultDisclosurePolicy{}}
 	targets := &fakeTargetRepo{targets: []model.QueryTarget{{ResourceID: 1}}}
 	svc := newTestDisclosureService(reader, inspector, targets)
 
@@ -256,9 +277,9 @@ func TestPreflight_MixedRawAndMasked(t *testing.T) {
 		},
 	}
 	reader := &fakeDisclosureReader{
-		policies: map[string]model.ResultDisclosurePolicy{
-			disclosureScopeKey("testdb", "users", "id"):    {TargetResourceID: 1, Mode: model.ResultDisclosureRawCopyAllowed},
-			disclosureScopeKey("testdb", "users", "email"): {TargetResourceID: 1, Mode: model.ResultDisclosureMaskedNoCopy},
+		policies: map[disclosureScopeKeyT]model.ResultDisclosurePolicy{
+			disclosureScopeKey("testdb", "", "users", "id"):    {TargetResourceID: 1, Mode: model.ResultDisclosureRawCopyAllowed},
+			disclosureScopeKey("testdb", "", "users", "email"): {TargetResourceID: 1, Mode: model.ResultDisclosureMaskedNoCopy},
 		},
 	}
 	targets := &fakeTargetRepo{targets: []model.QueryTarget{{ResourceID: 1}}}
@@ -293,7 +314,7 @@ func TestPreflight_UnsupportedSQLBlocked(t *testing.T) {
 
 	// Given: a disclosure service with no special configuration.
 	inspector := &fakeSchemaInspector{detail: nil}
-	reader := &fakeDisclosureReader{policies: map[string]model.ResultDisclosurePolicy{}}
+	reader := &fakeDisclosureReader{policies: map[disclosureScopeKeyT]model.ResultDisclosurePolicy{}}
 	targets := &fakeTargetRepo{targets: []model.QueryTarget{{ResourceID: 1}}}
 	svc := newTestDisclosureService(reader, inspector, targets)
 
@@ -326,9 +347,9 @@ func TestPreflightRelatedRecords_ValidFKMetadata(t *testing.T) {
 		},
 	}
 	reader := &fakeDisclosureReader{
-		policies: map[string]model.ResultDisclosurePolicy{
-			disclosureScopeKey("testdb", "orders", "id"):    {TargetResourceID: 1, Mode: model.ResultDisclosureRawCopyAllowed},
-			disclosureScopeKey("testdb", "orders", "total"): {TargetResourceID: 1, Mode: model.ResultDisclosureMaskedNoCopy},
+		policies: map[disclosureScopeKeyT]model.ResultDisclosurePolicy{
+			disclosureScopeKey("testdb", "", "orders", "id"):    {TargetResourceID: 1, Mode: model.ResultDisclosureRawCopyAllowed},
+			disclosureScopeKey("testdb", "", "orders", "total"): {TargetResourceID: 1, Mode: model.ResultDisclosureMaskedNoCopy},
 		},
 	}
 	targets := &fakeTargetRepo{targets: []model.QueryTarget{{ResourceID: 1}}}
@@ -369,7 +390,7 @@ func TestPreflightRelatedRecords_MissingPolicyBlocks(t *testing.T) {
 			},
 		},
 	}
-	reader := &fakeDisclosureReader{policies: map[string]model.ResultDisclosurePolicy{}}
+	reader := &fakeDisclosureReader{policies: map[disclosureScopeKeyT]model.ResultDisclosurePolicy{}}
 	targets := &fakeTargetRepo{targets: []model.QueryTarget{{ResourceID: 1}}}
 	svc := newTestDisclosureService(reader, inspector, targets)
 
@@ -399,7 +420,7 @@ func TestPreflightRelatedRecords_InspectorFailure_ReturnsBackendSentinel(t *test
 	inspector := &fakeSchemaInspector{
 		err: inspectorErr,
 	}
-	reader := &fakeDisclosureReader{policies: map[string]model.ResultDisclosurePolicy{}}
+	reader := &fakeDisclosureReader{policies: map[disclosureScopeKeyT]model.ResultDisclosurePolicy{}}
 	targets := &fakeTargetRepo{targets: []model.QueryTarget{{ResourceID: 1}}}
 	svc := newTestDisclosureService(reader, inspector, targets)
 
@@ -560,8 +581,8 @@ func TestPreflight_BlockedStoredModeBlocks(t *testing.T) {
 		},
 	}
 	reader := &fakeDisclosureReader{
-		policies: map[string]model.ResultDisclosurePolicy{
-			disclosureScopeKey("testdb", "users", "id"): {TargetResourceID: 1, Mode: model.ResultDisclosureBlocked},
+		policies: map[disclosureScopeKeyT]model.ResultDisclosurePolicy{
+			disclosureScopeKey("testdb", "", "users", "id"): {TargetResourceID: 1, Mode: model.ResultDisclosureBlocked},
 		},
 	}
 	targets := &fakeTargetRepo{targets: []model.QueryTarget{{ResourceID: 1}}}
@@ -595,8 +616,8 @@ func TestPreflight_UnknownStoredModeBlocks(t *testing.T) {
 		},
 	}
 	reader := &fakeDisclosureReader{
-		policies: map[string]model.ResultDisclosurePolicy{
-			disclosureScopeKey("testdb", "users", "id"): {TargetResourceID: 1, Mode: "unknown_mode"},
+		policies: map[disclosureScopeKeyT]model.ResultDisclosurePolicy{
+			disclosureScopeKey("testdb", "", "users", "id"): {TargetResourceID: 1, Mode: "unknown_mode"},
 		},
 	}
 	targets := &fakeTargetRepo{targets: []model.QueryTarget{{ResourceID: 1}}}
@@ -712,7 +733,7 @@ func TestPreflight_NonSelectStatementBlocks(t *testing.T) {
 	t.Parallel()
 
 	inspector := &fakeSchemaInspector{detail: nil}
-	reader := &fakeDisclosureReader{policies: map[string]model.ResultDisclosurePolicy{}}
+	reader := &fakeDisclosureReader{policies: map[disclosureScopeKeyT]model.ResultDisclosurePolicy{}}
 	targets := &fakeTargetRepo{targets: []model.QueryTarget{{ResourceID: 1}}}
 	svc := newTestDisclosureService(reader, inspector, targets)
 
@@ -746,7 +767,7 @@ func TestPreflight_SelectLiteralStillAllowed(t *testing.T) {
 	t.Parallel()
 
 	inspector := &fakeSchemaInspector{detail: nil}
-	reader := &fakeDisclosureReader{policies: map[string]model.ResultDisclosurePolicy{}}
+	reader := &fakeDisclosureReader{policies: map[disclosureScopeKeyT]model.ResultDisclosurePolicy{}}
 	targets := &fakeTargetRepo{targets: []model.QueryTarget{{ResourceID: 1}}}
 	svc := newTestDisclosureService(reader, inspector, targets)
 
@@ -808,5 +829,171 @@ func TestCreatePolicy_ConflictSentinelPassesThrough(t *testing.T) {
 	}
 	if _, err := svc.CreatePolicy(context.Background(), req); !errors.Is(err, ErrQueryDisclosurePolicyConflict) {
 		t.Fatalf("CreatePolicy error = %v, want ErrQueryDisclosurePolicyConflict", err)
+	}
+}
+
+// --- T9-A: canonical five-part scope and the engine-conditional schema gate ---
+
+func pgDisclosureTarget(id uint64) model.QueryTarget {
+	return model.QueryTarget{ResourceID: id, ConnectionContext: model.QueryTargetConnectionContext{Engine: "postgresql"}}
+}
+
+func mysqlDisclosureTarget(id uint64) model.QueryTarget {
+	return model.QueryTarget{ResourceID: id, ConnectionContext: model.QueryTargetConnectionContext{Engine: "mysql"}}
+}
+
+// TestCreatePolicy_PostgresRequiresExplicitSchema proves a PostgreSQL policy
+// scope can never be written with a missing schema: the service returns a
+// controlled validation error and the writer is never reached. WHY: silently
+// resolving schema to "public" or the connection default_schema would create
+// a policy under an identity the operator never stated (G10 fail-closed).
+func TestCreatePolicy_PostgresRequiresExplicitSchema(t *testing.T) {
+	t.Parallel()
+
+	writer := &fakeDisclosureWriter{}
+	targets := &fakeTargetRepo{targets: []model.QueryTarget{pgDisclosureTarget(7)}}
+	svc := NewQueryDisclosureService(&fakeDisclosureReader{}, writer, nil, targets)
+	req := model.ResultDisclosurePolicyUpsertRequest{
+		TargetResourceID: 7,
+		DatabaseName:     "sales_db",
+		ObjectName:       "orders",
+		ColumnName:       "email",
+		Mode:             model.ResultDisclosureRawCopyAllowed,
+	}
+	_, err := svc.CreatePolicy(context.Background(), req)
+	if !errors.Is(err, ErrQueryValidationFailed) {
+		t.Fatalf("CreatePolicy error = %v, want ErrQueryValidationFailed", err)
+	}
+	if writer.insertCalled {
+		t.Fatal("writer must not be reached when schema is missing for postgresql")
+	}
+}
+
+// TestCreatePolicy_PostgresSchemaPreservesCanonicalNames proves a PostgreSQL
+// scope keeps wide canonical names — case, Unicode, and characters only legal
+// inside quoted identifiers — verbatim through service validation into the
+// writer. WHY: the policy identity is a canonical name, not a SQL fragment; the
+// service must not lowercase, trim, or ASCII-filter it.
+func TestCreatePolicy_PostgresSchemaPreservesCanonicalNames(t *testing.T) {
+	t.Parallel()
+
+	writer := &fakeDisclosureWriter{}
+	targets := &fakeTargetRepo{targets: []model.QueryTarget{pgDisclosureTarget(7)}}
+	svc := NewQueryDisclosureService(&fakeDisclosureReader{}, writer, nil, targets)
+	req := model.ResultDisclosurePolicyUpsertRequest{
+		TargetResourceID: 7,
+		DatabaseName:     "销售库",
+		SchemaName:       "MixedCase.Schema",
+		ObjectName:       `"Quoted Table"`,
+		ColumnName:       "café",
+		Mode:             model.ResultDisclosureMaskedNoCopy,
+	}
+	id, err := svc.CreatePolicy(context.Background(), req)
+	if err != nil {
+		t.Fatalf("CreatePolicy error = %v, want nil for wide postgresql names", err)
+	}
+	if id != 1 || !writer.insertCalled {
+		t.Fatalf("writer insert result = %d called=%v", id, writer.insertCalled)
+	}
+	if writer.insertReq != req {
+		t.Fatalf("writer req = %+v, want verbatim %+v", writer.insertReq, req)
+	}
+}
+
+// TestCreatePolicy_MySQLRejectsNonEmptySchema proves a schema segment on a
+// MySQL-scoped policy is an invalid combination, not a quiet migration of
+// meaning. WHY: MySQL policy identity keeps the legacy empty schema.
+func TestCreatePolicy_MySQLRejectsNonEmptySchema(t *testing.T) {
+	t.Parallel()
+
+	writer := &fakeDisclosureWriter{}
+	targets := &fakeTargetRepo{targets: []model.QueryTarget{mysqlDisclosureTarget(3)}}
+	svc := NewQueryDisclosureService(&fakeDisclosureReader{}, writer, nil, targets)
+	req := model.ResultDisclosurePolicyUpsertRequest{
+		TargetResourceID: 3,
+		DatabaseName:     "orders_db",
+		SchemaName:       "app",
+		ObjectName:       "orders",
+		ColumnName:       "email",
+		Mode:             model.ResultDisclosureRawCopyAllowed,
+	}
+	_, err := svc.CreatePolicy(context.Background(), req)
+	if !errors.Is(err, ErrQueryValidationFailed) {
+		t.Fatalf("CreatePolicy error = %v, want ErrQueryValidationFailed", err)
+	}
+	if writer.insertCalled {
+		t.Fatal("writer must not be reached for a mysql scope with a schema")
+	}
+}
+
+// TestCreatePolicy_MySQLKeepsStrictIdentifierRule proves the ASCII identifier
+// contract MySQL/TiDB scopes always had still applies through the real service
+// path. WHY: relaxing the model-level rule for PostgreSQL must not widen the
+// MySQL contract by accident.
+func TestCreatePolicy_MySQLKeepsStrictIdentifierRule(t *testing.T) {
+	t.Parallel()
+
+	for _, database := range []string{"orders; DROP TABLE", "my db", "täble"} {
+		writer := &fakeDisclosureWriter{}
+		targets := &fakeTargetRepo{targets: []model.QueryTarget{mysqlDisclosureTarget(3)}}
+		svc := NewQueryDisclosureService(&fakeDisclosureReader{}, writer, nil, targets)
+		req := model.ResultDisclosurePolicyUpsertRequest{
+			TargetResourceID: 3,
+			DatabaseName:     database,
+			ObjectName:       "orders",
+			ColumnName:       "email",
+			Mode:             model.ResultDisclosureRawCopyAllowed,
+		}
+		if _, err := svc.CreatePolicy(context.Background(), req); !errors.Is(err, ErrQueryValidationFailed) {
+			t.Fatalf("CreatePolicy(%q) error = %v, want ErrQueryValidationFailed", database, err)
+		}
+		if writer.insertCalled {
+			t.Fatalf("writer must not be reached for invalid mysql database %q", database)
+		}
+	}
+}
+
+// TestDeletePolicy_FivePartScopeReachesWriter proves DeletePolicy binds all
+// five canonical segments verbatim. WHY: deleting (t,db,app,obj,col) must
+// never fall through to the empty-schema or a different schema's row.
+func TestDeletePolicy_FivePartScopeReachesWriter(t *testing.T) {
+	t.Parallel()
+
+	writer := &fakeDisclosureWriter{}
+	targets := &fakeTargetRepo{targets: []model.QueryTarget{pgDisclosureTarget(7)}}
+	svc := NewQueryDisclosureService(&fakeDisclosureReader{}, writer, nil, targets)
+	if err := svc.DeletePolicy(context.Background(), 7, "sales_db", "analytics", "orders", "email"); err != nil {
+		t.Fatalf("DeletePolicy error = %v, want nil", err)
+	}
+	want := disclosureScopeKey("sales_db", "analytics", "orders", "email")
+	if !writer.deleteCalled || writer.deleteTarget != 7 || writer.deleteScope != want {
+		t.Fatalf("delete scope = (%d, %+v) called=%v, want (7, %+v)", writer.deleteTarget, writer.deleteScope, writer.deleteCalled, want)
+	}
+}
+
+// TestDeletePolicy_SchemaGateMatchesWrites proves delete applies the same
+// engine-conditional contract as create/update: postgresql requires an
+// explicit schema, mysql requires none.
+func TestDeletePolicy_SchemaGateMatchesWrites(t *testing.T) {
+	t.Parallel()
+
+	pgWriter := &fakeDisclosureWriter{}
+	pgTargets := &fakeTargetRepo{targets: []model.QueryTarget{pgDisclosureTarget(7)}}
+	pgSvc := NewQueryDisclosureService(&fakeDisclosureReader{}, pgWriter, nil, pgTargets)
+	if err := pgSvc.DeletePolicy(context.Background(), 7, "sales_db", "", "orders", "email"); !errors.Is(err, ErrQueryValidationFailed) {
+		t.Fatalf("postgresql delete without schema error = %v, want ErrQueryValidationFailed", err)
+	}
+	if pgWriter.deleteCalled {
+		t.Fatal("writer must not be reached for a schema-less postgresql delete")
+	}
+
+	myWriter := &fakeDisclosureWriter{}
+	myTargets := &fakeTargetRepo{targets: []model.QueryTarget{mysqlDisclosureTarget(3)}}
+	mySvc := NewQueryDisclosureService(&fakeDisclosureReader{}, myWriter, nil, myTargets)
+	if err := mySvc.DeletePolicy(context.Background(), 3, "orders_db", "app", "orders", "email"); !errors.Is(err, ErrQueryValidationFailed) {
+		t.Fatalf("mysql delete with schema error = %v, want ErrQueryValidationFailed", err)
+	}
+	if myWriter.deleteCalled {
+		t.Fatal("writer must not be reached for a schema'd mysql delete")
 	}
 }

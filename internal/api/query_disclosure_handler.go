@@ -22,7 +22,7 @@ type queryDisclosureAPI interface {
 	ListPolicies(ctx context.Context, targetResourceID uint64) ([]model.ResultDisclosurePolicy, error)
 	CreatePolicy(ctx context.Context, req model.ResultDisclosurePolicyUpsertRequest) (uint64, error)
 	UpdatePolicy(ctx context.Context, req model.ResultDisclosurePolicyUpsertRequest) error
-	DeletePolicy(ctx context.Context, targetResourceID uint64, database, object, column string) error
+	DeletePolicy(ctx context.Context, targetResourceID uint64, database, schema, object, column string) error
 }
 
 // handleListPolicies handles GET /query-disclosure-policies. It returns all
@@ -88,6 +88,7 @@ func handleCreatePolicy(svc queryDisclosureAPI) http.HandlerFunc {
 			ID:               id,
 			TargetResourceID: req.TargetResourceID,
 			DatabaseName:     req.DatabaseName,
+			SchemaName:       req.SchemaName,
 			ObjectName:       req.ObjectName,
 			ColumnName:       req.ColumnName,
 			Mode:             req.Mode,
@@ -127,8 +128,10 @@ func handleUpdatePolicy(svc queryDisclosureAPI) http.HandlerFunc {
 }
 
 // handleDeletePolicy handles DELETE /query-disclosure-policies. It enforces the
-// admin-only boundary and returns 204 on success. The scope (target, database,
-// object, column) is extracted from query parameters.
+// admin-only boundary and returns 204 on success. The canonical five-part scope
+// (target, database, schema, object, column) is extracted from query
+// parameters; schemaName is required or forbidden per the target's engine
+// (the service applies that rule).
 func handleDeletePolicy(svc queryDisclosureAPI) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		actor, ok := actorFromContext(r.Context())
@@ -146,13 +149,14 @@ func handleDeletePolicy(svc queryDisclosureAPI) http.HandlerFunc {
 			return
 		}
 		database := r.URL.Query().Get("databaseName")
+		schema := r.URL.Query().Get("schemaName")
 		object := r.URL.Query().Get("objectName")
 		column := r.URL.Query().Get("columnName")
 		if database == "" || object == "" || column == "" {
 			writeJSONError(w, http.StatusBadRequest, "validation_failed", "databaseName, objectName, and columnName are required")
 			return
 		}
-		if err := svc.DeletePolicy(r.Context(), targetResourceID, database, object, column); err != nil {
+		if err := svc.DeletePolicy(r.Context(), targetResourceID, database, schema, object, column); err != nil {
 			writeDisclosureError(w, err)
 			return
 		}

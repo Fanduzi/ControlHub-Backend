@@ -305,7 +305,7 @@ func seedFixtureDisclosurePolicies(ctx context.Context, db *sql.DB, targetResour
 	for _, p := range policies {
 		// Delete-then-insert keeps the dev seed idempotent: Insert is a plain
 		// INSERT that would fail the unique scope constraint on a re-run.
-		if err := repo.Delete(ctx, p.TargetResourceID, p.DatabaseName, p.ObjectName, p.ColumnName); err != nil {
+		if err := repo.Delete(ctx, p.TargetResourceID, p.DatabaseName, p.SchemaName, p.ObjectName, p.ColumnName); err != nil {
 			return fmt.Errorf("clear policy for %s.%s.%s: %w", p.DatabaseName, p.ObjectName, p.ColumnName, err)
 		}
 		if _, err := repo.Insert(ctx, p); err != nil {

@@ -27,7 +27,7 @@ Domain structs, taxonomy constants, validation methods, and dictionary definitio
 | query_schema.go | Query schema response types, including SchemaListResponse and TableDefinitionResponse |
 | query_execution.go | Query execution request/response/history types, internal full-statement availability, public restore eligibility and dedicated statement response, validated user-or-machine QueryExecutionIdentity, truthful actor projection, execution status enum (incl. cancelled), remote-state enum + client-execution-id bound, composite connection-scope request/context fields, credential policy/ref validation, and governed result paging |
 | query_credential.go | Phase 38A query credential metadata request/response/runtime-status types + Validate (metadata only; never DSN/password); status/resolved records carry the (resourceId, database) connection identity and pinned defaultSchema; ValidateConnectionIdentity enforces the engine-keyed identity shape (PG requires database+schema) |
-| query_disclosure.go | Phase 38Q governed result-disclosure policy: ResultDisclosureMode enum + Validate, ResultDisclosurePolicy (five-part canonical key incl. schemaName), ResultDisclosurePolicyUpsertRequest + Validate, ResultDisclosurePolicyListQuery |
+| query_disclosure.go | Phase 38Q governed result-disclosure policy: ResultDisclosureMode enum + Validate, ResultDisclosurePolicy (five-part canonical key incl. schemaName), ResultDisclosurePolicyUpsertRequest + Validate (engine-agnostic shape), ValidateLegacyScopeIdentifier (the ASCII rule the service applies to non-schema engines), ResultDisclosurePolicyListQuery |
 | query_saved_statement.go | Phase 38W governed saved statements: immutable scopes, typed parameter definitions, connection-scope (database/schema) request + persistence fields with optional connection-name width validation, template-execution request/limits incl. clientExecutionId bound, and list response types |
 | query_workspace.go | Bounded one-row-per-owner worksheet aggregate with optimistic version requests, control-free metadata, and opaque statement preservation |
 | query_workspace_test.go | Workspace bounds/opaque-SQL tests and full-statement history JSON omission coverage |
@@ -35,7 +35,7 @@ Domain structs, taxonomy constants, validation methods, and dictionary definitio
 | health_observation_test.go | Freshness time-boundary contract tests |
 | query_execution_test.go | User/machine execution-identity, environment-policy, credential_ref, stored-status (cancelled admitted, derived running/unknown rejected), remote-state, client-execution-id bound, and governed-result-paging validation tests |
 | query_credential_test.go | Runtime-status and upsert-request validation tests (fail-closed enum, all-environments confirmation) |
-| query_disclosure_test.go | Disclosure-mode and upsert-request validation tests (fail-closed mode, identifier syntax/length) |
+| query_disclosure_test.go | Disclosure-mode and upsert-request validation tests (fail-closed mode, engine-agnostic identifier shape incl. NUL rejection and wide PostgreSQL names, legacy ASCII scope rule) |
 | query_saved_statement_test.go | Saved-statement scope, create, and update request validation tests (fail-closed scope, name bounds/control chars, statement size) |
 
 ## Exports
@@ -47,7 +47,7 @@ Domain structs, taxonomy constants, validation methods, and dictionary definitio
 - `ResourceTypeDictionary()`, `RelationTypeDictionary()`, `LifecycleStatusDictionary()`, `HealthStatusDictionary()`
 - `QueryEnvironmentPolicy.Validate()`, `ValidateCredentialRef()` (query sandbox credential policy)
 - `QueryCredentialRuntimeStatus.Validate()` / `.IsResolved()`, `QueryCredentialUpsertRequest.Validate()` (Phase 38A credential metadata contract)
-- `ResultDisclosureMode.Validate()`, `ResultDisclosurePolicyUpsertRequest.Validate()` (Phase 38Q governed result-disclosure policy)
+- `ResultDisclosureMode.Validate()`, `ResultDisclosurePolicyUpsertRequest.Validate()`, `ValidateLegacyScopeIdentifier()` (Phase 38Q governed result-disclosure policy)
 - `QuerySavedStatementScope.Validate()`, typed parameter definitions, `QuerySavedStatementCreateRequest.Validate()`, `QuerySavedStatementUpdateRequest.Validate()`, `QuerySavedStatementExecuteRequest.Validate()` + `MaxQuerySavedStatementExecuteValuesSize` (Phase 38W governed saved statements)
 - `QueryWorkspaceWorksheet`, `QueryWorkspace`, and `QueryWorkspacePutRequest.Validate()` for bounded opaque worksheet persistence without query guarding or target lookup
 - `QueryExecutionRecord.FullStatement` / `HasFullStatement` as internal-only persistence data, server-computed public `CanRestore`, and `QueryExecutionStatementResponse` as the dedicated owner-reuse shape

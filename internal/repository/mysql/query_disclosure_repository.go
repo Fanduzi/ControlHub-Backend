@@ -18,14 +18,14 @@ import (
 // QueryDisclosureReader reads disclosure policies.
 type QueryDisclosureReader interface {
 	ListByTarget(ctx context.Context, targetResourceID uint64) ([]model.ResultDisclosurePolicy, error)
-	GetByScope(ctx context.Context, targetResourceID uint64, database, object, column string) (model.ResultDisclosurePolicy, error)
+	GetByScope(ctx context.Context, targetResourceID uint64, database, schema, object, column string) (model.ResultDisclosurePolicy, error)
 }
 
 // QueryDisclosureWriter writes disclosure policies.
 type QueryDisclosureWriter interface {
 	Insert(ctx context.Context, req model.ResultDisclosurePolicyUpsertRequest) (uint64, error)
 	Update(ctx context.Context, req model.ResultDisclosurePolicyUpsertRequest) error
-	Delete(ctx context.Context, targetResourceID uint64, database, object, column string) error
+	Delete(ctx context.Context, targetResourceID uint64, database, schema, object, column string) error
 }
 
 // MySQLQueryDisclosureRepository implements QueryDisclosureReader and
@@ -40,13 +40,13 @@ func NewQueryDisclosureRepository(db *sql.DB) *MySQLQueryDisclosureRepository {
 	return &MySQLQueryDisclosureRepository{db: db}
 }
 
-// ListByTarget returns all disclosure policies for a target, ordered by
-// database_name, object_name, column_name.
+// ListByTarget returns all disclosure policies for a target, ordered by the
+// canonical key segments: database_name, schema_name, object_name, column_name.
 func (r *MySQLQueryDisclosureRepository) ListByTarget(ctx context.Context, targetResourceID uint64) ([]model.ResultDisclosurePolicy, error) {
 	const q = `select id, target_resource_id, database_name, schema_name, object_name, column_name, mode, created_at, updated_at
 	           from query_result_disclosure_policies
 	           where target_resource_id = ?
-	           order by database_name, object_name, column_name`
+	           order by database_name, schema_name, object_name, column_name`
 	rows, err := r.db.QueryContext(ctx, q, targetResourceID)
 	if err != nil {
 		return nil, fmt.Errorf("list disclosure policies: %w", err)
@@ -72,18 +72,18 @@ func (r *MySQLQueryDisclosureRepository) ListByTarget(ctx context.Context, targe
 	return items, nil
 }
 
-// GetByScope returns the disclosure policy for an exact legacy scope
-// (target_resource_id, database_name, schema_name='', object_name, column_name).
-// The schema segment is pinned to '' until schema-aware matching lands (T9);
-// a 4-part lookup can never silently hit a schema-scoped sibling row.
+// GetByScope returns the disclosure policy for the exact canonical scope
+// (target_resource_id, database_name, schema_name, object_name, column_name).
+// All five segments are bound parameters: a missing-schema lookup can never
+// silently hit a schema-scoped sibling row, and vice versa.
 // Returns sql.ErrNoRows when no matching policy exists (caller treats as blocked).
-func (r *MySQLQueryDisclosureRepository) GetByScope(ctx context.Context, targetResourceID uint64, database, object, column string) (model.ResultDisclosurePolicy, error) {
+func (r *MySQLQueryDisclosureRepository) GetByScope(ctx context.Context, targetResourceID uint64, database, schema, object, column string) (model.ResultDisclosurePolicy, error) {
 	const q = `select id, target_resource_id, database_name, schema_name, object_name, column_name, mode, created_at, updated_at
 	           from query_result_disclosure_policies
-	           where target_resource_id = ? and database_name = ? and schema_name = '' and object_name = ? and column_name = ?`
+	           where target_resource_id = ? and database_name = ? and schema_name = ? and object_name = ? and column_name = ?`
 	var p model.ResultDisclosurePolicy
 	var mode string
-	err := r.db.QueryRowContext(ctx, q, targetResourceID, database, object, column).Scan(
+	err := r.db.QueryRowContext(ctx, q, targetResourceID, database, schema, object, column).Scan(
 		&p.ID, &p.TargetResourceID, &p.DatabaseName, &p.SchemaName, &p.ObjectName, &p.ColumnName,
 		&mode, &p.CreatedAt, &p.UpdatedAt,
 	)
@@ -98,15 +98,15 @@ func (r *MySQLQueryDisclosureRepository) GetByScope(ctx context.Context, targetR
 }
 
 // Insert creates a new disclosure policy. Returns the new row ID. Returns
-// service.ErrQueryDisclosurePolicyConflict if a policy with the same scope
-// already exists (UNIQUE constraint on target_resource_id, database_name,
-// object_name, column_name).
+// service.ErrQueryDisclosurePolicyConflict if a policy with the same canonical
+// scope already exists (UNIQUE constraint on target_resource_id,
+// database_name, schema_name, object_name, column_name).
 func (r *MySQLQueryDisclosureRepository) Insert(ctx context.Context, req model.ResultDisclosurePolicyUpsertRequest) (uint64, error) {
 	const q = `insert into query_result_disclosure_policies
-	           (target_resource_id, database_name, object_name, column_name, mode)
-	           values (?, ?, ?, ?, ?)`
+	           (target_resource_id, database_name, schema_name, object_name, column_name, mode)
+	           values (?, ?, ?, ?, ?, ?)`
 	res, err := r.db.ExecContext(ctx, q,
-		req.TargetResourceID, req.DatabaseName, req.ObjectName, req.ColumnName, string(req.Mode),
+		req.TargetResourceID, req.DatabaseName, req.SchemaName, req.ObjectName, req.ColumnName, string(req.Mode),
 	)
 	if err != nil {
 		if isDuplicateKey(err) {
@@ -121,14 +121,15 @@ func (r *MySQLQueryDisclosureRepository) Insert(ctx context.Context, req model.R
 	return uint64(id), nil
 }
 
-// Update modifies the mode of an existing disclosure policy identified by scope.
+// Update modifies the mode of an existing disclosure policy identified by its
+// exact canonical scope (all five segments bound).
 // Returns sql.ErrNoRows when no matching policy exists.
 func (r *MySQLQueryDisclosureRepository) Update(ctx context.Context, req model.ResultDisclosurePolicyUpsertRequest) error {
 	const q = `update query_result_disclosure_policies
 	           set mode = ?
-	           where target_resource_id = ? and database_name = ? and schema_name = '' and object_name = ? and column_name = ?`
+	           where target_resource_id = ? and database_name = ? and schema_name = ? and object_name = ? and column_name = ?`
 	res, err := r.db.ExecContext(ctx, q,
-		string(req.Mode), req.TargetResourceID, req.DatabaseName, req.ObjectName, req.ColumnName,
+		string(req.Mode), req.TargetResourceID, req.DatabaseName, req.SchemaName, req.ObjectName, req.ColumnName,
 	)
 	if err != nil {
 		return fmt.Errorf("update disclosure policy: %w", err)
@@ -143,12 +144,13 @@ func (r *MySQLQueryDisclosureRepository) Update(ctx context.Context, req model.R
 	return nil
 }
 
-// Delete removes a disclosure policy by scope. It is idempotent: deleting a
-// scope that has no row is not an error.
-func (r *MySQLQueryDisclosureRepository) Delete(ctx context.Context, targetResourceID uint64, database, object, column string) error {
+// Delete removes a disclosure policy by its exact canonical scope (all five
+// segments bound). It is idempotent: deleting a scope that has no row is not
+// an error.
+func (r *MySQLQueryDisclosureRepository) Delete(ctx context.Context, targetResourceID uint64, database, schema, object, column string) error {
 	const q = `delete from query_result_disclosure_policies
-	           where target_resource_id = ? and database_name = ? and schema_name = '' and object_name = ? and column_name = ?`
-	if _, err := r.db.ExecContext(ctx, q, targetResourceID, database, object, column); err != nil {
+	           where target_resource_id = ? and database_name = ? and schema_name = ? and object_name = ? and column_name = ?`
+	if _, err := r.db.ExecContext(ctx, q, targetResourceID, database, schema, object, column); err != nil {
 		return fmt.Errorf("delete disclosure policy: %w", err)
 	}
 	return nil
