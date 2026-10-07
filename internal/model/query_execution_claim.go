@@ -56,14 +56,29 @@ func (c QueryExecutionClaimInput) Validate() error {
 	if utf8.RuneCountInString(c.SchemaName) > MaxIdentifierLength {
 		return fmt.Errorf("schema_name exceeds %d characters", MaxIdentifierLength)
 	}
-	if utf8.RuneCountInString(c.RequestDigest) != QueryExecutionClaimDigestLength {
-		return fmt.Errorf("request_digest must be exactly %d characters", QueryExecutionClaimDigestLength)
-	}
-	if strings.IndexByte(c.RequestDigest, 0) >= 0 {
-		return fmt.Errorf("request_digest must not contain NUL bytes")
+	if err := validateClaimDigest(c.RequestDigest); err != nil {
+		return err
 	}
 	if c.ClaimedAt.IsZero() {
 		return fmt.Errorf("claimed_at is required")
+	}
+	return nil
+}
+
+// validateClaimDigest enforces the digest shape: exactly 64 ASCII hexadecimal
+// characters — the canonical SHA-256 hex fingerprint. The digest is stored
+// verbatim: case is significant (the claim identity is byte-exact), so the
+// input is never normalized, and whitespace, trailing space, non-hex ASCII,
+// and non-ASCII are all rejected.
+func validateClaimDigest(d string) error {
+	if len(d) != QueryExecutionClaimDigestLength {
+		return fmt.Errorf("request_digest must be exactly %d ASCII hex characters", QueryExecutionClaimDigestLength)
+	}
+	for i := 0; i < len(d); i++ {
+		c := d[i]
+		if !(c >= '0' && c <= '9' || c >= 'a' && c <= 'f' || c >= 'A' && c <= 'F') {
+			return fmt.Errorf("request_digest contains a non-hex character at offset %d", i)
+		}
 	}
 	return nil
 }

@@ -114,15 +114,13 @@ func TestClaimCollationMigrationUpPreservesData(t *testing.T) {
 }
 
 func TestClaimCollationMigrationDownGuard(t *testing.T) {
-	// Any stored identity that would widen under ai_ci blocks the rollback
-	// before any DDL runs — either a case-bearing value or a ci-colliding pair.
-	t.Run("case-bearing claim key refuses", func(t *testing.T) {
-		db := freshClaimMigrationDB(t, "controlhub_claim_down1", 31)
-		mustExec(t, db, `INSERT INTO query_execution_claims
-			(target_resource_id, client_execution_id, actor_user_id, database_name, schema_name, request_digest, claimed_at)
-			VALUES (1, 'KeyA', 7, 'salesdb', 'app', ?, NOW(6))`, strings.Repeat("a", 64))
+	// ANY claim row or keyed-execution row blocks the rollback before any DDL
+	// runs: under ai_ci even a lowercase key widens its match class, so no
+	// "safe characters" list can prove a stored identity survives.
+	assertRefused := func(t *testing.T, db *sql.DB, why string) {
+		t.Helper()
 		if err := goose.DownTo(db, resolveMigrationsDir(), 30); err == nil || !strings.Contains(err.Error(), "45000") {
-			t.Fatalf("down with case-bearing key = %v, want 45000 refusal", err)
+			t.Fatalf("down with %s = %v, want 45000 refusal", why, err)
 		}
 		if v := claimVersion(t, db); v != 31 {
 			t.Fatalf("version after refused down = %d, want 31", v)
@@ -132,43 +130,58 @@ func TestClaimCollationMigrationDownGuard(t *testing.T) {
 				t.Fatalf("%s collation = %q after refused down", name, collation)
 			}
 		}
+	}
+
+	t.Run("single lowercase claim key refuses", func(t *testing.T) {
+		db := freshClaimMigrationDB(t, "controlhub_claim_down1", 31)
+		mustExec(t, db, `INSERT INTO query_execution_claims
+			(target_resource_id, client_execution_id, actor_user_id, database_name, schema_name, request_digest, claimed_at)
+			VALUES (1, 'lower-key', 7, 'salesdb', 'app', ?, NOW(6))`, strings.Repeat("a", 64))
+		assertRefused(t, db, "lowercase claim")
 		var key string
-		if err := db.QueryRow(`SELECT client_execution_id FROM query_execution_claims WHERE target_resource_id = 1`).Scan(&key); err != nil || key != "KeyA" {
+		if err := db.QueryRow(`SELECT client_execution_id FROM query_execution_claims WHERE target_resource_id = 1`).Scan(&key); err != nil || key != "lower-key" {
 			t.Fatalf("claim data after refused down: %q %v", key, err)
 		}
 	})
 
-	t.Run("ci-colliding key pair refuses", func(t *testing.T) {
+	t.Run("accented claim key refuses", func(t *testing.T) {
 		db := freshClaimMigrationDB(t, "controlhub_claim_down2", 31)
-		// Two claims whose keys differ only by case — distinct under bin.
-		for _, key := range []string{"RunKey", "runkey"} {
-			mustExec(t, db, `INSERT INTO query_execution_claims
-				(target_resource_id, client_execution_id, actor_user_id, database_name, schema_name, request_digest, claimed_at)
-				VALUES (1, ?, 7, 'salesdb', 'app', ?, NOW(6))`, key, strings.Repeat("a", 64))
-		}
-		if err := goose.DownTo(db, resolveMigrationsDir(), 30); err == nil || !strings.Contains(err.Error(), "45000") {
-			t.Fatalf("down with ci-colliding keys = %v, want 45000 refusal", err)
-		}
-		if got := countWhere(t, db, `SELECT COUNT(*) FROM query_execution_claims`); got != 2 {
-			t.Fatalf("refused down mutated claim rows: %d", got)
-		}
-	})
-
-	t.Run("keyed execution case-bearing key refuses", func(t *testing.T) {
-		db := freshClaimMigrationDB(t, "controlhub_claim_down3", 31)
-		mustExec(t, db, `INSERT INTO query_executions
-			(target_resource_id, actor_user_id, engine, statement_digest, statement_preview, status, client_execution_id)
-			VALUES (1, 7, 'postgresql', 'd', 'p', 'success', 'KeyB')`)
-		if err := goose.DownTo(db, resolveMigrationsDir(), 30); err == nil || !strings.Contains(err.Error(), "45000") {
-			t.Fatalf("down with keyed execution = %v, want 45000 refusal", err)
-		}
-	})
-
-	t.Run("clean data downgrades and upgrades again", func(t *testing.T) {
-		db := freshClaimMigrationDB(t, "controlhub_claim_down4", 31)
 		mustExec(t, db, `INSERT INTO query_execution_claims
 			(target_resource_id, client_execution_id, actor_user_id, database_name, schema_name, request_digest, claimed_at)
-			VALUES (1, 'lower-key', 7, 'salesdb', 'app', ?, NOW(6))`, strings.Repeat("a", 64))
+			VALUES (1, 'clé', 7, 'salesdb', 'app', ?, NOW(6))`, strings.Repeat("a", 64))
+		assertRefused(t, db, "accented claim")
+	})
+
+	t.Run("finalized claim refuses", func(t *testing.T) {
+		db := freshClaimMigrationDB(t, "controlhub_claim_down3", 31)
+		res, err := db.Exec(`INSERT INTO query_executions
+			(target_resource_id, actor_user_id, engine, statement_digest, statement_preview, status, client_execution_id)
+			VALUES (1, 7, 'postgresql', 'd', 'p', 'success', 'lower-key')`)
+		if err != nil {
+			t.Fatalf("seed keyed execution: %v", err)
+		}
+		execID, _ := res.LastInsertId()
+		mustExec(t, db, `INSERT INTO query_execution_claims
+			(target_resource_id, client_execution_id, actor_user_id, database_name, schema_name, request_digest, execution_id, claimed_at)
+			VALUES (1, 'lower-key', 7, 'salesdb', 'app', ?, ?, NOW(6))`, strings.Repeat("a", 64), execID)
+		assertRefused(t, db, "finalized claim")
+	})
+
+	t.Run("keyed history without claims refuses", func(t *testing.T) {
+		db := freshClaimMigrationDB(t, "controlhub_claim_down4", 31)
+		mustExec(t, db, `INSERT INTO query_executions
+			(target_resource_id, actor_user_id, engine, statement_digest, statement_preview, status, client_execution_id)
+			VALUES (1, 7, 'postgresql', 'd', 'p', 'success', 'keyb')`)
+		assertRefused(t, db, "keyed execution history")
+	})
+
+	t.Run("empty claims and NULL-key history downgrade cleanly", func(t *testing.T) {
+		db := freshClaimMigrationDB(t, "controlhub_claim_down5", 31)
+		// Keyless legacy evidence is safe to keep: its identity does not
+		// depend on the claim-key collation.
+		mustExec(t, db, `INSERT INTO query_executions
+			(target_resource_id, actor_user_id, engine, statement_digest, statement_preview, status)
+			VALUES (1, 7, 'mysql', 'd', 'p', 'failed')`)
 		if err := goose.DownTo(db, resolveMigrationsDir(), 30); err != nil {
 			t.Fatalf("clean down: %v", err)
 		}
@@ -178,9 +191,9 @@ func TestClaimCollationMigrationDownGuard(t *testing.T) {
 		if c := claimIdentityCollations(t, db)["query_execution_claims.client_execution_id"]; c != "utf8mb4_0900_ai_ci" {
 			t.Fatalf("collation after down = %q, want utf8mb4_0900_ai_ci", c)
 		}
-		var key string
-		if err := db.QueryRow(`SELECT client_execution_id FROM query_execution_claims WHERE target_resource_id = 1`).Scan(&key); err != nil || key != "lower-key" {
-			t.Fatalf("claim data after clean down: %q %v", key, err)
+		var cnt int
+		if err := db.QueryRow(`SELECT COUNT(*) FROM query_executions WHERE client_execution_id IS NULL`).Scan(&cnt); err != nil || cnt != 1 {
+			t.Fatalf("null-key history after down: %d %v", cnt, err)
 		}
 		if err := goose.UpTo(db, resolveMigrationsDir(), 31); err != nil {
 			t.Fatalf("re-up after clean down: %v", err)

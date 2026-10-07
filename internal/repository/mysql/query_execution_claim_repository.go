@@ -19,7 +19,8 @@ import (
 // history or audit rows.
 var (
 	// ErrQueryExecutionClaimInvalid marks a malformed admission or finalize
-	// input (bad key/digest/actor/scope shape, non-terminal status).
+	// input (bad key/digest/actor/scope shape, non-terminal status, unknown
+	// remote-state enum).
 	ErrQueryExecutionClaimInvalid = errors.New("invalid query execution claim")
 	// ErrQueryExecutionClaimExists marks a same-key, same-digest admission:
 	// the attempt was already recorded; the requester is not the occupant.
@@ -33,9 +34,16 @@ var (
 	// occupant, so nothing is written.
 	ErrQueryExecutionClaimNotLinked = errors.New("query execution claim not linked to this input")
 	// ErrQueryExecutionClaimBrokenLink marks a structural violation: a claim
-	// whose execution_id is set but whose execution row is absent. Readers get
-	// an evidence error, never a fabricated running state or forged id.
+	// whose execution_id is set but whose execution row is absent or whose
+	// stored identity (target, actor, scope, key) does not match the claim.
+	// Readers get an evidence error, never a fabricated running state or a
+	// forged id.
 	ErrQueryExecutionClaimBrokenLink = errors.New("query execution claim link is broken")
+	// errQueryExecutionClaimStore is the safe internal failure for claim-store
+	// reads/writes: a fixed text with no driver, statement, request, or
+	// identity details. Cancellation/deadline stay classifiable through a
+	// wrapped ctx error.
+	errQueryExecutionClaimStore = errors.New("query execution claim store failed")
 )
 
 const (
@@ -45,14 +53,6 @@ const (
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
 	selectClaimDigestSQL = `SELECT request_digest FROM query_execution_claims
 		WHERE target_resource_id = ? AND client_execution_id = ?`
-	// insertKeyedExecutionSQL is the keyed sibling of insertExecutionSQL: the
-	// claim protocol additionally persists the resolved connection scope,
-	// observed backend handle, remote-state probe, and the idempotency key.
-	insertKeyedExecutionSQL = `insert into query_executions
-		(target_resource_id, actor_user_id, actor_machine_principal_id, engine, database_name, schema_name,
-		 statement_digest, statement_preview, full_statement, status, row_count, duration_ms,
-		 error_code, error_message, backend_pid, remote_state, client_execution_id, created_at)
-		values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, COALESCE(?, CURRENT_TIMESTAMP(6)))`
 	// selectClaimForUpdateSQL locks the (target, key) claim row inside the
 	// finalize transaction so concurrent finalizers serialize on occupancy:
 	// the loser waits for the winner's commit, then sees execution_id set and
@@ -72,6 +72,19 @@ const (
 		  AND actor_user_id <=> ? AND actor_machine_principal_id <=> ?
 		  AND database_name = ? AND schema_name = ?`
 )
+
+// claimStoreError maps a claim-store failure to a safe internal error: raw
+// driver/database text never escapes, while caller cancellation and deadlines
+// stay classifiable via errors.Is against the context error.
+func claimStoreError(ctx context.Context, err error) error {
+	if cerr := ctx.Err(); cerr != nil {
+		return fmt.Errorf("%w: %w", errQueryExecutionClaimStore, cerr)
+	}
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return fmt.Errorf("%w: %w", errQueryExecutionClaimStore, err)
+	}
+	return errQueryExecutionClaimStore
+}
 
 // TryClaimExecution is the single atomic admission gate for a keyed execution
 // (G9): one INSERT against the (target_resource_id, client_execution_id)
@@ -94,12 +107,12 @@ func (r *QueryExecutionRepository) TryClaimExecution(ctx context.Context, in mod
 		in.TargetResourceID, in.ClientExecutionID, actorUserID, actorMachineID,
 		in.DatabaseName, in.SchemaName, in.RequestDigest, in.ClaimedAt.UTC()); err != nil {
 		if !isDuplicateKey(err) {
-			return fmt.Errorf("insert execution claim: %w", err)
+			return claimStoreError(ctx, err)
 		}
 		var stored string
 		if qerr := r.db.QueryRowContext(ctx, selectClaimDigestSQL,
 			in.TargetResourceID, in.ClientExecutionID).Scan(&stored); qerr != nil {
-			return fmt.Errorf("read conflicting execution claim: %w", qerr)
+			return claimStoreError(ctx, qerr)
 		}
 		if stored == in.RequestDigest {
 			return ErrQueryExecutionClaimExists
@@ -113,12 +126,13 @@ func (r *QueryExecutionRepository) TryClaimExecution(ctx context.Context, in mod
 // the occupant's terminal Execution Evidence Pair — one history row, one fixed
 // audit event, and the claim link — commits in a single transaction. The
 // history row really persists database_name/schema_name/backend_pid/
-// remote_state/client_execution_id; running/unknown are never storable
-// statuses. The claim link UPDATE must hit exactly one still-unlinked claim
-// whose occupancy fields match this input, or the whole transaction rolls
-// back — no evidence pair may persist under an identity it did not claim.
-// Any pre-commit failure rolls back history, audit, and link together; the
-// claim survives unlinked. A commit failure is reported without retrying.
+// remote_state/client_execution_id through the shared executionRecordArgs
+// mapping; running/unknown are never storable statuses and remote_state must
+// be a known enum. The claim link UPDATE must hit exactly one still-unlinked
+// claim whose occupancy fields match this input, or the whole transaction
+// rolls back — no evidence pair may persist under an identity it did not
+// claim. Any pre-commit failure rolls back history, audit, and link together;
+// the claim survives unlinked. A commit failure is reported without retrying.
 func (r *QueryExecutionRepository) FinalizeClaimWithAudit(ctx context.Context, rec model.QueryExecutionRecord, eventType, result string) (uint64, error) {
 	if rec.ClientExecutionID == nil || *rec.ClientExecutionID == "" {
 		return 0, fmt.Errorf("%w: client_execution_id is required for keyed finalize", ErrQueryExecutionClaimInvalid)
@@ -129,7 +143,10 @@ func (r *QueryExecutionRepository) FinalizeClaimWithAudit(ctx context.Context, r
 	if err := model.ValidateStatus(string(rec.Status)); err != nil {
 		return 0, fmt.Errorf("%w: %v", ErrQueryExecutionClaimInvalid, err)
 	}
-	args, err := keyedExecutionRecordArgs(rec)
+	if err := rec.RemoteState.Validate(); err != nil {
+		return 0, fmt.Errorf("%w: %v", ErrQueryExecutionClaimInvalid, err)
+	}
+	args, err := executionRecordArgs(rec)
 	if err != nil {
 		return 0, fmt.Errorf("%w: %v", ErrQueryExecutionClaimInvalid, err)
 	}
@@ -163,7 +180,7 @@ func (r *QueryExecutionRepository) FinalizeClaimWithAudit(ctx context.Context, r
 		return 0, ErrQueryExecutionClaimNotLinked
 	}
 
-	res, err := tx.ExecContext(ctx, insertKeyedExecutionSQL, args...)
+	res, err := tx.ExecContext(ctx, insertExecutionSQL, args...)
 	if err != nil {
 		recordQueryEvidencePersistenceFailure()
 		return 0, errQueryEvidencePairFailed
@@ -207,9 +224,10 @@ func (r *QueryExecutionRepository) FinalizeClaimWithAudit(ctx context.Context, r
 // actor_user_id with the machine column NULL, and vice versa — user:7 can
 // never read machine:7. Unauthorized and nonexistent collapse to
 // sql.ErrNoRows; internal failures never masquerade as absent. A linked claim
-// returns the real terminal execution; an unlinked claim returns a nil
-// Execution; a link that points nowhere is ErrQueryExecutionClaimBrokenLink,
-// never a fabricated record.
+// returns the real terminal execution after verifying its stored identity —
+// target, typed actor, scope, and key — matches the claim; a link that is
+// missing or inconsistent is ErrQueryExecutionClaimBrokenLink with an empty
+// view, never a fabricated record.
 func (r *QueryExecutionRepository) GetClaimWithExecution(ctx context.Context, targetResourceID uint64, database, clientExecutionID string, actor model.QueryExecutionIdentity) (model.QueryExecutionClaimView, error) {
 	if err := actor.Validate(); err != nil {
 		return model.QueryExecutionClaimView{}, fmt.Errorf("%w: %v", ErrQueryExecutionClaimInvalid, err)
@@ -221,7 +239,8 @@ func (r *QueryExecutionRepository) GetClaimWithExecution(ctx context.Context, ta
 	const q = `SELECT c.target_resource_id, c.client_execution_id,
 			c.actor_user_id, c.actor_machine_principal_id,
 			c.database_name, c.schema_name, c.request_digest, c.execution_id, c.claimed_at,
-			e.id, e.engine, e.status, e.row_count, e.duration_ms, e.error_code, e.error_message,
+			e.id, e.target_resource_id, e.actor_user_id, e.actor_machine_principal_id,
+			e.engine, e.status, e.row_count, e.duration_ms, e.error_code, e.error_message,
 			e.database_name, e.schema_name, e.backend_pid, e.remote_state, e.client_execution_id, e.created_at
 		FROM query_execution_claims c
 		LEFT JOIN query_executions e ON e.id = c.execution_id
@@ -235,33 +254,36 @@ func (r *QueryExecutionRepository) GetClaimWithExecution(ctx context.Context, ta
 		cUser, cMach nullableUint64
 		execID       nullableUint64
 		// Nullable join columns for the linked execution row.
-		eID         nullableUint64
-		eEngine     sql.NullString
-		eStatus     sql.NullString
-		eRowCount   sql.NullInt64
-		eDuration   sql.NullInt64
-		eErrCode    sql.NullString
-		eErrMsg     sql.NullString
-		eDB         sql.NullString
-		eSchema     sql.NullString
-		eBackendPID sql.NullInt64
-		eRemote     sql.NullString
-		eKey        sql.NullString
-		eCreated    sql.NullTime
+		eID          nullableUint64
+		eTarget      nullableUint64
+		eUser, eMach nullableUint64
+		eEngine      sql.NullString
+		eStatus      sql.NullString
+		eRowCount    sql.NullInt64
+		eDuration    sql.NullInt64
+		eErrCode     sql.NullString
+		eErrMsg      sql.NullString
+		eDB          sql.NullString
+		eSchema      sql.NullString
+		eBackendPID  sql.NullInt64
+		eRemote      sql.NullString
+		eKey         sql.NullString
+		eCreated     sql.NullTime
 	)
 	err = row.Scan(
 		&view.Claim.TargetResourceID, &view.Claim.ClientExecutionID,
 		&cUser, &cMach,
 		&view.Claim.DatabaseName, &view.Claim.SchemaName,
 		&view.Claim.RequestDigest, &execID, &view.Claim.ClaimedAt,
-		&eID, &eEngine, &eStatus, &eRowCount, &eDuration, &eErrCode, &eErrMsg,
+		&eID, &eTarget, &eUser, &eMach,
+		&eEngine, &eStatus, &eRowCount, &eDuration, &eErrCode, &eErrMsg,
 		&eDB, &eSchema, &eBackendPID, &eRemote, &eKey, &eCreated,
 	)
 	if errors.Is(err, sql.ErrNoRows) {
 		return model.QueryExecutionClaimView{}, sql.ErrNoRows
 	}
 	if err != nil {
-		return model.QueryExecutionClaimView{}, fmt.Errorf("get execution claim view: %w", err)
+		return model.QueryExecutionClaimView{}, claimStoreError(ctx, err)
 	}
 	if cUser.Valid {
 		view.Claim.ActorUserID = cUser.Uint64
@@ -272,26 +294,51 @@ func (r *QueryExecutionRepository) GetClaimWithExecution(ctx context.Context, ta
 	if !execID.Valid {
 		return view, nil // unlinked claim — no derived state fabricated here
 	}
-	if !eID.Valid {
+	if !eID.Valid || !eTarget.Valid {
+		return model.QueryExecutionClaimView{}, ErrQueryExecutionClaimBrokenLink
+	}
+	// The linked row must be the claim's own terminal evidence: same target,
+	// same typed actor, same connection scope, same key. Anything else is a
+	// structural violation, not a display state.
+	execKeyOK := eKey.Valid && eKey.String == view.Claim.ClientExecutionID
+	identityOK := eTarget.Uint64 == view.Claim.TargetResourceID &&
+		eDB.String == view.Claim.DatabaseName &&
+		eSchema.String == view.Claim.SchemaName &&
+		eUser.Valid == cUser.Valid && eMach.Valid == cMach.Valid &&
+		(!eUser.Valid || eUser.Uint64 == cUser.Uint64) &&
+		(!eMach.Valid || eMach.Uint64 == cMach.Uint64)
+	if !execKeyOK || !identityOK {
+		return model.QueryExecutionClaimView{}, ErrQueryExecutionClaimBrokenLink
+	}
+	if err := model.ValidateStatus(eStatus.String); err != nil {
+		return model.QueryExecutionClaimView{}, ErrQueryExecutionClaimBrokenLink
+	}
+	if err := model.QueryExecutionRemoteState(eRemote.String).Validate(); err != nil {
 		return model.QueryExecutionClaimView{}, ErrQueryExecutionClaimBrokenLink
 	}
 	exec := &model.QueryExecutionRecord{
 		ID:               eID.Uint64,
-		TargetResourceID: view.Claim.TargetResourceID,
+		TargetResourceID: eTarget.Uint64,
 		Engine:           eEngine.String,
 		Status:           model.QueryExecutionStatus(eStatus.String),
 		DatabaseName:     eDB.String,
 		SchemaName:       eSchema.String,
+		RemoteState:      model.QueryExecutionRemoteState(eRemote.String),
+		RowCount:         int(eRowCount.Int64),
+		DurationMs:       eDuration.Int64,
+		ErrorCode:        eErrCode.String,
+		ErrorMessage:     eErrMsg.String,
 	}
-	exec.RowCount = int(eRowCount.Int64)
-	exec.DurationMs = eDuration.Int64
-	exec.ErrorCode = eErrCode.String
-	exec.ErrorMessage = eErrMsg.String
+	if eUser.Valid {
+		exec.ActorUserID = eUser.Uint64
+	}
+	if eMach.Valid {
+		exec.ActorMachinePrincipalID = eMach.Uint64
+	}
 	if eBackendPID.Valid {
 		pid := eBackendPID.Int64
 		exec.BackendPID = &pid
 	}
-	exec.RemoteState = model.QueryExecutionRemoteState(eRemote.String)
 	if eKey.Valid {
 		key := eKey.String
 		exec.ClientExecutionID = &key
@@ -335,32 +382,4 @@ func claimActorArgs(identity model.QueryExecutionIdentity) (any, any, error) {
 		return identity.ID, nil, nil
 	}
 	return nil, identity.ID, nil
-}
-
-// keyedExecutionRecordArgs extends executionRecordArgs with the claim-protocol
-// columns persisted only on the keyed path: resolved connection scope,
-// observed backend handle, remote-state probe, and the idempotency key. The
-// privacy rule is shared: full SQL is stored only for successful user
-// executions, never for machine or non-success rows.
-func keyedExecutionRecordArgs(rec model.QueryExecutionRecord) ([]any, error) {
-	base, err := executionRecordArgs(rec)
-	if err != nil {
-		return nil, err
-	}
-	// executionRecordArgs order: target, actor_user, actor_machine, engine,
-	// digest, preview, full_statement, status, row_count, duration, error_code,
-	// error_message, created_at. The keyed statement inserts database/schema
-	// after engine and backend_pid/remote_state/client_execution_id before
-	// created_at.
-	var backendPID any
-	if rec.BackendPID != nil {
-		backendPID = *rec.BackendPID
-	}
-	return []any{
-		base[0], base[1], base[2], base[3],
-		rec.DatabaseName, rec.SchemaName,
-		base[4], base[5], base[6], base[7], base[8], base[9], base[10], base[11],
-		backendPID, string(rec.RemoteState), *rec.ClientExecutionID,
-		base[12],
-	}, nil
 }

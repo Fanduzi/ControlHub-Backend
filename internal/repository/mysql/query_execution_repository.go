@@ -45,8 +45,8 @@ const (
 	insertAuditEventSQL         = `insert into audit_events (actor_user_id, target_resource_id, event_type, result) values (?, ?, ?, ?)`
 	insertExecutionAuditSQL     = `insert into audit_events (actor_user_id, actor_machine_principal_id, target_resource_id, event_type, result) values (?, ?, ?, ?, ?)`
 	insertExecutionSQL          = `insert into query_executions
-	           (target_resource_id, actor_user_id, actor_machine_principal_id, engine, statement_digest, statement_preview, full_statement, status, row_count, duration_ms, error_code, error_message, created_at)
-	           values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, COALESCE(?, CURRENT_TIMESTAMP(6)))`
+	           (target_resource_id, actor_user_id, actor_machine_principal_id, engine, database_name, schema_name, statement_digest, statement_preview, full_statement, status, row_count, duration_ms, error_code, error_message, backend_pid, remote_state, client_execution_id, created_at)
+	           values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, COALESCE(?, CURRENT_TIMESTAMP(6)))`
 )
 
 // QueryEvidencePersistenceFailures is the dimensionless operational counter for
@@ -217,9 +217,13 @@ func (r *QueryExecutionRepository) DeleteCredential(ctx context.Context, resourc
 }
 
 // executionRecordArgs converts a record into the insertExecutionSQL parameters.
+// It is the single field mapping shared by the keyless and keyed evidence
+// paths — the keyed path differs only by a non-NULL client_execution_id.
 // Full SQL is bound only for successful user executions; every machine or
 // non-success outcome binds NULL without rejecting its metadata evidence.
-// When rec.CreatedAt is zero a nil placeholder lets the database default apply.
+// Unset optional evidence binds NULL: BackendPID and ClientExecutionID stay
+// NULL, remote_state binds its stored zero value ”. When rec.CreatedAt is
+// zero a nil placeholder lets the database default apply.
 func executionRecordArgs(rec model.QueryExecutionRecord) ([]any, error) {
 	actorUserID, actorMachinePrincipalID, err := executionActorArgs(rec)
 	if err != nil {
@@ -233,10 +237,20 @@ func executionRecordArgs(rec model.QueryExecutionRecord) ([]any, error) {
 	if rec.ActorUserID != 0 && rec.ActorMachinePrincipalID == 0 && rec.Status == model.QueryExecutionSuccess && rec.FullStatement != "" {
 		fullStatement = rec.FullStatement
 	}
+	var backendPID any
+	if rec.BackendPID != nil {
+		backendPID = *rec.BackendPID
+	}
+	var clientExecutionID any
+	if rec.ClientExecutionID != nil && *rec.ClientExecutionID != "" {
+		clientExecutionID = *rec.ClientExecutionID
+	}
 	return []any{
-		rec.TargetResourceID, actorUserID, actorMachinePrincipalID, rec.Engine, rec.StatementDigest, rec.StatementPreview,
-		fullStatement, string(rec.Status), rec.RowCount, rec.DurationMs, rec.ErrorCode, rec.ErrorMessage,
-		createdAt,
+		rec.TargetResourceID, actorUserID, actorMachinePrincipalID, rec.Engine,
+		rec.DatabaseName, rec.SchemaName,
+		rec.StatementDigest, rec.StatementPreview, fullStatement, string(rec.Status),
+		rec.RowCount, rec.DurationMs, rec.ErrorCode, rec.ErrorMessage,
+		backendPID, string(rec.RemoteState), clientExecutionID, createdAt,
 	}, nil
 }
 

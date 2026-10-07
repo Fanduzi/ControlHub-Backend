@@ -26,58 +26,22 @@ ALTER TABLE query_executions
 
 -- +goose Down
 
--- Refuse to revert to a case-insensitive collation while it is unsafe. Two
--- hazards, checked before any DDL:
---   1. Any stored identity carrying a case-distinct or folded character would
---      widen its match identity under ai_ci (a claim keyed 'KeyA' would then
---      answer 'keya'), so case-bearing rows block the downgrade. The check
---      runs while columns are still binary, so col <> LOWER(col) is exact.
---   2. Keys distinct only under binary but equal under ai_ci would collide on
---      the old constraints; group by the ci collation to find them, including
---      folds that LOWER() misses (e.g. Kelvin sign).
--- Neither check deletes, merges, or rewrites claim or execution data.
+-- Reverting to utf8mb4_0900_ai_ci widens every stored identity's match class:
+-- under ai_ci a claim keyed 'lower-key' also answers 'LOWER-KEY', and accent
+-- and other equivalence folds apply on top of case. No "safe characters"
+-- list can prove a stored row keeps its identity, so the only provable-safe
+-- downgrade is an untouched claim space: refuse while ANY claim row exists
+-- or ANY execution row carries a client_execution_id, before any DDL runs.
+-- The guard deletes, merges, or rewrites nothing.
 DROP PROCEDURE IF EXISTS guard_claim_collation_down_31;
 -- +goose StatementBegin
 CREATE PROCEDURE guard_claim_collation_down_31()
 BEGIN
-  IF EXISTS (
-    SELECT 1 FROM query_execution_claims
-     WHERE client_execution_id <> LOWER(client_execution_id)
-        OR database_name        <> LOWER(database_name)
-        OR schema_name          <> LOWER(schema_name)
-        OR request_digest       <> LOWER(request_digest)
-     LIMIT 1
-  ) OR EXISTS (
-    SELECT 1 FROM query_executions
-     WHERE client_execution_id IS NOT NULL
-       AND client_execution_id <> LOWER(client_execution_id)
-     LIMIT 1
-  ) THEN
+  IF EXISTS (SELECT 1 FROM query_execution_claims LIMIT 1)
+     OR EXISTS (SELECT 1 FROM query_executions WHERE client_execution_id IS NOT NULL LIMIT 1)
+  THEN
     SIGNAL SQLSTATE '45000'
-      SET MESSAGE_TEXT = 'cannot roll back migration 00031 while claim or keyed-execution identities carry case-distinct bytes';
-  END IF;
-  IF EXISTS (
-    SELECT 1
-      FROM (
-        SELECT target_resource_id, client_execution_id
-          FROM query_execution_claims
-      ) ci_key
-     GROUP BY target_resource_id, client_execution_id COLLATE utf8mb4_0900_ai_ci
-    HAVING COUNT(*) > 1
-     LIMIT 1
-  ) OR EXISTS (
-    SELECT 1
-      FROM (
-        SELECT target_resource_id, client_execution_id
-          FROM query_executions
-         WHERE client_execution_id IS NOT NULL
-      ) ci_exec
-     GROUP BY target_resource_id, client_execution_id COLLATE utf8mb4_0900_ai_ci
-    HAVING COUNT(*) > 1
-     LIMIT 1
-  ) THEN
-    SIGNAL SQLSTATE '45000'
-      SET MESSAGE_TEXT = 'cannot roll back migration 00031 while claim or keyed-execution keys collide under case-insensitive comparison';
+      SET MESSAGE_TEXT = 'cannot roll back migration 00031 while claim or keyed-execution data exists';
   END IF;
 END;
 -- +goose StatementEnd

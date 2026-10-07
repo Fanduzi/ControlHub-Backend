@@ -648,27 +648,70 @@ func TestClaim_NullKeyEvidenceCoexists(t *testing.T) {
 	ctx := context.Background()
 	targetID := createQueryTargetResource(t, db, "qe-claim-nullkey")
 
-	// Two NULL-key pairs (e.g. access denial before claim, claim-insert
-	// failure) coexist — the unique index tolerates repeated NULLs.
-	for i, status := range []model.QueryExecutionStatus{model.QueryExecutionRejected, model.QueryExecutionFailed} {
+	// Two NULL-key pairs on different PG databases (e.g. access denial before
+	// claim, claim-insert failure) coexist, each preserving its resolved
+	// connection scope — the unique index tolerates repeated NULL keys.
+	pairs := []struct {
+		database, schema, errCode string
+		status                    model.QueryExecutionStatus
+	}{
+		{claimTestDB, "tenant_a", "E0", model.QueryExecutionRejected},
+		{claimTestDBOther, "tenant_b", "E1", model.QueryExecutionFailed},
+	}
+	for _, p := range pairs {
 		if _, err := repo.InsertExecutionWithAudit(ctx, model.QueryExecutionRecord{
 			TargetResourceID: targetID,
 			ActorUserID:      claimUserActor,
 			Engine:           "postgresql",
-			DatabaseName:     claimTestDB,
-			Status:           status,
-			ErrorCode:        fmt.Sprintf("E%d", i),
+			DatabaseName:     p.database,
+			SchemaName:       p.schema,
+			Status:           p.status,
+			ErrorCode:        p.errCode,
 		}, "query.executed", "failure"); err != nil {
-			t.Fatalf("null-key pair %d: %v", i, err)
+			t.Fatalf("null-key pair %s: %v", p.errCode, err)
+		}
+	}
+	// Each pair landed with its real scope and an explicit NULL key.
+	for _, p := range pairs {
+		var dbName, schema, status string
+		var key sql.NullString
+		if err := db.QueryRow(`SELECT database_name, schema_name, status, client_execution_id
+			FROM query_executions WHERE target_resource_id = ? AND error_code = ?`, targetID, p.errCode).
+			Scan(&dbName, &schema, &status, &key); err != nil {
+			t.Fatalf("read null-key row %s: %v", p.errCode, err)
+		}
+		if dbName != p.database || schema != p.schema || status != string(p.status) || key.Valid {
+			t.Fatalf("null-key row %s = db:%q schema:%q status:%q key:%v", p.errCode, dbName, schema, status, key)
 		}
 	}
 	if got := countWhere(t, db,
-		`SELECT COUNT(*) FROM query_executions WHERE target_resource_id = ? AND client_execution_id IS NULL`, targetID); got != 2 {
-		t.Fatalf("null-key rows = %d, want 2", got)
+		`SELECT COUNT(*) FROM audit_events WHERE target_resource_id = ? AND event_type = 'query.executed' AND result = 'failure'`, targetID); got != 2 {
+		t.Fatalf("null-key audit rows = %d, want 2", got)
 	}
-	// The NULL-key pairs did not occupy the key.
+	// Legacy keyless evidence (empty scope, machine actor) keeps old semantics.
+	if _, err := repo.InsertExecutionWithAudit(ctx, model.QueryExecutionRecord{
+		TargetResourceID:        targetID,
+		ActorMachinePrincipalID: claimMachineID,
+		Engine:                  "mysql",
+		Status:                  model.QueryExecutionFailed,
+		FullStatement:           "SELECT machine_secret",
+	}, "query.executed", "failure"); err != nil {
+		t.Fatalf("machine null-key pair: %v", err)
+	}
+	var fs sql.NullString
+	var mach sql.NullInt64
+	var usr sql.NullInt64
+	if err := db.QueryRow(`SELECT full_statement, actor_machine_principal_id, actor_user_id, database_name, schema_name, client_execution_id
+		FROM query_executions WHERE target_resource_id = ? AND engine = 'mysql'`, targetID).
+		Scan(&fs, &mach, &usr, new(string), new(string), new(sql.NullString)); err != nil {
+		t.Fatalf("read machine null-key row: %v", err)
+	}
+	if fs.Valid || !mach.Valid || mach.Int64 != claimMachineID || usr.Valid {
+		t.Fatalf("machine evidence leaked: fs=%v mach=%v usr=%v", fs, mach, usr)
+	}
+	// The NULL-key pairs did not occupy any key.
 	key := "freed-after-denial"
-	if err := repo.TryClaimExecution(ctx, newClaimInput(targetID, key, userIdentity(claimUserActor), claimTestDB, claimDigest("k"))); err != nil {
+	if err := repo.TryClaimExecution(ctx, newClaimInput(targetID, key, userIdentity(claimUserActor), claimTestDB, claimDigest("aa"))); err != nil {
 		t.Fatalf("key consumed by null-key evidence: %v", err)
 	}
 	// The keyless path must refuse a keyed record outright.
@@ -730,8 +773,95 @@ func TestClaim_ContextCancellationBoundary(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// Key/digest/actor admission shape validation + exact key collation.
+// R1-1: the point read returns the linked execution's real identity and
+// rejects any link whose stored identity does not match the claim.
 // ---------------------------------------------------------------------------
+
+func TestClaim_PointReadVerifiesLinkedIdentity(t *testing.T) {
+	db := setupTestDB(t)
+	repo := mysql.NewQueryExecutionRepository(db)
+	ctx := context.Background()
+	targetID := createQueryTargetResource(t, db, "qe-claim-linkid")
+
+	// Real user and machine links return the real typed actor ids.
+	for _, id := range []model.QueryExecutionIdentity{userIdentity(claimUserActor), machineIdentity(claimMachineID)} {
+		key := "lid-" + string(id.Kind)
+		if err := repo.TryClaimExecution(ctx, newClaimInput(targetID, key, id, claimTestDB, claimDigest("aa"))); err != nil {
+			t.Fatalf("claim %s: %v", key, err)
+		}
+		execID, err := repo.FinalizeClaimWithAudit(ctx, keyedRecord(targetID, id, key, claimTestDB, model.QueryExecutionSuccess), "query.executed", "success")
+		if err != nil {
+			t.Fatalf("finalize %s: %v", key, err)
+		}
+		view, err := repo.GetClaimWithExecution(ctx, targetID, claimTestDB, key, id)
+		if err != nil {
+			t.Fatalf("read %s: %v", key, err)
+		}
+		if view.Execution == nil || view.Execution.ID != execID {
+			t.Fatalf("%s exec missing", key)
+		}
+		switch id.Kind {
+		case model.QueryExecutionActorUser:
+			if view.Execution.ActorUserID != id.ID || view.Execution.ActorMachinePrincipalID != 0 {
+				t.Fatalf("user exec identity wrong: %+v", view.Execution)
+			}
+		default:
+			if view.Execution.ActorMachinePrincipalID != id.ID || view.Execution.ActorUserID != 0 {
+				t.Fatalf("machine exec identity wrong: %+v", view.Execution)
+			}
+		}
+		if view.Execution.TargetResourceID != targetID {
+			t.Fatalf("exec target = %d, want %d", view.Execution.TargetResourceID, targetID)
+		}
+	}
+
+	// Forge a link from claim B to claim A's real execution row — every
+	// mismatched dimension (key/actor/scope) must surface a structural error,
+	// never a fabricated view.
+	realExec := countWhere(t, db,
+		`SELECT execution_id FROM query_execution_claims WHERE target_resource_id = ? AND client_execution_id = 'lid-user'`, targetID)
+	forge := func(key string, id model.QueryExecutionIdentity, database string) {
+		if err := repo.TryClaimExecution(ctx, newClaimInput(targetID, key, id, database, claimDigest("bb"))); err != nil {
+			t.Fatalf("forge claim %s: %v", key, err)
+		}
+		mustExec(t, db, `UPDATE query_execution_claims SET execution_id = ?
+			WHERE target_resource_id = ? AND client_execution_id = ?`, realExec, targetID, key)
+	}
+	forge("forge-key", userIdentity(claimUserActor), claimTestDB)        // key differs
+	forge("forge-actor", machineIdentity(claimMachineID), claimTestDB)   // actor type differs
+	forge("forge-scope", userIdentity(claimUserActor), claimTestDBOther) // database differs
+	for _, c := range []struct {
+		key string
+		id  model.QueryExecutionIdentity
+		db  string
+	}{{"forge-key", userIdentity(claimUserActor), claimTestDB},
+		{"forge-actor", machineIdentity(claimMachineID), claimTestDB},
+		{"forge-scope", userIdentity(claimUserActor), claimTestDBOther}} {
+		view, err := repo.GetClaimWithExecution(ctx, targetID, c.db, c.key, c.id)
+		if !errors.Is(err, mysql.ErrQueryExecutionClaimBrokenLink) {
+			t.Fatalf("%s mismatched link = %v (view %+v), want ErrQueryExecutionClaimBrokenLink", c.key, err, view)
+		}
+		if view.Execution != nil {
+			t.Fatalf("%s forged link leaked an execution", c.key)
+		}
+	}
+
+	// A linked row whose status is not a stored terminal enum is also broken
+	// evidence, not a running state.
+	badRes, err := db.Exec(`INSERT INTO query_executions
+		(target_resource_id, actor_user_id, engine, database_name, schema_name, statement_digest, statement_preview, status, client_execution_id)
+		VALUES (?, ?, 'postgresql', 'claimdb', 'app', 'd', 'p', 'running', 'bad-status')`, targetID, claimUserActor)
+	if err != nil {
+		t.Fatalf("seed illegal-status row: %v", err)
+	}
+	badID, _ := badRes.LastInsertId()
+	if err := repo.TryClaimExecution(ctx, newClaimInput(targetID, "bad-status", userIdentity(claimUserActor), claimTestDB, claimDigest("cc"))); err == nil {
+		mustExec(t, db, `UPDATE query_execution_claims SET execution_id = ? WHERE target_resource_id = ? AND client_execution_id = 'bad-status'`, badID, targetID)
+	}
+	if _, err := repo.GetClaimWithExecution(ctx, targetID, claimTestDB, "bad-status", userIdentity(claimUserActor)); !errors.Is(err, mysql.ErrQueryExecutionClaimBrokenLink) {
+		t.Fatalf("illegal-status link = %v, want ErrQueryExecutionClaimBrokenLink", err)
+	}
+}
 
 func TestClaim_AdmissionValidation(t *testing.T) {
 	db := setupTestDB(t)
@@ -769,6 +899,22 @@ func TestClaim_AdmissionValidation(t *testing.T) {
 			in.RequestDigest = "abc"
 			return in
 		},
+		"long digest": func(in model.QueryExecutionClaimInput) model.QueryExecutionClaimInput {
+			in.RequestDigest = strings.Repeat("a", 65)
+			return in
+		},
+		"non-hex digest": func(in model.QueryExecutionClaimInput) model.QueryExecutionClaimInput {
+			in.RequestDigest = strings.Repeat("g", 64)
+			return in
+		},
+		"unicode digest": func(in model.QueryExecutionClaimInput) model.QueryExecutionClaimInput {
+			in.RequestDigest = strings.Repeat("中", 64)
+			return in
+		},
+		"trailing-space digest": func(in model.QueryExecutionClaimInput) model.QueryExecutionClaimInput {
+			in.RequestDigest = strings.Repeat("a", 63) + " "
+			return in
+		},
 		"zero claimed_at": func(in model.QueryExecutionClaimInput) model.QueryExecutionClaimInput {
 			in.ClaimedAt = time.Time{}
 			return in
@@ -794,6 +940,36 @@ func TestClaim_AdmissionValidation(t *testing.T) {
 	*rec.ClientExecutionID = ""
 	if _, err := repo.FinalizeClaimWithAudit(ctx, rec, "query.executed", "x"); !errors.Is(err, mysql.ErrQueryExecutionClaimInvalid) {
 		t.Fatalf("finalize empty key = %v, want ErrQueryExecutionClaimInvalid", err)
+	}
+
+	// Hex digests are valid in either case — stored verbatim, never normalized.
+	for _, d := range []string{
+		strings.Repeat("a", 64),
+		strings.Repeat("A", 64),
+		strings.Repeat("0123456789abcdefABCDEF", 3)[:64],
+	} {
+		in := base
+		in.ClientExecutionID = "hex-" + d[:8] + fmt.Sprint(len(d))
+		in.RequestDigest = d
+		if err := repo.TryClaimExecution(ctx, in); err != nil {
+			t.Fatalf("valid hex digest rejected: %v", err)
+		}
+	}
+	// An unknown remote-state enum is refused before the transaction and
+	// writes nothing.
+	in := base
+	in.ClientExecutionID = "bad-remote"
+	in.RequestDigest = strings.Repeat("e", 64)
+	if err := repo.TryClaimExecution(ctx, in); err != nil {
+		t.Fatalf("claim for remote-state test: %v", err)
+	}
+	badRemote := keyedRecord(targetID, userIdentity(claimUserActor), "bad-remote", claimTestDB, model.QueryExecutionSuccess)
+	badRemote.RemoteState = "teleported"
+	if _, err := repo.FinalizeClaimWithAudit(ctx, badRemote, "query.executed", "success"); !errors.Is(err, mysql.ErrQueryExecutionClaimInvalid) {
+		t.Fatalf("bad remote_state finalize = %v, want ErrQueryExecutionClaimInvalid", err)
+	}
+	if execs, _, linked := claimExecCounts(t, db, targetID, "bad-remote"); execs != 0 || linked != 0 {
+		t.Fatalf("bad remote_state touched the store: execs=%d linked=%d", execs, linked)
 	}
 }
 

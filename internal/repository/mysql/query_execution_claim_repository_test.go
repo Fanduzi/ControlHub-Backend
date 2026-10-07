@@ -7,7 +7,9 @@ package mysql
 
 import (
 	"context"
+	"database/sql"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -68,6 +70,64 @@ func TestClaimValidationSkipsDatabase(t *testing.T) {
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatalf("validation must not reach the database: %v", err)
+	}
+}
+
+// Claim-store failures return a fixed safe error: injected markers and driver
+// details never reach the caller, while context cancellation stays
+// classifiable and is never disguised as Exists/Conflict/ErrNoRows.
+func TestClaimStoreErrorsAreSafeAndClassifiable(t *testing.T) {
+	const marker = "SECRET-dsn-payload-9f3"
+	in := claimTestInput()
+	ctx := context.Background()
+
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock.New: %v", err)
+	}
+	defer db.Close()
+	repo := NewQueryExecutionRepository(db)
+
+	// 1. Non-duplicate INSERT failure.
+	mock.ExpectExec(`INSERT INTO query_execution_claims`).WillReturnError(errors.New("conn reset " + marker))
+	if err := repo.TryClaimExecution(ctx, in); err == nil || strings.Contains(err.Error(), marker) {
+		t.Fatalf("insert failure leaked details or succeeded: %v", err)
+	} else if errors.Is(err, ErrQueryExecutionClaimExists) || errors.Is(err, ErrQueryExecutionClaimConflict) || errors.Is(err, sql.ErrNoRows) {
+		t.Fatalf("store failure disguised as admission outcome: %v", err)
+	}
+
+	// 2. Digest-read failure after a PK conflict.
+	dup := &driver.MySQLError{Number: 1062, Message: "dup"}
+	mock.ExpectExec(`INSERT INTO query_execution_claims`).WillReturnError(dup)
+	mock.ExpectQuery(`SELECT request_digest`).WillReturnError(errors.New("timeout " + marker))
+	if err := repo.TryClaimExecution(ctx, in); err == nil || strings.Contains(err.Error(), marker) {
+		t.Fatalf("conflict-read failure leaked details or succeeded: %v", err)
+	} else if errors.Is(err, ErrQueryExecutionClaimExists) || errors.Is(err, ErrQueryExecutionClaimConflict) {
+		t.Fatalf("conflict-read failure disguised as admission outcome: %v", err)
+	}
+
+	// 3. Point-read query/scan failure.
+	mock.ExpectQuery(`SELECT .* FROM query_execution_claims`).WillReturnError(errors.New("driver exploded " + marker))
+	if _, err := repo.GetClaimWithExecution(ctx, 42, "claimdb", "k", model.QueryExecutionIdentity{Kind: model.QueryExecutionActorUser, ID: 7}); err == nil || strings.Contains(err.Error(), marker) {
+		t.Fatalf("read failure leaked details or succeeded: %v", err)
+	} else if errors.Is(err, sql.ErrNoRows) {
+		t.Fatalf("read failure disguised as absence: %v", err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+
+	// Cancellation/deadline stay classifiable through the safe wrapper.
+	cancelled, cancel := context.WithCancel(ctx)
+	cancel()
+	if err := repo.TryClaimExecution(cancelled, in); !errors.Is(err, context.Canceled) {
+		t.Fatalf("cancelled claim = %v, want classifiable context.Canceled", err)
+	}
+	expired, stop := context.WithTimeout(ctx, time.Nanosecond)
+	defer stop()
+	time.Sleep(time.Millisecond)
+	if _, err := repo.GetClaimWithExecution(expired, 42, "claimdb", "k", model.QueryExecutionIdentity{Kind: model.QueryExecutionActorUser, ID: 7}); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("expired read = %v, want classifiable DeadlineExceeded", err)
 	}
 }
 

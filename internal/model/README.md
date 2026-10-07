@@ -33,7 +33,7 @@ Domain structs, taxonomy constants, validation methods, and dictionary definitio
 | query_workspace_test.go | Workspace bounds/opaque-SQL tests and full-statement history JSON omission coverage |
 | resource_test.go | Validation and dictionary completeness tests |
 | health_observation_test.go | Freshness time-boundary contract tests |
-| query_execution_claim.go | G9 execution-claim protocol types (T10-A): QueryExecutionClaimInput admission record (target/key/typed identity/database/schema/64-char digest/claimed_at with shape Validate), persisted QueryExecutionClaim occupancy row, and QueryExecutionClaimView single-snapshot claim+terminal-execution read model — internal only, no client JSON contract |
+| query_execution_claim.go | G9 execution-claim protocol types (T10-A): QueryExecutionClaimInput admission record (target/key/typed identity/database/schema/64-char ASCII-hex digest/claimed_at with shape Validate), persisted QueryExecutionClaim occupancy row, and QueryExecutionClaimView single-snapshot claim+terminal-execution read model — internal only, no client JSON contract |
 | query_execution_test.go | User/machine execution-identity, environment-policy, credential_ref, stored-status (cancelled admitted, derived running/unknown rejected), remote-state, client-execution-id bound, and governed-result-paging validation tests |
 | query_credential_test.go | Runtime-status and upsert-request validation tests (fail-closed enum, all-environments confirmation) |
 | query_disclosure_test.go | Disclosure-mode and upsert-request validation tests (fail-closed mode, engine-agnostic identifier shape incl. NUL rejection and wide PostgreSQL names, legacy ASCII scope rule) |

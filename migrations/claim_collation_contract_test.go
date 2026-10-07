@@ -26,8 +26,9 @@ func TestClaimCollationMigrationContract(t *testing.T) {
 		"modify client_execution_id varchar(64) null collate utf8mb4_0900_bin",
 		"create procedure guard_claim_collation_down_31()",
 		"signal sqlstate '45000'",
-		"cannot roll back migration 00031 while claim or keyed-execution identities carry case-distinct bytes",
-		"cannot roll back migration 00031 while claim or keyed-execution keys collide under case-insensitive comparison",
+		"exists (select 1 from query_execution_claims limit 1)",
+		"exists (select 1 from query_executions where client_execution_id is not null limit 1)",
+		"cannot roll back migration 00031 while claim or keyed-execution data exists",
 	} {
 		if !strings.Contains(sql, clause) {
 			t.Errorf("migration 00031 missing contract clause %q", clause)

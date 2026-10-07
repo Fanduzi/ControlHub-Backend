@@ -24,8 +24,8 @@ func TestInsertExecutionWithAuditWritesFullStatementButNotAudit(t *testing.T) {
 	defer db.Close()
 
 	mock.ExpectBegin()
-	mock.ExpectExec(`insert into query_executions\s+\(target_resource_id, actor_user_id, actor_machine_principal_id, engine, statement_digest, statement_preview, full_statement`).
-		WithArgs(uint64(22), uint64(7), nil, "mysql", "digest", "preview", "\n SELECT  1 \t", "success", 1, int64(7), "", "", nil).
+	mock.ExpectExec(`insert into query_executions\s+\(target_resource_id, actor_user_id, actor_machine_principal_id, engine, database_name, schema_name, statement_digest, statement_preview, full_statement`).
+		WithArgs(uint64(22), uint64(7), nil, "mysql", "", "", "digest", "preview", "\n SELECT  1 \t", "success", 1, int64(7), "", "", nil, "", nil, nil).
 		WillReturnResult(sqlmock.NewResult(101, 1))
 	mock.ExpectExec(`insert into audit_events \(actor_user_id, actor_machine_principal_id, target_resource_id, event_type, result\)`).
 		WithArgs(uint64(7), nil, uint64(22), "query.executed", "success").
@@ -69,8 +69,8 @@ func TestExecutionRecordArgsDropsFullStatementOutsideSuccessfulUserExecutions(t 
 			if err != nil {
 				t.Fatalf("executionRecordArgs: %v", err)
 			}
-			if args[6] != nil {
-				t.Fatalf("full_statement arg = %q, want nil", args[6])
+			if args[8] != nil {
+				t.Fatalf("full_statement arg = %q, want nil", args[8])
 			}
 			for _, arg := range args {
 				if arg == secret {
