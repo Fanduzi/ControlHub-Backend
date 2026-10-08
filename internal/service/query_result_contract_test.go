@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 	"unicode/utf8"
+	"unsafe"
 
 	"github.com/fan/controlhub/internal/model"
 )
@@ -164,17 +165,32 @@ func TestTruncateRowAndMatrixAlignment(t *testing.T) {
 }
 
 func TestValidateCellTruncatedMatrix(t *testing.T) {
-	cols := []model.QueryResultColumn{copyableColumn("a"), copyableColumn("b")}
 	rows := [][]any{{"x", "y"}, {"p", "q"}}
-	// Aligned matrix and nil matrix (no info) are both structurally legal.
+	// Aligned matrix on a non-empty page is legal evidence.
 	if err := validateCellTruncatedMatrix(2, rows, [][]bool{{true, false}, {false, false}}); err != nil {
 		t.Fatalf("aligned matrix: %v", err)
 	}
-	if err := validateCellTruncatedMatrix(2, rows, nil); err != nil {
-		t.Fatalf("nil matrix must mean no-info, not corrupt: %v", err)
+	// A non-empty page without a matrix is missing evidence — rejected, not
+	// treated as a known-clean page.
+	if err := validateCellTruncatedMatrix(2, rows, nil); err == nil {
+		t.Fatal("nil matrix on a non-empty page must be rejected as missing evidence")
 	}
+	// Row width is enforced even when the matrix supplies no evidence.
+	if err := validateCellTruncatedMatrix(1, [][]any{{"x", "y"}}, nil); err == nil {
+		t.Fatal("row wider than public columns must be rejected even with nil matrix")
+	}
+	// Legal empty pages: zero rows with nil or zero-row matrix.
 	if err := validateCellTruncatedMatrix(2, nil, nil); err != nil {
-		t.Fatalf("zero-row page: %v", err)
+		t.Fatalf("zero-row nil matrix: %v", err)
+	}
+	if err := validateCellTruncatedMatrix(2, nil, [][]bool{}); err != nil {
+		t.Fatalf("zero-row empty matrix: %v", err)
+	}
+	// A residual non-empty matrix on a zero-row page is corrupt evidence.
+	for _, residual := range [][][]bool{{{false}}, {{true}}} {
+		if err := validateCellTruncatedMatrix(2, nil, residual); err == nil {
+			t.Fatalf("residual matrix %v on a zero-row page must be rejected", residual)
+		}
 	}
 	for _, bad := range [][][]bool{
 		{{true}},                               // row count mismatch
@@ -185,7 +201,6 @@ func TestValidateCellTruncatedMatrix(t *testing.T) {
 			t.Fatalf("malformed matrix %v must be rejected", bad)
 		}
 	}
-	_ = cols
 	// Clone must not alias the producer's backing array.
 	src := [][]bool{{true, false}}
 	clone := CloneCellTruncated(src)
@@ -257,6 +272,48 @@ func TestDecideResultDeliveryCapabilityGate(t *testing.T) {
 			t.Fatalf("upstream must win: %v", err)
 		}
 	})
+	t.Run("non-empty page without matrix is missing evidence, not clean", func(t *testing.T) {
+		// Really truncate a raw over-long value through the production
+		// primitive, then drop the produced matrix before the delivery gate —
+		// both capability states must fail with the fixed internal evidence
+		// error, never as a clean page or a missing capability.
+		row, _, err := TruncateRow([]any{strings.Repeat("a", 9000)}, nil, ResultCellMaxBytes)
+		if err != nil {
+			t.Fatalf("truncate: %v", err)
+		}
+		for _, caps := range [][]string{nil, {CapabilityCellTruncated}} {
+			d, err := DecideResultDelivery(ResultDeliveryInput{
+				Columns: cols, Rows: [][]any{row}, Capabilities: caps,
+			})
+			if err == nil || errors.Is(err, ErrResultContractUpgradeRequired) {
+				t.Fatalf("caps=%v missing matrix must be the internal evidence error, got %v", caps, err)
+			}
+			if d.Rows != nil || d.CellTruncated != nil {
+				t.Fatalf("missing-evidence refusal must carry no rows: %+v", d)
+			}
+		}
+	})
+	t.Run("row width checked even without matrix", func(t *testing.T) {
+		_, err := DecideResultDelivery(ResultDeliveryInput{
+			Columns: []model.QueryResultColumn{copyableColumn("a")},
+			Rows:    [][]any{{"x", "y"}}, // width 2 vs 1 column
+		})
+		if err == nil || errors.Is(err, ErrResultContractUpgradeRequired) {
+			t.Fatalf("misaligned row must fail as evidence error, got %v", err)
+		}
+	})
+	t.Run("zero-row pages: nil or empty matrix legal, residual corrupt", func(t *testing.T) {
+		for _, m := range [][][]bool{nil, {}} {
+			if _, err := DecideResultDelivery(ResultDeliveryInput{Columns: cols, CellTruncated: m}); err != nil {
+				t.Fatalf("empty page with matrix %v must deliver: %v", m, err)
+			}
+		}
+		for _, m := range [][][]bool{{{false}}, {{true}}} {
+			if _, err := DecideResultDelivery(ResultDeliveryInput{Columns: cols, CellTruncated: m}); err == nil {
+				t.Fatalf("residual matrix %v on empty page must be rejected", m)
+			}
+		}
+	})
 	t.Run("corrupt matrix fails loud even for capable client", func(t *testing.T) {
 		_, err := DecideResultDelivery(ResultDeliveryInput{
 			Columns: cols, Rows: truncRows, CellTruncated: [][]bool{{true, true}},
@@ -312,6 +369,22 @@ func TestDecideCSVExport(t *testing.T) {
 	t.Run("zero rows can export headers when all columns copyable", func(t *testing.T) {
 		if err := DecideCSVExport(cols, nil, nil); err != nil {
 			t.Fatalf("empty page: %v", err)
+		}
+		if err := DecideCSVExport(cols, nil, [][]bool{}); err != nil {
+			t.Fatalf("empty page + empty matrix: %v", err)
+		}
+	})
+	t.Run("residual matrix on zero rows denies", func(t *testing.T) {
+		for _, m := range [][][]bool{{{false, false}}, {{true, false}}} {
+			if err := DecideCSVExport(cols, nil, m); !errors.Is(err, ErrCSVExportNotPermitted) {
+				t.Fatalf("residual matrix %v on empty page must deny: %v", m, err)
+			}
+		}
+	})
+	t.Run("row width is checked even without matrix", func(t *testing.T) {
+		oneCol := []model.QueryResultColumn{copyableColumn("a")}
+		if err := DecideCSVExport(oneCol, [][]any{{"x", "y"}}, nil); !errors.Is(err, ErrCSVExportNotPermitted) {
+			t.Fatalf("misaligned row with nil matrix must deny: %v", err)
 		}
 	})
 	t.Run("no columns denies", func(t *testing.T) {
@@ -371,5 +444,118 @@ func TestCellTruncatedEnvelopeContracts(t *testing.T) {
 	// Misaligned matrix must never attach to either envelope.
 	if _, err := attachCellTruncated(cols, rows, [][]bool{{false}}); err == nil {
 		t.Fatal("misaligned matrix must not attach")
+	}
+	// The adapter enforces evidence: a non-empty page cannot attach a nil
+	// matrix, while an empty page leaves the field unset (omitempty stays).
+	if _, err := attachCellTruncated(cols, rows, nil); err == nil {
+		t.Fatal("nil matrix on a non-empty page must be rejected")
+	}
+	empty, err := attachCellTruncated(cols, nil, nil)
+	if err != nil || empty != nil {
+		t.Fatalf("empty page attach must stay nil: %v %v", empty, err)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// R1-2: the decision owns its slices — caller/decision mutation isolation.
+// ---------------------------------------------------------------------------
+
+func TestDecideResultDeliveryDecisionOwnsSlices(t *testing.T) {
+	cols := []model.QueryResultColumn{copyableColumn("a"), copyableColumn("b")}
+	inRows := [][]any{
+		{"r1c1", "r1c2"},
+		{"r2c1", "r2c2"},
+	}
+	inMatrix := [][]bool{
+		{false, true},
+		{false, false},
+	}
+	d, err := DecideResultDelivery(ResultDeliveryInput{
+		Columns: cols, Rows: inRows, CellTruncated: inMatrix,
+		Capabilities: []string{CapabilityCellTruncated},
+	})
+	if err != nil {
+		t.Fatalf("delivery: %v", err)
+	}
+
+	// Mutate every level of the producer input: cell value, row slice, outer
+	// rows slice, matrix flag, matrix row.
+	inRows[0][0] = "MUTATED"
+	inRows[1] = []any{"X", "Y"}
+	inRows[0] = nil
+	inMatrix[0][1] = false
+	inMatrix[1][0] = true
+	inMatrix[0] = nil
+
+	if d.Rows[0][0] != "r1c1" || d.Rows[0][1] != "r1c2" ||
+		d.Rows[1][0] != "r2c1" || d.Rows[1][1] != "r2c2" {
+		t.Fatalf("input mutation reached the decision: %+v", d.Rows)
+	}
+	if !d.CellTruncated[0][1] || d.CellTruncated[1][0] {
+		t.Fatalf("input mutation reached the decision matrix: %+v", d.CellTruncated)
+	}
+	// The decision's own flag still governs CSV: the page stays denied.
+	if err := DecideCSVExport(cols, d.Rows, d.CellTruncated); !errors.Is(err, ErrCSVExportNotPermitted) {
+		t.Fatalf("decision must still deny CSV after input mutation: %v", err)
+	}
+
+	// Reverse direction: mutating the decision must not reach the producer's
+	// surviving structures. Reset inputs to a second pristine page first.
+	inRows = [][]any{{"keep1", "keep2"}}
+	inMatrix = [][]bool{{true, false}}
+	d2, err := DecideResultDelivery(ResultDeliveryInput{
+		Columns: cols, Rows: inRows, CellTruncated: inMatrix,
+		Capabilities: []string{CapabilityCellTruncated},
+	})
+	if err != nil {
+		t.Fatalf("delivery 2: %v", err)
+	}
+	d2.Rows[0][0] = "DECISION-MUTATED"
+	d2.CellTruncated[0][0] = false
+	if inRows[0][0] != "keep1" || !inMatrix[0][0] {
+		t.Fatal("decision mutation reached the producer input")
+	}
+
+	// Refusal stays a zero decision that shares nothing.
+	d3, err := DecideResultDelivery(ResultDeliveryInput{
+		Columns: cols, Rows: inRows, CellTruncated: inMatrix, // no capability
+	})
+	if !errors.Is(err, ErrResultContractUpgradeRequired) || d3.Rows != nil || d3.CellTruncated != nil {
+		t.Fatalf("refusal must return zero decision: %v %+v", err, d3)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// R1-3: a truncated result must not retain the giant source string's storage.
+// ---------------------------------------------------------------------------
+
+func TestTruncateCellTextReleasesSourceStorage(t *testing.T) {
+	// A multi-megabyte source is truncated to the budget; the returned string
+	// must be an independent small copy, not a subslice pinning the source's
+	// backing array (test-only unsafe observation; production stays unsafe-free).
+	big := strings.Repeat("a", 4<<20) + "中"
+	got, truncated, err := TruncateCellText(big, ResultCellMaxBytes)
+	if err != nil || !truncated || len(got) != ResultCellMaxBytes {
+		t.Fatalf("truncation contract changed: len=%d trunc=%v err=%v", len(got), truncated, err)
+	}
+	if unsafe.StringData(got) == unsafe.StringData(big) {
+		t.Fatal("truncated result still aliases the multi-MiB source backing store")
+	}
+
+	// The untruncated branch deliberately does NOT copy — same base pointer is
+	// fine there (no waste), only the truncated branch must isolate storage.
+	small := "small"
+	got2, truncated2, err := TruncateCellText(small, ResultCellMaxBytes)
+	if err != nil || truncated2 || got2 != small {
+		t.Fatalf("untruncated contract changed: %q %v %v", got2, truncated2, err)
+	}
+
+	// TruncateRow must route through the same isolating primitive.
+	row, flags, err := TruncateRow([]any{big}, nil, ResultCellMaxBytes)
+	if err != nil || !flags[0] || len(row[0].(string)) != ResultCellMaxBytes {
+		t.Fatalf("row path changed: %v %v", flags, err)
+	}
+	if unsafe.StringData(row[0].(string)) == unsafe.StringData(big) {
+		t.Fatal("TruncateRow result aliases the source backing store")
 	}
 }

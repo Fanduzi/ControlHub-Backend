@@ -8,6 +8,7 @@ package service
 import (
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 	"unicode/utf8"
 
@@ -70,7 +71,11 @@ func TruncateCellText(s string, maxBytes int) (string, bool, error) {
 	for end > 0 && !utf8.RuneStart(s[end]) {
 		end--
 	}
-	return s[:end], true, nil
+	// Clone isolates the ≤maxBytes prefix from the source string's backing
+	// array — without it a truncated cell would pin a potentially multi-MiB
+	// scan buffer for the life of the response. The untruncated branch above
+	// deliberately stays copy-free.
+	return strings.Clone(s[:end]), true, nil
 }
 
 // TruncateCellValue applies the cell contract to one materialized value.
@@ -143,21 +148,31 @@ func AnyCellTruncated(matrix [][]bool) bool {
 	return false
 }
 
-// validateCellTruncatedMatrix enforces strict alignment of the matrix with
-// the public page: len(matrix) must equal len(rows), every row width must
-// equal the public column count, and every matrix row must match. A nil
-// matrix means "no per-cell information" (a pre-T8 producer) and is allowed
-// here — callers that require proven evidence (CSV export) reject nil
-// separately. A malformed matrix is never silently accepted.
+// validateCellTruncatedMatrix enforces strict alignment between the public
+// page and its truncation evidence. Every public row width is always checked
+// against the column count — the matrix being nil never skips that check.
+// Evidence rules: a non-empty page must carry a complete aligned matrix (its
+// absence is the fixed internal evidence error, never a known-clean page and
+// never a client-capability issue); a zero-row page may carry nil or an
+// empty matrix, while a residual non-empty matrix is corrupt. There is no
+// fabricated all-false fill-in and no trust/skip switch.
 func validateCellTruncatedMatrix(columnCount int, rows [][]any, matrix [][]bool) error {
+	for i := range rows {
+		if len(rows[i]) != columnCount {
+			return errResultContractInvalid
+		}
+	}
 	if matrix == nil {
-		return nil
+		if len(rows) == 0 {
+			return nil
+		}
+		return errResultContractInvalid
 	}
 	if len(matrix) != len(rows) {
 		return errResultContractInvalid
 	}
 	for i := range matrix {
-		if len(rows[i]) != columnCount || len(matrix[i]) != columnCount {
+		if len(matrix[i]) != columnCount {
 			return errResultContractInvalid
 		}
 	}
@@ -226,10 +241,27 @@ func DecideResultDelivery(in ResultDeliveryInput) (ResultDeliveryDecision, error
 	if AnyCellTruncated(in.CellTruncated) && !hasCellTruncatedCapability(in.Capabilities) {
 		return ResultDeliveryDecision{}, ErrResultContractUpgradeRequired
 	}
+	// The decision owns its payload: outer + per-row slices and both matrix
+	// levels are copied so later producer/consumer mutation cannot reach
+	// across the boundary. Cell values are declared immutable scalar shapes,
+	// so no deeper recursion is needed (or wanted).
 	return ResultDeliveryDecision{
-		Rows:          in.Rows,
-		CellTruncated: in.CellTruncated,
+		Rows:          cloneRows(in.Rows),
+		CellTruncated: CloneCellTruncated(in.CellTruncated),
 	}, nil
+}
+
+// cloneRows copies the outer slice and each row slice. Elements themselves
+// are the declared immutable scalar shapes and are shared by design.
+func cloneRows(rows [][]any) [][]any {
+	if rows == nil {
+		return nil
+	}
+	out := make([][]any, len(rows))
+	for i, r := range rows {
+		out[i] = append([]any(nil), r...)
+	}
+	return out
 }
 
 // hasCellTruncatedCapability reports whether the client declared the exact
@@ -267,16 +299,14 @@ func DecideCSVExport(columns []model.QueryResultColumn, rows [][]any, cellTrunca
 			return fmt.Errorf("%w: column %d not copyable", ErrCSVExportNotPermitted, i)
 		}
 	}
-	if len(rows) > 0 {
-		if cellTruncated == nil {
-			return fmt.Errorf("%w: missing truncation evidence", ErrCSVExportNotPermitted)
-		}
-		if err := validateCellTruncatedMatrix(len(columns), rows, cellTruncated); err != nil {
-			return fmt.Errorf("%w: corrupt truncation matrix", ErrCSVExportNotPermitted)
-		}
-		if AnyCellTruncated(cellTruncated) {
-			return fmt.Errorf("%w: page contains truncated cells", ErrCSVExportNotPermitted)
-		}
+	// The matrix relationship is validated whenever it is provided — a
+	// residual matrix on a zero-row page, a nil matrix on a non-empty page,
+	// or any misalignment is corrupt evidence, never authorized-clean.
+	if err := validateCellTruncatedMatrix(len(columns), rows, cellTruncated); err != nil {
+		return fmt.Errorf("%w: missing or corrupt truncation evidence", ErrCSVExportNotPermitted)
+	}
+	if AnyCellTruncated(cellTruncated) {
+		return fmt.Errorf("%w: page contains truncated cells", ErrCSVExportNotPermitted)
 	}
 	return nil
 }
