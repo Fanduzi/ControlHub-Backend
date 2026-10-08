@@ -1,7 +1,7 @@
 // Package service provides the MySQL/TiDB query executor for the read-only sandbox.
 // input: context, database/sql, fmt, strings, time, go-sql-driver/mysql, internal/model
 // output: MySQLQueryExecutor, NewMySQLQueryExecutor, QueryExecutorCaps, newScanPointer, normalizeScanned (implements QueryDatabaseExecutor)
-// pos: Runs guarded ordinary and compiler-owned template SELECTs against a target DB under read-only transactions with column/cell/payload caps; paginated windows reject on payload-cap overflow, non-paged results truncate; preserves SQL NULL as JSON null
+// pos: Runs guarded ordinary and compiler-owned template SELECTs against a target DB under read-only transactions with column/cell/payload caps; paginated windows reject on payload-cap overflow, non-paged results truncate; every kept row carries an aligned cellTruncated flag via the T8 contract (sentinel/budget-dropped rows never produce flags); preserves SQL NULL as JSON null
 // note: if this file changes, update header and README.md
 package service
 
@@ -173,10 +173,21 @@ func (e *MySQLQueryExecutor) scanBoundedRows(rows *sql.Rows, limit int, paginate
 			return QueryDatabaseResult{}, err
 		}
 		row := make([]any, len(colTypes))
+		flags := make([]bool, len(colTypes))
 		rowBytes := 0
 		for i, p := range ptrs {
 			safe, n := e.toJSONSafe(normalizeScanned(p))
-			row[i] = safe
+			delivered, truncated, err := TruncateCellValue(safe, e.caps.MaxCellBytes)
+			if err != nil {
+				return QueryDatabaseResult{}, err
+			}
+			if truncated {
+				// Only strings can carry the flag, so the delivered prefix is
+				// always a string — bill the response for what actually ships.
+				n = len(delivered.(string))
+			}
+			row[i] = delivered
+			flags[i] = truncated
 			rowBytes += n
 		}
 		responseBytes += rowBytes
@@ -188,6 +199,7 @@ func (e *MySQLQueryExecutor) scanBoundedRows(rows *sql.Rows, limit int, paginate
 			break
 		}
 		result.Rows = append(result.Rows, row)
+		result.CellTruncated = append(result.CellTruncated, flags)
 		result.RowCount++
 	}
 	if err := rows.Err(); err != nil {
@@ -253,22 +265,17 @@ func normalizeScanned(p any) any {
 }
 
 // toJSONSafe converts a scanned database value into a JSON-safe value and returns
-// its approximate serialized byte weight for response-cap accounting. []byte and
-// over-long strings are truncated to the cell cap rather than failing the query.
+// its approximate serialized byte weight for response-cap accounting. It only
+// converts — the cell cap belongs to the T8 contract, applied by scanBoundedRows
+// through TruncateCellValue so every oversized cell also produces its flag.
 func (e *MySQLQueryExecutor) toJSONSafe(v any) (any, int) {
 	switch x := v.(type) {
 	case nil:
 		return nil, 0
 	case []byte:
-		if len(x) > e.caps.MaxCellBytes {
-			x = x[:e.caps.MaxCellBytes]
-		}
 		s := string(x)
 		return s, len(s)
 	case string:
-		if len(x) > e.caps.MaxCellBytes {
-			x = x[:e.caps.MaxCellBytes]
-		}
 		return x, len(x)
 	case time.Time:
 		return x, len(x.Format(time.RFC3339Nano))

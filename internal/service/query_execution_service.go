@@ -1,7 +1,7 @@
 // Package service provides business logic for the Phase 37/38S read-only query sandbox.
 // input: context, database/sql, errors, fmt, net, strconv, strings, time, go-sql-driver/mysql, internal/model
 // output: QueryExecutionService, validated user/machine Execute identity, owner-only successful statement retrieval and history restore eligibility, repository/resolver/executor/clock interfaces, sentinel errors, ListHistory, validateDSNBinding
-// pos: Orchestrates ordinary user/machine governed execution plus user-only template/navigation and private statement retrieval/restore projection through one atomic identity-aware evidence implementation while preserving cancellation and disclosure behavior
+// pos: Orchestrates ordinary user/machine governed execution plus user-only template/navigation and private statement retrieval/restore projection through one atomic identity-aware evidence implementation while preserving cancellation and disclosure behavior; the T8-B post-finalize capability gate runs after the committed success pair on all three governed result paths (refusal never rewrites evidence; persistence failure wins)
 // note: if this file changes, update this header and module README.md.
 package service
 
@@ -161,7 +161,7 @@ type Clock interface {
 type QueryDisclosurePlanner interface {
 	Preflight(ctx context.Context, dsn string, targetResourceID uint64, guarded GuardedQuery) (DisclosurePlan, error)
 	PreflightRelatedRecords(ctx context.Context, dsn string, targetResourceID uint64, referencedDatabase string, referencedTable string) (DisclosurePlan, error)
-	Apply(plan DisclosurePlan, columns []model.QueryResultColumn, rows [][]any) ([]model.QueryResultColumn, [][]any, error)
+	Apply(plan DisclosurePlan, columns []model.QueryResultColumn, rows [][]any, cellTruncated [][]bool) ([]model.QueryResultColumn, [][]any, [][]bool, error)
 }
 
 // QueryExecutionService orchestrates guarded read-only SELECT execution: it
@@ -286,7 +286,7 @@ func (s *QueryExecutionService) Execute(ctx context.Context, identity model.Quer
 	return s.executeGuardedChain(ctx, target, identity, access.dsn, &guarded,
 		func(execCtx context.Context, dsn string) (QueryDatabaseResult, error) {
 			return s.executor.Query(execCtx, dsn, guarded)
-		}, page, pageSize, start)
+		}, req.Capabilities, page, pageSize, start)
 }
 
 // clampProductionMaxRows applies the tighter production release cap before the
@@ -310,6 +310,7 @@ func (s *QueryExecutionService) executeGuardedChain(
 	dsn string,
 	guarded *GuardedQuery,
 	run func(execCtx context.Context, dsn string) (QueryDatabaseResult, error),
+	capabilities []string,
 	page, pageSize int,
 	start time.Time,
 ) (model.QueryExecuteResponse, error) {
@@ -343,18 +344,36 @@ func (s *QueryExecutionService) executeGuardedChain(
 		return s.recordTerminalOutcome(ctx, target, identity, guarded, err, start)
 	}
 
-	columns, rows, applyErr := s.disclosure.Apply(plan, result.Columns, result.Rows)
+	columns, rows, cellTruncated, applyErr := s.disclosure.Apply(plan, result.Columns, result.Rows, result.CellTruncated)
 	if applyErr != nil {
 		return s.recordTerminalOutcome(ctx, target, identity, guarded, applyErr, start)
 	}
 	result.Columns = columns
 	result.Rows = rows
+	result.CellTruncated = cellTruncated
 
 	// Success: record (history + audit) then return. A recording failure must
 	// not yield a success response, so execID is guaranteed non-zero here.
 	execID, perr := s.persistAttempt(ctx, target, identity, guarded, model.QueryExecutionSuccess, result.RowCount, "", "", start)
 	if perr != nil {
 		return model.QueryExecuteResponse{}, errPersistAttempt
+	}
+
+	// Post-finalize delivery gate (G2): the committed success pair already
+	// exists, so a capability refusal returns a zero response without writing
+	// or rewriting history; a persistence failure above already took priority
+	// (502). Corrupt evidence is a backend failure, never a capability issue.
+	decision, derr := DecideResultDelivery(ResultDeliveryInput{
+		Columns:       result.Columns,
+		Rows:          result.Rows,
+		CellTruncated: result.CellTruncated,
+		Capabilities:  capabilities,
+	})
+	if derr != nil {
+		if errors.Is(derr, ErrResultContractUpgradeRequired) {
+			return model.QueryExecuteResponse{}, derr
+		}
+		return model.QueryExecuteResponse{}, fmt.Errorf("%w: result contract evidence invalid", ErrQueryBackendFailure)
 	}
 
 	var pagination *model.QueryExecutePaginationResponse
@@ -377,13 +396,14 @@ func (s *QueryExecutionService) executeGuardedChain(
 		TargetResourceID: target.ResourceID,
 		Engine:           target.ConnectionContext.Engine,
 		Columns:          result.Columns,
-		Rows:             result.Rows,
+		Rows:             decision.Rows,
 		RowCount:         result.RowCount,
 		Truncated:        result.Truncated,
 		DurationMs:       s.clock.Now().Sub(start).Milliseconds(),
 		LimitApplied:     guarded.LimitApplied,
 		ExecutedAt:       s.clock.Now(),
 		Pagination:       pagination,
+		CellTruncated:    decision.CellTruncated,
 	}, nil
 }
 
@@ -686,12 +706,13 @@ func (s *QueryExecutionService) NavigateRelatedRecords(ctx context.Context, acto
 		return s.recordNavigationTerminalOutcome(ctx, target, identity, matchedFK, err, start)
 	}
 
-	columns, rows, applyErr := s.disclosure.Apply(plan, result.Columns, result.Rows)
+	columns, rows, cellTruncated, applyErr := s.disclosure.Apply(plan, result.Columns, result.Rows, result.CellTruncated)
 	if applyErr != nil {
 		return s.recordNavigationTerminalOutcome(ctx, target, identity, matchedFK, applyErr, start)
 	}
 	result.Columns = columns
 	result.Rows = rows
+	result.CellTruncated = cellTruncated
 
 	// 10. Build relation metadata from trusted FK columns.
 	refColumns := make([]string, len(matchedFK.Columns))
@@ -705,15 +726,34 @@ func (s *QueryExecutionService) NavigateRelatedRecords(ctx context.Context, acto
 		return model.RelatedRecordNavigationResponse{}, errPersistAttempt
 	}
 
+	// Post-finalize delivery gate (G2): identical to the execute chain — the
+	// committed success pair exists, so a capability refusal returns a zero
+	// response without rewriting evidence; persistence failure above already
+	// won (502). Corrupt evidence is a backend failure, never a capability
+	// issue.
+	decision, derr := DecideResultDelivery(ResultDeliveryInput{
+		Columns:       result.Columns,
+		Rows:          result.Rows,
+		CellTruncated: result.CellTruncated,
+		Capabilities:  req.Capabilities,
+	})
+	if derr != nil {
+		if errors.Is(derr, ErrResultContractUpgradeRequired) {
+			return model.RelatedRecordNavigationResponse{}, derr
+		}
+		return model.RelatedRecordNavigationResponse{}, fmt.Errorf("%w: result contract evidence invalid", ErrQueryBackendFailure)
+	}
+
 	return model.RelatedRecordNavigationResponse{
 		ExecutionID:        execID,
 		Status:             model.QueryExecutionSuccess,
 		TargetResourceID:   target.ResourceID,
 		Engine:             target.ConnectionContext.Engine,
 		Columns:            result.Columns,
-		Rows:               result.Rows,
+		Rows:               decision.Rows,
 		RowCount:           result.RowCount,
 		Truncated:          result.Truncated,
+		CellTruncated:      decision.CellTruncated,
 		DurationMs:         s.clock.Now().Sub(start).Milliseconds(),
 		LimitApplied:       limit,
 		ExecutedAt:         s.clock.Now(),

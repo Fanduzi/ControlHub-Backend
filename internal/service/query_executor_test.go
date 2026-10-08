@@ -1,7 +1,7 @@
 // Package service provides unit tests for the query executor scan helpers.
-// input: context, database/sql, errors, regexp, strings, testing, DATA-DOG/go-sqlmock
+// input: context, database/sql, errors, regexp, strings, testing, unicode/utf8, DATA-DOG/go-sqlmock
 // output: TestNewScanPointer_*, TestNormalizeScanned_*, TestScanBoundedRows_*, TestMySQLQueryExecutorQueryTemplate* (executor binding and cap behavior)
-// pos: Unit tests verifying SQL NULL is preserved as nil, non-null numbers stay numbers, and compiler-owned template SQL binds through the read-only executor
+// pos: Unit tests verifying SQL NULL is preserved as nil, non-null numbers stay numbers, cellTruncated flags align only with kept rows (8192-byte cell cap, rune-safe cuts, sentinel/budget-dropped rows excluded), and compiler-owned template SQL binds through the read-only executor
 // note: if this file changes, update header and README.md
 package service
 
@@ -13,6 +13,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/DATA-DOG/go-sqlmock"
 )
@@ -187,6 +188,202 @@ func TestScanBoundedRows_PaginatedRowLimitStopKeepsTruncatedSuccess(t *testing.T
 	}
 	if result.RowCount != 2 || len(result.Rows) != 2 || !result.Truncated {
 		t.Fatalf("paginated row-limit result = %+v, want full 2-row window truncated", result)
+	}
+}
+
+// --- T8-B: per-cell truncation evidence from the production scanner ---
+//
+// scanBoundedRows is the single seam shared by Query, QueryTemplate, and
+// QueryRelatedRecords, so every retained row must carry an aligned
+// cellTruncated flag row produced in the same pass as the delivered value.
+
+// scanTextRows builds real *sql.Rows over one TEXT column with the given
+// string cells via sqlmock, exercising the same database/sql scan path as
+// production.
+func scanTextRows(t *testing.T, cells ...string) *sql.Rows {
+	t.Helper()
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock.New: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	rows := sqlmock.NewRowsWithColumnDefinition(
+		sqlmock.NewColumn("payload").OfType("TEXT", ""),
+	)
+	for _, c := range cells {
+		rows = rows.AddRow(c)
+	}
+	mock.ExpectQuery("select payload from t").WillReturnRows(rows)
+	got, err := db.Query("select payload from t")
+	if err != nil {
+		t.Fatalf("query mock rows: %v", err)
+	}
+	return got
+}
+
+func TestScanBoundedRows_CellTruncatedMatrixFlagsOversizedCell(t *testing.T) {
+	t.Parallel()
+	e := NewMySQLQueryExecutor(QueryExecutorCaps{})
+
+	result, err := e.scanBoundedRows(scanTextRows(t, strings.Repeat("a", 8193)), 10, false)
+	if err != nil {
+		t.Fatalf("scan error: %v", err)
+	}
+	if len(result.CellTruncated) != 1 || len(result.CellTruncated[0]) != 1 || !result.CellTruncated[0][0] {
+		t.Fatalf("cellTruncated = %v, want [[true]]", result.CellTruncated)
+	}
+	got, ok := result.Rows[0][0].(string)
+	if !ok || len(got) != ResultCellMaxBytes {
+		t.Fatalf("delivered cell len = %d, want %d", len(got), ResultCellMaxBytes)
+	}
+}
+
+func TestScanBoundedRows_CellBoundaries8191and8192NotTruncated(t *testing.T) {
+	t.Parallel()
+	e := NewMySQLQueryExecutor(QueryExecutorCaps{})
+
+	result, err := e.scanBoundedRows(scanTextRows(t, strings.Repeat("a", 8191), strings.Repeat("b", 8192)), 10, false)
+	if err != nil {
+		t.Fatalf("scan error: %v", err)
+	}
+	if len(result.CellTruncated) != 2 || result.CellTruncated[0][0] || result.CellTruncated[1][0] {
+		t.Fatalf("cellTruncated = %v, want [[false],[false]]", result.CellTruncated)
+	}
+	if got := result.Rows[1][0].(string); len(got) != 8192 {
+		t.Fatalf("8192-byte cell delivered len = %d, want full 8192", len(got))
+	}
+}
+
+func TestScanBoundedRows_MultiByteBoundaryNeverSplitsRune(t *testing.T) {
+	t.Parallel()
+	e := NewMySQLQueryExecutor(QueryExecutorCaps{})
+
+	// 8190 ASCII + one 3-byte rune = 8193 bytes: the rune must not be split,
+	// so the delivered prefix is 8190 bytes, not 8192.
+	tricky := strings.Repeat("a", 8190) + "界"
+	result, err := e.scanBoundedRows(scanTextRows(t, tricky), 10, false)
+	if err != nil {
+		t.Fatalf("scan error: %v", err)
+	}
+	got := result.Rows[0][0].(string)
+	if len(result.CellTruncated) != 1 || len(result.CellTruncated[0]) != 1 || !result.CellTruncated[0][0] {
+		t.Fatalf("cellTruncated = %v, want [[true]]", result.CellTruncated)
+	}
+	if len(got) != 8190 {
+		t.Fatalf("delivered len = %d, want 8190 bytes (rune-safe cut)", len(got))
+	}
+	if !utf8.ValidString(got) {
+		t.Fatalf("delivered value is not valid UTF-8: %q...", got[len(got)-8:])
+	}
+}
+
+func TestScanBoundedRows_FourByteBoundaryNeverSplitsRune(t *testing.T) {
+	t.Parallel()
+	e := NewMySQLQueryExecutor(QueryExecutorCaps{})
+
+	// 8189 ASCII + one 4-byte rune = 8193 bytes: the emoji must not be split,
+	// so the delivered prefix is 8189 bytes, not 8192.
+	tricky := strings.Repeat("a", 8189) + "\U0001F600"
+	result, err := e.scanBoundedRows(scanTextRows(t, tricky), 10, false)
+	if err != nil {
+		t.Fatalf("scan error: %v", err)
+	}
+	got := result.Rows[0][0].(string)
+	if len(result.CellTruncated) != 1 || !result.CellTruncated[0][0] {
+		t.Fatalf("cellTruncated = %v, want [[true]]", result.CellTruncated)
+	}
+	if len(got) != 8189 || !utf8.ValidString(got) {
+		t.Fatalf("delivered len = %d valid = %v, want 8189 valid UTF-8", len(got), utf8.ValidString(got))
+	}
+}
+
+func TestScanBoundedRows_CleanPageProducesRealAllFalseMatrix(t *testing.T) {
+	t.Parallel()
+	e := NewMySQLQueryExecutor(QueryExecutorCaps{})
+
+	result, err := e.scanBoundedRows(scanTextRows(t, "alpha", "", "beta"), 10, false)
+	if err != nil {
+		t.Fatalf("scan error: %v", err)
+	}
+	// WHY: a non-empty page must carry an aligned matrix — the scanner emits
+	// it honestly (all-false), never synthesized downstream.
+	if len(result.CellTruncated) != 3 {
+		t.Fatalf("matrix rows = %d, want 3", len(result.CellTruncated))
+	}
+	for r, flags := range result.CellTruncated {
+		if len(flags) != 1 || flags[0] {
+			t.Fatalf("matrix[%d] = %v, want [false]", r, flags)
+		}
+	}
+}
+
+func TestScanBoundedRows_NullNumericBoolTimeCellsFlagFalse(t *testing.T) {
+	t.Parallel()
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock.New: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	e := NewMySQLQueryExecutor(QueryExecutorCaps{})
+
+	mock.ExpectQuery("select mixed from t").WillReturnRows(
+		sqlmock.NewRowsWithColumnDefinition(
+			sqlmock.NewColumn("n").OfType("BIGINT", int64(0)),
+			sqlmock.NewColumn("f").OfType("DOUBLE", float64(0)),
+			sqlmock.NewColumn("b").OfType("BOOL", false),
+			sqlmock.NewColumn("d").OfType("DATETIME", time.Time{}),
+			sqlmock.NewColumn("s").OfType("VARCHAR", ""),
+		).AddRow(int64(7), 1.5, true, time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC), nil),
+	)
+	rows, err := db.Query("select mixed from t")
+	if err != nil {
+		t.Fatalf("query mock rows: %v", err)
+	}
+
+	result, err := e.scanBoundedRows(rows, 10, false)
+	if err != nil {
+		t.Fatalf("scan error: %v", err)
+	}
+	if result.CellTruncated[0][0] || result.CellTruncated[0][1] || result.CellTruncated[0][2] ||
+		result.CellTruncated[0][3] || result.CellTruncated[0][4] {
+		t.Fatalf("typed/null flags = %v, want all false", result.CellTruncated[0])
+	}
+	if result.Rows[0][0] != int64(7) || result.Rows[0][1] != 1.5 || result.Rows[0][2] != true || result.Rows[0][4] != nil {
+		t.Fatalf("typed values mutated: %+v", result.Rows[0])
+	}
+}
+
+func TestScanBoundedRows_SentinelRowTruncationNeverReachesPage(t *testing.T) {
+	t.Parallel()
+	e := NewMySQLQueryExecutor(QueryExecutorCaps{})
+
+	// Paginated window of 2 + a huge sentinel row that is never scanned: the
+	// released page's matrix must describe only the two kept rows.
+	result, err := e.scanBoundedRows(
+		scanTextRows(t, "x", "y", strings.Repeat("a", 99999)), 2, true)
+	if err != nil {
+		t.Fatalf("scan error: %v", err)
+	}
+	if !result.Truncated {
+		t.Fatal("truncated = false, want true (sentinel proves next page exists)")
+	}
+	if len(result.CellTruncated) != 2 || result.CellTruncated[0][0] || result.CellTruncated[1][0] {
+		t.Fatalf("cellTruncated = %v, want [[false],[false]] — sentinel rows never enter the matrix", result.CellTruncated)
+	}
+}
+
+func TestScanBoundedRows_BudgetDroppedRowLeavesNoFlag(t *testing.T) {
+	t.Parallel()
+	e := NewMySQLQueryExecutor(QueryExecutorCaps{MaxResponseBytes: 12})
+
+	// Non-paginated: the row that overflows the response budget is dropped
+	// entirely — its flag must not linger in the matrix either.
+	result, err := e.scanBoundedRows(scanTextRows(t, "aaa", "bbb", "ccc"), 10, false)
+	if err != nil {
+		t.Fatalf("scan error: %v", err)
+	}
+	if len(result.CellTruncated) != len(result.Rows) {
+		t.Fatalf("matrix rows = %d, want %d aligned with kept rows", len(result.CellTruncated), len(result.Rows))
 	}
 }
 

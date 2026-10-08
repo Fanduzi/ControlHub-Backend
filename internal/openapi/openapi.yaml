@@ -496,7 +496,7 @@ paths:
                     limitApplied: 0
                     executedAt: "2026-07-29T08:02:00Z"
         "400":
-          description: Validation failed (bad request, blocked statement, bad maxRows, invalid pagination)
+          description: Validation failed (bad request, blocked statement, bad maxRows, invalid pagination), or post-finalize result-contract refusal — a page containing truncated cells was refused because the request did not declare the cellTruncated capability (execution history keeps its committed success record; the refusal body carries no rows)
           content:
             application/json:
               schema:
@@ -516,6 +516,11 @@ paths:
                   value:
                     error: validation_failed
                     message: "page must be > 0, got 0"
+                resultContractUpgradeRequired:
+                  summary: Truncated page refused — client did not declare cellTruncated capability
+                  value:
+                    error: result_contract_upgrade_required
+                    message: result contract upgrade required
         "401":
           description: Missing, invalid, expired, or revoked User/Machine credential (including a User token older than the TTL)
           content:
@@ -751,7 +756,11 @@ paths:
         "400":
           description: >
             Validation failed (bad request shape, unknown source/FK, value
-            count mismatch, non-table kind, overlong values)
+            count mismatch, non-table kind, overlong values), or post-finalize
+            result-contract refusal — a page containing truncated cells was
+            refused because the request did not declare the cellTruncated
+            capability (history keeps its committed success record; the
+            refusal body carries no rows)
           content:
             application/json:
               schema:
@@ -765,6 +774,11 @@ paths:
                   value:
                     error: validation_failed
                     message: "localValues count does not match foreign key column count"
+                resultContractUpgradeRequired:
+                  summary: Truncated page refused — client did not declare cellTruncated capability
+                  value:
+                    error: result_contract_upgrade_required
+                    message: result contract upgrade required
         "401":
           description: Missing or invalid Bearer token (or token older than the TTL)
           content:
@@ -2876,11 +2890,22 @@ paths:
           description: >
             Validation failed — malformed or unknown fields, duplicate keys,
             oversized values, invalid pagination, or per-parameter value field
-            errors carried in details (missing/unknown/invalid/oversized).
+            errors carried in details (missing/unknown/invalid/oversized) —
+            or post-finalize result-contract refusal: a page containing
+            truncated cells was refused because the request did not declare
+            the cellTruncated capability (result_contract_upgrade_required;
+            history keeps its committed success record; the refusal body
+            carries no rows).
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/ErrorResponse"
+              examples:
+                resultContractUpgradeRequired:
+                  summary: Truncated page refused — client did not declare cellTruncated capability
+                  value:
+                    error: result_contract_upgrade_required
+                    message: result contract upgrade required
         "401":
           description: Missing or invalid Bearer token (or token older than the TTL)
           content:
@@ -5903,9 +5928,11 @@ components:
             type: string
             enum: [cellTruncated]
           description: >
-            Declared client result-contract capabilities. Declaration-only;
-            the per-cell truncation gate (result_contract_upgrade_required)
-            activates when truncation lands.
+            Declared client result-contract capabilities. Active gate: when a
+            delivered page contains at least one cellTruncated=true cell, only
+            clients declaring the exact "cellTruncated" token receive it —
+            other clients get 400 result_contract_upgrade_required with no
+            rows. Clean pages are always delivered regardless.
     QuerySavedStatementListResponse:
       type: object
       required: [items, pageInfo, canManageSharedTemplates]
@@ -7153,9 +7180,11 @@ components:
             type: string
             enum: [cellTruncated]
           description: >
-            Declared client result-contract capabilities. Declaration-only;
-            the per-cell truncation gate (result_contract_upgrade_required)
-            activates when truncation lands.
+            Declared client result-contract capabilities. Active gate: when a
+            delivered page contains at least one cellTruncated=true cell, only
+            clients declaring the exact "cellTruncated" token receive it —
+            other clients get 400 result_contract_upgrade_required with no
+            rows. Clean pages are always delivered regardless.
         maxRows:
           type: integer
           minimum: 0
@@ -7472,9 +7501,11 @@ components:
             type: string
             enum: [cellTruncated]
           description: >
-            Declared client result-contract capabilities. Declaration-only;
-            the per-cell truncation gate (result_contract_upgrade_required)
-            activates when truncation lands.
+            Declared client result-contract capabilities. Active gate: when a
+            delivered page contains at least one cellTruncated=true cell, only
+            clients declaring the exact "cellTruncated" token receive it —
+            other clients get 400 result_contract_upgrade_required with no
+            rows. Clean pages are always delivered regardless.
     RelatedRecordNavigationResponse:
       type: object
       required:

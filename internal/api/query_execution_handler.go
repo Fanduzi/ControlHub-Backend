@@ -1,7 +1,7 @@
 // Package api provides HTTP handlers and routing for the ControlHub REST API.
 // input: bytes, context, errors, fmt, io, net/http, strconv, strings, time, chi, internal/model, internal/service
 // output: user-or-machine ordinary execute identity, user-only sibling query and owner-only statement handlers, controlled error mapping, queryExecutionAPI/queryExecutionStatementAPI interfaces
-// pos: HTTP handlers for governed execute/history/owner-only statement retrieval, saved-statement execution, and related-record navigation. Execute/related disclosure blocks publish query_result_disclosure_blocked (Issue #48); target-not-enabled remains query_not_allowed.
+// pos: HTTP handlers for governed execute/history/owner-only statement retrieval, saved-statement execution, and related-record navigation. Execute/related disclosure blocks publish query_result_disclosure_blocked (Issue #48); target-not-enabled remains query_not_allowed; post-finalize result-contract refusal publishes 400 result_contract_upgrade_required on all three result paths (T8-B).
 // note: if this file changes, update header and README.md
 package api
 
@@ -322,6 +322,11 @@ func parseExecutionFilters(r *http.Request) (status *model.QueryExecutionStatus,
 // rejections wrap both; matching the other way published query_not_allowed.
 func writeQueryExecutionError(w http.ResponseWriter, err error) {
 	switch {
+	case errors.Is(err, service.ErrResultContractUpgradeRequired):
+		// Post-finalize delivery refusal (G2): the attempt already recorded
+		// success; the fixed 400/code tells the client to declare the
+		// cellTruncated capability. The response carries no rows or matrix.
+		writeJSONError(w, http.StatusBadRequest, "result_contract_upgrade_required", err.Error())
 	case errors.Is(err, service.ErrQueryValidationFailed):
 		writeJSONError(w, http.StatusBadRequest, "validation_failed", err.Error())
 	case errors.Is(err, service.ErrQueryDisclosureBlocked):
@@ -449,6 +454,10 @@ func handleNavigateRelatedRecords(svc queryExecutionAPI) http.HandlerFunc {
 // before not-allowed for the same wrap-order reason as writeQueryExecutionError.
 func writeNavigationError(w http.ResponseWriter, err error) {
 	switch {
+	case errors.Is(err, service.ErrResultContractUpgradeRequired):
+		// Same post-finalize refusal as writeQueryExecutionError: 400 with the
+		// fixed result-contract code, no rows or matrix in the response.
+		writeJSONError(w, http.StatusBadRequest, "result_contract_upgrade_required", err.Error())
 	case errors.Is(err, service.ErrQueryValidationFailed),
 		errors.Is(err, service.ErrNavigationSourceNotFound),
 		errors.Is(err, service.ErrNavigationValueMismatch):

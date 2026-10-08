@@ -1,7 +1,7 @@
 // Package service provides tests for the Phase 37/38S query execution service.
 // input: context, errors, fmt, strings, testing, time, internal/model
 // output: TestExecute_* including successful-User full SQL, owner-only statement retrieval/history restore eligibility, machine identity terminal outcomes, readiness/credential tests, and repository/resolver/executor/clock fakes
-// pos: Unit boundary for identity-aware governed execution, private statement access and restore projection, atomic terminal evidence, paging, cancellation durability, credential fail-closed behavior, and disclosure error mapping
+// pos: Unit boundary for identity-aware governed execution, private statement access and restore projection, atomic terminal evidence, paging, cancellation durability, credential fail-closed behavior, disclosure error mapping, and post-finalize delivery-gate fakes (cannedResult stamps the honest all-false matrix a real clean-page scan emits)
 // note: if this file changes, update header and README.md
 package service
 
@@ -249,6 +249,21 @@ type fakeExecutor struct {
 	cancelOnQuery context.CancelFunc
 }
 
+// cannedResult returns the configured result. When the fixture supplies a
+// non-empty page without a matrix it stamps the honest all-false matrix a real
+// clean-page scan emits — tests that need truncated or corrupt evidence set
+// CellTruncated explicitly on the fixture.
+func (f *fakeExecutor) cannedResult() QueryDatabaseResult {
+	res := f.result
+	if len(res.Rows) > 0 && res.CellTruncated == nil {
+		res.CellTruncated = make([][]bool, len(res.Rows))
+		for i, row := range res.Rows {
+			res.CellTruncated[i] = make([]bool, len(row))
+		}
+	}
+	return res
+}
+
 func (f *fakeExecutor) Query(ctx context.Context, dsn string, guarded GuardedQuery) (QueryDatabaseResult, error) {
 	f.called = true
 	f.queryCalls++
@@ -270,7 +285,7 @@ func (f *fakeExecutor) Query(ctx context.Context, dsn string, guarded GuardedQue
 	if f.err != nil {
 		return QueryDatabaseResult{}, f.err
 	}
-	return f.result, nil
+	return f.cannedResult(), nil
 }
 
 func (f *fakeExecutor) QueryTemplate(ctx context.Context, dsn string, statement GuardedTemplateStatement) (QueryDatabaseResult, error) {
@@ -287,7 +302,7 @@ func (f *fakeExecutor) QueryTemplate(ctx context.Context, dsn string, statement 
 	if f.err != nil {
 		return QueryDatabaseResult{}, f.err
 	}
-	return f.result, nil
+	return f.cannedResult(), nil
 }
 
 func (f *fakeExecutor) QueryRelatedRecords(ctx context.Context, dsn string, input RelatedRecordsQueryInput) (QueryDatabaseResult, error) {
@@ -304,7 +319,7 @@ func (f *fakeExecutor) QueryRelatedRecords(ctx context.Context, dsn string, inpu
 	if f.err != nil {
 		return QueryDatabaseResult{}, f.err
 	}
-	return f.result, nil
+	return f.cannedResult(), nil
 }
 
 type fakeClock struct{ t time.Time }
@@ -315,6 +330,8 @@ type fakeDisclosureService struct {
 	blockErr         error
 	preflightErr     error
 	applyErr         error
+	applyMatrix      [][]bool
+	dropMatrix       bool
 	preflightCalls   int
 	preflightQueries []GuardedQuery
 }
@@ -341,11 +358,14 @@ func (f *fakeDisclosureService) PreflightRelatedRecords(_ context.Context, _ str
 	return DisclosurePlan{}, nil
 }
 
-func (f *fakeDisclosureService) Apply(_ DisclosurePlan, columns []model.QueryResultColumn, rows [][]any) ([]model.QueryResultColumn, [][]any, error) {
+func (f *fakeDisclosureService) Apply(_ DisclosurePlan, columns []model.QueryResultColumn, rows [][]any, cellTruncated [][]bool) ([]model.QueryResultColumn, [][]any, [][]bool, error) {
 	if f.applyErr != nil {
-		return nil, nil, f.applyErr
+		return nil, nil, nil, f.applyErr
 	}
-	return columns, rows, nil
+	if f.applyMatrix != nil || f.dropMatrix {
+		return columns, rows, f.applyMatrix, nil
+	}
+	return columns, rows, cellTruncated, nil
 }
 
 // fakeNavSchemaInspector implements QuerySchemaInspector for navigation tests.

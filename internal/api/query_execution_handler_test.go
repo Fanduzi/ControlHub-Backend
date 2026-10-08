@@ -1301,8 +1301,8 @@ func (applyPathDisclosure) PreflightRelatedRecords(context.Context, string, uint
 	return service.DisclosurePlan{}, nil
 }
 
-func (applyPathDisclosure) Apply(service.DisclosurePlan, []model.QueryResultColumn, [][]any) ([]model.QueryResultColumn, [][]any, error) {
-	return nil, nil, service.ErrQueryDisclosureBlocked
+func (applyPathDisclosure) Apply(service.DisclosurePlan, []model.QueryResultColumn, [][]any, [][]bool) ([]model.QueryResultColumn, [][]any, [][]bool, error) {
+	return nil, nil, nil, service.ErrQueryDisclosureBlocked
 }
 
 type applyPathInspector struct{}

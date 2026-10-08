@@ -1,7 +1,7 @@
 // Package service provides tests for QueryDisclosureService.
 // input: testing, internal/model, fakeDisclosureReader, fakeDisclosureWriter, fakeSchemaInspector, fakeTargetRepo
 // output: TestPreflight*, TestPreflightRelatedRecords*, TestApply*, TestUpdatePolicy*, TestCreatePolicy*, TestDeletePolicy* functions
-// pos: Verifies fail-closed preflight/apply behavior, policy CRUD sentinel mapping, and the T9-A engine-conditional schema gate
+// pos: Verifies fail-closed preflight/apply behavior, policy CRUD sentinel mapping, the T9-A engine-conditional schema gate, and T8-B matrix carry-through (masked cells clear flags; missing/misaligned matrices are internal evidence errors)
 // note: if this file changes, update header and README.md
 package service
 
@@ -444,6 +444,20 @@ func TestPreflightRelatedRecords_InspectorFailure_ReturnsBackendSentinel(t *test
 	}
 }
 
+// allFalseApplyMatrix builds a structurally valid all-false truncation matrix
+// for the given columns/rows — the honest clean-page shape a real executor
+// emits (never a substitute for missing evidence).
+func allFalseApplyMatrix(columns []model.QueryResultColumn, rows [][]any) [][]bool {
+	if len(rows) == 0 {
+		return nil
+	}
+	matrix := make([][]bool, len(rows))
+	for i := range matrix {
+		matrix[i] = make([]bool, len(columns))
+	}
+	return matrix
+}
+
 func TestApply_TransformsRows(t *testing.T) {
 	t.Parallel()
 
@@ -518,7 +532,7 @@ func TestApply_TransformsRows(t *testing.T) {
 			svc := &QueryDisclosureService{}
 
 			// When: Apply transforms the result set.
-			gotColumns, gotRows, applyErr := svc.Apply(tt.plan, tt.columns, tt.rows)
+			gotColumns, gotRows, gotMatrix, applyErr := svc.Apply(tt.plan, tt.columns, tt.rows, allFalseApplyMatrix(tt.columns, tt.rows))
 			if applyErr != nil {
 				t.Fatalf("Apply() returned unexpected error: %v", applyErr)
 			}
@@ -544,8 +558,109 @@ func TestApply_TransformsRows(t *testing.T) {
 					}
 				}
 			}
+			// Clean input stays clean: masking a NULL keeps false; a masked
+			// cell's flag clears because the delivered value is not truncated.
+			if len(gotRows) > 0 && len(gotMatrix) != len(gotRows) {
+				t.Fatalf("matrix rows = %d, want %d", len(gotMatrix), len(gotRows))
+			}
 		})
 	}
+}
+
+// TestApply_TruncationMatrix proves the T8-B flag contract inside Apply:
+// masked cells always publish flag=false (the delivered "[MASKED]"/NULL is
+// never a truncated raw), raw cells keep their honest flags, and the output
+// owns its matrix — mutating the caller's matrix must not reach the result.
+func TestApply_TruncationMatrix(t *testing.T) {
+	t.Parallel()
+	svc := &QueryDisclosureService{}
+
+	t.Run("masked cell clears the truncated flag", func(t *testing.T) {
+		plan := DisclosurePlan{Columns: []ColumnDisclosure{
+			{Mode: model.ResultDisclosureMaskedNoCopy, CopyAllowed: false},
+			{Mode: model.ResultDisclosureRawCopyAllowed, CopyAllowed: true},
+		}}
+		columns := []model.QueryResultColumn{{Name: "ssn"}, {Name: "note"}}
+		rows := [][]any{{"prefix...", "raw-prefix"}}
+		matrix := [][]bool{{true, true}}
+
+		_, gotRows, gotMatrix, err := svc.Apply(plan, columns, rows, matrix)
+		if err != nil {
+			t.Fatalf("Apply() error = %v", err)
+		}
+		if gotRows[0][0] != maskedReplacement || gotMatrix[0][0] {
+			t.Fatalf("masked cell = %v flag %v, want [MASKED] with flag cleared", gotRows[0][0], gotMatrix[0][0])
+		}
+		if gotRows[0][1] != "raw-prefix" || !gotMatrix[0][1] {
+			t.Fatalf("raw truncated cell must keep its flag: %v", gotMatrix)
+		}
+	})
+
+	t.Run("masked NULL stays NULL with flag false", func(t *testing.T) {
+		plan := DisclosurePlan{Columns: []ColumnDisclosure{
+			{Mode: model.ResultDisclosureMaskedNoCopy, CopyAllowed: false},
+		}}
+		columns := []model.QueryResultColumn{{Name: "ssn"}}
+		rows := [][]any{{nil}}
+		matrix := [][]bool{{false}}
+
+		_, gotRows, gotMatrix, err := svc.Apply(plan, columns, rows, matrix)
+		if err != nil {
+			t.Fatalf("Apply() error = %v", err)
+		}
+		if gotRows[0][0] != nil || gotMatrix[0][0] {
+			t.Fatalf("masked NULL = %v flag %v, want nil/false", gotRows[0][0], gotMatrix[0][0])
+		}
+	})
+
+	t.Run("all-masked page still rejects a missing matrix", func(t *testing.T) {
+		plan := DisclosurePlan{Columns: []ColumnDisclosure{
+			{Mode: model.ResultDisclosureMaskedNoCopy, CopyAllowed: false},
+		}}
+		columns := []model.QueryResultColumn{{Name: "ssn"}}
+		rows := [][]any{{"secret"}}
+
+		_, _, _, err := svc.Apply(plan, columns, rows, nil)
+		if err == nil || !errors.Is(err, errResultContractInvalid) {
+			t.Fatalf("Apply() error = %v, want errResultContractInvalid — masking never bypasses evidence", err)
+		}
+	})
+
+	t.Run("misaligned matrix rejected even fully masked", func(t *testing.T) {
+		plan := DisclosurePlan{Columns: []ColumnDisclosure{
+			{Mode: model.ResultDisclosureMaskedNoCopy, CopyAllowed: false},
+		}}
+		columns := []model.QueryResultColumn{{Name: "ssn"}}
+		rows := [][]any{{"a"}, {"b"}}
+
+		_, _, _, err := svc.Apply(plan, columns, rows, [][]bool{{false}})
+		if !errors.Is(err, errResultContractInvalid) {
+			t.Fatalf("Apply() error = %v, want errResultContractInvalid", err)
+		}
+	})
+
+	t.Run("output matrix owns its slices", func(t *testing.T) {
+		plan := DisclosurePlan{Columns: []ColumnDisclosure{
+			{Mode: model.ResultDisclosureRawCopyAllowed, CopyAllowed: true},
+			{Mode: model.ResultDisclosureRawCopyAllowed, CopyAllowed: true},
+		}}
+		columns := []model.QueryResultColumn{{Name: "a"}, {Name: "b"}}
+		rows := [][]any{{"x", "y"}}
+		matrix := [][]bool{{true, true}}
+
+		_, _, gotMatrix, err := svc.Apply(plan, columns, rows, matrix)
+		if err != nil {
+			t.Fatalf("Apply() error = %v", err)
+		}
+		matrix[0][0] = false // mutate caller input
+		if !gotMatrix[0][0] {
+			t.Fatal("result matrix must not alias caller input")
+		}
+		gotMatrix[0][1] = false // mutate result
+		if !matrix[0][1] {
+			t.Fatal("mutating the result matrix must not reach the caller's input")
+		}
+	})
 }
 
 func TestApply_EmptyPlanBlocks(t *testing.T) {
@@ -557,7 +672,7 @@ func TestApply_EmptyPlanBlocks(t *testing.T) {
 	rows := [][]any{{42}}
 
 	// When: Apply is called with an empty plan.
-	_, _, applyErr := svc.Apply(DisclosurePlan{}, columns, rows)
+	_, _, _, applyErr := svc.Apply(DisclosurePlan{}, columns, rows, allFalseApplyMatrix(columns, rows))
 
 	// Then: empty plan must be rejected (fail-closed). Raw rows must not pass through.
 	if applyErr == nil {
@@ -650,7 +765,7 @@ func TestApply_RejectsRawModeWithCopyAllowedFalse(t *testing.T) {
 	rows := [][]any{{42}}
 
 	// When: Apply is called with invalid mode/copy pair.
-	_, _, err := svc.Apply(plan, columns, rows)
+	_, _, _, err := svc.Apply(plan, columns, rows, allFalseApplyMatrix(columns, rows))
 
 	// Then: ErrQueryDisclosureBlocked is returned.
 	if err == nil {
@@ -673,7 +788,7 @@ func TestApply_RejectsMaskedModeWithCopyAllowedTrue(t *testing.T) {
 	rows := [][]any{{"123-45-6789"}}
 
 	// When: Apply is called with invalid mode/copy pair.
-	_, _, err := svc.Apply(plan, columns, rows)
+	_, _, _, err := svc.Apply(plan, columns, rows, allFalseApplyMatrix(columns, rows))
 
 	// Then: ErrQueryDisclosureBlocked is returned.
 	if err == nil {
@@ -696,7 +811,7 @@ func TestApply_RejectsBlockedMode(t *testing.T) {
 	rows := [][]any{{42}}
 
 	// When: Apply is called with blocked mode.
-	_, _, err := svc.Apply(plan, columns, rows)
+	_, _, _, err := svc.Apply(plan, columns, rows, allFalseApplyMatrix(columns, rows))
 
 	// Then: ErrQueryDisclosureBlocked is returned.
 	if err == nil {
@@ -719,7 +834,7 @@ func TestApply_RejectsUnknownMode(t *testing.T) {
 	rows := [][]any{{42}}
 
 	// When: Apply is called with unknown mode.
-	_, _, err := svc.Apply(plan, columns, rows)
+	_, _, _, err := svc.Apply(plan, columns, rows, allFalseApplyMatrix(columns, rows))
 
 	// Then: ErrQueryDisclosureBlocked is returned.
 	if err == nil {

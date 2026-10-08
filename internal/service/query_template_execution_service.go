@@ -1,7 +1,7 @@
 // Package service provides the governed template-execution adapter.
 // input: bytes, context, database/sql, encoding/json, errors, fmt, internal/model
 // output: TemplateValueValidationError, QueryExecutionService.WithTemplateExecution, QueryExecutionService.ExecuteSavedStatement
-// pos: User-only fresh-query-actor saved-statement execution that passes a validated user identity into the shared evidence chain without template identity/values
+// pos: User-only fresh-query-actor saved-statement execution that passes a validated user identity into the shared evidence chain without template identity/values; client capabilities flow into the shared post-finalize delivery gate (T8-B)
 // note: if this file changes, update this header and module README.md.
 package service
 
@@ -131,7 +131,7 @@ func (s *QueryExecutionService) ExecuteSavedStatement(ctx context.Context, actor
 	return s.executeGuardedChain(ctx, target, identity, access.dsn, &evidenceSafeQuery,
 		func(execCtx context.Context, dsn string) (QueryDatabaseResult, error) {
 			return s.executor.QueryTemplate(execCtx, dsn, guardedTemplate)
-		}, page, pageSize, start)
+		}, req.Capabilities, page, pageSize, start)
 }
 
 // validateTemplateValues decodes the raw JSON values into typed values and

@@ -19,7 +19,7 @@ HTTP handlers, chi routing, CORS middleware, and fake-repo test infrastructure.
 | machine_principal_handler.go | Admin-only machine principal create/list and credential rotate/revoke handlers |
 | dictionary_handler.go | Dictionary list handlers (environments, owners, roles, resource-types, relation-types, lifecycle-statuses, health-statuses) |
 | query_schema_handler.go | Schema metadata handlers, including PostgreSQL schema list and the unsupported table-definition response |
-| query_execution_handler.go | User-or-machine POST ordinary execute plus fresh-User saved-statement execution, related-record navigation, execution history, and exact owner-only successful statement detail handlers; migration-29 contract fields (database, schema, clientExecutionId, source.schema) fail closed until their owning tickets wire them |
+| query_execution_handler.go | User-or-machine POST ordinary execute plus fresh-User saved-statement execution, related-record navigation, execution history, and exact owner-only successful statement detail handlers; migration-29 contract fields (database, schema, clientExecutionId, source.schema) fail closed until their owning tickets wire them; post-finalize result-contract refusal maps to 400 `result_contract_upgrade_required` on all three governed result paths (T8-B) |
 | query_workspace_handler.go | User-only singular query workspace GET/strict bounded PUT with controlled OCC conflict mapping |
 | query_credential_handler.go | Phase 38A credential metadata handlers (GET/PUT/DELETE) with the composite `?database=` connection selector |
 | query_disclosure_handler.go | Phase 38Q disclosure policy CRUD/list handlers (handler-admin) |
@@ -41,6 +41,7 @@ HTTP handlers, chi routing, CORS middleware, and fake-repo test infrastructure.
 | query_execution_handler_test.go | Query execution handler tests, including authenticated execution identity, per-row restore eligibility, owner-only fresh statement detail, fail-closed unwired contract fields, and controlled error mapping |
 | query_workspace_handler_test.go | Authenticated owner GET/PUT, strict JSON/size, validation, and OCC mapping tests |
 | navigate_related_records_handler_test.go | Related-record navigation handler tests, including Preflight and Apply-path disclosure vs not-allowed Controlled Error Codes and fail-closed unwired contract fields |
+| query_result_contract_handler_test.go | T8-B HTTP mapping tests: ErrResultContractUpgradeRequired → 400 `result_contract_upgrade_required` on execute, saved-execute, and related-records with no rows in the refusal envelope |
 | query_saved_statement_handler_test.go | Saved statement handler tests |
 | query_saved_statement_execution_handler_test.go | Template-execution handler tests (strict request decoding, controlled field errors, `query_result_disclosure_blocked`, fail-closed clientExecutionId) |
 | named_inventory_view_handler_test.go | Named inventory view router tests, including authentication for every CRUD route, shared-management metadata, strict JSON, and controlled errors |
@@ -91,7 +92,10 @@ Disclosure policy error mapping: a duplicate-scope POST answers `409` with the
 answers `404` with `disclosure_policy_not_found`. Execute and related-record
 disclosure blocks — including Apply after a successful executor run — publish
 `403` with `query_result_disclosure_blocked`; target-not-enabled refusals
-remain `query_not_allowed`.
+remain `query_not_allowed`. Post-finalize result-contract refusals (a delivered
+page containing truncated cells but no declared `cellTruncated` capability)
+publish `400` with `result_contract_upgrade_required` on all three governed
+result paths (T8-B).
 | GET | /query-targets/{id}/saved-statements | List saved statements for a query target (`database` selects the composite connection scope; absent reads the legacy empty scope) |
 | POST | /query-targets/{id}/saved-statements | Create a saved statement |
 | PUT | /query-targets/{id}/saved-statements/{statementId} | Update a saved statement |

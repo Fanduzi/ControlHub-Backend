@@ -4,7 +4,7 @@
 // navigation across resource types.
 // input: database/sql, testing, internal/model, internal/repository/mysql, internal/service, canonical manual-origin target fixtures
 // output: TestNavigateRelatedRecords_Integration_* cases
-// pos: Proves relation-driven navigation over real MySQL state
+// pos: Proves relation-driven navigation over real MySQL state; the fixture also wires the saved-statement execute route so T8-B gate tests cover all three governed paths
 // note: if this file changes, update header and README.md
 package integration
 
@@ -121,6 +121,9 @@ func setupNavigateFixture(t *testing.T) (string, uint64, *sql.DB) {
 			service.NewMySQLSchemaInspector(),
 			queryTargetRepo,
 		),
+	).WithTemplateExecution(
+		mysql.NewQuerySavedStatementRepository(db),
+		service.NewTemplateStatementCompiler(),
 	)
 
 	dictRepo := mysql.NewDictionaryRepository(db)
@@ -145,6 +148,12 @@ func setupNavigateFixture(t *testing.T) (string, uint64, *sql.DB) {
 		QueryTargetService:     service.NewQueryTargetService(queryTargetRepo).WithCredentialReader(queryExecutionRepo).WithCredentialResolver(credentialResolver),
 		QueryCredentialService: service.NewQueryCredentialService(queryTargetRepo, queryExecutionRepo, credentialResolver),
 		QueryExecutionService:  queryExecutionSvc,
+		QuerySavedStatementService: service.NewQuerySavedStatementService(
+			mysql.NewQuerySavedStatementRepository(db),
+			mysql.NewQuerySavedStatementRepository(db),
+			queryTargetRepo,
+			service.NewQueryGuard(service.QueryGuardConfig{DefaultMaxRows: 100, HardMaxRows: 500}),
+		),
 		QuerySchemaService: service.NewQuerySchemaService(
 			service.NewTargetAccessResolver(queryTargetRepo, queryExecutionRepo, credentialResolver),
 			service.NewMySQLSchemaInspector(),

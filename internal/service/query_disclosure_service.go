@@ -1,7 +1,7 @@
 // Package service evaluates and applies result-disclosure policies for query results (fail-closed).
 // input: context, database/sql, errors, fmt, mysql DSN, internal/model, QuerySchemaInspector, QueryTargetRepository
 // output: QueryDisclosureService, DisclosurePlan, ColumnDisclosure, QueryDisclosureReader/Writer, ErrQueryDisclosure* sentinels
-// pos: fail-closed disclosure governance (Phase 38Q); policy refusals stay blocked while machinery failures use a distinct backend sentinel (Issue #35); management paths enforce the canonical five-part scope with the engine-conditional schema rule (T9-A) and share one name-shape validation path across create/update/delete (T9-A-R1)
+// pos: fail-closed disclosure governance (Phase 38Q); policy refusals stay blocked while machinery failures use a distinct backend sentinel (Issue #35); Apply carries the cellTruncated matrix through and clears flags on masked replacements (T8-B); management paths enforce the canonical five-part scope with the engine-conditional schema rule (T9-A) and share one name-shape validation path across create/update/delete (T9-A-R1)
 // note: if this file changes, update header and README.md
 package service
 
@@ -227,14 +227,23 @@ func (s *QueryDisclosureService) PreflightRelatedRecords(
 	return s.buildDisclosurePlan(ctx, targetResourceID, projection)
 }
 
-// Apply transforms result rows according to the disclosure plan. For
-// masked_no_copy columns, non-null values are replaced with "[MASKED]". For
-// raw_copy_allowed columns, values pass through unchanged. Returns transformed
-// rows and updated column metadata with DisplayMode/CopyAllowed.
+// Apply transforms result rows and their truncation matrix according to the
+// disclosure plan. For masked_no_copy columns, non-null values are replaced
+// with "[MASKED]" and the delivered cell's truncation flag is cleared — the
+// published value is never a truncated raw, so a page whose only oversized
+// cells are masked stays deliverable to capability-less clients (G7). For
+// raw_copy_allowed columns, values and their flags pass through unchanged —
+// the flag describes the delivered cell, so a truncated raw prefix keeps true.
+// Returns transformed rows, the aligned transformed matrix, and updated column
+// metadata with DisplayMode/CopyAllowed.
 //
 // Returns an error if the plan column count doesn't match the result column
 // count — this catches schema drift between preflight and execution that could
-// otherwise leak unplanned raw values.
+// otherwise leak unplanned raw values. The input row/matrix relationship is
+// validated before any masking: a missing or misaligned matrix on a non-empty
+// page (or a residual matrix on a zero-row page) is internal corrupt evidence
+// (errResultContractInvalid → backend failure), never a policy refusal and
+// never silently repaired.
 //
 // Defensive validation: each ColumnDisclosure is validated before copying rows.
 // Invalid mode/copy pairs, blocked mode, empty mode, or unknown values cause
@@ -243,26 +252,33 @@ func (s *QueryDisclosureService) Apply(
 	plan DisclosurePlan,
 	columns []model.QueryResultColumn,
 	rows [][]any,
-) ([]model.QueryResultColumn, [][]any, error) {
+	cellTruncated [][]bool,
+) ([]model.QueryResultColumn, [][]any, [][]bool, error) {
 	if len(plan.Columns) == 0 {
-		return nil, nil, fmt.Errorf("%w: disclosure plan has no columns; cannot validate result safety", ErrQueryDisclosureBlocked)
+		return nil, nil, nil, fmt.Errorf("%w: disclosure plan has no columns; cannot validate result safety", ErrQueryDisclosureBlocked)
 	}
 
 	if len(plan.Columns) != len(columns) {
-		return nil, nil, fmt.Errorf("%w: plan has %d columns but result has %d", ErrQueryDisclosureBlocked, len(plan.Columns), len(columns))
+		return nil, nil, nil, fmt.Errorf("%w: plan has %d columns but result has %d", ErrQueryDisclosureBlocked, len(plan.Columns), len(columns))
 	}
 
 	// Defensive validation: verify each column disclosure before copying rows.
 	for i, cd := range plan.Columns {
 		if err := cd.Mode.Validate(); err != nil {
-			return nil, nil, fmt.Errorf("%w: column %d has invalid mode: %v", ErrQueryDisclosureBlocked, i, err)
+			return nil, nil, nil, fmt.Errorf("%w: column %d has invalid mode: %v", ErrQueryDisclosureBlocked, i, err)
 		}
 		if cd.Mode == model.ResultDisclosureRawCopyAllowed && !cd.CopyAllowed {
-			return nil, nil, fmt.Errorf("%w: column %d has raw mode but copyAllowed=false", ErrQueryDisclosureBlocked, i)
+			return nil, nil, nil, fmt.Errorf("%w: column %d has raw mode but copyAllowed=false", ErrQueryDisclosureBlocked, i)
 		}
 		if cd.Mode == model.ResultDisclosureMaskedNoCopy && cd.CopyAllowed {
-			return nil, nil, fmt.Errorf("%w: column %d has masked mode but copyAllowed=true", ErrQueryDisclosureBlocked, i)
+			return nil, nil, nil, fmt.Errorf("%w: column %d has masked mode but copyAllowed=true", ErrQueryDisclosureBlocked, i)
 		}
+	}
+
+	// Matrix evidence is validated before any masking — even a fully masked
+	// page cannot pass with missing or misaligned evidence.
+	if err := validateCellTruncatedMatrix(len(columns), rows, cellTruncated); err != nil {
+		return nil, nil, nil, err
 	}
 
 	// Update column metadata with disclosure decisions.
@@ -273,21 +289,26 @@ func (s *QueryDisclosureService) Apply(
 		outColumns[i].CopyAllowed = cd.CopyAllowed
 	}
 
-	// Transform row values for masked columns.
+	// Transform row values and flags for masked columns. The output owns its
+	// rows and matrix; inputs are never mutated.
 	outRows := make([][]any, len(rows))
+	outMatrix := CloneCellTruncated(cellTruncated)
 	for r, row := range rows {
 		if len(row) != len(columns) {
-			return nil, nil, fmt.Errorf("%w: row %d has %d cells but expected %d", ErrQueryDisclosureBlocked, r, len(row), len(columns))
+			return nil, nil, nil, fmt.Errorf("%w: row %d has %d cells but expected %d", ErrQueryDisclosureBlocked, r, len(row), len(columns))
 		}
 		outRow := make([]any, len(row))
 		copy(outRow, row)
 		for c, cd := range plan.Columns {
 			outRow[c] = applyDisclosureMask(outRow[c], cd.Mode)
+			if cd.Mode == model.ResultDisclosureMaskedNoCopy {
+				outMatrix[r][c] = false
+			}
 		}
 		outRows[r] = outRow
 	}
 
-	return outColumns, outRows, nil
+	return outColumns, outRows, outMatrix, nil
 }
 
 // buildDisclosurePlan looks up policies for each projected column and assembles
