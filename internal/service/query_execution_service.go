@@ -143,6 +143,10 @@ type QueryDatabaseResult struct {
 	Rows      [][]any
 	RowCount  int
 	Truncated bool
+	// CellTruncated is the executor-produced per-cell truncation matrix
+	// aligned with Rows (T8 contract seam). Nil means the producer emitted no
+	// per-cell information — distinct from a delivered all-false matrix.
+	CellTruncated [][]bool
 }
 
 // Clock abstracts time so execution durations and timestamps are deterministic
