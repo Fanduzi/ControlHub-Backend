@@ -75,15 +75,21 @@ const (
 
 // claimStoreError maps a claim-store failure to a safe internal error: raw
 // driver/database text never escapes, while caller cancellation and deadlines
-// stay classifiable via errors.Is against the context error.
+// stay classifiable via errors.Is against the bare context sentinel — the
+// lower-layer error itself is never re-wrapped, because a wrapped or joined
+// context sentinel can carry sensitive text in its message.
 func claimStoreError(ctx context.Context, err error) error {
 	if cerr := ctx.Err(); cerr != nil {
 		return fmt.Errorf("%w: %w", errQueryExecutionClaimStore, cerr)
 	}
-	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
-		return fmt.Errorf("%w: %w", errQueryExecutionClaimStore, err)
+	switch {
+	case errors.Is(err, context.Canceled):
+		return fmt.Errorf("%w: %w", errQueryExecutionClaimStore, context.Canceled)
+	case errors.Is(err, context.DeadlineExceeded):
+		return fmt.Errorf("%w: %w", errQueryExecutionClaimStore, context.DeadlineExceeded)
+	default:
+		return errQueryExecutionClaimStore
 	}
-	return errQueryExecutionClaimStore
 }
 
 // TryClaimExecution is the single atomic admission gate for a keyed execution
