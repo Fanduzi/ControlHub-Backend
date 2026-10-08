@@ -96,7 +96,7 @@ type QueryExecuteRequest struct {
 	// Rejected while non-empty until claims are wired (T10).
 	ClientExecutionID string `json:"clientExecutionId,omitempty"`
 	// Capabilities declares client result-contract capabilities (e.g.
-	// "cellTruncated"); declaration-only until the truncation gate (T8).
+	// "cellTruncated"); checked by the post-finalize delivery gate (T8-B).
 	Capabilities []string `json:"capabilities,omitempty"`
 }
 

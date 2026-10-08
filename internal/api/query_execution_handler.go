@@ -1,7 +1,7 @@
 // Package api provides HTTP handlers and routing for the ControlHub REST API.
 // input: bytes, context, errors, fmt, io, net/http, strconv, strings, time, chi, internal/model, internal/service
 // output: user-or-machine ordinary execute identity, user-only sibling query and owner-only statement handlers, controlled error mapping, queryExecutionAPI/queryExecutionStatementAPI interfaces
-// pos: HTTP handlers for governed execute/history/owner-only statement retrieval, saved-statement execution, and related-record navigation. Execute/related disclosure blocks publish query_result_disclosure_blocked (Issue #48); target-not-enabled remains query_not_allowed.
+// pos: HTTP handlers for governed execute/history/owner-only statement retrieval, saved-statement execution, and related-record navigation. Execute/related disclosure blocks publish query_result_disclosure_blocked (Issue #48); target-not-enabled remains query_not_allowed; post-finalize result-contract refusals publish 409 result_contract_upgrade_required on all three result routes (T8-B).
 // note: if this file changes, update header and README.md
 package api
 
@@ -334,6 +334,11 @@ func writeQueryExecutionError(w http.ResponseWriter, err error) {
 		writeJSONError(w, http.StatusRequestTimeout, "query_timeout", err.Error())
 	case errors.Is(err, service.ErrQueryBackendFailure):
 		writeJSONError(w, http.StatusBadGateway, "query_backend_error", err.Error())
+	case errors.Is(err, service.ErrResultContractUpgradeRequired):
+		// T8-B wiring convention: the capability refusal is a post-finalize
+		// delivery refusal — the attempt already recorded success — so the
+		// response is a controlled 409 with no result payload.
+		writeJSONError(w, http.StatusConflict, "result_contract_upgrade_required", err.Error())
 	default:
 		writeJSONError(w, http.StatusInternalServerError, "internal_error", "unexpected server failure")
 	}
@@ -463,6 +468,8 @@ func writeNavigationError(w http.ResponseWriter, err error) {
 		writeJSONError(w, http.StatusRequestTimeout, "query_timeout", err.Error())
 	case errors.Is(err, service.ErrQueryBackendFailure):
 		writeJSONError(w, http.StatusBadGateway, "query_backend_error", err.Error())
+	case errors.Is(err, service.ErrResultContractUpgradeRequired):
+		writeJSONError(w, http.StatusConflict, "result_contract_upgrade_required", err.Error())
 	default:
 		writeJSONError(w, http.StatusInternalServerError, "internal_error", "unexpected server failure")
 	}

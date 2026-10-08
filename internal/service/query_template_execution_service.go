@@ -131,7 +131,7 @@ func (s *QueryExecutionService) ExecuteSavedStatement(ctx context.Context, actor
 	return s.executeGuardedChain(ctx, target, identity, access.dsn, &evidenceSafeQuery,
 		func(execCtx context.Context, dsn string) (QueryDatabaseResult, error) {
 			return s.executor.QueryTemplate(execCtx, dsn, guardedTemplate)
-		}, page, pageSize, start)
+		}, req.Capabilities, page, pageSize, start)
 }
 
 // validateTemplateValues decodes the raw JSON values into typed values and

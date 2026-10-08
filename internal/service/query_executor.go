@@ -1,7 +1,7 @@
 // Package service provides the MySQL/TiDB query executor for the read-only sandbox.
 // input: context, database/sql, fmt, strings, time, go-sql-driver/mysql, internal/model
 // output: MySQLQueryExecutor, NewMySQLQueryExecutor, QueryExecutorCaps, newScanPointer, normalizeScanned (implements QueryDatabaseExecutor)
-// pos: Runs guarded ordinary and compiler-owned template SELECTs against a target DB under read-only transactions with column/cell/payload caps; paginated windows reject on payload-cap overflow, non-paged results truncate; preserves SQL NULL as JSON null
+// pos: Runs guarded ordinary, compiler-owned template, and navigation SELECTs against a target DB under read-only transactions with column/cell/payload caps; emits the aligned cellTruncated matrix from the same scan pass that retains values; paginated windows reject on payload-cap overflow, non-paged results truncate; preserves SQL NULL as JSON null
 // note: if this file changes, update header and README.md
 package service
 
@@ -158,6 +158,7 @@ func (e *MySQLQueryExecutor) scanBoundedRows(rows *sql.Rows, limit int, paginate
 	}
 
 	result := QueryDatabaseResult{Columns: columns, Rows: make([][]any, 0)}
+	cellTruncated := make([][]bool, 0)
 	responseBytes := 0
 
 	for rows.Next() {
@@ -173,10 +174,15 @@ func (e *MySQLQueryExecutor) scanBoundedRows(rows *sql.Rows, limit int, paginate
 			return QueryDatabaseResult{}, err
 		}
 		row := make([]any, len(colTypes))
+		rowTruncated := make([]bool, len(colTypes))
 		rowBytes := 0
 		for i, p := range ptrs {
-			safe, n := e.toJSONSafe(normalizeScanned(p))
+			safe, n, truncated, err := e.toJSONSafe(normalizeScanned(p))
+			if err != nil {
+				return QueryDatabaseResult{}, err
+			}
 			row[i] = safe
+			rowTruncated[i] = truncated
 			rowBytes += n
 		}
 		responseBytes += rowBytes
@@ -188,11 +194,16 @@ func (e *MySQLQueryExecutor) scanBoundedRows(rows *sql.Rows, limit int, paginate
 			break
 		}
 		result.Rows = append(result.Rows, row)
+		// The matrix row appends in lockstep with the delivered row: a row
+		// dropped by the response-byte budget above leaves no dangling
+		// truncation evidence behind (T8-B).
+		cellTruncated = append(cellTruncated, rowTruncated)
 		result.RowCount++
 	}
 	if err := rows.Err(); err != nil {
 		return QueryDatabaseResult{}, err
 	}
+	result.CellTruncated = cellTruncated
 	return result, nil
 }
 
@@ -252,35 +263,39 @@ func normalizeScanned(p any) any {
 	}
 }
 
-// toJSONSafe converts a scanned database value into a JSON-safe value and returns
-// its approximate serialized byte weight for response-cap accounting. []byte and
-// over-long strings are truncated to the cell cap rather than failing the query.
-func (e *MySQLQueryExecutor) toJSONSafe(v any) (any, int) {
+// toJSONSafe converts one materialized scan value into its retained JSON-safe
+// value, its approximate serialized byte weight for response-cap accounting,
+// and the cellTruncated flag — produced in the same pass through the approved
+// result-contract truncation primitive so the flag always describes the
+// original value, never a post-hoc guess (T8-B). Truncation is rune-safe and
+// never splits UTF-8. Invalid UTF-8 text and undeclared materialized shapes
+// surface the fixed internal error through the existing failure path rather
+// than being masked by byte replacement or reformatting.
+func (e *MySQLQueryExecutor) toJSONSafe(v any) (any, int, bool, error) {
+	safe, truncated, err := TruncateCellValue(v, e.caps.MaxCellBytes)
+	if err != nil {
+		return nil, 0, false, err
+	}
+	return safe, jsonSafeWeight(safe), truncated, nil
+}
+
+// jsonSafeWeight approximates a materialized value's serialized byte weight
+// for the total response cap. It only sees the declared shapes TruncateCellValue
+// already accepted; anything else is unreachable and weighs zero.
+func jsonSafeWeight(v any) int {
 	switch x := v.(type) {
 	case nil:
-		return nil, 0
-	case []byte:
-		if len(x) > e.caps.MaxCellBytes {
-			x = x[:e.caps.MaxCellBytes]
-		}
-		s := string(x)
-		return s, len(s)
+		return 0
 	case string:
-		if len(x) > e.caps.MaxCellBytes {
-			x = x[:e.caps.MaxCellBytes]
-		}
-		return x, len(x)
+		return len(x)
 	case time.Time:
-		return x, len(x.Format(time.RFC3339Nano))
-	case int64:
-		return x, 8
-	case float64:
-		return x, 8
+		return len(x.Format(time.RFC3339Nano))
+	case int64, float64:
+		return 8
 	case bool:
-		return x, 1
+		return 1
 	default:
-		s := fmt.Sprintf("%v", v)
-		return s, len(s)
+		return 0
 	}
 }
 

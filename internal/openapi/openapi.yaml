@@ -540,6 +540,21 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/ErrorResponse"
+        "409":
+          description: >
+            Result delivery refused: the page contains at least one truncated
+            cell but the request did not declare the cellTruncated capability.
+            The attempt was still recorded as success; the response carries no
+            result rows. Re-submit with capabilities: [cellTruncated].
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              examples:
+                capabilityRequired:
+                  value:
+                    error: result_contract_upgrade_required
+                    message: result contract upgrade required
         "502":
           description: Target database rejected or connection failed
           content:
@@ -789,6 +804,21 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/ErrorResponse"
+        "409":
+          description: >
+            Result delivery refused: the page contains at least one truncated
+            cell but the request did not declare the cellTruncated capability.
+            The attempt was still recorded as success; the response carries no
+            result rows. Re-submit with capabilities: [cellTruncated].
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              examples:
+                capabilityRequired:
+                  value:
+                    error: result_contract_upgrade_required
+                    message: result contract upgrade required
         "502":
           description: Target database rejected or connection failed
           content:
@@ -2905,6 +2935,21 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/ErrorResponse"
+        "409":
+          description: >
+            Result delivery refused: the page contains at least one truncated
+            cell but the request did not declare the cellTruncated capability.
+            The attempt was still recorded as success; the response carries no
+            result rows. Re-submit with capabilities: [cellTruncated].
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              examples:
+                capabilityRequired:
+                  value:
+                    error: result_contract_upgrade_required
+                    message: result contract upgrade required
         "502":
           description: Target database backend failure
           content:
@@ -5903,9 +5948,10 @@ components:
             type: string
             enum: [cellTruncated]
           description: >
-            Declared client result-contract capabilities. Declaration-only;
-            the per-cell truncation gate (result_contract_upgrade_required)
-            activates when truncation lands.
+            Declared client result-contract capabilities. Active on the
+            MySQL/TiDB governed paths: a page containing a truncated cell is
+            only delivered when cellTruncated is declared, otherwise the
+            response is result_contract_upgrade_required (409).
     QuerySavedStatementListResponse:
       type: object
       required: [items, pageInfo, canManageSharedTemplates]
@@ -7153,9 +7199,10 @@ components:
             type: string
             enum: [cellTruncated]
           description: >
-            Declared client result-contract capabilities. Declaration-only;
-            the per-cell truncation gate (result_contract_upgrade_required)
-            activates when truncation lands.
+            Declared client result-contract capabilities. Active on the
+            MySQL/TiDB governed paths: a page containing a truncated cell is
+            only delivered when cellTruncated is declared, otherwise the
+            response is result_contract_upgrade_required (409).
         maxRows:
           type: integer
           minimum: 0
@@ -7472,9 +7519,10 @@ components:
             type: string
             enum: [cellTruncated]
           description: >
-            Declared client result-contract capabilities. Declaration-only;
-            the per-cell truncation gate (result_contract_upgrade_required)
-            activates when truncation lands.
+            Declared client result-contract capabilities. Active on the
+            MySQL/TiDB governed paths: a page containing a truncated cell is
+            only delivered when cellTruncated is declared, otherwise the
+            response is result_contract_upgrade_required (409).
     RelatedRecordNavigationResponse:
       type: object
       required:

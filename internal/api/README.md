@@ -19,7 +19,7 @@ HTTP handlers, chi routing, CORS middleware, and fake-repo test infrastructure.
 | machine_principal_handler.go | Admin-only machine principal create/list and credential rotate/revoke handlers |
 | dictionary_handler.go | Dictionary list handlers (environments, owners, roles, resource-types, relation-types, lifecycle-statuses, health-statuses) |
 | query_schema_handler.go | Schema metadata handlers, including PostgreSQL schema list and the unsupported table-definition response |
-| query_execution_handler.go | User-or-machine POST ordinary execute plus fresh-User saved-statement execution, related-record navigation, execution history, and exact owner-only successful statement detail handlers; migration-29 contract fields (database, schema, clientExecutionId, source.schema) fail closed until their owning tickets wire them |
+| query_execution_handler.go | User-or-machine POST ordinary execute plus fresh-User saved-statement execution, related-record navigation, execution history, and exact owner-only successful statement detail handlers; migration-29 contract fields (database, schema, clientExecutionId, source.schema) fail closed until their owning tickets wire them; the post-finalize result-contract refusal maps to a controlled 409 `result_contract_upgrade_required` on all three result routes (T8-B) |
 | query_workspace_handler.go | User-only singular query workspace GET/strict bounded PUT with controlled OCC conflict mapping |
 | query_credential_handler.go | Phase 38A credential metadata handlers (GET/PUT/DELETE) with the composite `?database=` connection selector |
 | query_disclosure_handler.go | Phase 38Q disclosure policy CRUD/list handlers (handler-admin) |

@@ -1,7 +1,7 @@
 // Package service provides business logic for the Phase 37/38S read-only query sandbox.
 // input: context, database/sql, errors, fmt, net, strconv, strings, time, go-sql-driver/mysql, internal/model
 // output: QueryExecutionService, validated user/machine Execute identity, owner-only successful statement retrieval and history restore eligibility, repository/resolver/executor/clock interfaces, sentinel errors, ListHistory, validateDSNBinding
-// pos: Orchestrates ordinary user/machine governed execution plus user-only template/navigation and private statement retrieval/restore projection through one atomic identity-aware evidence implementation while preserving cancellation and disclosure behavior
+// pos: Orchestrates ordinary user/machine governed execution plus user-only template/navigation and private statement retrieval/restore projection through one atomic identity-aware evidence implementation while preserving cancellation and disclosure behavior; evaluates the shared post-finalize result-delivery gate after each committed success pair (T8-B)
 // note: if this file changes, update this header and module README.md.
 package service
 
@@ -277,8 +277,9 @@ func (s *QueryExecutionService) Execute(ctx context.Context, identity model.Quer
 	}
 
 	// The remaining governed chain — disclosure preflight, timed execution,
-	// disclosure apply, history/audit persist, and response build — is shared
-	// with template execution so the two paths cannot drift.
+	// disclosure apply, history/audit persist, post-finalize delivery gate,
+	// and response build — is shared with template execution so the two
+	// paths cannot drift.
 	var page, pageSize int
 	if req.Pagination != nil {
 		page, pageSize = req.Pagination.Page, req.Pagination.PageSize
@@ -286,7 +287,7 @@ func (s *QueryExecutionService) Execute(ctx context.Context, identity model.Quer
 	return s.executeGuardedChain(ctx, target, identity, access.dsn, &guarded,
 		func(execCtx context.Context, dsn string) (QueryDatabaseResult, error) {
 			return s.executor.Query(execCtx, dsn, guarded)
-		}, page, pageSize, start)
+		}, req.Capabilities, page, pageSize, start)
 }
 
 // clampProductionMaxRows applies the tighter production release cap before the
@@ -300,9 +301,12 @@ func clampProductionMaxRows(environment string, requested int) int {
 }
 
 // executeGuardedChain runs the post-guard governed chain: disclosure preflight,
-// a timed executor run, disclosure apply, and the history/audit persist, then
-// builds the response. It is shared by Execute and ExecuteSavedStatement so
-// template execution reuses the exact ordinary execution chain per page.
+// a timed executor run, disclosure apply, the history/audit persist, and the
+// shared post-finalize result-delivery gate, then builds the response. It is
+// shared by Execute and ExecuteSavedStatement so template execution reuses the
+// exact ordinary execution chain per page. capabilities is the client's
+// declared result-contract capability set, checked only after the success
+// evidence pair is durably written.
 func (s *QueryExecutionService) executeGuardedChain(
 	ctx context.Context,
 	target model.QueryTarget,
@@ -310,6 +314,7 @@ func (s *QueryExecutionService) executeGuardedChain(
 	dsn string,
 	guarded *GuardedQuery,
 	run func(execCtx context.Context, dsn string) (QueryDatabaseResult, error),
+	capabilities []string,
 	page, pageSize int,
 	start time.Time,
 ) (model.QueryExecuteResponse, error) {
@@ -350,11 +355,32 @@ func (s *QueryExecutionService) executeGuardedChain(
 	result.Columns = columns
 	result.Rows = rows
 
+	// Producer evidence check before finalize: a missing or misaligned
+	// cellTruncated matrix is an internal producer failure — recorded as a
+	// failed attempt, never filled in with fabricated all-false evidence and
+	// never surfaced as a client-capability issue (T8-B).
+	if err := validateCellTruncatedMatrix(len(result.Columns), result.Rows, result.CellTruncated); err != nil {
+		return s.recordTerminalOutcome(ctx, target, identity, guarded, err, start)
+	}
+
 	// Success: record (history + audit) then return. A recording failure must
 	// not yield a success response, so execID is guaranteed non-zero here.
 	execID, perr := s.persistAttempt(ctx, target, identity, guarded, model.QueryExecutionSuccess, result.RowCount, "", "", start)
 	if perr != nil {
 		return model.QueryExecuteResponse{}, errPersistAttempt
+	}
+
+	// Post-finalize delivery gate (spec G2): the success pair is already
+	// committed, so a capability refusal is a delivery refusal only — the
+	// recorded outcome stays success and no second evidence write happens.
+	decision, derr := DecideResultDelivery(ResultDeliveryInput{
+		Columns:       result.Columns,
+		Rows:          result.Rows,
+		CellTruncated: result.CellTruncated,
+		Capabilities:  capabilities,
+	})
+	if derr != nil {
+		return model.QueryExecuteResponse{}, derr
 	}
 
 	var pagination *model.QueryExecutePaginationResponse
@@ -377,8 +403,9 @@ func (s *QueryExecutionService) executeGuardedChain(
 		TargetResourceID: target.ResourceID,
 		Engine:           target.ConnectionContext.Engine,
 		Columns:          result.Columns,
-		Rows:             result.Rows,
+		Rows:             decision.Rows,
 		RowCount:         result.RowCount,
+		CellTruncated:    decision.CellTruncated,
 		Truncated:        result.Truncated,
 		DurationMs:       s.clock.Now().Sub(start).Milliseconds(),
 		LimitApplied:     guarded.LimitApplied,
@@ -693,6 +720,14 @@ func (s *QueryExecutionService) NavigateRelatedRecords(ctx context.Context, acto
 	result.Columns = columns
 	result.Rows = rows
 
+	// Producer evidence check before finalize: a missing or misaligned
+	// cellTruncated matrix is an internal producer failure — recorded as a
+	// failed attempt, never filled in with fabricated all-false evidence and
+	// never surfaced as a client-capability issue (T8-B).
+	if err := validateCellTruncatedMatrix(len(result.Columns), result.Rows, result.CellTruncated); err != nil {
+		return s.recordNavigationTerminalOutcome(ctx, target, identity, matchedFK, err, start)
+	}
+
 	// 10. Build relation metadata from trusted FK columns.
 	refColumns := make([]string, len(matchedFK.Columns))
 	for i, col := range matchedFK.Columns {
@@ -705,14 +740,28 @@ func (s *QueryExecutionService) NavigateRelatedRecords(ctx context.Context, acto
 		return model.RelatedRecordNavigationResponse{}, errPersistAttempt
 	}
 
+	// 12. Post-finalize delivery gate (spec G2): the success evidence pair is
+	// already committed, so a capability refusal is a delivery refusal only —
+	// the recorded outcome stays success and no second evidence write happens.
+	decision, derr := DecideResultDelivery(ResultDeliveryInput{
+		Columns:       result.Columns,
+		Rows:          result.Rows,
+		CellTruncated: result.CellTruncated,
+		Capabilities:  req.Capabilities,
+	})
+	if derr != nil {
+		return model.RelatedRecordNavigationResponse{}, derr
+	}
+
 	return model.RelatedRecordNavigationResponse{
 		ExecutionID:        execID,
 		Status:             model.QueryExecutionSuccess,
 		TargetResourceID:   target.ResourceID,
 		Engine:             target.ConnectionContext.Engine,
 		Columns:            result.Columns,
-		Rows:               result.Rows,
+		Rows:               decision.Rows,
 		RowCount:           result.RowCount,
+		CellTruncated:      decision.CellTruncated,
 		Truncated:          result.Truncated,
 		DurationMs:         s.clock.Now().Sub(start).Milliseconds(),
 		LimitApplied:       limit,

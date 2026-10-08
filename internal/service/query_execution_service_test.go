@@ -1,7 +1,7 @@
 // Package service provides tests for the Phase 37/38S query execution service.
 // input: context, errors, fmt, strings, testing, time, internal/model
 // output: TestExecute_* including successful-User full SQL, owner-only statement retrieval/history restore eligibility, machine identity terminal outcomes, readiness/credential tests, and repository/resolver/executor/clock fakes
-// pos: Unit boundary for identity-aware governed execution, private statement access and restore projection, atomic terminal evidence, paging, cancellation durability, credential fail-closed behavior, and disclosure error mapping
+// pos: Unit boundary for identity-aware governed execution, private statement access and restore projection, atomic terminal evidence, paging, cancellation durability, credential fail-closed behavior, disclosure error mapping, and executor-fake cellTruncated contract fill (T8-B)
 // note: if this file changes, update header and README.md
 package service
 
@@ -244,9 +244,31 @@ type fakeExecutor struct {
 	gotDSN        string
 	gotNavInput   *RelatedRecordsQueryInput
 	templateCalls int
+	// rawResult returns f.result verbatim — tests inject corrupt truncation
+	// evidence (missing/misaligned matrix) through it. When unset, the fake
+	// reproduces the real executor's contract: a non-empty result always
+	// carries a complete all-false cellTruncated matrix unless the test set
+	// one explicitly (T8-B).
+	rawResult bool
 	// Issue #35: cancels the request context at result-production time (the
 	// query completed successfully before the client cancellation arrived).
 	cancelOnQuery context.CancelFunc
+}
+
+// contractResult returns the fake result with the executor-side matrix
+// contract filled in: the real scan path always emits a cellTruncated matrix
+// aligned with Rows (all-false for clean rows). rawResult bypasses the fill so
+// corrupt-evidence tests can feed missing or misaligned matrices.
+func (f *fakeExecutor) contractResult() QueryDatabaseResult {
+	res := f.result
+	if f.rawResult || res.CellTruncated != nil || len(res.Rows) == 0 {
+		return res
+	}
+	res.CellTruncated = make([][]bool, len(res.Rows))
+	for i := range res.CellTruncated {
+		res.CellTruncated[i] = make([]bool, len(res.Rows[i]))
+	}
+	return res
 }
 
 func (f *fakeExecutor) Query(ctx context.Context, dsn string, guarded GuardedQuery) (QueryDatabaseResult, error) {
@@ -270,7 +292,7 @@ func (f *fakeExecutor) Query(ctx context.Context, dsn string, guarded GuardedQue
 	if f.err != nil {
 		return QueryDatabaseResult{}, f.err
 	}
-	return f.result, nil
+	return f.contractResult(), nil
 }
 
 func (f *fakeExecutor) QueryTemplate(ctx context.Context, dsn string, statement GuardedTemplateStatement) (QueryDatabaseResult, error) {
@@ -287,7 +309,7 @@ func (f *fakeExecutor) QueryTemplate(ctx context.Context, dsn string, statement 
 	if f.err != nil {
 		return QueryDatabaseResult{}, f.err
 	}
-	return f.result, nil
+	return f.contractResult(), nil
 }
 
 func (f *fakeExecutor) QueryRelatedRecords(ctx context.Context, dsn string, input RelatedRecordsQueryInput) (QueryDatabaseResult, error) {
@@ -304,7 +326,7 @@ func (f *fakeExecutor) QueryRelatedRecords(ctx context.Context, dsn string, inpu
 	if f.err != nil {
 		return QueryDatabaseResult{}, f.err
 	}
-	return f.result, nil
+	return f.contractResult(), nil
 }
 
 type fakeClock struct{ t time.Time }

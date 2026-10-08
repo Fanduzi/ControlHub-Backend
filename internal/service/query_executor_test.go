@@ -1,7 +1,7 @@
 // Package service provides unit tests for the query executor scan helpers.
 // input: context, database/sql, errors, regexp, strings, testing, DATA-DOG/go-sqlmock
-// output: TestNewScanPointer_*, TestNormalizeScanned_*, TestScanBoundedRows_*, TestMySQLQueryExecutorQueryTemplate* (executor binding and cap behavior)
-// pos: Unit tests verifying SQL NULL is preserved as nil, non-null numbers stay numbers, and compiler-owned template SQL binds through the read-only executor
+// output: TestNewScanPointer_*, TestNormalizeScanned_*, TestScanBoundedRows_*, TestMySQLQueryExecutorQueryTemplate* (executor binding, cap, and cellTruncated matrix alignment behavior)
+// pos: Unit tests verifying SQL NULL is preserved as nil, non-null numbers stay numbers, the aligned truncation matrix never outlives a dropped row, and compiler-owned template SQL binds through the read-only executor
 // note: if this file changes, update header and README.md
 package service
 
@@ -187,6 +187,49 @@ func TestScanBoundedRows_PaginatedRowLimitStopKeepsTruncatedSuccess(t *testing.T
 	}
 	if result.RowCount != 2 || len(result.Rows) != 2 || !result.Truncated {
 		t.Fatalf("paginated row-limit result = %+v, want full 2-row window truncated", result)
+	}
+}
+
+// TestScanBoundedRows_MatrixAlignsWithDeliveredRows proves the cellTruncated
+// matrix is produced in the same scan pass that retains values and never
+// outlives a dropped row: the over-cap discarded row leaves no matrix row.
+func TestScanBoundedRows_MatrixAlignsWithDeliveredRows(t *testing.T) {
+	t.Parallel()
+	// Given a 10-byte cell cap and a 12-byte response cap over three rows:
+	// row1 "ok" (2B clean), row2 50 x's (truncates to 10B), row3 "tail" (4B)
+	// pushes the response over 12B and is dropped from the delivered page.
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock.New: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	mock.ExpectQuery("select pad from t").WillReturnRows(
+		sqlmock.NewRows([]string{"pad"}).
+			AddRow("ok").
+			AddRow(strings.Repeat("x", 50)).
+			AddRow("tail"),
+	)
+	rows, err := db.Query("select pad from t")
+	if err != nil {
+		t.Fatalf("query mock rows: %v", err)
+	}
+	e := NewMySQLQueryExecutor(QueryExecutorCaps{MaxCellBytes: 10, MaxResponseBytes: 12})
+
+	result, err := e.scanBoundedRows(rows, 10, false)
+	if err != nil {
+		t.Fatalf("scan: %v", err)
+	}
+	if result.RowCount != 2 || len(result.Rows) != 2 || !result.Truncated {
+		t.Fatalf("result = %+v, want 2 delivered rows truncated", result)
+	}
+	if len(result.CellTruncated) != 2 {
+		t.Fatalf("matrix rows = %d, want exactly the 2 delivered rows — the dropped row must leave no evidence", len(result.CellTruncated))
+	}
+	if result.CellTruncated[0][0] || !result.CellTruncated[1][0] {
+		t.Fatalf("matrix = %v, want [[false],[true]]", result.CellTruncated)
+	}
+	if got := result.Rows[1][0].(string); got != strings.Repeat("x", 10) {
+		t.Fatalf("truncated cell = %q, want 10-byte prefix", got)
 	}
 }
 
