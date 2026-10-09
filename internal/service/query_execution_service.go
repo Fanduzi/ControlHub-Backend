@@ -1,7 +1,7 @@
 // Package service provides business logic for the Phase 37/38S read-only query sandbox.
 // input: context, database/sql, errors, fmt, net, strconv, strings, time, go-sql-driver/mysql, internal/model
 // output: QueryExecutionService, validated user/machine Execute identity, owner-only successful statement retrieval and history restore eligibility, repository/resolver/executor/clock interfaces, sentinel errors, ListHistory, validateDSNBinding
-// pos: Orchestrates ordinary user/machine governed execution plus user-only template/navigation and private statement retrieval/restore projection through one atomic identity-aware evidence implementation while preserving cancellation and disclosure behavior; evaluates the shared post-finalize result-delivery gate after each committed success pair (T8-B)
+// pos: Orchestrates ordinary user/machine governed execution plus user-only template/navigation and private statement retrieval/restore projection through one atomic identity-aware evidence implementation while preserving cancellation and disclosure behavior; validates producer result evidence before disclosure (T8-B-R1) and evaluates the shared post-finalize result-delivery gate after each committed success pair (T8-B)
 // note: if this file changes, update this header and module README.md.
 package service
 
@@ -345,6 +345,15 @@ func (s *QueryExecutionService) executeGuardedChain(
 
 	result, err := run(execCtx, dsn)
 	if err != nil {
+		return s.recordTerminalOutcome(ctx, target, identity, guarded, err, start)
+	}
+
+	// Producer evidence check before disclosure: the executor's own
+	// columns/rows/matrix must be internally consistent before Apply runs —
+	// the real Apply classifies row-width corruption as a policy refusal, so
+	// letting it see malformed producer evidence would record rejected instead
+	// of the failed internal fault this is (T8-B-R1).
+	if err := validateCellTruncatedMatrix(len(result.Columns), result.Rows, result.CellTruncated); err != nil {
 		return s.recordTerminalOutcome(ctx, target, identity, guarded, err, start)
 	}
 
@@ -710,6 +719,13 @@ func (s *QueryExecutionService) NavigateRelatedRecords(ctx context.Context, acto
 		Limit:     limit,
 	})
 	if err != nil {
+		return s.recordNavigationTerminalOutcome(ctx, target, identity, matchedFK, err, start)
+	}
+
+	// Producer evidence check before disclosure: malformed executor evidence
+	// is an internal failure — never let Apply reclassify it as a policy
+	// refusal (T8-B-R1).
+	if err := validateCellTruncatedMatrix(len(result.Columns), result.Rows, result.CellTruncated); err != nil {
 		return s.recordNavigationTerminalOutcome(ctx, target, identity, matchedFK, err, start)
 	}
 

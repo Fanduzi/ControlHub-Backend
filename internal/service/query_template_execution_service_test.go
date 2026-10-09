@@ -1,6 +1,6 @@
 // Package service provides tests for governed saved-statement (template) execution.
 // input: context, database/sql, encoding/json, errors, strings, testing, time, internal/model
-// output: TestExecuteSavedStatement* (reread, authorization matrix, typed values, per-page chain, post-target no-value evidence, atomic Execution Evidence Pair writes)
+// output: TestExecuteSavedStatement* (reread, authorization matrix, typed values, per-page chain, post-target no-value evidence, atomic Execution Evidence Pair writes; newTemplateExecutionTestServiceWithDisclosure for injectable disclosure planners)
 // pos: Unit tests for Template Execution rejected/failed evidence, cancellation durability (Issues #35/#61), and per-page disclosure wrapping ErrQueryDisclosureBlocked (Issue #48)
 // note: if this file changes, update this header and module README.md.
 package service
@@ -18,6 +18,15 @@ import (
 )
 
 func newTemplateExecutionTestService(statement model.QuerySavedStatement, readerErr error) (*QueryExecutionService, *fakeExecRepo, *fakeExecutor, *fakeDisclosureService) {
+	svc, repo, executor, disc := newTemplateExecutionTestServiceWithDisclosure(statement, readerErr, &fakeDisclosureService{})
+	return svc, repo, executor, disc.(*fakeDisclosureService)
+}
+
+// newTemplateExecutionTestServiceWithDisclosure is
+// newTemplateExecutionTestService with an injectable disclosure planner —
+// the result-contract wiring tests delegate Apply to the production service
+// to prove ordering on the shared guarded chain (T8-B-R1).
+func newTemplateExecutionTestServiceWithDisclosure(statement model.QuerySavedStatement, readerErr error, disclosure QueryDisclosurePlanner) (*QueryExecutionService, *fakeExecRepo, *fakeExecutor, QueryDisclosurePlanner) {
 	target := mysqlTarget("Staging")
 	repo := &fakeExecRepo{credentials: map[uint64]model.QueryCredentialMetadata{9001: enabledCred(model.QueryEnvPolicyNonProdOnly)}}
 	executor := &fakeExecutor{result: QueryDatabaseResult{
@@ -25,7 +34,6 @@ func newTemplateExecutionTestService(statement model.QuerySavedStatement, reader
 		Rows:     [][]any{{int64(1)}},
 		RowCount: 1,
 	}}
-	disclosure := &fakeDisclosureService{}
 	svc := NewQueryExecutionService(
 		fakeTargetRepo{targets: []model.QueryTarget{target}},
 		repo,

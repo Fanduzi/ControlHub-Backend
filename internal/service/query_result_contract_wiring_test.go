@@ -1,7 +1,7 @@
 // Package service tests the T8-B production wiring of the result contract.
 // input: context, errors, testing, time, internal/model
 // output: Test*_CellTruncated* / Test*_ResultContract* cases proving capability propagation, post-finalize gate ordering, and corrupt-evidence handling through the three governed service paths
-// pos: Service-boundary proof that real Execute/ExecuteSavedStatement/NavigateRelatedRecords flows carry the aligned matrix, apply the capability gate only after the success evidence pair, and treat producer matrix faults as internal failures — never fabricated-clean pages
+// pos: Service-boundary proof that real Execute/ExecuteSavedStatement/NavigateRelatedRecords flows carry the aligned matrix, apply the capability gate only after the success evidence pair, and treat producer matrix faults as internal failures — never fabricated-clean pages; corrupt-evidence cases delegate Apply to the production QueryDisclosureService so the pre-disclosure validation ordering is really exercised (T8-B-R1)
 // note: if this file changes, update this header and module README.md.
 package service
 
@@ -245,6 +245,145 @@ func TestNavigateRelatedRecords_CorruptTruncationEvidenceIsInternalFailure(t *te
 	}
 }
 
+// --- Corrupt producer evidence is rejected before the real Apply runs ---
+//
+// WHY (T8-B-R1): the production Apply rejects row-width mismatches as
+// ErrQueryDisclosureBlocked. If producer-evidence validation ran only after
+// Apply, a corrupt executor page would surface as a 403 policy refusal
+// instead of a failed/query_backend_error (502) internal fault. These tests
+// delegate Apply to the real QueryDisclosureService so the ordering cannot
+// hide behind a passthrough fake.
+
+// realApplyDisclosureService delegates Apply to the production
+// QueryDisclosureService while Preflight returns a fixed, well-formed plan.
+type realApplyDisclosureService struct {
+	plan       DisclosurePlan
+	applyCalls int
+}
+
+func (f *realApplyDisclosureService) Preflight(_ context.Context, _ string, _ uint64, _ GuardedQuery) (DisclosurePlan, error) {
+	return f.plan, nil
+}
+
+func (f *realApplyDisclosureService) PreflightRelatedRecords(_ context.Context, _ string, _ uint64, _, _ string) (DisclosurePlan, error) {
+	return f.plan, nil
+}
+
+func (f *realApplyDisclosureService) Apply(plan DisclosurePlan, columns []model.QueryResultColumn, rows [][]any) ([]model.QueryResultColumn, [][]any, error) {
+	f.applyCalls++
+	// Apply uses only its arguments — a dependency-free production instance
+	// still runs the real plan/row structural checks.
+	return NewQueryDisclosureService(nil, nil, nil, nil).Apply(plan, columns, rows)
+}
+
+func oneColumnPlan() DisclosurePlan {
+	return DisclosurePlan{Columns: []ColumnDisclosure{{
+		Mode: model.ResultDisclosureRawCopyAllowed, CopyAllowed: true,
+	}}}
+}
+
+func corruptResultCases() []struct {
+	name   string
+	result QueryDatabaseResult
+} {
+	oneCol := []model.QueryResultColumn{{Name: "value", DatabaseType: "VARCHAR"}}
+	return []struct {
+		name   string
+		result QueryDatabaseResult
+	}{
+		{"row wider than public columns", QueryDatabaseResult{
+			Columns: oneCol, Rows: [][]any{{"x", "y"}}, RowCount: 1, CellTruncated: [][]bool{{false, false}},
+		}},
+		{"row narrower than public columns", QueryDatabaseResult{
+			Columns: oneCol, Rows: [][]any{{}}, RowCount: 1, CellTruncated: [][]bool{{}},
+		}},
+		{"missing matrix on a well-formed row", QueryDatabaseResult{
+			Columns: oneCol, Rows: [][]any{{"x"}}, RowCount: 1, CellTruncated: nil,
+		}},
+		{"matrix row width mismatch on a well-formed row", QueryDatabaseResult{
+			Columns: oneCol, Rows: [][]any{{"x"}}, RowCount: 1, CellTruncated: [][]bool{{false, false}},
+		}},
+	}
+}
+
+// requireCorruptEvidenceFailure is the shared assertion set for producer
+// corruption: a controlled backend failure, no delivered rows, no Apply call,
+// exactly one failed/query_backend_error pair of the expected event type.
+func requireCorruptEvidenceFailure(t *testing.T, err error, rowsLen int, disc *realApplyDisclosureService, repo *fakeExecRepo, eventType string) {
+	t.Helper()
+	if !errors.Is(err, ErrQueryBackendFailure) {
+		t.Fatalf("err = %v, want ErrQueryBackendFailure", err)
+	}
+	if errors.Is(err, ErrQueryDisclosureBlocked) {
+		t.Fatal("producer corruption must not surface as a disclosure refusal")
+	}
+	if errors.Is(err, ErrResultContractUpgradeRequired) {
+		t.Fatal("producer corruption must not surface as the capability refusal")
+	}
+	if rowsLen != 0 {
+		t.Fatalf("corrupt evidence leaked %d rows", rowsLen)
+	}
+	if disc.applyCalls != 0 {
+		t.Fatalf("Apply ran %d times; producer corruption must be rejected before disclosure", disc.applyCalls)
+	}
+	if status := lastPairStatus(t, repo); status != model.QueryExecutionFailed {
+		t.Fatalf("recorded status = %q, want failed", status)
+	}
+	if repo.pairCalls[0].rec.ErrorCode != "query_backend_error" {
+		t.Fatalf("recorded error code = %q, want query_backend_error", repo.pairCalls[0].rec.ErrorCode)
+	}
+	if repo.pairCalls[0].event != eventType {
+		t.Fatalf("audit event = %q, want %q", repo.pairCalls[0].event, eventType)
+	}
+}
+
+func TestExecute_CorruptResultEvidenceFailsBeforeRealApply(t *testing.T) {
+	for _, tc := range corruptResultCases() {
+		t.Run(tc.name, func(t *testing.T) {
+			disc := &realApplyDisclosureService{plan: oneColumnPlan()}
+			svc, repo, _, executor, _ := executionScaffoldWithDisclosure(t, disc)
+			executor.rawResult = true
+			executor.result = tc.result
+
+			resp, err := svc.Execute(context.Background(), userExecutionIdentity(1), 9001, model.QueryExecuteRequest{
+				Statement:    "select value from t",
+				Capabilities: []string{CapabilityCellTruncated},
+			})
+			requireCorruptEvidenceFailure(t, err, len(resp.Rows), disc, repo, "query.executed")
+		})
+	}
+}
+
+func TestExecuteSavedStatement_CorruptResultEvidenceFailsBeforeRealApply(t *testing.T) {
+	disc := &realApplyDisclosureService{plan: oneColumnPlan()}
+	svc, repo, executor, _ := newTemplateExecutionTestServiceWithDisclosure(
+		templateStatement(7, model.QuerySavedStatementPersonal, "select value from t", nil), nil, disc,
+	)
+	executor.rawResult = true
+	executor.result = corruptResultCases()[0].result
+
+	req := templateExecuteRequest(nil)
+	req.Capabilities = []string{CapabilityCellTruncated}
+	resp, err := svc.ExecuteSavedStatement(context.Background(), 7, 9001, 7, req)
+	requireCorruptEvidenceFailure(t, err, len(resp.Rows), disc, repo, "query.executed")
+}
+
+func TestNavigateRelatedRecords_CorruptResultEvidenceFailsBeforeRealApply(t *testing.T) {
+	for _, tc := range corruptResultCases() {
+		t.Run(tc.name, func(t *testing.T) {
+			disc := &realApplyDisclosureService{plan: oneColumnPlan()}
+			svc, repo, executor, _ := navScaffoldWithDisclosure(t, disc)
+			executor.rawResult = true
+			executor.result = tc.result
+
+			req := validNavRequest()
+			req.Capabilities = []string{CapabilityCellTruncated}
+			resp, err := svc.NavigateRelatedRecords(context.Background(), 1, 9001, req)
+			requireCorruptEvidenceFailure(t, err, len(resp.Rows), disc, repo, "related_record_navigation")
+		})
+	}
+}
+
 // --- Evidence-persist failure stays a 502-class upstream error ---
 
 func TestExecute_EvidenceFailureWinsOverCapabilityGate(t *testing.T) {
@@ -265,4 +404,3 @@ func TestExecute_EvidenceFailureWinsOverCapabilityGate(t *testing.T) {
 		t.Fatalf("failed persistence leaked %d rows", len(resp.Rows))
 	}
 }
-

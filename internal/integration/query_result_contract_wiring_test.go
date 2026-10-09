@@ -295,16 +295,17 @@ func (f resultContractFixture) createSavedStatement(t *testing.T) uint64 {
 }
 
 // navRequestBody is the governed related-records body against the aux FK
-// fixture (child parent_id=1 → parent row carrying the oversized pad).
-func navRequestBody(capabilities string) string {
+// fixture: localValue "1" resolves to the parent row carrying the oversized
+// pad, "2" resolves to the clean 'P_BETA' parent.
+func navRequestBody(localValue, capabilities string) string {
 	caps := ""
 	if capabilities != "" {
 		caps = `,"capabilities":` + capabilities
 	}
 	return fmt.Sprintf(`{
 		"source": {"database":"query_e2e_aux","object":"rc_child","kind":"table","foreignKey":"fk_rc_child_parent"},
-		"localValues": ["1"]%s
-	}`, caps)
+		"localValues": ["%s"]%s
+	}`, localValue, caps)
 }
 
 // ---------------------------------------------------------------------------
@@ -384,16 +385,35 @@ func TestResultContractHTTP_SavedStatement_CapabilityGate(t *testing.T) {
 	if status != string(model.QueryExecutionSuccess) || audit != history {
 		t.Fatalf("template evidence mismatch: %d/%d %q", history, audit, status)
 	}
+
+	// Clean record (id=1, exact-8192 pad), no capability → 200 with the
+	// correct row and a complete all-false matrix; one more query.executed
+	// success pair lands on top of the two prior attempts.
+	rec = fx.rcPost(t, path, `{"values":{"cell_id":1}}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("clean template status = %d; body=%s", rec.Code, rec.Body.String())
+	}
+	rows, matrix = decodeRows(t, rec)
+	if len(rows) != 1 || len(matrix) != 1 || len(matrix[0]) != 2 {
+		t.Fatalf("clean template rows=%d matrix=%v, want 1x2", len(rows), matrix)
+	}
+	if matrix[0][0] || matrix[0][1] {
+		t.Fatalf("clean template matrix = %v, want all-false", matrix[0])
+	}
+	if rows[0][0].(float64) != 1 || len(rows[0][1].(string)) != 8192 {
+		t.Fatalf("clean template row = %v, want (1, 8192-byte pad)", rows[0])
+	}
+	fx.requireSuccessPairs(t, "query.executed", 3, 3)
 }
 
 func TestResultContractHTTP_Navigation_CapabilityGate(t *testing.T) {
 	fx := setupResultContractFixture(t)
 	path := fmt.Sprintf("/query-targets/%d/related-records", fx.targetID)
 
-	rec := fx.rcPost(t, path, navRequestBody(""))
+	rec := fx.rcPost(t, path, navRequestBody("1", ""))
 	fx.requireUpgradeRefusal(t, rec, "related_record_navigation", 1, 1)
 
-	rec = fx.rcPost(t, path, navRequestBody(`["cellTruncated"]`))
+	rec = fx.rcPost(t, path, navRequestBody("1", `["cellTruncated"]`))
 	if rec.Code != http.StatusOK {
 		t.Fatalf("capable status = %d; body=%s", rec.Code, rec.Body.String())
 	}
@@ -408,6 +428,26 @@ func TestResultContractHTTP_Navigation_CapabilityGate(t *testing.T) {
 	if got := rows[0][2].(string); len(got) != 8192 || !utf8.ValidString(got) {
 		t.Fatalf("nav retained %d bytes valid=%v", len(got), utf8.ValidString(got))
 	}
+
+	// Clean parent (P_BETA, 'short' pad), no capability → 200 with a complete
+	// all-false matrix and one more committed navigation success pair.
+	rec = fx.rcPost(t, path, navRequestBody("2", ""))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("clean nav status = %d; body=%s", rec.Code, rec.Body.String())
+	}
+	rows, matrix = decodeRows(t, rec)
+	if len(rows) != 1 || len(matrix) != 1 || len(matrix[0]) != 3 {
+		t.Fatalf("clean nav rows=%d matrix=%v, want 1x3", len(rows), matrix)
+	}
+	for j := range matrix[0] {
+		if matrix[0][j] {
+			t.Fatalf("clean nav matrix flagged col %d", j)
+		}
+	}
+	if rows[0][1].(string) != "P_BETA" || rows[0][2].(string) != "short" {
+		t.Fatalf("clean nav row = %v, want (2,P_BETA,short)", rows[0])
+	}
+	fx.requireSuccessPairs(t, "related_record_navigation", 3, 3)
 }
 
 // ---------------------------------------------------------------------------
@@ -474,7 +514,7 @@ func TestResultContractHTTP_EvidenceFailureBeatsGate(t *testing.T) {
 	}{
 		"execute":  {fx.executePath(), `{"statement":"select id, pad from query_e2e_aux.rc_cells where id = 2"}`},
 		"template": {fx.savedExecutePath(stmtID), `{"values":{"cell_id":2}}`},
-		"navigate": {fmt.Sprintf("/query-targets/%d/related-records", fx.targetID), navRequestBody("")},
+		"navigate": {fmt.Sprintf("/query-targets/%d/related-records", fx.targetID), navRequestBody("1", "")},
 	} {
 		t.Run(name, func(t *testing.T) {
 			rec := fx.rcPost(t, tc.path, tc.body)

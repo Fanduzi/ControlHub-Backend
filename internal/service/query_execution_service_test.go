@@ -433,6 +433,15 @@ func userExecutionIdentity(id uint64) model.QueryExecutionIdentity {
 // executionTestScaffold wires a service with a ready mysql/staging target.
 func executionTestScaffold(t *testing.T) (*QueryExecutionService, *fakeExecRepo, *fakeResolver, *fakeExecutor) {
 	t.Helper()
+	svc, repo, resolver, executor, _ := executionScaffoldWithDisclosure(t, &fakeDisclosureService{})
+	return svc, repo, resolver, executor
+}
+
+// executionScaffoldWithDisclosure is executionTestScaffold with an injectable
+// disclosure planner — the result-contract wiring tests delegate Apply to the
+// production service to prove ordering (T8-B-R1).
+func executionScaffoldWithDisclosure(t *testing.T, disclosure QueryDisclosurePlanner) (*QueryExecutionService, *fakeExecRepo, *fakeResolver, *fakeExecutor, QueryDisclosurePlanner) {
+	t.Helper()
 	repo := &fakeExecRepo{
 		credentials: map[uint64]model.QueryCredentialMetadata{
 			9001: enabledCred(model.QueryEnvPolicyNonProdOnly),
@@ -450,9 +459,9 @@ func executionTestScaffold(t *testing.T) (*QueryExecutionService, *fakeExecRepo,
 		NewQueryGuard(QueryGuardConfig{DefaultMaxRows: 100, HardMaxRows: 500}),
 		&fakeClock{t: time.Date(2026, 6, 21, 8, 0, 0, 0, time.UTC)},
 		&fakeNavSchemaInspector{},
-		&fakeDisclosureService{},
+		disclosure,
 	)
-	return svc, repo, resolver, executor
+	return svc, repo, resolver, executor, disclosure
 }
 
 // --- Execute behavior tests ---

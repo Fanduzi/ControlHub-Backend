@@ -1,6 +1,6 @@
 // Package service provides tests for the Phase 38J related-record navigation.
 // input: context, errors, strings, testing, time, internal/model
-// output: TestNavigateRelatedRecords_* (fakes for inspector, executor bound queries)
+// output: TestNavigateRelatedRecords_* (fakes for inspector, executor bound queries; navScaffoldWithDisclosure for injectable disclosure planners)
 // pos: Unit tests for FK navigation governance, parameter binding, history/audit, error mapping including Preflight dual-wrap vs Apply exclusive ErrQueryDisclosureBlocked for HTTP (Issue #48), and inspector-phase cancellation/deadline terminal evidence (Issue #40)
 // note: if this file changes, update header and README.md
 package service
@@ -21,6 +21,14 @@ import (
 // navTestScaffold wires a service with a ready mysql/staging target and a
 // fake inspector that returns FK metadata for the "order_items" table.
 func navTestScaffold(t *testing.T) (*QueryExecutionService, *fakeExecRepo, *fakeExecutor, *fakeNavSchemaInspector) {
+	t.Helper()
+	return navScaffoldWithDisclosure(t, &fakeDisclosureService{})
+}
+
+// navScaffoldWithDisclosure is navTestScaffold with an injectable disclosure
+// planner — the result-contract wiring tests delegate Apply to the production
+// service to prove ordering (T8-B-R1).
+func navScaffoldWithDisclosure(t *testing.T, disclosure QueryDisclosurePlanner) (*QueryExecutionService, *fakeExecRepo, *fakeExecutor, *fakeNavSchemaInspector) {
 	t.Helper()
 	repo := &fakeExecRepo{
 		credentials: map[uint64]model.QueryCredentialMetadata{
@@ -58,7 +66,7 @@ func navTestScaffold(t *testing.T) (*QueryExecutionService, *fakeExecRepo, *fake
 		repo, resolver, executor,
 		NewQueryGuard(QueryGuardConfig{DefaultMaxRows: 100, HardMaxRows: 500}),
 		&fakeClock{t: time.Date(2026, 7, 14, 8, 0, 0, 0, time.UTC)},
-		inspector, &fakeDisclosureService{},
+		inspector, disclosure,
 	)
 	return svc, repo, executor, inspector
 }

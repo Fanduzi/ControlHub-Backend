@@ -340,6 +340,34 @@ func TestQueryExecution_Execute_ApplyDisclosureBlocked(t *testing.T) {
 	}
 }
 
+// TestQueryExecution_Execute_BackendFailure proves an internal producer fault
+// on the shared chain (e.g. corrupt result evidence rejected before Apply,
+// T8-B-R1) publishes the controlled 502/query_backend_error envelope — never
+// the disclosure-refusal 403 or the contract 409.
+func TestQueryExecution_Execute_BackendFailure(t *testing.T) {
+	router := newQueryExecRouter(&stubQueryExec{executeErr: service.ErrQueryBackendFailure})
+	token := mintToken(t, "qe-test-secret", 42, "admin", qeTestNow)
+
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, qeRequest(http.MethodPost, "/query-targets/22/execute", `{"statement":"select 1"}`, token))
+
+	if rec.Code != http.StatusBadGateway {
+		t.Fatalf("status = %d, want 502; body=%s", rec.Code, rec.Body.String())
+	}
+	var body struct {
+		Error string `json:"error"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode body: %v", err)
+	}
+	if body.Error != "query_backend_error" {
+		t.Fatalf("error = %q, want query_backend_error", body.Error)
+	}
+	if json.Valid(rec.Body.Bytes()) && bytes.Contains(rec.Body.Bytes(), []byte(`"rows"`)) {
+		t.Fatalf("backend failure leaked a rows payload: %s", rec.Body.String())
+	}
+}
+
 func TestQueryExecution_Execute_RejectsActorIDInBody(t *testing.T) {
 	stub := &stubQueryExec{}
 	router := newQueryExecRouter(stub)
@@ -1269,9 +1297,10 @@ type applyPathExecutor struct{}
 
 func (applyPathExecutor) Query(context.Context, string, service.GuardedQuery) (service.QueryDatabaseResult, error) {
 	return service.QueryDatabaseResult{
-		Columns:  []model.QueryResultColumn{{Name: "value", DatabaseType: "BIGINT"}},
-		Rows:     [][]any{{int64(1)}},
-		RowCount: 1,
+		Columns:       []model.QueryResultColumn{{Name: "value", DatabaseType: "BIGINT"}},
+		Rows:          [][]any{{int64(1)}},
+		RowCount:      1,
+		CellTruncated: [][]bool{{false}},
 	}, nil
 }
 
@@ -1281,9 +1310,10 @@ func (applyPathExecutor) QueryTemplate(context.Context, string, service.GuardedT
 
 func (applyPathExecutor) QueryRelatedRecords(context.Context, string, service.RelatedRecordsQueryInput) (service.QueryDatabaseResult, error) {
 	return service.QueryDatabaseResult{
-		Columns:  []model.QueryResultColumn{{Name: "id", DatabaseType: "BIGINT"}},
-		Rows:     [][]any{{int64(100)}},
-		RowCount: 1,
+		Columns:       []model.QueryResultColumn{{Name: "id", DatabaseType: "BIGINT"}},
+		Rows:          [][]any{{int64(100)}},
+		RowCount:      1,
+		CellTruncated: [][]bool{{false}},
 	}, nil
 }
 
