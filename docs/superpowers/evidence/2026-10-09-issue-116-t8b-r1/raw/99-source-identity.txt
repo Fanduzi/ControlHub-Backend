@@ -1,0 +1,13 @@
+# source identity — T8-B-R1
+# captured-utc: 2026-10-09T08:20:22Z
+# cwd: /private/tmp/pg-t8
+tested-head: dff4cdeef31214de3e0a6dfcd75d74988bd1fdab
+branch: impl/pg-workbench-t8-result-contract
+upstream: 4e46417cc90cb6f7a4310880594c1a88abdfc14e
+# worktree-status --porcelain:
+(empty above = only evidence files pending)
+# prod-tree diff b4dc07c..dff4cde (name-status):
+A	docs/superpowers/evidence/2026-10-09-issue-116-t8b-result-contract-production-wiring-evidence.md
+M	internal/service/query_executor_test.go
+# production files changed vs reviewed b4dc07c (expected: none):
+(empty = production tree byte-identical)

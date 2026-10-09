@@ -1,0 +1,8 @@
+=== RUN   TestScanBoundedRows_BudgetDroppedRowLeavesNoFlag
+=== PAUSE TestScanBoundedRows_BudgetDroppedRowLeavesNoFlag
+=== CONT  TestScanBoundedRows_BudgetDroppedRowLeavesNoFlag
+    query_executor_test.go:398: cellTruncated = [[false] [false] [true]], want exactly [[false],[false]] — the dropped row's true flag must not linger
+--- FAIL: TestScanBoundedRows_BudgetDroppedRowLeavesNoFlag (0.00s)
+FAIL
+FAIL	github.com/fan/controlhub/internal/service	0.586s
+FAIL

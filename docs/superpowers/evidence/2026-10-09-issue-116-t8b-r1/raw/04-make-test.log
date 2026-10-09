@@ -1,0 +1,27 @@
+# gate: 04-make-test
+# start-utc: 2026-10-09T08:13:09Z
+# cwd: /private/tmp/pg-t8
+# head: dff4cdeef31214de3e0a6dfcd75d74988bd1fdab
+# worktree-status: 1 changed files
+# argv: env GOFLAGS=-count=1 make test
+# --- stdout+stderr ---
+go test ./...
+ok  	github.com/fan/controlhub/cmd/bootstrap-admin	1.654s
+ok  	github.com/fan/controlhub/cmd/cutover-local	0.866s
+ok  	github.com/fan/controlhub/cmd/e2e-fixture-bootstrap	1.566s
+ok  	github.com/fan/controlhub/cmd/querydev	1.814s
+ok  	github.com/fan/controlhub/cmd/server	2.266s
+ok  	github.com/fan/controlhub/internal/api	33.843s
+ok  	github.com/fan/controlhub/internal/config	3.460s
+ok  	github.com/fan/controlhub/internal/cutover	3.854s
+ok  	github.com/fan/controlhub/internal/integration	3.082s
+ok  	github.com/fan/controlhub/internal/model	4.699s
+ok  	github.com/fan/controlhub/internal/openapi	5.891s
+ok  	github.com/fan/controlhub/internal/pgsql	4.804s
+ok  	github.com/fan/controlhub/internal/repository/mysql	4.997s
+ok  	github.com/fan/controlhub/internal/service	7.432s
+?   	github.com/fan/controlhub/internal/testsupport/operatoraccess	[no test files]
+ok  	github.com/fan/controlhub/migrations	4.911s
+# --- end ---
+# end-utc: 2026-10-09T08:13:44Z
+# tested-command-rc: 0

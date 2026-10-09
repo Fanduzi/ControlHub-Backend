@@ -1,0 +1,10 @@
+# gate: 02-go-vet
+# start-utc: 2026-10-09T08:13:03Z
+# cwd: /private/tmp/pg-t8
+# head: dff4cdeef31214de3e0a6dfcd75d74988bd1fdab
+# worktree-status: 1 changed files
+# argv: go vet ./...
+# --- stdout+stderr ---
+# --- end ---
+# end-utc: 2026-10-09T08:13:03Z
+# tested-command-rc: 0

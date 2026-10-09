@@ -1,0 +1,11 @@
+# gate: 06-race-api
+# start-utc: 2026-10-09T08:14:21Z
+# cwd: /private/tmp/pg-t8
+# head: dff4cdeef31214de3e0a6dfcd75d74988bd1fdab
+# worktree-status: 1 changed files
+# argv: go test -race -count=1 ./internal/api
+# --- stdout+stderr ---
+ok  	github.com/fan/controlhub/internal/api	354.832s
+# --- end ---
+# end-utc: 2026-10-09T08:20:17Z
+# tested-command-rc: 0

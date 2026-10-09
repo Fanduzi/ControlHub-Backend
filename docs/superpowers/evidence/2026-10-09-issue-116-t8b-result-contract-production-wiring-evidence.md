@@ -62,22 +62,30 @@ wiring `WithTemplateExecution` + `QuerySavedStatementService`.
 | `go test ./internal/service ./internal/api` | FAIL — 17 cases: no matrix from scanner, no gate on any path, refusal mapped to 500 |
 | `go test -tags=integration ./internal/integration -run 'TestResultGateIntegration'` | FAIL — 10 cases: real-MySQL paths returned 200 with rows and no matrix on a truncated page |
 
-## Final Gates (at tested SHA `b4dc07c`)
+## Final Gates — per-gate run attribution (revised in T8-B-R1)
 
-| Gate | Result |
-|------|--------|
-| `go build ./...` | PASS |
-| `go vet ./...` | PASS |
-| `GOFLAGS=-count=1 make test` | PASS (all packages) |
-| `go test -race -count=1 ./internal/service` | PASS (28.8s) |
-| `go test -race -count=1 ./internal/api` | PASS (305.1s — slow under race, no failures) |
-| `make openapi-validate` | PASS |
-| `make test-integration` | PASS — real MySQL 8.0 suite (70.1s, 11 `TestResultGateIntegration_*` PASS) + PG pool version gate (3.8s) |
-| `gofmt -l` on changed files | clean |
-| three-level doc check | OK (L1 reminder reviewed: root README needs no change — no stale declaration-only wording) |
+The table below was previously headlined "at tested SHA `b4dc07c`" without
+per-gate attribution. Corrected attribution, per T8-B-R1:
 
-Gates ran on the working tree that became `b4dc07c`; a build + targeted test
-re-run at the committed SHA passed (`git status` clean).
+| Gate | Result | When it ran | Raw record |
+|------|--------|-------------|------------|
+| `go build ./...` | PASS | pre-commit, on the working tree that became `b4dc07c` (content-identical) | console record only — original stdout not preserved |
+| `go vet ./...` | PASS | same pre-commit tree | console record only |
+| `GOFLAGS=-count=1 make test` | PASS (all packages) | same pre-commit tree | partial console capture (tail only) archived under `2026-10-09-issue-116-t8b-r1/raw/archive-b4dc07c-console/` |
+| `go test -race -count=1 ./internal/service` | PASS (28.8s) | same pre-commit tree | console record only |
+| `go test -race -count=1 ./internal/api` | PASS (305.1s) | same pre-commit tree | console record only |
+| `make openapi-validate` | PASS | same pre-commit tree (via `go test ./internal/openapi`) | console record only |
+| `make test-integration` | PASS — real MySQL 8.0 suite (70.1s, 11 `TestResultGateIntegration_*`) + PG pool gate (3.8s) | same pre-commit tree | complete `-v` console capture archived under `2026-10-09-issue-116-t8b-r1/raw/archive-b4dc07c-console/` |
+| `gofmt -l` on changed files | clean | pre-commit | console record only |
+| three-level doc check | OK | pre-commit | console record only |
+| `go build ./...` + targeted service/api tests | PASS | **post-commit** at `b4dc07c`, clean tree | console record only |
+
+No gate output was re-timestamped: "pre-commit tree" means exactly that —
+the runs happened before `git commit`, on the same file content that was
+committed. T8-B-R1 re-ran every frozen gate at `dff4cde` (production files
+byte-identical to `b4dc07c`; only `query_executor_test.go` changed) with
+full stdout/stderr logs and real exit codes archived; see
+`docs/superpowers/evidence/2026-10-09-issue-116-t8b-r1/`.
 
 ## Real-MySQL Integration Evidence
 

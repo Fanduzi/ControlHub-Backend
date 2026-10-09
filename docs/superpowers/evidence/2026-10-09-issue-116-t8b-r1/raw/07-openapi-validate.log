@@ -1,0 +1,15 @@
+# gate: 07-openapi-validate
+# start-utc: 2026-10-09T08:14:18Z
+# cwd: /private/tmp/pg-t8
+# head: dff4cdeef31214de3e0a6dfcd75d74988bd1fdab
+# worktree-status: 1 changed files
+# argv: make openapi-validate
+# --- stdout+stderr ---
+go test ./internal/openapi -v -run TestOpenAPIYAMLIsValid
+=== RUN   TestOpenAPIYAMLIsValid
+--- PASS: TestOpenAPIYAMLIsValid (0.05s)
+PASS
+ok  	github.com/fan/controlhub/internal/openapi	(cached)
+# --- end ---
+# end-utc: 2026-10-09T08:14:18Z
+# tested-command-rc: 0

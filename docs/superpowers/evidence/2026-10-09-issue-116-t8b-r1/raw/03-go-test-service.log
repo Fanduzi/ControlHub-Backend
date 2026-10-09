@@ -1,0 +1,11 @@
+# gate: 03-go-test-service
+# start-utc: 2026-10-09T08:13:03Z
+# cwd: /private/tmp/pg-t8
+# head: dff4cdeef31214de3e0a6dfcd75d74988bd1fdab
+# worktree-status: 1 changed files
+# argv: go test -count=1 ./internal/service
+# --- stdout+stderr ---
+ok  	github.com/fan/controlhub/internal/service	2.951s
+# --- end ---
+# end-utc: 2026-10-09T08:13:07Z
+# tested-command-rc: 0

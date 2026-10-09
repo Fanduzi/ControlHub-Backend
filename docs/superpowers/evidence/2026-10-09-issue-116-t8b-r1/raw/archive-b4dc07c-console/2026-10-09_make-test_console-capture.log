@@ -1,0 +1,12 @@
+go test ./...
+ok  	github.com/fan/controlhub/cmd/bootstrap-admin	0.791s
+ok  	github.com/fan/controlhub/cmd/cutover-local	0.863s
+ok  	github.com/fan/controlhub/cmd/e2e-fixture-bootstrap	2.861s
+ok  	github.com/fan/controlhub/cmd/querydev	1.355s
+ok  	github.com/fan/controlhub/cmd/server	2.375s
+ok  	github.com/fan/controlhub/internal/api	32.895s
+ok  	github.com/fan/controlhub/internal/config	2.260s
+ok  	github.com/fan/controlhub/internal/cutover	3.214s
+ok  	github.com/fan/controlhub/internal/integration	3.590s
+ok  	github.com/fan/controlhub/internal/model	4.023s
+ok  	github.com/fan/controlhub/internal/openapi	5.125s

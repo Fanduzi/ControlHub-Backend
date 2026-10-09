@@ -1,0 +1,28 @@
+# gate: 00-new-test-regex
+# start-utc: 2026-10-09T08:12:53Z
+# cwd: /private/tmp/pg-t8
+# head: dff4cdeef31214de3e0a6dfcd75d74988bd1fdab
+# worktree-status: 1 changed files
+# argv: go test -count=1 -v ./internal/service -run TestScanBoundedRows_.*(Budget|Payload|Sentinel)
+# --- stdout+stderr ---
+=== RUN   TestScanBoundedRows_PaginatedPayloadOverflowReturnsResultTooLarge
+=== PAUSE TestScanBoundedRows_PaginatedPayloadOverflowReturnsResultTooLarge
+=== RUN   TestScanBoundedRows_NonPaginatedPayloadOverflowKeepsTruncatedSuccess
+=== PAUSE TestScanBoundedRows_NonPaginatedPayloadOverflowKeepsTruncatedSuccess
+=== RUN   TestScanBoundedRows_SentinelRowTruncationNeverReachesPage
+=== PAUSE TestScanBoundedRows_SentinelRowTruncationNeverReachesPage
+=== RUN   TestScanBoundedRows_BudgetDroppedRowLeavesNoFlag
+=== PAUSE TestScanBoundedRows_BudgetDroppedRowLeavesNoFlag
+=== CONT  TestScanBoundedRows_PaginatedPayloadOverflowReturnsResultTooLarge
+=== CONT  TestScanBoundedRows_SentinelRowTruncationNeverReachesPage
+=== CONT  TestScanBoundedRows_NonPaginatedPayloadOverflowKeepsTruncatedSuccess
+=== CONT  TestScanBoundedRows_BudgetDroppedRowLeavesNoFlag
+--- PASS: TestScanBoundedRows_SentinelRowTruncationNeverReachesPage (0.00s)
+--- PASS: TestScanBoundedRows_PaginatedPayloadOverflowReturnsResultTooLarge (0.00s)
+--- PASS: TestScanBoundedRows_NonPaginatedPayloadOverflowKeepsTruncatedSuccess (0.00s)
+--- PASS: TestScanBoundedRows_BudgetDroppedRowLeavesNoFlag (0.00s)
+PASS
+ok  	github.com/fan/controlhub/internal/service	0.388s
+# --- end ---
+# end-utc: 2026-10-09T08:12:55Z
+# tested-command-rc: 0
