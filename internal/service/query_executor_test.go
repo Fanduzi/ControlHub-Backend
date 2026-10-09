@@ -376,14 +376,50 @@ func TestScanBoundedRows_BudgetDroppedRowLeavesNoFlag(t *testing.T) {
 	t.Parallel()
 	e := NewMySQLQueryExecutor(QueryExecutorCaps{MaxResponseBytes: 12})
 
-	// Non-paginated: the row that overflows the response budget is dropped
-	// entirely — its flag must not linger in the matrix either.
-	result, err := e.scanBoundedRows(scanTextRows(t, "aaa", "bbb", "ccc"), 10, false)
+	// Non-paginated: the third row's 8193-byte cell would truncate to an
+	// 8192-byte delivered prefix (flag true), but its 8192 bytes overflow the
+	// 12-byte response budget after the first two 3-byte rows — the row is
+	// dropped entirely and its flag must not linger in the matrix either.
+	result, err := e.scanBoundedRows(
+		scanTextRows(t, "aaa", "bbb", strings.Repeat("c", 8193)), 10, false)
 	if err != nil {
 		t.Fatalf("scan error: %v", err)
 	}
-	if len(result.CellTruncated) != len(result.Rows) {
-		t.Fatalf("matrix rows = %d, want %d aligned with kept rows", len(result.CellTruncated), len(result.Rows))
+	if result.RowCount != 2 || len(result.Rows) != 2 ||
+		result.Rows[0][0] != "aaa" || result.Rows[1][0] != "bbb" {
+		t.Fatalf("rows = %v (count %d), want exactly [[aaa],[bbb]]", result.Rows, result.RowCount)
+	}
+	if !result.Truncated {
+		t.Fatal("truncated = false, want true — the budget-dropped row proves more rows existed")
+	}
+	if len(result.CellTruncated) != 2 || len(result.CellTruncated[0]) != 1 ||
+		len(result.CellTruncated[1]) != 1 ||
+		result.CellTruncated[0][0] || result.CellTruncated[1][0] {
+		t.Fatalf("cellTruncated = %v, want exactly [[false],[false]] — the dropped row's true flag must not linger", result.CellTruncated)
+	}
+	// The retained page carries no truncated cell, so a capability-less client
+	// must still pass the delivery gate — budget drops never cause refusal.
+	decision, derr := DecideResultDelivery(ResultDeliveryInput{
+		Columns:       result.Columns,
+		Rows:          result.Rows,
+		CellTruncated: result.CellTruncated,
+	})
+	if derr != nil {
+		t.Fatalf("delivery gate refused a clean budget-truncated page: %v", derr)
+	}
+	if len(decision.Rows) != 2 {
+		t.Fatalf("decision rows = %v, want the two kept rows", decision.Rows)
+	}
+
+	// Paginated control with the same input: the whole window is refused —
+	// no half page, no rows, no matrix.
+	paged, perr := e.scanBoundedRows(
+		scanTextRows(t, "aaa", "bbb", strings.Repeat("c", 8193)), 10, true)
+	if !errors.Is(perr, ErrQueryResultTooLarge) {
+		t.Fatalf("paginated overflow error = %v, want ErrQueryResultTooLarge", perr)
+	}
+	if len(paged.Rows) != 0 || len(paged.CellTruncated) != 0 || paged.RowCount != 0 {
+		t.Fatalf("paginated overflow result = %+v, want empty result — no partial page", paged)
 	}
 }
 
