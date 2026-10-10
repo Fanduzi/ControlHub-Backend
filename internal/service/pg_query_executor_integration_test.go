@@ -20,6 +20,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net"
+	"slices"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -72,10 +75,12 @@ func pgExecFixture(t *testing.T) pgPoolLab {
 			    0.1, 'plain')`,
 			`INSERT INTO app.g7types (i, s) VALUES
 			   (2, ''), (3, 'NULL')`,
-			// i=4 is large enough to be stored out of line: reading it
-			// detoasts under an ACCESS SHARE lock on the toast relation —
-			// the audit must explain that lock through the ownership edge,
-			// not through the approved set.
+			// i=4 must live OUT of line: EXTERNAL storage disables
+			// compression so a large incompressible-looking value is
+			// guaranteed to be chunked into the toast table — the storage
+			// fact is asserted against the toast table itself, not assumed
+			// from the value's length.
+			`ALTER TABLE app.g7types ALTER COLUMN s SET STORAGE EXTERNAL`,
 			`INSERT INTO app.g7types (i, s) VALUES (4, repeat('x', 10000))`,
 			`DELETE FROM app.orders`,
 			`INSERT INTO app.orders (id, item, qty, note, amount, ts) VALUES
@@ -589,7 +594,9 @@ func TestPGExecute_TimeoutCancelAndRecovery(t *testing.T) {
 		admin := lab.adminConn(t)
 		locked := make(chan error, 1)
 		release := make(chan struct{})
+		released := make(chan struct{})
 		go func() {
+			defer close(released)
 			cctx := context.Background()
 			tx, err := admin.Begin(cctx)
 			if err != nil {
@@ -608,7 +615,9 @@ func TestPGExecute_TimeoutCancelAndRecovery(t *testing.T) {
 		if err := <-locked; err != nil {
 			t.Fatalf("admin lock: %v", err)
 		}
-		defer close(release)
+		// Release must complete before the subtest ends — the rollback rides
+		// the same admin connection its cleanup closes.
+		defer func() { close(release); <-released }()
 
 		in := pgExecInput(t, lab, `SELECT l.id FROM lockme l`, pageOpts(1, 25))
 		in.Timeout = 1500 * time.Millisecond
@@ -785,6 +794,607 @@ func TestPGExecute_ControlledRejections(t *testing.T) {
 				t.Fatalf("%q code = %s, want %s (err %v)", tc.stmt, code, tc.want, err)
 			}
 		})
+	}
+	waitNoPGBackends(t, lab, "ch-t7s34-exec")
+}
+
+// Post-bind drift on the object namespace: the transport statement is the
+// first place a schema rename or a schema-USAGE revocation can land, and the
+// frozen verdict is a controlled relation-access rejection — never an
+// internal failure, never delivered rows. (A relation-level rename or ACL
+// change can't get past the attempt's ACCESS SHARE locks — that is proven
+// separately by the blocked-DDL barrier.)
+func TestPGExecute_PostBindDrift(t *testing.T) {
+	lab := pgExecFixture(t)
+	admin := lab.adminConn(t)
+
+	t.Run("schema rename is a controlled rejection", func(t *testing.T) {
+		done := make(chan error, 1)
+		pgExecAfterBindHook = func(ctx context.Context, tx pgx.Tx) error {
+			go func() {
+				_, err := admin.Exec(context.Background(),
+					`ALTER SCHEMA app RENAME TO app_moved`)
+				done <- err
+			}()
+			select {
+			case <-done:
+			case <-time.After(8 * time.Second):
+			}
+			return nil
+		}
+		defer func() {
+			pgExecAfterBindHook = nil
+			if _, err := admin.Exec(context.Background(),
+				`ALTER SCHEMA app_moved RENAME TO app`); err != nil {
+				t.Fatalf("restore schema: %v", err)
+			}
+		}()
+
+		_, err := ExecutePGGoverned(context.Background(), pgExecInput(t, lab,
+			`SELECT o.id FROM orders o ORDER BY o.id`, pageOpts(1, 25)))
+		if code := rejectCodeOf(t, err); code != "query_object_not_found" {
+			t.Fatalf("code = %s (err %v), want query_object_not_found", code, err)
+		}
+	})
+
+	t.Run("schema usage revoke is a controlled rejection", func(t *testing.T) {
+		done := make(chan error, 1)
+		pgExecAfterBindHook = func(ctx context.Context, tx pgx.Tx) error {
+			go func() {
+				_, err := admin.Exec(context.Background(),
+					`REVOKE USAGE ON SCHEMA app FROM ro_bind`)
+				done <- err
+			}()
+			select {
+			case <-done:
+			case <-time.After(8 * time.Second):
+			}
+			return nil
+		}
+		defer func() {
+			pgExecAfterBindHook = nil
+			if _, err := admin.Exec(context.Background(),
+				`GRANT USAGE ON SCHEMA app TO ro_bind`); err != nil {
+				t.Fatalf("restore usage: %v", err)
+			}
+		}()
+
+		_, err := ExecutePGGoverned(context.Background(), pgExecInput(t, lab,
+			`SELECT o.id FROM orders o ORDER BY o.id`, pageOpts(1, 25)))
+		if code := rejectCodeOf(t, err); code != "query_object_not_found" {
+			t.Fatalf("code = %s (err %v), want query_object_not_found", code, err)
+		}
+	})
+	waitNoPGBackends(t, lab, "ch-t7s34-exec")
+}
+
+// A consistent lie inside the expected record set — two approved objects
+// swapped across reference positions — leaves the held lock set perfectly
+// identical. Only the per-position FD comparison can refuse it, on both the
+// row and the zero-row path.
+func TestPGExecute_PositionSwap(t *testing.T) {
+	lab := pgExecFixture(t)
+
+	swap := func(rw *pgsql.RewriteResult) error {
+		if len(rw.PublicProofs) != 2 {
+			return fmt.Errorf("expected 2 public proofs, got %d", len(rw.PublicProofs))
+		}
+		p0, p1 := rw.PublicProofs[0], rw.PublicProofs[1]
+		p0.FDOrigin, p1.FDOrigin = p1.FDOrigin, p0.FDOrigin
+		p0.Dependencies, p1.Dependencies = p1.Dependencies, p0.Dependencies
+		rw.PublicProofs[0], rw.PublicProofs[1] = p0, p1
+		return nil
+	}
+
+	for _, tc := range []struct {
+		name string
+		stmt string
+	}{
+		{"rows path", `SELECT o.id, s.id FROM orders o JOIN smallvals s ON o.id = s.id ORDER BY o.id`},
+		{"zero-row path", `SELECT o.id, s.id FROM orders o JOIN smallvals s ON o.id = s.id WHERE 1 = 0`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			pgExecPostRewriteHook = swap
+			defer func() { pgExecPostRewriteHook = nil }()
+			_, err := ExecutePGGoverned(context.Background(), pgExecInput(t, lab, tc.stmt, pageOpts(1, 25)))
+			var re *pgsql.RejectError
+			if !errors.As(err, &re) || re.Code != "query_binding_mismatch" {
+				t.Fatalf("err = %v, want query_binding_mismatch", err)
+			}
+		})
+	}
+	waitNoPGBackends(t, lab, "ch-t7s34-exec")
+}
+
+// Malformed expected records stop before ExecParams — the materialize seam
+// proves the transport statement was never sent, not just that an error
+// came back.
+func TestPGExecute_ExpectedLayoutStopsBeforeWire(t *testing.T) {
+	lab := pgExecFixture(t)
+	reached := false
+	pgExecPostRewriteHook = func(rw *pgsql.RewriteResult) error {
+		rw.Witnesses[0].CoveredSources = nil // a witness covering nothing
+		return nil
+	}
+	pgExecAfterMaterializeHook = func(ctx context.Context, tx pgx.Tx) error {
+		reached = true
+		return nil
+	}
+	defer func() {
+		pgExecPostRewriteHook = nil
+		pgExecAfterMaterializeHook = nil
+	}()
+
+	_, err := ExecutePGGoverned(context.Background(), pgExecInput(t, lab,
+		`SELECT o.id FROM orders o ORDER BY o.id`, pageOpts(1, 25)))
+	if !errors.Is(err, pgsql.ErrEvidenceUnavailable) {
+		t.Fatalf("err = %v, want evidence unavailable", err)
+	}
+	if reached {
+		t.Fatal("ExecParams reached the wire on malformed expected records")
+	}
+	waitNoPGBackends(t, lab, "ch-t7s34-exec")
+}
+
+// adminTextRows runs the ORIGINAL statement on the admin connection through
+// the simple protocol — the same text-mode values the governed transport
+// produces, without pgx's binary format negotiation skewing the oracle.
+func adminTextRows(t *testing.T, conn *pgx.Conn, sql string) [][]*string {
+	t.Helper()
+	results, err := conn.PgConn().Exec(context.Background(), sql).ReadAll()
+	if err != nil {
+		t.Fatalf("oracle query: %v", err)
+	}
+	var out [][]*string
+	for _, res := range results {
+		for _, vals := range res.Rows {
+			row := make([]*string, len(vals))
+			for i, v := range vals {
+				if v == nil {
+					continue
+				}
+				s := string(v)
+				row[i] = &s
+			}
+			out = append(out, row)
+		}
+	}
+	return out
+}
+
+func rowKey(row []*string) string {
+	parts := make([]string, len(row))
+	for i, c := range row {
+		if c == nil {
+			parts[i] = "\x00N"
+		} else {
+			parts[i] = "\x00V" + *c
+		}
+	}
+	return strings.Join(parts, "\x01")
+}
+
+func derefRows(rows [][]*string) [][]string {
+	out := make([][]string, len(rows))
+	for i, row := range rows {
+		out[i] = make([]string, len(row))
+		for j, c := range row {
+			if c == nil {
+				out[i][j] = "NULL"
+			} else {
+				out[i][j] = *c
+			}
+		}
+	}
+	return out
+}
+
+// assertRowsEqualOracle compares delivered rows with the oracle: ordered
+// queries compare sequence; unordered queries compare as a multiset.
+func assertRowsEqualOracle(t *testing.T, got, want [][]*string, ordered bool) {
+	t.Helper()
+	if len(got) != len(want) {
+		t.Fatalf("row count %d != oracle %d", len(got), len(want))
+	}
+	if ordered {
+		for i := range got {
+			if rowKey(got[i]) != rowKey(want[i]) {
+				t.Fatalf("row %d = %v, oracle = %v", i, derefRows(got), derefRows(want))
+			}
+		}
+		return
+	}
+	gk, wk := make([]string, len(got)), make([]string, len(want))
+	for i := range got {
+		gk[i], wk[i] = rowKey(got[i]), rowKey(want[i])
+	}
+	slices.Sort(gk)
+	slices.Sort(wk)
+	if !slices.Equal(gk, wk) {
+		t.Fatalf("multiset differs: got %v, oracle %v", derefRows(got), derefRows(want))
+	}
+}
+
+// The production entry must reproduce the original statement's result on a
+// non-empty fixture — not just matching shapes. Ordered statements compare
+// order; unordered ones compare as multisets.
+func TestPGExecute_OracleEquivalence(t *testing.T) {
+	lab := pgExecFixture(t)
+	admin := lab.adminConn(t)
+	ctx := context.Background()
+
+	cases := []struct {
+		name    string
+		stmt    string
+		ordered bool
+	}{
+		{"direct columns ordered",
+			`SELECT o.id, o.item, o.qty, o.note, o.amount FROM app.orders o ORDER BY o.id`, true},
+		{"join on non-empty tables",
+			`SELECT o.id, s.tag FROM app.orders o JOIN app.smallvals s ON o.id = s.id ORDER BY o.id`, true},
+		{"aggregate non-key group by",
+			`SELECT o.qty, count(*) FROM app.orders o GROUP BY o.qty ORDER BY o.qty NULLS LAST`, true},
+		{"distinct unordered multiset",
+			`SELECT DISTINCT o.qty FROM app.orders o`, false},
+		{"count star having unordered",
+			`SELECT o.item, count(*) FROM app.orders o GROUP BY o.item HAVING count(*) >= 1`, false},
+		{"window ordered",
+			`SELECT o.id, row_number() OVER (ORDER BY o.id) FROM app.orders o ORDER BY o.id`, true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			res, err := ExecutePGGoverned(ctx, pgExecInput(t, lab, tc.stmt, pageOpts(1, 25)))
+			if err != nil {
+				t.Fatalf("execute: %v", err)
+			}
+			assertRowsEqualOracle(t, res.Rows, adminTextRows(t, admin, tc.stmt), tc.ordered)
+		})
+	}
+	waitNoPGBackends(t, lab, "ch-t7s34-exec")
+}
+
+// waitLocksGone polls pg_locks until no relation lock attributable to the
+// execution role remains — the release claim is observed, never assumed.
+func waitLocksGone(t *testing.T, lab pgPoolLab, what string) {
+	t.Helper()
+	admin := lab.adminConn(t)
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		var n int
+		if err := admin.QueryRow(context.Background(),
+			`SELECT count(*) FROM pg_catalog.pg_locks l
+			   JOIN pg_catalog.pg_stat_activity a ON a.pid = l.pid
+			  WHERE a.application_name = 'ch-t7s34-exec'
+			    AND l.locktype = 'relation'`).Scan(&n); err != nil {
+			t.Fatalf("poll locks: %v", err)
+		}
+		if n == 0 {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("%s: %d relation locks still held after cleanup", what, n)
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+}
+
+// The observer connection is a real second pool — when its dial or its query
+// cannot complete while the execution transaction still holds locks, the
+// attempt must fail without delivering, classify by actual cause (not a
+// governance rejection), and release the execution locks promptly.
+func TestPGExecute_ObserverFailure(t *testing.T) {
+	lab := pgExecFixture(t)
+
+	t.Run("observer dial failure", func(t *testing.T) {
+		// Reserve a port then drop it — the observer's dial deterministically
+		// refuses while the execution side is healthy.
+		l, err := net.Listen("tcp", "127.0.0.1:0")
+		if err != nil {
+			t.Fatalf("reserve port: %v", err)
+		}
+		dead := l.Addr().(*net.TCPAddr).Port
+		l.Close()
+		pgExecObserverConfig = func(c *pgx.ConnConfig) *pgx.ConnConfig {
+			c2 := c.Copy()
+			c2.Port = uint16(dead)
+			c2.ConnectTimeout = 500 * time.Millisecond
+			return c2
+		}
+		defer func() { pgExecObserverConfig = nil }()
+
+		res, err := ExecutePGGoverned(context.Background(), pgExecInput(t, lab,
+			`SELECT o.id FROM orders o ORDER BY o.id`, pageOpts(1, 25)))
+		if err == nil || res != nil {
+			t.Fatal("observer dial failure delivered a result")
+		}
+		var re *pgsql.RejectError
+		if errors.As(err, &re) {
+			t.Fatalf("observer failure classified as rejection: %v", err)
+		}
+		if !errors.Is(err, ErrPGConnectFailed) && !errors.Is(err, ErrQueryBackendFailure) {
+			t.Fatalf("err = %v, want connect-failed/backend-failure", err)
+		}
+		waitLocksGone(t, lab, "observer dial failure")
+	})
+
+	t.Run("observer stage timeout", func(t *testing.T) {
+		// The materialize hook drains the attempt budget while the execution
+		// transaction holds every lock — the observer stage then dies on the
+		// deadline and the frozen classification is timeout.
+		pgExecAfterMaterializeHook = func(ctx context.Context, tx pgx.Tx) error {
+			select {
+			case <-ctx.Done():
+				return nil
+			case <-time.After(5 * time.Second):
+				return fmt.Errorf("attempt context did not expire")
+			}
+		}
+		defer func() { pgExecAfterMaterializeHook = nil }()
+		in := pgExecInput(t, lab, `SELECT o.id FROM orders o ORDER BY o.id`, pageOpts(1, 25))
+		in.Timeout = 800 * time.Millisecond
+		res, err := ExecutePGGoverned(context.Background(), in)
+		if err == nil || res != nil {
+			t.Fatal("deadline-exhausted attempt delivered a result")
+		}
+		if !errors.Is(err, ErrQueryTimeout) {
+			t.Fatalf("err = %v, want ErrQueryTimeout", err)
+		}
+		waitLocksGone(t, lab, "observer timeout")
+	})
+	waitNoPGBackends(t, lab, "ch-t7s34-exec")
+}
+
+// Verified output must not be delivered when teardown fails: killing the
+// backend between audit and cleanup makes ROLLBACK fail — the assembled
+// result is dropped and the cleanup failure is the reported error.
+func TestPGExecute_PostAuditCleanupFailure(t *testing.T) {
+	lab := pgExecFixture(t)
+	admin := lab.adminConn(t)
+	pgExecAfterAuditHook = func(ctx context.Context, tx pgx.Tx) error {
+		var pid int
+		if err := tx.QueryRow(ctx, `SELECT pg_catalog.pg_backend_pid()`).Scan(&pid); err != nil {
+			return err
+		}
+		var killed bool
+		if err := admin.QueryRow(context.Background(),
+			`SELECT pg_catalog.pg_terminate_backend($1)`, pid).Scan(&killed); err != nil {
+			return err
+		}
+		time.Sleep(150 * time.Millisecond)
+		return nil
+	}
+	defer func() { pgExecAfterAuditHook = nil }()
+
+	res, err := ExecutePGGoverned(context.Background(), pgExecInput(t, lab,
+		`SELECT o.id FROM orders o ORDER BY o.id`, pageOpts(1, 25)))
+	if res != nil {
+		t.Fatal("verified result delivered despite teardown failure")
+	}
+	if !errors.Is(err, ErrQueryBackendFailure) {
+		t.Fatalf("err = %v, want ErrQueryBackendFailure", err)
+	}
+	waitNoPGBackends(t, lab, "ch-t7s34-exec")
+}
+
+// Materialization bounds are enforced per value before copying and per row
+// before retaining: a multi-megabyte cell is refused without duplication,
+// one hundred public columns plus witnesses is a normal path, and a real
+// over-cap public width is still rejected.
+func TestPGExecute_MaterializeBounds(t *testing.T) {
+	lab := pgExecFixture(t)
+	ctx := context.Background()
+
+	t.Run("oversized cell rejected before copy", func(t *testing.T) {
+		_, err := ExecutePGGoverned(ctx, pgExecInput(t, lab,
+			`SELECT repeat('x', 2097152)`, pageOpts(1, 25)))
+		if !errors.Is(err, ErrQueryResultTooLarge) {
+			t.Fatalf("err = %v, want ErrQueryResultTooLarge", err)
+		}
+	})
+
+	t.Run("hundred public columns plus witnesses pass", func(t *testing.T) {
+		cols := make([]string, 100)
+		for i := range cols {
+			cols[i] = "o.id"
+		}
+		res, err := ExecutePGGoverned(ctx, pgExecInput(t, lab,
+			`SELECT `+strings.Join(cols, ", ")+` FROM orders o`, pageOpts(1, 25)))
+		if err != nil {
+			t.Fatalf("100 public columns: %v", err)
+		}
+		if len(res.Columns) != 100 || len(res.Rows) != 3 {
+			t.Fatalf("cols=%d rows=%d", len(res.Columns), len(res.Rows))
+		}
+	})
+
+	t.Run("over-cap public width rejected", func(t *testing.T) {
+		cols := make([]string, 101)
+		for i := range cols {
+			cols[i] = "o.id"
+		}
+		_, err := ExecutePGGoverned(ctx, pgExecInput(t, lab,
+			`SELECT `+strings.Join(cols, ", ")+` FROM orders o`, pageOpts(1, 25)))
+		if !errors.Is(err, ErrQueryResultTooLarge) {
+			t.Fatalf("err = %v, want ErrQueryResultTooLarge", err)
+		}
+	})
+	waitNoPGBackends(t, lab, "ch-t7s34-exec")
+}
+
+// Toast identities are generated from each relation's OWN relisshared —
+// ordinary toast carries this database, shared-catalog toast carries
+// database 0 — compared one by one against live pg_class.
+func TestPGExecute_ToastIdentities(t *testing.T) {
+	lab := pgExecFixture(t)
+	admin := lab.adminConn(t)
+	ctx := context.Background()
+
+	var dbOID, g7oid, shdescOID uint32
+	if err := admin.QueryRow(ctx,
+		`SELECT oid FROM pg_catalog.pg_database WHERE datname = current_database()`).Scan(&dbOID); err != nil {
+		t.Fatalf("db oid: %v", err)
+	}
+	if err := admin.QueryRow(ctx,
+		`SELECT 'app.g7types'::pg_catalog.regclass::pg_catalog.oid`).Scan(&g7oid); err != nil {
+		t.Fatalf("g7types oid: %v", err)
+	}
+	if err := admin.QueryRow(ctx,
+		`SELECT 'pg_catalog.pg_shdescription'::pg_catalog.regclass::pg_catalog.oid`).Scan(&shdescOID); err != nil {
+		t.Fatalf("shdescription oid: %v", err)
+	}
+	// Storage fact: the fixture's EXTERNAL-storage row lives in the toast
+	// table as multiple chunks — asserted on the catalog, not assumed from
+	// the inserted length.
+	var toastOID uint32
+	if err := admin.QueryRow(ctx,
+		`SELECT reltoastrelid FROM pg_catalog.pg_class WHERE oid = $1`, g7oid).Scan(&toastOID); err != nil || toastOID == 0 {
+		t.Fatalf("g7types toast rel = %d err=%v", toastOID, err)
+	}
+	var chunks int
+	if err := admin.QueryRow(ctx,
+		fmt.Sprintf(`SELECT count(*) FROM pg_toast."pg_toast_%d"`, g7oid)).Scan(&chunks); err != nil {
+		t.Fatalf("toast chunks: %v", err)
+	}
+	if chunks < 2 {
+		t.Fatalf("external row stored inline — %d toast chunks, want out-of-line storage", chunks)
+	}
+
+	tx, err := admin.Begin(ctx)
+	if err != nil {
+		t.Fatalf("tx: %v", err)
+	}
+	defer tx.Rollback(ctx)
+	derived, err := pgCollectToastIdentities(ctx, tx, dbOID, []int64{int64(g7oid), int64(shdescOID)}, nil)
+	if err != nil {
+		t.Fatalf("collect toast identities: %v", err)
+	}
+	if len(derived) == 0 {
+		t.Fatal("no toast identities collected")
+	}
+	seenShared := false
+	for _, id := range derived {
+		var shared bool
+		if err := admin.QueryRow(ctx,
+			`SELECT relisshared FROM pg_catalog.pg_class WHERE oid = $1`, id.RelationOID).Scan(&shared); err != nil {
+			t.Fatalf("relisshared of %d: %v", id.RelationOID, err)
+		}
+		want := dbOID
+		if shared {
+			want = 0
+			seenShared = true
+		}
+		if id.DatabaseOID != want {
+			t.Fatalf("identity of %d = (%d,%d), want database %d (relisshared=%v)",
+				id.RelationOID, id.DatabaseOID, id.RelationOID, want, shared)
+		}
+	}
+	if !seenShared {
+		t.Fatal("pg_shdescription's shared toast produced no database-0 identity")
+	}
+}
+
+// Real-read evidence plus a CONTROLLED held-lock injection — labeled as
+// such: on PG16 a natural detoast read does NOT retain the toast relation
+// lock past the fetch, so the explanation branch is exercised by an explicit
+// ACCESS SHARE lock on the toast table taken inside the live attempt (the
+// fixture value's out-of-line storage and real detoast are proven on the
+// same attempt). The held set is recorded verbatim. Disabling the ownership
+// edge must turn the identical attempt into a Mismatch — that is what makes
+// the attribution branch load-bearing rather than decorative.
+func TestPGExecute_ToastDetoastHeldLock(t *testing.T) {
+	lab := pgExecFixture(t)
+	admin := lab.adminConn(t)
+	ctx := context.Background()
+
+	var g7oid, toastOID uint32
+	if err := admin.QueryRow(ctx,
+		`SELECT 'app.g7types'::pg_catalog.regclass::pg_catalog.oid`).Scan(&g7oid); err != nil {
+		t.Fatalf("g7types oid: %v", err)
+	}
+	if err := admin.QueryRow(ctx,
+		`SELECT reltoastrelid FROM pg_catalog.pg_class WHERE oid = $1`, g7oid).Scan(&toastOID); err != nil || toastOID == 0 {
+		t.Fatalf("toast rel: %v", err)
+	}
+	toastName := fmt.Sprintf(`pg_toast."pg_toast_%d"`, g7oid)
+	// Controlled injection only works if the restricted role may lock the
+	// toast table — admin grants are part of the injection, revoked after.
+	if _, err := admin.Exec(ctx, `GRANT USAGE ON SCHEMA pg_toast TO ro_bind`); err != nil {
+		t.Fatalf("grant toast schema: %v", err)
+	}
+	if _, err := admin.Exec(ctx,
+		fmt.Sprintf(`GRANT SELECT ON %s TO ro_bind`, toastName)); err != nil {
+		t.Fatalf("grant toast table: %v", err)
+	}
+	defer func() {
+		admin.Exec(context.Background(), fmt.Sprintf(`REVOKE SELECT ON %s FROM ro_bind`, toastName))
+		admin.Exec(context.Background(), `REVOKE USAGE ON SCHEMA pg_toast FROM ro_bind`)
+	}()
+
+	var heldSnapshot []uint32
+	toastHeld := false
+	pgExecAfterMaterializeHook = func(hookCtx context.Context, tx pgx.Tx) error {
+		// Controlled injection: a SELECT directly against the toast table
+		// takes a real AccessShareLock held to transaction end — NOT
+		// claimed to be a natural detoast artifact.
+		var n int
+		if err := tx.QueryRow(hookCtx,
+			fmt.Sprintf(`SELECT count(*) FROM %s`, toastName)).Scan(&n); err != nil {
+			return err
+		}
+		if n == 0 {
+			return fmt.Errorf("injected toast read returned no chunks")
+		}
+		rows, err := tx.Query(hookCtx,
+			`SELECT relation::pg_catalog.oid FROM pg_catalog.pg_locks
+			  WHERE pid = pg_catalog.pg_backend_pid()
+			    AND locktype = 'relation' AND granted`)
+		if err != nil {
+			return err
+		}
+		defer rows.Close()
+		var held []uint32
+		for rows.Next() {
+			var r uint32
+			if err := rows.Scan(&r); err != nil {
+				return err
+			}
+			held = append(held, r)
+		}
+		heldSnapshot = held
+		toastHeld = slices.Contains(held, toastOID)
+		return rows.Err()
+	}
+	defer func() { pgExecAfterMaterializeHook = nil }()
+
+	// Ownership edges on: the injected toast lock is explained and the real
+	// out-of-line value still verifies byte-for-byte.
+	res, err := ExecutePGGoverned(ctx, pgExecInput(t, lab,
+		`SELECT g.s FROM app.g7types g WHERE g.i = 4`, pageOpts(1, 25)))
+	if err != nil {
+		t.Fatalf("detoast read: %v", err)
+	}
+	if len(res.Rows) != 1 || res.Rows[0][0] == nil || len(*res.Rows[0][0]) != 10000 {
+		t.Fatalf("detoasted value = %v", res.Rows)
+	}
+	if !toastHeld {
+		t.Fatalf("injected toast lock absent — held set %v (toast %d)",
+			heldSnapshot, toastOID)
+	}
+
+	// Same attempt with ownership edges disabled: the still-held toast lock
+	// is now unexplained and must Mismatch.
+	toastHeld = false
+	pgExecDisableDerived = true
+	defer func() { pgExecDisableDerived = false }()
+	_, err = ExecutePGGoverned(ctx, pgExecInput(t, lab,
+		`SELECT g.s FROM app.g7types g WHERE g.i = 4`, pageOpts(1, 25)))
+	if !toastHeld {
+		t.Fatalf("injected toast lock absent on the negative run — held %v (toast %d)",
+			heldSnapshot, toastOID)
+	}
+	var re *pgsql.RejectError
+	if !errors.As(err, &re) || re.Code != "query_binding_mismatch" {
+		t.Fatalf("derived-off err = %v, want query_binding_mismatch", err)
 	}
 	waitNoPGBackends(t, lab, "ch-t7s34-exec")
 }

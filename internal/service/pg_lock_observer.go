@@ -18,9 +18,12 @@
 package service
 
 import (
+	"context"
 	"fmt"
 	"strconv"
 	"time"
+
+	"github.com/jackc/pgx/v5"
 
 	"github.com/fan/controlhub/internal/pgsql"
 )
@@ -51,9 +54,12 @@ type pgLockRow struct {
 // (pg_class.reltoastrelid) and each TOAST table's own indexes. The probe runs
 // inside the attempt transaction under the same remaining budget and keys by
 // OID — never by name — so its output is traceable to approved relations,
-// not learned from the observed lock set.
+// not learned from the observed lock set. Every derived identity carries the
+// relation's OWN relisshared: shared-catalog toast (e.g. pg_shdescription's)
+// gets database 0, ordinary toast gets this database's OID — nothing is
+// assumed.
 func (a *pgExecAttempt) collectDerivedIdentities() error {
-	if a.bind == nil || len(a.bind.Approved) == 0 {
+	if a.bind == nil || len(a.bind.Approved) == 0 || pgExecDisableDerived {
 		return nil
 	}
 	bases := make([]int64, 0, len(a.bind.Approved))
@@ -65,57 +71,94 @@ func (a *pgExecAttempt) collectDerivedIdentities() error {
 		seen[id.RelationOID] = true
 		bases = append(bases, int64(id.RelationOID))
 	}
-	if err := a.budget.arm(a.ctx, a.tx); err != nil {
-		return err
-	}
-	rows, err := a.tx.Query(a.ctx,
-		`SELECT c.oid::pg_catalog.oid, c.reltoastrelid::pg_catalog.oid, c.relisshared
-		   FROM pg_catalog.pg_class c
-		  WHERE c.oid::bigint = ANY($1::bigint[])`, bases)
+	arm := func() error { return a.budget.arm(a.ctx, a.tx) }
+	derived, err := pgCollectToastIdentities(a.ctx, a.tx, a.bind.DatabaseOID, bases, arm)
 	if err != nil {
 		return err
+	}
+	a.derived = append(a.derived, derived...)
+	return nil
+}
+
+// pgCollectToastIdentities resolves the TOAST ownership edges of the given
+// approved relation OIDs to (database_oid, relation_oid) identities using
+// each toast table's and each toast index's own pg_class.relisshared. The
+// base→toast→index attribution is a real pg_class edge chain — nothing here
+// widens the approved set by schema, relkind, or "catalogs are safe".
+func pgCollectToastIdentities(ctx context.Context, tx pgx.Tx, databaseOID uint32, baseOIDs []int64, arm func() error) ([]PGRelationIdentity, error) {
+	if len(baseOIDs) == 0 {
+		return nil, nil
+	}
+	if arm != nil {
+		if err := arm(); err != nil {
+			return nil, err
+		}
+	}
+	rows, err := tx.Query(ctx,
+		`SELECT c.reltoastrelid::pg_catalog.oid
+		   FROM pg_catalog.pg_class c
+		  WHERE c.oid::bigint = ANY($1::bigint[])
+		    AND c.reltoastrelid <> 0`, baseOIDs)
+	if err != nil {
+		return nil, err
 	}
 	var toast []int64
 	for rows.Next() {
-		var base, toastOID uint32
-		var shared bool
-		if err := rows.Scan(&base, &toastOID, &shared); err != nil {
+		var toastOID uint32
+		if err := rows.Scan(&toastOID); err != nil {
 			rows.Close()
-			return err
+			return nil, err
 		}
-		if toastOID != 0 {
-			toast = append(toast, int64(toastOID))
-			a.derived = append(a.derived, PGRelationIdentity{DatabaseOID: a.bind.DatabaseOID, RelationOID: toastOID})
-		}
+		toast = append(toast, int64(toastOID))
 	}
 	if err := rows.Err(); err != nil {
 		rows.Close()
-		return err
+		return nil, err
 	}
 	rows.Close()
 	if len(toast) == 0 {
-		return nil
+		return nil, nil
 	}
-	// TOAST tables are never relisshared; their indexes follow the same rule.
-	if err := a.budget.arm(a.ctx, a.tx); err != nil {
-		return err
+	if arm != nil {
+		if err := arm(); err != nil {
+			return nil, err
+		}
 	}
-	idx, err := a.tx.Query(a.ctx,
-		`SELECT i.indexrelid::pg_catalog.oid, i.indrelid::pg_catalog.oid
-		   FROM pg_catalog.pg_index i
-		  WHERE i.indrelid::bigint = ANY($1::bigint[])`, toast)
+	// Each toast relation and each index on it contributes its own
+	// relisshared — a shared catalog's toast legitimately carries
+	// database 0 in pg_locks, an ordinary table's toast does not.
+	idx, err := tx.Query(ctx,
+		`SELECT t.oid::pg_catalog.oid, t.relisshared,
+		        COALESCE(i.indexrelid, 0)::pg_catalog.oid,
+		        COALESCE(ic.relisshared, false)
+		   FROM pg_catalog.pg_class t
+		   LEFT JOIN pg_catalog.pg_index i ON i.indrelid = t.oid
+		   LEFT JOIN pg_catalog.pg_class ic ON ic.oid = i.indexrelid
+		  WHERE t.oid::bigint = ANY($1::bigint[])`, toast)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	defer idx.Close()
-	for idx.Next() {
-		var indexOID, toastOID uint32
-		if err := idx.Scan(&indexOID, &toastOID); err != nil {
-			return err
+	var derived []PGRelationIdentity
+	identity := func(oid uint32, shared bool) PGRelationIdentity {
+		id := PGRelationIdentity{DatabaseOID: databaseOID, RelationOID: oid}
+		if shared {
+			id.DatabaseOID = 0
 		}
-		a.derived = append(a.derived, PGRelationIdentity{DatabaseOID: a.bind.DatabaseOID, RelationOID: indexOID})
+		return id
 	}
-	return idx.Err()
+	for idx.Next() {
+		var toastOID, indexOID uint32
+		var toastShared, indexShared bool
+		if err := idx.Scan(&toastOID, &toastShared, &indexOID, &indexShared); err != nil {
+			return nil, err
+		}
+		derived = append(derived, identity(toastOID, toastShared))
+		if indexOID != 0 {
+			derived = append(derived, identity(indexOID, indexShared))
+		}
+	}
+	return derived, idx.Err()
 }
 
 // auditLockSet observes the attempt transaction's held locks through a second
@@ -130,7 +173,11 @@ func (a *pgExecAttempt) auditLockSet() error {
 		return fmt.Errorf("%w: lock audit lacks transaction identity evidence",
 			pgsql.ErrEvidenceUnavailable)
 	}
-	obsPool, err := OpenPostgresPool(a.ctx, a.cfg)
+	cfg := a.cfg
+	if pgExecObserverConfig != nil {
+		cfg = pgExecObserverConfig(a.cfg)
+	}
+	obsPool, err := OpenPostgresPool(a.ctx, cfg)
 	if err != nil {
 		return err
 	}

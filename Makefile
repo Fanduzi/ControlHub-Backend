@@ -16,10 +16,11 @@ GOOSE_DBSTRING := $(shell echo "$(DATABASE_DSN)" | sed 's/?parseTime=true&charse
 test:
 	go test ./...
 
-test-integration: ## Run integration tests except the dedicated OpenAPI fuzz test (requires Docker): disposable MySQL, plus the PostgreSQL connection-factory gate and the T7-S2 binding-gate acceptance
+test-integration: ## Run integration tests except the dedicated OpenAPI fuzz test (requires Docker): disposable MySQL, plus the PostgreSQL connection-factory gate, the T7-S2 binding-gate acceptance, and the T7-S3/S4 governed-execution acceptance
 	go test -tags=integration -count=1 -v -run '^Test' -skip '^TestOpenAPIFuzz$$' ./internal/integration
 	go test -tags=integration -count=1 -v -run '^TestPostgresPool' ./internal/service
 	go test -tags=integration -count=1 -v -run '^TestPGBind' ./internal/service
+	go test -tags=integration -count=1 -v -run '^TestPGExecute' ./internal/service
 
 test-ingestion-integration: ## Run issue #83 ingestion confirmation tests against disposable MySQL (requires Docker)
 	go test -tags=integration -count=1 -v -run '^TestIngestionConfirmation' ./internal/integration

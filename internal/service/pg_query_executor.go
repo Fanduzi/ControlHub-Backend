@@ -10,7 +10,8 @@
 // pos: T7-S3/S4 internal execution closure (frozen G4 steps 1–10 plus G10
 // mechanism 5b/5c) — guard → OpenPostgresPool → BEGIN READ ONLY + G4 session
 // settings → in-transaction virtualxid identity → PGBind →
-// RewriteFromGuardPaginated → ExecParams fresh parse with text result format →
+// RewriteFromGuardPaginated → pre-wire expected-record validation → ExecParams
+// fresh parse with text result format →
 // bounded private materialization → per-position FD verification →
 // second-connection lock-set audit → ROLLBACK → witness strip → deliver;
 // every exit path converges resources under an independent bounded cleanup
@@ -48,6 +49,14 @@ const (
 	// result contract applies its own per-cell truncation downstream.
 	pgMaxResultColumns = 100
 	pgMaxResultBytes   = 1 << 20
+
+	// The public column cap is a user-output bound — internal witness
+	// overhead is not user output. The transport still carries its own
+	// explainable bound: public cap plus a fixed witness allowance, so a
+	// 100-column public result with witnesses is legal while a pathological
+	// record set cannot materialize unbounded transport width.
+	pgMaxWitnessColumns   = 128
+	pgMaxTransportColumns = pgMaxResultColumns + pgMaxWitnessColumns
 )
 
 // PGExecuteInput bundles the caller-resolved governed execution inputs. The
@@ -131,6 +140,28 @@ var pgExecAfterBindHook func(ctx context.Context, tx pgx.Tx) error
 // copies must survive it for verification to pass.
 var pgExecAfterMaterializeHook func(ctx context.Context, tx pgx.Tx) error
 
+// pgExecPostRewriteHook is a third test-only seam between rewrite output and
+// the pre-execution expected-layout check. It may mutate the expected
+// records to model a fault inside the record set itself — the pre-check must
+// then stop ExecParams, or the post-check must catch a consistent lie.
+var pgExecPostRewriteHook func(rw *pgsql.RewriteResult) error
+
+// pgExecAfterAuditHook runs after the lock audit verifies and before the
+// result is projected — the point a cleanup-stage fault can still prove
+// that verified data is never delivered when teardown fails.
+var pgExecAfterAuditHook func(ctx context.Context, tx pgx.Tx) error
+
+// pgExecObserverConfig lets a test mutate the validated ConnConfig before
+// the independent observation pool is built — the only way to make the
+// observer's dial fail on a real server while the execution side stays
+// perfectly healthy.
+var pgExecObserverConfig func(*pgx.ConnConfig) *pgx.ConnConfig
+
+// pgExecDisableDerived skips the TOAST ownership edge collection in tests so
+// a held toast lock proves the explanation branch is load-bearing instead of
+// silently passing as "not held".
+var pgExecDisableDerived bool
+
 // ExecutePGGoverned runs one complete governed attempt and returns the
 // internal verified result only when position verification and the lock-set
 // audit both pass and cleanup finished. Any failure is classified onto the
@@ -205,6 +236,17 @@ func ExecutePGGoverned(ctx context.Context, in PGExecuteInput) (res *PGVerifiedR
 	if err := attemptCtx.Err(); err != nil {
 		return nil, a.fail(err)
 	}
+	if pgExecPostRewriteHook != nil {
+		if err := pgExecPostRewriteHook(rw); err != nil {
+			return nil, a.fail(err)
+		}
+	}
+	// Expected records are proven against the bound evidence before any user
+	// byte reaches the wire — a malformed record set never sends the
+	// transport statement.
+	if err := verifyPGExpectedLayout(rw, bind); err != nil {
+		return nil, a.fail(err)
+	}
 
 	if err := a.executeAndMaterialize(rw.SQL, win); err != nil {
 		return nil, a.fail(err)
@@ -217,8 +259,19 @@ func ExecutePGGoverned(ctx context.Context, in PGExecuteInput) (res *PGVerifiedR
 	if err := verifyPGPositions(a.fds, rw, bind); err != nil {
 		return nil, a.fail(err)
 	}
+	if err := attemptCtx.Err(); err != nil {
+		return nil, a.fail(err)
+	}
 	if err := a.auditLockSet(); err != nil {
 		return nil, a.fail(err)
+	}
+	if err := attemptCtx.Err(); err != nil {
+		return nil, a.fail(err)
+	}
+	if pgExecAfterAuditHook != nil {
+		if err := pgExecAfterAuditHook(attemptCtx, a.tx); err != nil {
+			return nil, a.fail(err)
+		}
 	}
 
 	page, err := win.Result(len(a.rows))
@@ -231,6 +284,12 @@ func ExecutePGGoverned(ctx context.Context, in PGExecuteInput) (res *PGVerifiedR
 	out.PublicProofs = rw.PublicProofs
 	out.Sources = rw.SourceCatalog
 	out.BoundRefs = bind.Refs
+	// The success verdict must land inside a live attempt: a deadline that
+	// passed during the last CPU stages turns this into a timeout, never a
+	// delivered result.
+	if err := attemptCtx.Err(); err != nil {
+		return nil, a.fail(err)
+	}
 	return out, nil
 }
 
@@ -328,23 +387,47 @@ func (a *pgExecAttempt) executeAndMaterialize(sql string, win pgsql.PageWindow) 
 	copy(a.fds, fds)
 
 	var readErr error
-	if len(a.fds) > pgMaxResultColumns {
-		readErr = ErrQueryResultTooLarge
+	if len(a.fds) > pgMaxTransportColumns {
+		readErr = fmt.Errorf("%w: transport carries %d columns beyond bound %d",
+			pgsql.ErrEvidenceUnavailable, len(a.fds), pgMaxTransportColumns)
 	}
 	totalBytes := 0
-	for readErr == nil && rr.NextRow() {
+	for readErr == nil {
+		if err := a.ctx.Err(); err != nil {
+			readErr = err
+			break
+		}
+		if !rr.NextRow() {
+			break
+		}
+		if int64(len(a.rows)) >= win.FetchCount {
+			// A row beyond the rewritten fetch window is an internal
+			// anomaly — stop now, never collect the surplus first.
+			readErr = fmt.Errorf("%w: transport row %d exceeds fetch window %d",
+				pgsql.ErrEvidenceUnavailable, len(a.rows)+1, win.FetchCount)
+			break
+		}
 		vals := rr.Values()
 		row := make([]*string, len(vals))
+		rowOK := true
 		for i, v := range vals {
 			if v == nil {
 				continue // SQL NULL stays nil
+			}
+			// Check the remaining budget before copying — an oversized
+			// value is rejected without being duplicated, and the
+			// subtraction cannot underflow because totalBytes never
+			// exceeds the cap.
+			if len(v) > pgMaxResultBytes-totalBytes {
+				readErr = ErrQueryResultTooLarge
+				rowOK = false
+				break
 			}
 			s := string(v) // native wire text, copied before the next read
 			row[i] = &s
 			totalBytes += len(s)
 		}
-		if totalBytes > pgMaxResultBytes {
-			readErr = ErrQueryResultTooLarge
+		if !rowOK {
 			break
 		}
 		a.rows = append(a.rows, row)
@@ -352,16 +435,23 @@ func (a *pgExecAttempt) executeAndMaterialize(sql string, win pgsql.PageWindow) 
 	_, closeErr := rr.Close()
 	switch {
 	case readErr != nil:
-		return readErr
+		return classifyPGExecTransportError(readErr)
 	case closeErr != nil:
-		return closeErr
-	case int64(len(a.rows)) > win.FetchCount:
-		// More rows than the rewritten window permits is an internal
-		// defect — the buffer is dropped, never delivered.
-		return fmt.Errorf("%w: transport returned %d rows beyond window %d",
-			pgsql.ErrEvidenceUnavailable, len(a.rows), win.FetchCount)
+		return classifyPGExecTransportError(closeErr)
 	}
 	return nil
+}
+
+// classifyPGExecTransportError narrows user-transport-stage failures onto
+// the frozen relation-access verdict (a bound object that vanished or lost
+// privilege between binding and parse). Only the user's own statement goes
+// through here — observer probes and internal catalog reads never turn a
+// 42501 into a user rejection.
+func classifyPGExecTransportError(err error) error {
+	if c := classifyPGRelationAccess(err); c != nil {
+		return c
+	}
+	return err
 }
 
 // fail maps an executor error onto the frozen terminal vocabulary, mirroring
@@ -390,7 +480,12 @@ func (a *pgExecAttempt) fail(err error) error {
 		return ErrQueryTimeout
 	case errors.Is(err, ErrQueryTimeout), errors.Is(err, ErrQueryBackendFailure),
 		errors.Is(err, ErrQueryResultTooLarge), errors.Is(err, ErrQueryValidationFailed),
-		errors.Is(err, pgsql.ErrEvidenceUnavailable):
+		errors.Is(err, pgsql.ErrEvidenceUnavailable),
+		errors.Is(err, ErrPGVersionUnsupported), errors.Is(err, ErrPGConnectFailed),
+		errors.Is(err, ErrPGVersionReadFailed):
+		// Classified sentinels keep their identity — the version gate's
+		// verdict must stay recognizable, never flattened into a generic
+		// backend failure.
 		return err
 	case isPGQueryCanceled(err):
 		return ErrQueryTimeout
