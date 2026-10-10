@@ -53,6 +53,9 @@ var pgProbeCatalogNames = []string{
 	"pg_auth_members",
 	"pg_authid",
 	"pg_type",
+	// pg_locks: the attempt's own virtualtransaction identity probe reads it
+	// inside the execution transaction and holds its lock until rollback.
+	"pg_locks",
 }
 
 // PGRelationIdentity is the lock-audit identity of one relation: (database
