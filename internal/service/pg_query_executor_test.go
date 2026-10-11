@@ -2,7 +2,8 @@
 // input: constructed FieldDescriptions, rewrite proof records, bound refs,
 // observed pg_locks row sets
 // output: unit tests for evaluatePGLockAudit (three-state verdict),
-// verifyPGExpectedLayout (pre-wire expected-record validation),
+// verifyPGExpectedLayout (pre-wire expected-record validation incl. the
+// catalog/binding/guard identity-correspondence fault matrix),
 // verifyPGPositions (per-position FD identity), pgColumnTypeName (G7 naming
 // and the stable unrecognized marker), and projectPGPublicResult (witness
 // strip)
@@ -338,6 +339,142 @@ func TestPGVerifyExpectedLayout(t *testing.T) {
 		// "nonzero means present" bug would break it.
 		if err := verifyPGExpectedLayout(rw, bind); err != nil {
 			t.Fatalf("occurrence 0: %v", err)
+		}
+	})
+}
+
+// pgRewriteTwoEntityFixture models a two-entity join: guard refs R0→A
+// (oid 100, reltype 900) and R1→B (oid 200, reltype 901), one public proof
+// each, one witness per entity. Every fault below mutates identity
+// correspondence inside an otherwise-valid record set — the pre-wire check
+// must refuse every one with evidence-unavailable, never a rejection.
+func pgRewriteTwoEntityFixture() (*pgsql.RewriteResult, *PGBindResult) {
+	src := func(occ pgsql.SourceOccurrenceID) pgsql.SourceRef {
+		return pgsql.SourceRef{Occurrence: occ,
+			Slot: pgsql.SourceSlot{Kind: pgsql.SourceSlotColumn, Ordinal: 0}}
+	}
+	rw := &pgsql.RewriteResult{
+		Public: []string{"aid", "bid"},
+		Witnesses: []pgsql.WitnessRecord{
+			{Column: "__chub_w0", CoveredSources: []pgsql.SourceOccurrenceID{0}, CarrierOccurrence: 0},
+			{Column: "__chub_w1", CoveredSources: []pgsql.SourceOccurrenceID{1}, CarrierOccurrence: 1},
+		},
+		WitnessPositions: []int{2, 3},
+		PublicProofs: []pgsql.PublicColumnProof{
+			{TransportIndex: 0, Resolution: pgsql.ProofComplete,
+				Dependencies: []pgsql.SourceRef{src(0)},
+				FDOrigin: pgsql.FDOrigin{Kind: pgsql.FDOriginKnownColumn,
+					Source: src(0), RelationOID: 100, AttributeNumber: 1}},
+			{TransportIndex: 1, Resolution: pgsql.ProofComplete,
+				Dependencies: []pgsql.SourceRef{src(1)},
+				FDOrigin: pgsql.FDOrigin{Kind: pgsql.FDOriginKnownColumn,
+					Source: src(1), RelationOID: 200, AttributeNumber: 1}},
+		},
+		SourceCatalog: map[pgsql.SourceOccurrenceID]pgsql.SourceOccurrence{
+			0: {ID: 0, Kind: pgsql.SourceEntityRangeVar, RefID: 0, HasRefID: true},
+			1: {ID: 1, Kind: pgsql.SourceEntityRangeVar, RefID: 1, HasRefID: true},
+		},
+		Refs: []pgsql.RangeVarRef{
+			{RefID: 0, Kind: pgsql.RefEntity, Name: "a"},
+			{RefID: 1, Kind: pgsql.RefQualified, Name: "b", Schema: "app"},
+		},
+	}
+	bind := &PGBindResult{Refs: map[pgsql.RefID]*PGBoundRef{
+		0: {RefID: 0, Identity: PGRelationIdentity{DatabaseOID: 5, RelationOID: 100},
+			RelTypeOID: 900, TouchConfirmed: true,
+			Columns: []pgsql.ColumnMetadata{{Name: "id", RelationOID: 100, AttributeNumber: 1}}},
+		1: {RefID: 1, Identity: PGRelationIdentity{DatabaseOID: 5, RelationOID: 200},
+			RelTypeOID: 901, TouchConfirmed: true,
+			Columns: []pgsql.ColumnMetadata{{Name: "id", RelationOID: 200, AttributeNumber: 1}}},
+	}}
+	return rw, bind
+}
+
+func TestPGVerifyExpectedLayout_IdentityCorrespondence(t *testing.T) {
+	t.Run("valid two-entity layout passes", func(t *testing.T) {
+		rw, bind := pgRewriteTwoEntityFixture()
+		if err := verifyPGExpectedLayout(rw, bind); err != nil {
+			t.Fatalf("verify: %v", err)
+		}
+	})
+
+	expectFail := func(name string, mutate func(rw *pgsql.RewriteResult, bind *PGBindResult)) {
+		t.Run(name, func(t *testing.T) {
+			rw, bind := pgRewriteTwoEntityFixture()
+			mutate(rw, bind)
+			err := verifyPGExpectedLayout(rw, bind)
+			if !errors.Is(err, pgsql.ErrEvidenceUnavailable) {
+				t.Fatalf("err = %v, want evidence unavailable", err)
+			}
+		})
+	}
+
+	// Catalog occurrence 0 keeps its own key but borrows entity B's RefID —
+	// proofs and FDs can consistently describe B while entity A's real
+	// occurrence vanished behind the wrong identity.
+	expectFail("catalog occurrence pointing at another entity's RefID", func(rw *pgsql.RewriteResult, bind *PGBindResult) {
+		c0 := rw.SourceCatalog[0]
+		c0.RefID = 1
+		rw.SourceCatalog[0] = c0
+	})
+
+	expectFail("catalog record stored under a foreign key", func(rw *pgsql.RewriteResult, bind *PGBindResult) {
+		rw.SourceCatalog[7] = pgsql.SourceOccurrence{ID: 0,
+			Kind: pgsql.SourceEntityRangeVar, RefID: 0, HasRefID: true}
+	})
+
+	expectFail("generated occurrence claims entity identity", func(rw *pgsql.RewriteResult, bind *PGBindResult) {
+		rw.SourceCatalog[-1] = pgsql.SourceOccurrence{ID: -1,
+			Kind: pgsql.SourceEntityRangeVar, RefID: 0, HasRefID: true}
+	})
+
+	// The guard still collected R1 — dropping it from BOTH bind and catalog
+	// must not hide it: completeness runs from the original input.
+	expectFail("guard ref dropped from bind and catalog together", func(rw *pgsql.RewriteResult, bind *PGBindResult) {
+		delete(rw.SourceCatalog, 1)
+		delete(bind.Refs, 1)
+	})
+
+	expectFail("bound ref key mismatches its inner RefID", func(rw *pgsql.RewriteResult, bind *PGBindResult) {
+		bind.Refs[0].RefID = 9
+	})
+
+	// One witness claiming both entities: A reltype 900 and B reltype 901
+	// cannot share one transport DataTypeOID — determinable before the wire.
+	expectFail("witness covering incompatible physical identities", func(rw *pgsql.RewriteResult, bind *PGBindResult) {
+		rw.Witnesses[0].CoveredSources = []pgsql.SourceOccurrenceID{0, 1}
+		rw.Witnesses = rw.Witnesses[:1]
+		rw.WitnessPositions = rw.WitnessPositions[:1]
+	})
+
+	// Positive control: two refs of the SAME table share one identity and
+	// reltype — a merged witness covering both occurrences is legal.
+	t.Run("same-table refs may share one witness", func(t *testing.T) {
+		rw, bind := pgRewriteTwoEntityFixture()
+		bind.Refs[1].Identity = bind.Refs[0].Identity
+		bind.Refs[1].RelTypeOID = bind.Refs[0].RelTypeOID
+		bind.Refs[1].Columns = bind.Refs[0].Columns
+		rw.PublicProofs[1].FDOrigin.RelationOID = 100
+		rw.Witnesses[0].CoveredSources = []pgsql.SourceOccurrenceID{0, 1}
+		rw.Witnesses = rw.Witnesses[:1]
+		rw.WitnessPositions = rw.WitnessPositions[:1]
+		if err := verifyPGExpectedLayout(rw, bind); err != nil {
+			t.Fatalf("same-table shared witness: %v", err)
+		}
+	})
+
+	// Positive control: a CTE ref needs no entity binding; a generated
+	// carrier with a negative id is a legal witness carrier.
+	t.Run("cte ref and generated carrier are legal", func(t *testing.T) {
+		rw, bind := pgRewriteTwoEntityFixture()
+		rw.Refs = append(rw.Refs, pgsql.RangeVarRef{RefID: 2, Kind: pgsql.RefCTE, Name: "c"})
+		rw.SourceCatalog[2] = pgsql.SourceOccurrence{ID: 2,
+			Kind: pgsql.SourceCTERangeVar, RefID: 2, HasRefID: true}
+		rw.SourceCatalog[-1] = pgsql.SourceOccurrence{ID: -1,
+			Kind: pgsql.SourceGeneratedCarrier, HasRefID: false}
+		rw.Witnesses[0].CarrierOccurrence = -1
+		if err := verifyPGExpectedLayout(rw, bind); err != nil {
+			t.Fatalf("cte + carrier: %v", err)
 		}
 	})
 }

@@ -4,10 +4,10 @@
 // private row buffer, connection TypeMap
 // output: verifyPGExpectedLayout, verifyPGPositions,
 // projectPGPublicResult, pgColumnTypeName — a pre-ExecParams expected-record
-// validation (completeness, coordinate map, source/binding/coverage
-// correspondence, slot and attribute-map legality) plus the post-execution
-// per-position FD comparison, witness-stripped public projection, and stable
-// G7 type naming
+// validation (completeness, coordinate map, catalog/binding/guard identity
+// correspondence, witness physical-identity compatibility, slot and
+// attribute-map legality) plus the post-execution per-position FD
+// comparison, witness-stripped public projection, and stable G7 type naming
 // pos: T7-S3 verification split (frozen G10 mechanism 5b) — expectations are
 // validated against the S1/S2 record set and the touch-confirmed bindings
 // BEFORE the transport statement is sent, never reverse-derived from actual
@@ -109,11 +109,12 @@ func verifyPGExpectedLayout(rw *pgsql.RewriteResult, bind *PGBindResult) error {
 		}
 	}
 
-	// Coverage must hold in both directions, iterated over the binding
-	// record — never only over the catalog a rewrite defect could shrink:
-	// every bound entity occurrence exists in the catalog as an entity source
-	// and reaches at least one final witness position; every catalog entity
-	// maps back to a confirmed binding and to the guard's own ref.
+	// Coverage must hold in all three directions, each anchored to a
+	// different authority: the catalog's own identity bookkeeping (map key
+	// vs record ID, original RefID vs generated carrier), the binding's
+	// key-vs-RefID consistency, and the GUARD's ref list — the original
+	// input — from which every entity ref must reach a confirmed binding,
+	// a catalog entity occurrence, and final witness coverage.
 	covered := map[pgsql.SourceOccurrenceID]bool{}
 	for _, w := range rw.Witnesses {
 		for _, src := range w.CoveredSources {
@@ -128,11 +129,28 @@ func verifyPGExpectedLayout(rw *pgsql.RewriteResult, bind *PGBindResult) error {
 		refsByID[ref.RefID] = ref
 	}
 	for id, occ := range rw.SourceCatalog {
+		if occ.ID != id {
+			return fmt.Errorf("%w: catalog record %d stored under key %d",
+				pgsql.ErrEvidenceUnavailable, occ.ID, id)
+		}
+		switch {
+		case occ.ID < 0:
+			// Generated carriers keep their synthetic identity — one
+			// claiming entity kind is forged.
+			if occ.Kind == pgsql.SourceEntityRangeVar {
+				return fmt.Errorf("%w: generated occurrence %d claims entity identity",
+					pgsql.ErrEvidenceUnavailable, id)
+			}
+		default:
+			// Original RangeVar occurrences carry their own RefID — S1
+			// numbers them identically.
+			if !occ.HasRefID || pgsql.SourceOccurrenceID(occ.RefID) != occ.ID {
+				return fmt.Errorf("%w: original occurrence %d does not carry its own RefID",
+					pgsql.ErrEvidenceUnavailable, id)
+			}
+		}
 		if occ.Kind != pgsql.SourceEntityRangeVar {
 			continue
-		}
-		if !occ.HasRefID {
-			return fmt.Errorf("%w: entity occurrence %d lacks a RefID", pgsql.ErrEvidenceUnavailable, id)
 		}
 		ref, ok := refsByID[occ.RefID]
 		if !ok || (ref.Kind != pgsql.RefEntity && ref.Kind != pgsql.RefQualified) {
@@ -148,15 +166,35 @@ func verifyPGExpectedLayout(rw *pgsql.RewriteResult, bind *PGBindResult) error {
 				pgsql.ErrEvidenceUnavailable, id)
 		}
 	}
-	for refID, bound := range bind.Refs {
-		id := pgsql.SourceOccurrenceID(refID)
-		occ, ok := rw.SourceCatalog[id]
+	// The original guard input is the completeness authority: every entity
+	// ref it collected must have survived binding, catalog, and coverage —
+	// a ref dropped silently from both bind and catalog still fails here.
+	for _, ref := range rw.Refs {
+		if ref.Kind != pgsql.RefEntity && ref.Kind != pgsql.RefQualified {
+			continue
+		}
+		if bind.Refs[ref.RefID] == nil || !bind.Refs[ref.RefID].TouchConfirmed {
+			return fmt.Errorf("%w: guard entity ref %d lacks a confirmed binding",
+				pgsql.ErrEvidenceUnavailable, ref.RefID)
+		}
+		occ, ok := rw.SourceCatalog[pgsql.SourceOccurrenceID(ref.RefID)]
 		if !ok || occ.Kind != pgsql.SourceEntityRangeVar {
-			return fmt.Errorf("%w: bound entity %d missing from rewrite coverage",
+			return fmt.Errorf("%w: guard entity ref %d missing from source catalog",
+				pgsql.ErrEvidenceUnavailable, ref.RefID)
+		}
+		if !covered[pgsql.SourceOccurrenceID(ref.RefID)] {
+			return fmt.Errorf("%w: guard entity ref %d has no final witness coverage",
+				pgsql.ErrEvidenceUnavailable, ref.RefID)
+		}
+	}
+	for refID, bound := range bind.Refs {
+		if bound == nil || bound.RefID != refID {
+			return fmt.Errorf("%w: bound ref key %d does not match its identity",
 				pgsql.ErrEvidenceUnavailable, refID)
 		}
-		if !covered[id] || bound == nil {
-			return fmt.Errorf("%w: bound entity %d has no final witness coverage",
+		ref, ok := refsByID[refID]
+		if !ok || (ref.Kind != pgsql.RefEntity && ref.Kind != pgsql.RefQualified) {
+			return fmt.Errorf("%w: bound ref %d is not a guard entity ref",
 				pgsql.ErrEvidenceUnavailable, refID)
 		}
 	}
@@ -181,6 +219,12 @@ func verifyPGWitnessExpected(w pgsql.WitnessRecord, rw *pgsql.RewriteResult, bin
 		return fmt.Errorf("%w: witness %q carrier %d unknown",
 			pgsql.ErrEvidenceUnavailable, w.Column, w.CarrierOccurrence)
 	}
+	// Every covered source must resolve to the SAME confirmed physical
+	// identity and reltype: the transport column carries exactly one
+	// DataTypeOID, so a witness spanning incompatible bindings could only
+	// be caught by the actual FD — which is too late.
+	var wantIdentity *PGRelationIdentity
+	var wantRelType uint32
 	for _, src := range w.CoveredSources {
 		occ, ok := rw.SourceCatalog[src]
 		if !ok {
@@ -195,6 +239,16 @@ func verifyPGWitnessExpected(w pgsql.WitnessRecord, rw *pgsql.RewriteResult, bin
 		if bound == nil || !bound.TouchConfirmed {
 			return fmt.Errorf("%w: witness %q covers unconfirmed binding %d",
 				pgsql.ErrEvidenceUnavailable, w.Column, occ.RefID)
+		}
+		if wantIdentity == nil {
+			id := bound.Identity
+			wantIdentity = &id
+			wantRelType = bound.RelTypeOID
+			continue
+		}
+		if bound.Identity != *wantIdentity || bound.RelTypeOID != wantRelType {
+			return fmt.Errorf("%w: witness %q covers incompatible physical identities",
+				pgsql.ErrEvidenceUnavailable, w.Column)
 		}
 	}
 	return nil

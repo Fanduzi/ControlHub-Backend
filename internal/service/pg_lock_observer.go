@@ -198,13 +198,16 @@ func (a *pgExecAttempt) auditLockSet() error {
 	} else {
 		return ErrQueryTimeout
 	}
-	rows, err := conn.Query(a.ctx,
-		`SELECT l.locktype::text, l.mode::text, l.granted,
+	obsSQL := `SELECT l.locktype::text, l.mode::text, l.granted,
 		        COALESCE(l.database, 0)::pg_catalog.oid,
 		        COALESCE(l.relation, 0)::pg_catalog.oid,
 		        COALESCE(l.virtualtransaction, '')
 		   FROM pg_catalog.pg_locks l
-		  WHERE l.pid = $1`, a.backendPID)
+		  WHERE l.pid = $1`
+	if pgExecObserverSQL != nil {
+		obsSQL = pgExecObserverSQL(obsSQL)
+	}
+	rows, err := conn.Query(a.ctx, obsSQL, a.backendPID)
 	if err != nil {
 		return err
 	}

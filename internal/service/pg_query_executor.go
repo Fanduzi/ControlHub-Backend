@@ -23,6 +23,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sync/atomic"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -161,6 +162,16 @@ var pgExecObserverConfig func(*pgx.ConnConfig) *pgx.ConnConfig
 // a held toast lock proves the explanation branch is load-bearing instead of
 // silently passing as "not held".
 var pgExecDisableDerived bool
+
+// pgExecObserverSQL wraps the observer's fixed pg_locks statement in tests
+// (e.g. a sleep-injected variant) so a real second-connection query can be
+// stalled mid-flight while the production path keeps the original SQL.
+var pgExecObserverSQL func(orig string) string
+
+// pgExecTransportCalls counts ExecParams invocations — the seam sits
+// immediately before the statement is sent, so a test can prove malformed
+// expected records stopped the wire rather than merely erroring later.
+var pgExecTransportCalls atomic.Int64
 
 // ExecutePGGoverned runs one complete governed attempt and returns the
 // internal verified result only when position verification and the lock-set
@@ -380,6 +391,7 @@ func (a *pgExecAttempt) executeAndMaterialize(sql string, win pgsql.PageWindow) 
 	if err := a.budget.arm(a.ctx, a.tx); err != nil {
 		return err
 	}
+	pgExecTransportCalls.Add(1)
 	rr := a.tx.Conn().PgConn().ExecParams(a.ctx, sql, nil, nil, nil, []int16{0})
 
 	fds := rr.FieldDescriptions()

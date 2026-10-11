@@ -24,6 +24,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -906,14 +907,24 @@ func TestPGExecute_PositionSwap(t *testing.T) {
 	waitNoPGBackends(t, lab, "ch-t7s34-exec")
 }
 
-// Malformed expected records stop before ExecParams — the materialize seam
-// proves the transport statement was never sent, not just that an error
-// came back.
+// Malformed expected records stop before ExecParams — the transport call
+// counter sitting immediately before the send proves the statement never
+// reached the wire, and the materialize seam confirms it stayed silent.
 func TestPGExecute_ExpectedLayoutStopsBeforeWire(t *testing.T) {
 	lab := pgExecFixture(t)
 	reached := false
+	before := pgExecTransportCalls.Load()
 	pgExecPostRewriteHook = func(rw *pgsql.RewriteResult) error {
-		rw.Witnesses[0].CoveredSources = nil // a witness covering nothing
+		// Reassign entity A's catalog identity to entity B's RefID — the
+		// proofs and FDs would consistently describe B while A's real
+		// occurrence vanished.
+		for id, occ := range rw.SourceCatalog {
+			if occ.Kind == pgsql.SourceEntityRangeVar && occ.RefID == 0 {
+				occ.RefID = 1
+				rw.SourceCatalog[id] = occ
+				break
+			}
+		}
 		return nil
 	}
 	pgExecAfterMaterializeHook = func(ctx context.Context, tx pgx.Tx) error {
@@ -926,12 +937,15 @@ func TestPGExecute_ExpectedLayoutStopsBeforeWire(t *testing.T) {
 	}()
 
 	_, err := ExecutePGGoverned(context.Background(), pgExecInput(t, lab,
-		`SELECT o.id FROM orders o ORDER BY o.id`, pageOpts(1, 25)))
+		`SELECT o.id, s.id FROM orders o JOIN smallvals s ON o.id = s.id ORDER BY o.id`, pageOpts(1, 25)))
 	if !errors.Is(err, pgsql.ErrEvidenceUnavailable) {
 		t.Fatalf("err = %v, want evidence unavailable", err)
 	}
 	if reached {
-		t.Fatal("ExecParams reached the wire on malformed expected records")
+		t.Fatal("materialize seam reached on malformed expected records")
+	}
+	if got := pgExecTransportCalls.Load(); got != before {
+		t.Fatalf("ExecParams calls %d→%d — the wire was reached", before, got)
 	}
 	waitNoPGBackends(t, lab, "ch-t7s34-exec")
 }
@@ -1117,10 +1131,11 @@ func TestPGExecute_ObserverFailure(t *testing.T) {
 		waitLocksGone(t, lab, "observer dial failure")
 	})
 
-	t.Run("observer stage timeout", func(t *testing.T) {
+	t.Run("pre-observer budget exhaustion", func(t *testing.T) {
 		// The materialize hook drains the attempt budget while the execution
-		// transaction holds every lock — the observer stage then dies on the
-		// deadline and the frozen classification is timeout.
+		// transaction holds every lock — the attempt dies on the deadline
+		// check BEFORE the observer connection is ever built. The
+		// mid-observer timeout is proven separately below.
 		pgExecAfterMaterializeHook = func(ctx context.Context, tx pgx.Tx) error {
 			select {
 			case <-ctx.Done():
@@ -1139,8 +1154,135 @@ func TestPGExecute_ObserverFailure(t *testing.T) {
 		if !errors.Is(err, ErrQueryTimeout) {
 			t.Fatalf("err = %v, want ErrQueryTimeout", err)
 		}
-		waitLocksGone(t, lab, "observer timeout")
+		waitLocksGone(t, lab, "pre-observer exhaustion")
 	})
+	waitNoPGBackends(t, lab, "ch-t7s34-exec")
+}
+
+// The observer timeout that actually ENTERS the observation stage: the
+// attempt context is still valid, the execution transaction holds its locks,
+// a real second connection (different PID) is established, and its real
+// pg_locks statement — wrapped in a test-only sleep so it cannot finish
+// inside the armed budget — is proven mid-flight on the server before the
+// timeout lands. Classification, lock release, observer convergence, and a
+// later clean attempt are all asserted.
+func TestPGExecute_ObserverQueryTimeout(t *testing.T) {
+	lab := pgExecFixture(t)
+	admin := lab.adminConn(t)
+	ctx := context.Background()
+
+	var execPID atomic.Int32
+	pgExecAfterMaterializeHook = func(hookCtx context.Context, tx pgx.Tx) error {
+		var pid int32
+		if err := tx.QueryRow(hookCtx, `SELECT pg_catalog.pg_backend_pid()`).Scan(&pid); err != nil {
+			return err
+		}
+		execPID.Store(pid)
+		return nil
+	}
+	// Test-only delay: the real observer statement runs behind a sleep the
+	// armed statement_timeout cannot survive. Production SQL is untouched —
+	// this seam exists precisely so the timeout lands mid-query on a real
+	// second connection, not in a mocked context.
+	pgExecObserverSQL = func(orig string) string {
+		return `SELECT s.* FROM (SELECT pg_catalog.pg_sleep(4)) d CROSS JOIN (` + orig + `) s`
+	}
+	defer func() {
+		pgExecAfterMaterializeHook = nil
+		pgExecObserverSQL = nil
+	}()
+
+	// Barrier: from the admin side, watch for the observer backend running
+	// the sleep-wrapped statement — proof a real second connection entered
+	// the observation stage before asserting on its demise.
+	var obsPID atomic.Int32
+	observerSeen := make(chan int32, 1)
+	go func() {
+		deadline := time.Now().Add(4 * time.Second)
+		for time.Now().Before(deadline) {
+			var pid int32
+			err := admin.QueryRow(context.Background(),
+				`SELECT pid FROM pg_catalog.pg_stat_activity
+				  WHERE application_name = 'ch-t7s34-exec'
+				    AND pid <> pg_catalog.pg_backend_pid()
+				    AND query LIKE '%pg_sleep%'
+				  LIMIT 1`).Scan(&pid)
+			if err == nil {
+				observerSeen <- pid
+				return
+			}
+			time.Sleep(20 * time.Millisecond)
+		}
+		observerSeen <- -1
+	}()
+
+	in := pgExecInput(t, lab, `SELECT o.id FROM orders o ORDER BY o.id`, pageOpts(1, 25))
+	in.Timeout = 1200 * time.Millisecond
+	res, err := ExecutePGGoverned(ctx, in)
+	if err == nil || res != nil {
+		t.Fatal("mid-observer timeout delivered a result")
+	}
+	if !errors.Is(err, ErrQueryTimeout) {
+		t.Fatalf("err = %v, want ErrQueryTimeout", err)
+	}
+	if ep := execPID.Load(); ep == 0 {
+		t.Fatal("execution backend pid was never recorded")
+	}
+	op := <-observerSeen
+	if op <= 0 {
+		t.Fatal("observer statement never appeared on the server — timeout did not reach the observation stage")
+	}
+	obsPID.Store(op)
+	if obsPID.Load() == execPID.Load() {
+		t.Fatalf("observer ran on the execution backend pid %d — not an independent connection", op)
+	}
+
+	// Lock release must be proven against THIS attempt's recorded backend —
+	// an application-name headcount after the fact would miss a leak on a
+	// stale pid.
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		var n int
+		if err := admin.QueryRow(context.Background(),
+			`SELECT count(*) FROM pg_catalog.pg_locks
+			  WHERE pid = $1 AND locktype = 'relation'`, execPID.Load()).Scan(&n); err != nil {
+			t.Fatalf("poll exec locks: %v", err)
+		}
+		if n == 0 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("execution backend %d still holds %d relation locks", execPID.Load(), n)
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+
+	// The observer backend and any late-constructed resource must converge.
+	deadline = time.Now().Add(10 * time.Second)
+	for {
+		var n int
+		if err := admin.QueryRow(context.Background(),
+			`SELECT count(*) FROM pg_catalog.pg_stat_activity WHERE pid = $1`, obsPID.Load()).Scan(&n); err != nil {
+			t.Fatalf("poll observer: %v", err)
+		}
+		if n == 0 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("observer backend %d never converged", obsPID.Load())
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+
+	// A later independent attempt recovers cleanly.
+	res, err = ExecutePGGoverned(ctx, pgExecInput(t, lab,
+		`SELECT o.id FROM orders o ORDER BY o.id`, pageOpts(1, 25)))
+	if err != nil {
+		t.Fatalf("recovery attempt: %v", err)
+	}
+	if len(res.Rows) != 3 {
+		t.Fatalf("recovery rows = %d", len(res.Rows))
+	}
 	waitNoPGBackends(t, lab, "ch-t7s34-exec")
 }
 
