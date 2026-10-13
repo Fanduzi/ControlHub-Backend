@@ -1,18 +1,20 @@
 // Package pgsql implements the PostgreSQL governed read-only query front half
 // (spec G4/G5/G10 stage: parse → guard → classify → qualify → inject).
 // input: user SQL text via github.com/wasilibs/go-pgquery; pg_query_go/v6 typed AST
-// output: RejectError, ErrNotReadOnly/ErrNotWitnessable/ErrAmbiguousScope/ErrLayoutUnfreezable, GuardResult, GuardPG
+// output: RejectError, ErrNotReadOnly/ErrNotWitnessable/ErrAmbiguousScope/ErrLayoutUnfreezable, GuardResult, GuardPG — classified original refs plus same-analysis fingerprint for guarded rewrite reuse
 // pos: G5 read-only dialect guard — single SelectStmt, no INTO/locking/data-modifying CTE, recursive forbidden-function denylist; emits classified RangeVar refs with witnessable-position verdicts; controlled error codes map verbatim to the API layer
 // note: if this file changes, update header and README.md
 package pgsql
 
 import (
+	"crypto/sha256"
 	"errors"
 	"fmt"
 	"strings"
 
 	pg "github.com/pganalyze/pg_query_go/v6"
 	pgquery "github.com/wasilibs/go-pgquery"
+	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/reflect/protoreflect"
 )
 
@@ -79,6 +81,9 @@ type GuardResult struct {
 	Tree *pg.ParseResult
 	Stmt *pg.SelectStmt // the single top-level SELECT
 	Refs []RangeVarRef  // entity + CTE references in statement order
+
+	statement   string   // exact analyzed SQL; prevents mixing a GuardResult with other text
+	fingerprint [32]byte // deterministic hash of statement + original tree
 }
 
 // GuardPG parses and validates one user statement under the read-only
@@ -105,7 +110,7 @@ func GuardPG(statement string) (*GuardResult, error) {
 	if err := checkForbidden(tree); err != nil {
 		return nil, err
 	}
-	refs, err := collectRangeVarRefs(tree)
+	refs, _, err := collectRangeVarRefs(tree)
 	if err != nil {
 		return nil, err
 	}
@@ -117,7 +122,33 @@ func GuardPG(statement string) (*GuardResult, error) {
 			return nil, &RejectError{Code: "query_reference_not_witnessable", Message: fmt.Sprintf("%v", ErrNotWitnessable)}
 		}
 	}
-	return &GuardResult{Tree: tree, Stmt: sel, Refs: refs}, nil
+	fingerprint, err := guardFingerprint(statement, tree)
+	if err != nil {
+		return nil, err
+	}
+	return &GuardResult{Tree: tree, Stmt: sel, Refs: refs, statement: statement, fingerprint: fingerprint}, nil
+}
+
+// guardFingerprint binds a GuardResult to both its exact source bytes and
+// the immutable parse tree produced by GuardPG. Later rewrite entry points
+// recompute it so exported fields cannot be silently swapped for another
+// analysis of the same SQL text.
+func guardFingerprint(statement string, tree *pg.ParseResult) ([32]byte, error) {
+	var zero [32]byte
+	if tree == nil {
+		return zero, fmt.Errorf("%w: guard result lacks parse tree", ErrEvidenceUnavailable)
+	}
+	raw, err := proto.MarshalOptions{Deterministic: true}.Marshal(tree)
+	if err != nil {
+		return zero, fmt.Errorf("%w: guard result tree cannot be fingerprinted", ErrEvidenceUnavailable)
+	}
+	h := sha256.New()
+	_, _ = h.Write([]byte(statement))
+	_, _ = h.Write([]byte{0})
+	_, _ = h.Write(raw)
+	var out [32]byte
+	copy(out[:], h.Sum(nil))
+	return out, nil
 }
 
 // checkForbidden walks the whole tree for forbidden constructs.
