@@ -71,9 +71,12 @@ type PGRelationIdentity struct {
 // same relation share physical metadata through the gate's caches but stay
 // distinct BoundRef records.
 type PGBoundRef struct {
-	RefID          pgsql.RefID
-	Schema         string // effective schema: pinned for unqualified entities
-	Name           string
+	RefID  pgsql.RefID
+	Schema string // effective schema: pinned for unqualified entities
+	Name   string
+	// CatalogName is the locked pg_class.relname — the canonical object key
+	// disclosure policy lookup needs (user spelling may differ by folding).
+	CatalogName    string
 	Identity       PGRelationIdentity // lock-audit identity (database 0 when relisshared)
 	RelTypeOID     uint32             // pg_class.reltype — expected witness DataTypeOID
 	RelKind        string             // pg_class.relkind as text
@@ -171,6 +174,7 @@ type pgBoundRelation struct {
 	relkind string
 	shared  bool
 	schema  string // canonical nspname confirmed at resolve time
+	name    string // canonical relname from the same locked row
 	columns []pgsql.ColumnMetadata
 }
 
@@ -438,7 +442,7 @@ func (g *pgBindingGate) bindEntity(ref pgsql.RangeVarRef) error {
 
 	row, err := g.row(
 		`SELECT c.oid::pg_catalog.oid, c.reltype::pg_catalog.oid, c.relkind::text,
-		        c.relisshared, n.nspname
+		        c.relisshared, n.nspname, c.relname
 		   FROM pg_catalog.pg_class c
 		   JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
 		  WHERE c.oid = pg_catalog.to_regclass($1)`, canonical)
@@ -450,8 +454,9 @@ func (g *pgBindingGate) bindEntity(ref pgsql.RangeVarRef) error {
 		relkind      string
 		shared       bool
 		nspname      string
+		relname      string
 	)
-	if err := row.Scan(&oid, &reltype, &relkind, &shared, &nspname); err != nil {
+	if err := row.Scan(&oid, &reltype, &relkind, &shared, &nspname, &relname); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return &pgsql.RejectError{Code: "query_object_not_found", Message: "pgsql: relation not found"}
 		}
@@ -493,7 +498,7 @@ func (g *pgBindingGate) bindEntity(ref pgsql.RangeVarRef) error {
 	key := pgRelKey{schema: schema, name: ref.Name}
 	rel, dup := g.byName[key]
 	if !dup {
-		rel = &pgBoundRelation{oid: oid, reltype: reltype, relkind: relkind, shared: shared, schema: nspname}
+		rel = &pgBoundRelation{oid: oid, reltype: reltype, relkind: relkind, shared: shared, schema: nspname, name: relname}
 		g.byName[key] = rel
 		g.byOID[oid] = rel
 	} else if rel.oid != oid || rel.reltype != reltype {
@@ -505,6 +510,7 @@ func (g *pgBindingGate) bindEntity(ref pgsql.RangeVarRef) error {
 		RefID:          ref.RefID,
 		Schema:         nspname,
 		Name:           ref.Name,
+		CatalogName:    rel.name,
 		Identity:       g.identityOf(rel),
 		RelTypeOID:     reltype,
 		RelKind:        relkind,
