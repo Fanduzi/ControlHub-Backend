@@ -83,6 +83,16 @@ func pgExecFixture(t *testing.T) pgPoolLab {
 			// from the value's length.
 			`ALTER TABLE app.g7types ALTER COLUMN s SET STORAGE EXTERNAL`,
 			`INSERT INTO app.g7types (i, s) VALUES (4, repeat('x', 10000))`,
+			// T9-B disclosure identity cases: a trailing-space relation and a
+			// Unicode relation with exact-name policy keys.
+			`CREATE TABLE IF NOT EXISTS app."trail " (id bigint PRIMARY KEY, "v " text)`,
+			`CREATE TABLE IF NOT EXISTS app."wïde" (id bigint PRIMARY KEY, "naïve" text)`,
+			`GRANT SELECT ON app."trail " TO ro_bind`,
+			`GRANT SELECT ON app."wïde" TO ro_bind`,
+			`DELETE FROM app."trail "`,
+			`INSERT INTO app."trail " VALUES (1, 'space')`,
+			`DELETE FROM app."wïde"`,
+			`INSERT INTO app."wïde" VALUES (1, 'uni')`,
 			`DELETE FROM app.orders`,
 			`INSERT INTO app.orders (id, item, qty, note, amount, ts) VALUES
 			   (1, 'alpha', 10, 'n1', 100.50, '2024-01-01 00:00:00+00'),

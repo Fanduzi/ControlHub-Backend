@@ -179,7 +179,16 @@ var pgExecTransportCalls atomic.Int64
 // frozen vocabulary: *pgsql.RejectError (rejected), ErrQueryTimeout,
 // context.Canceled, ErrQueryResultTooLarge, ErrQueryValidationFailed, or a
 // redacted internal failure.
-func ExecutePGGoverned(ctx context.Context, in PGExecuteInput) (res *PGVerifiedResult, err error) {
+func ExecutePGGoverned(ctx context.Context, in PGExecuteInput) (*PGVerifiedResult, error) {
+	return runPGGovernedAttempt(ctx, in, nil)
+}
+
+// runPGGovernedAttempt is the shared attempt body — the T9-B seam. A non-nil
+// disclosure stage inserts the provenance-bound policy preflight between the
+// rewrite records' pre-wire validation and ExecParams (policy reads spend
+// the same attempt budget) and carries the plan out for the caller's
+// post-cleanup transform. A nil stage preserves the undisclosed T7 path.
+func runPGGovernedAttempt(ctx context.Context, in PGExecuteInput, disc *pgDisclosureStage) (res *PGVerifiedResult, err error) {
 	if in.ConnConfig == nil || in.Database == "" || in.PinnedSchema == "" || in.Timeout <= 0 {
 		return nil, ErrQueryValidationFailed
 	}
@@ -257,6 +266,18 @@ func ExecutePGGoverned(ctx context.Context, in PGExecuteInput) (res *PGVerifiedR
 	// transport statement.
 	if err := verifyPGExpectedLayout(rw, bind); err != nil {
 		return nil, a.fail(err)
+	}
+
+	// T9-B: the disclosure preflight consumes this attempt's bound and
+	// pre-wire-validated records. A policy refusal, evidence fault, or
+	// policy-store failure here means the user statement is never sent.
+	if disc != nil {
+		if err := a.disclosurePreflight(disc, rw, bind); err != nil {
+			return nil, a.fail(err)
+		}
+		if err := attemptCtx.Err(); err != nil {
+			return nil, a.fail(err)
+		}
 	}
 
 	if err := a.executeAndMaterialize(rw.SQL, win); err != nil {
@@ -492,6 +513,7 @@ func (a *pgExecAttempt) fail(err error) error {
 		return ErrQueryTimeout
 	case errors.Is(err, ErrQueryTimeout), errors.Is(err, ErrQueryBackendFailure),
 		errors.Is(err, ErrQueryResultTooLarge), errors.Is(err, ErrQueryValidationFailed),
+		errors.Is(err, ErrQueryDisclosureBlocked), errors.Is(err, ErrQueryDisclosureBackendFailure),
 		errors.Is(err, pgsql.ErrEvidenceUnavailable),
 		errors.Is(err, ErrPGVersionUnsupported), errors.Is(err, ErrPGConnectFailed),
 		errors.Is(err, ErrPGVersionReadFailed):
