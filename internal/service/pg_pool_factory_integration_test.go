@@ -31,6 +31,7 @@ type pgPoolLab struct {
 	port int
 	db   string
 	user string
+	ctr  testcontainers.Container
 }
 
 var (
@@ -71,7 +72,7 @@ func postgresPoolLab(t *testing.T) pgPoolLab {
 			pgPoolLabErr = fmt.Errorf("postgres port parse: %w", err)
 			return
 		}
-		pgPoolLabInst = pgPoolLab{host: host, port: port, db: "pool_lab", user: "lab"}
+		pgPoolLabInst = pgPoolLab{host: host, port: port, db: "pool_lab", user: "lab", ctr: c}
 	})
 	if pgPoolLabErr != nil {
 		t.Fatalf("postgres fixture: %v", pgPoolLabErr)

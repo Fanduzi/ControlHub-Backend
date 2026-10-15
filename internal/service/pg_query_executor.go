@@ -1,21 +1,20 @@
 // Package service runs the governed PostgreSQL execution attempt end to end.
 // input: attempt context with deadline, T2-validated *pgx.ConnConfig, resolved
-// database/pinned schema, user statement text, pgsql.PageOptions and the
-// caller-resolved attempt timeout
-// output: ExecutePGGoverned, PGExecuteInput, PGVerifiedResult, PGResultColumn,
-// errPGExecInternal — internal verified result (native-text public rows, G7
-// column types, pagination verdict, provenance/binding records) or the frozen
-// classified error; no live connection, transaction, cursor, or resolver ever
-// leaves the attempt
-// pos: T7-S3/S4 internal execution closure (frozen G4 steps 1–10 plus G10
-// mechanism 5b/5c) — guard → OpenPostgresPool → BEGIN READ ONLY + G4 session
-// settings → in-transaction virtualxid identity → PGBind →
-// RewriteFromGuardPaginated → pre-wire expected-record validation → ExecParams
-// fresh parse with text result format →
-// bounded private materialization → per-position FD verification →
-// second-connection lock-set audit → ROLLBACK → witness strip → deliver;
-// every exit path converges resources under an independent bounded cleanup
-// context and every failure maps onto timeout/cancelled/rejected/failed
+// database/pinned schema, user statement text, pgsql.PageOptions, timeout
+// output: ExecutePGGoverned, ExecutePGGovernedOutcome, PGExecuteInput,
+// PGVerifiedResult, PGResultColumn, errPGExecInternal — internal verified
+// result plus the per-attempt PGAttemptEvidence (stage/status/backend
+// identity/remote_state/sql-sent facts) or the frozen classified error; no
+// live connection, transaction, cursor, or resolver leaves the attempt
+// pos: T7-S3/S4 internal execution closure (frozen G4 steps 1–10, G10 5b/5c)
+// — guard → OpenPostgresPool → BEGIN READ ONLY + G4 session → in-transaction
+// virtualxid + backend identity → PGBind → RewriteFromGuardPaginated →
+// pre-wire expected-record validation → ExecParams fresh parse + text
+// format → bounded private materialization → per-position FD verification →
+// second-conn lock audit → ROLLBACK + release → bounded remote-state
+// observation → observer teardown → witness strip → deliver; every exit
+// converges resources under bounded cleanup, produces one evidence record,
+// and maps failures onto timeout/cancelled/rejected/failed
 // note: if this file changes, update this header and module README.md.
 package service
 
@@ -115,8 +114,9 @@ type pgExecAttempt struct {
 	execConn *pgxpool.Conn
 	tx       pgx.Tx
 
-	backendPID int32
-	virtualXID string
+	backendPID   int32
+	backendStart time.Time // this backend session's start — disambiguates pid reuse
+	virtualXID   string
 
 	obsPool *pgxpool.Pool
 	obsConn *pgxpool.Conn
@@ -125,6 +125,13 @@ type pgExecAttempt struct {
 	derived []PGRelationIdentity // toast-attributed identities beyond the gate's set
 	fds     []pgconn.FieldDescription
 	rows    [][]*string
+
+	// T10-B attempt facts: the furthest stage reached, what the transport
+	// knows about the user statement's remote fate, and the scalar evidence
+	// record handed to orchestration on every exit path.
+	stage    PGAttemptStage
+	stmtFate pgStmtFate
+	evidence PGAttemptEvidence
 }
 
 // pgExecAfterBindHook is a test-only seam mirroring the gate's
@@ -180,6 +187,17 @@ var pgExecTransportCalls atomic.Int64
 // context.Canceled, ErrQueryResultTooLarge, ErrQueryValidationFailed, or a
 // redacted internal failure.
 func ExecutePGGoverned(ctx context.Context, in PGExecuteInput) (*PGVerifiedResult, error) {
+	res, _, err := ExecutePGGovernedOutcome(ctx, in)
+	return res, err
+}
+
+// ExecutePGGovernedOutcome is ExecutePGGoverned plus the T10-B evidence
+// record: the same shared attempt produces a PGAttemptEvidence on every
+// exit path — success, rejection, timeout, cancellation, failure — so later
+// claim/finalize orchestration can persist backend identity, remote_state,
+// and the classified status without re-running anything. The evidence is
+// never nil when input validation passed.
+func ExecutePGGovernedOutcome(ctx context.Context, in PGExecuteInput) (*PGVerifiedResult, *PGAttemptEvidence, error) {
 	return runPGGovernedAttempt(ctx, in, nil)
 }
 
@@ -188,17 +206,24 @@ func ExecutePGGoverned(ctx context.Context, in PGExecuteInput) (*PGVerifiedResul
 // rewrite records' pre-wire validation and ExecParams (policy reads spend
 // the same attempt budget) and carries the plan out for the caller's
 // post-cleanup transform. A nil stage preserves the undisclosed T7 path.
-func runPGGovernedAttempt(ctx context.Context, in PGExecuteInput, disc *pgDisclosureStage) (res *PGVerifiedResult, err error) {
+func runPGGovernedAttempt(ctx context.Context, in PGExecuteInput, disc *pgDisclosureStage) (res *PGVerifiedResult, ev *PGAttemptEvidence, err error) {
 	if in.ConnConfig == nil || in.Database == "" || in.PinnedSchema == "" || in.Timeout <= 0 {
-		return nil, ErrQueryValidationFailed
+		return nil, &PGAttemptEvidence{Stage: PGStageInput, Status: pgAttemptStatus(ErrQueryValidationFailed)}, ErrQueryValidationFailed
 	}
-	a := &pgExecAttempt{ctx: ctx, cfg: in.ConnConfig, database: in.Database, pinned: in.PinnedSchema}
+	a := &pgExecAttempt{ctx: ctx, cfg: in.ConnConfig, database: in.Database, pinned: in.PinnedSchema, stage: PGStageInput}
 	defer func() {
 		// A cleanup failure can never hide behind a successful result, and a
-		// known primary failure is never masked by it either.
+		// known primary failure is never masked by it either. Execution locks
+		// are released before the bounded remote-state observation runs, so
+		// probing can never hold the transaction hostage.
 		if cerr := a.close(); cerr != nil && err == nil {
 			res, err = nil, cerr
 		}
+		// One final conclusion per attempt: the evidence always reflects the
+		// error actually returned, whatever stage produced it.
+		a.evidence.Stage = a.stage
+		a.evidence.Status = pgAttemptStatus(err)
+		ev = &a.evidence
 	}()
 
 	// Unified attempt deadline: an earlier caller deadline still wins through
@@ -208,107 +233,117 @@ func runPGGovernedAttempt(ctx context.Context, in PGExecuteInput, disc *pgDisclo
 	a.ctx = attemptCtx
 	budget, err := pgAttemptBudgetFromContext(attemptCtx)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	a.budget = budget
 
 	// CPU-only stages are bracketed by context checks — no database work
 	// continues on a spent or canceled attempt context.
 	if err := attemptCtx.Err(); err != nil {
-		return nil, a.fail(err)
+		return nil, nil, a.fail(err)
 	}
+	a.stage = PGStageGuard
 	gr, err := pgsql.GuardPG(in.Statement)
 	if err != nil {
-		return nil, a.fail(err)
+		return nil, nil, a.fail(err)
 	}
 	if err := attemptCtx.Err(); err != nil {
-		return nil, a.fail(err)
+		return nil, nil, a.fail(err)
 	}
 
+	a.stage = PGStageConnect
 	if err := a.openExecution(); err != nil {
-		return nil, a.fail(err)
+		return nil, nil, a.fail(err)
 	}
+	a.stage = PGStageIdentity
 	if err := a.readTransactionIdentity(); err != nil {
-		return nil, a.fail(err)
+		return nil, nil, a.fail(err)
 	}
+	a.stage = PGStageBind
 	bind, err := PGBind(attemptCtx, PGBindInput{
 		Tx: a.tx, Database: in.Database, PinnedSchema: in.PinnedSchema, Guard: gr,
 	})
 	if err != nil {
-		return nil, a.fail(err)
+		return nil, nil, a.fail(err)
 	}
 	a.bind = bind
 	if err := a.collectDerivedIdentities(); err != nil {
-		return nil, a.fail(err)
+		return nil, nil, a.fail(err)
 	}
 	if pgExecAfterBindHook != nil {
 		if err := pgExecAfterBindHook(attemptCtx, a.tx); err != nil {
-			return nil, a.fail(err)
+			return nil, nil, a.fail(err)
 		}
 	}
 	if err := attemptCtx.Err(); err != nil {
-		return nil, a.fail(err)
+		return nil, nil, a.fail(err)
 	}
+	a.stage = PGStageRewrite
 	rw, win, err := pgsql.RewriteFromGuardPaginated(in.Statement, in.PinnedSchema, gr, bind.Resolver, in.Page)
 	if err != nil {
-		return nil, a.fail(err)
+		return nil, nil, a.fail(err)
 	}
 	if err := attemptCtx.Err(); err != nil {
-		return nil, a.fail(err)
+		return nil, nil, a.fail(err)
 	}
 	if pgExecPostRewriteHook != nil {
 		if err := pgExecPostRewriteHook(rw); err != nil {
-			return nil, a.fail(err)
+			return nil, nil, a.fail(err)
 		}
 	}
 	// Expected records are proven against the bound evidence before any user
 	// byte reaches the wire — a malformed record set never sends the
 	// transport statement.
 	if err := verifyPGExpectedLayout(rw, bind); err != nil {
-		return nil, a.fail(err)
+		return nil, nil, a.fail(err)
 	}
 
 	// T9-B: the disclosure preflight consumes this attempt's bound and
 	// pre-wire-validated records. A policy refusal, evidence fault, or
 	// policy-store failure here means the user statement is never sent.
 	if disc != nil {
+		a.stage = PGStagePreflight
 		if err := a.disclosurePreflight(disc, rw, bind); err != nil {
-			return nil, a.fail(err)
+			return nil, nil, a.fail(err)
 		}
 		if err := attemptCtx.Err(); err != nil {
-			return nil, a.fail(err)
+			return nil, nil, a.fail(err)
 		}
 	}
 
+	a.stage = PGStageExecute
 	if err := a.executeAndMaterialize(rw.SQL, win); err != nil {
-		return nil, a.fail(err)
+		return nil, nil, a.fail(err)
 	}
 	if pgExecAfterMaterializeHook != nil {
 		if err := pgExecAfterMaterializeHook(attemptCtx, a.tx); err != nil {
-			return nil, a.fail(err)
+			return nil, nil, a.fail(err)
 		}
 	}
+	a.stage = PGStageVerify
 	if err := verifyPGPositions(a.fds, rw, bind); err != nil {
-		return nil, a.fail(err)
+		return nil, nil, a.fail(err)
 	}
 	if err := attemptCtx.Err(); err != nil {
-		return nil, a.fail(err)
+		return nil, nil, a.fail(err)
 	}
+	a.stage = PGStageAudit
 	if err := a.auditLockSet(); err != nil {
-		return nil, a.fail(err)
+		return nil, nil, a.fail(err)
 	}
 	if err := attemptCtx.Err(); err != nil {
-		return nil, a.fail(err)
+		return nil, nil, a.fail(err)
 	}
 	if pgExecAfterAuditHook != nil {
 		if err := pgExecAfterAuditHook(attemptCtx, a.tx); err != nil {
-			return nil, a.fail(err)
+			return nil, nil, a.fail(err)
 		}
 	}
 
+	a.stage = PGStageDeliver
 	page, err := win.Result(len(a.rows))
 	if err != nil {
-		return nil, a.fail(fmt.Errorf("%w: %v", pgsql.ErrEvidenceUnavailable, err))
+		return nil, nil, a.fail(fmt.Errorf("%w: %v", pgsql.ErrEvidenceUnavailable, err))
 	}
 	out := projectPGPublicResult(a.fds, a.rows[:page.RowCount], rw, a.execConn.Conn().TypeMap())
 	out.Page = page
@@ -320,9 +355,9 @@ func runPGGovernedAttempt(ctx context.Context, in PGExecuteInput, disc *pgDisclo
 	// passed during the last CPU stages turns this into a timeout, never a
 	// delivered result.
 	if err := attemptCtx.Err(); err != nil {
-		return nil, a.fail(err)
+		return nil, nil, a.fail(err)
 	}
-	return out, nil
+	return out, nil, nil
 }
 
 // openExecution builds the execution pool, acquires the single connection,
@@ -358,18 +393,26 @@ func (a *pgExecAttempt) openExecution() error {
 	return a.budget.arm(a.ctx, tx)
 }
 
-// readTransactionIdentity records this backend's pid and this transaction's
-// virtualtransaction — the held-lock evidence key the independent audit
-// later matches. The probe reads our own already-granted virtualxid
-// ExclusiveLock row and must yield exactly one non-empty identity; anything
-// else is missing internal evidence, never a guessed substitute like a
-// permanent xid.
+// readTransactionIdentity records this backend's pid, this transaction's
+// virtualtransaction, and the backend's session start — the held-lock
+// evidence key the independent audit later matches, plus the identity fact a
+// later remote-state probe uses to reject pid reuse. The probe reads our own
+// already-granted virtualxid ExclusiveLock row while the connection is
+// confirmed live — never a post-hoc lookup after the statement ends — and
+// must yield exactly one non-empty identity; anything else is missing
+// internal evidence, never a guessed substitute like a permanent xid. The
+// session start comes from pg_stat_get_backend_* functions, NOT the
+// pg_stat_activity view: a view reference would hold an AccessShareLock the
+// lock audit cannot explain.
 func (a *pgExecAttempt) readTransactionIdentity() error {
 	if err := a.budget.arm(a.ctx, a.tx); err != nil {
 		return err
 	}
 	rows, err := a.tx.Query(a.ctx,
-		`SELECT pg_catalog.pg_backend_pid(), l.virtualtransaction
+		`SELECT pg_catalog.pg_backend_pid(), l.virtualtransaction,
+		        pg_catalog.pg_stat_get_backend_start((
+		          SELECT s.id FROM pg_catalog.pg_stat_get_backend_idset() s(id)
+		           WHERE pg_catalog.pg_stat_get_backend_pid(s.id) = pg_catalog.pg_backend_pid()))
 		   FROM pg_catalog.pg_locks l
 		  WHERE l.pid = pg_catalog.pg_backend_pid()
 		    AND l.locktype = 'virtualxid'
@@ -379,13 +422,14 @@ func (a *pgExecAttempt) readTransactionIdentity() error {
 		return err
 	}
 	var (
-		pid  int32
-		vxid string
-		n    int
+		pid          int32
+		vxid         string
+		backendStart *time.Time
+		n            int
 	)
 	for rows.Next() {
 		n++
-		if scanErr := rows.Scan(&pid, &vxid); scanErr != nil {
+		if scanErr := rows.Scan(&pid, &vxid, &backendStart); scanErr != nil {
 			rows.Close()
 			return scanErr
 		}
@@ -395,10 +439,11 @@ func (a *pgExecAttempt) readTransactionIdentity() error {
 		return err
 	}
 	rows.Close()
-	if n != 1 || pid == 0 || vxid == "" {
+	if n != 1 || pid == 0 || vxid == "" || backendStart == nil || backendStart.IsZero() {
 		return fmt.Errorf("%w: attempt transaction identity absent", pgsql.ErrEvidenceUnavailable)
 	}
 	a.backendPID = pid
+	a.backendStart = *backendStart
 	a.virtualXID = vxid
 	return nil
 }
@@ -413,6 +458,10 @@ func (a *pgExecAttempt) executeAndMaterialize(sql string, win pgsql.PageWindow) 
 		return err
 	}
 	pgExecTransportCalls.Add(1)
+	// Dispatched to the transport: from here the statement's remote fate is
+	// indeterminate until the reader proves completion or the server
+	// delivers an ErrorResponse.
+	a.stmtFate = pgStmtIndeterminate
 	rr := a.tx.Conn().PgConn().ExecParams(a.ctx, sql, nil, nil, nil, []int16{0})
 
 	fds := rr.FieldDescriptions()
@@ -466,12 +515,23 @@ func (a *pgExecAttempt) executeAndMaterialize(sql string, win pgsql.PageWindow) 
 		a.rows = append(a.rows, row)
 	}
 	_, closeErr := rr.Close()
+	// A delivered ErrorResponse is the server's own confirmation that the
+	// statement terminated; a clean close through ReadyForQuery proves
+	// completion. Anything else stays indeterminate — observation decides.
+	var pgErr *pgconn.PgError
 	switch {
 	case readErr != nil:
+		if errors.As(readErr, &pgErr) {
+			a.stmtFate = pgStmtErrored
+		}
 		return classifyPGExecTransportError(readErr)
 	case closeErr != nil:
+		if errors.As(closeErr, &pgErr) {
+			a.stmtFate = pgStmtErrored
+		}
 		return classifyPGExecTransportError(closeErr)
 	}
+	a.stmtFate = pgStmtCompleted
 	return nil
 }
 
@@ -528,14 +588,27 @@ func (a *pgExecAttempt) fail(err error) error {
 	}
 }
 
-// close converges every owned resource on every exit path. ROLLBACK runs
-// first — under an independent bounded context so an already-canceled request
-// still releases the transaction's locks — and before the observation pool is
-// torn down, so a failed audit can never hold execution locks hostage. A
-// connection is always released before its pool is closed (Pool.Close waits
-// on outstanding acquisitions). A rollback failure is reported; it never
-// turns cached rows into a delivered result.
+// close converges every owned resource on every exit path in a fixed order:
+// ROLLBACK and execution-connection release first — under an independent
+// bounded context so an already-canceled request still releases the
+// transaction's locks — then the bounded remote-state observation, then the
+// audit-observation pool teardown. The probe waits on no execution lock and
+// no execution lock waits on the probe. A connection is always released
+// before its pool is closed (Pool.Close waits on outstanding acquisitions).
+// A rollback failure is reported; it never turns cached rows into a
+// delivered result.
 func (a *pgExecAttempt) close() error {
+	first := a.releaseExecution()
+	a.observeRemoteState()
+	a.releasePools()
+	return first
+}
+
+// releaseExecution rolls the attempt transaction back, releases the
+// execution connection, and closes the execution pool. This is the fast
+// half of close(): it must complete before remote observation spends its
+// own window, so a canceled or failed attempt frees its locks at once.
+func (a *pgExecAttempt) releaseExecution() error {
 	base := a.ctx
 	if base == nil {
 		base = context.Background()
@@ -553,6 +626,16 @@ func (a *pgExecAttempt) close() error {
 		a.execConn.Release()
 		a.execConn = nil
 	}
+	return first
+}
+
+// releasePools tears down both pools after the remote probe. A dead
+// execution connection's destruction is asynchronous (puddle runs the
+// destructor in a goroutine), so execConn.Release above has already returned
+// it — Pool.Close here only waits for that bounded teardown to finish. The
+// probe therefore overlaps the dead connection's drain instead of queuing
+// behind it.
+func (a *pgExecAttempt) releasePools() {
 	if a.execPool != nil {
 		a.execPool.Close()
 		a.execPool = nil
@@ -565,5 +648,4 @@ func (a *pgExecAttempt) close() error {
 		a.obsPool.Close()
 		a.obsPool = nil
 	}
-	return first
 }

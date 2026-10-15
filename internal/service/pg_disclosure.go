@@ -2,9 +2,11 @@
 // execution chain.
 // input: attempt context with deadline, PGExecuteInput, target resource id,
 // QueryDisclosureReader (T9-A five-part canonical policy lookup)
-// output: ExecutePGGovernedDisclosed, PGDisclosureInput, PGDisclosedResult,
+// output: ExecutePGGovernedDisclosed, ExecutePGGovernedDisclosedOutcome,
+// PGDisclosureInput, PGDisclosedResult,
 // PGDisclosedColumn — the internal disclosed result (per-column
-// DisplayMode/CopyAllowed, masked native-text rows) or the frozen classified
+// DisplayMode/CopyAllowed, masked native-text rows) plus the per-attempt
+// PGAttemptEvidence, or the frozen classified
 // error; the plan lives exactly one attempt and never survives past it
 // pos: T9-B disclosure closure (issue #117, frozen G9 stage order +
 // G10 mechanism 5b records) — the preflight consumes THIS attempt's bound and
@@ -95,15 +97,33 @@ type pgDisclosureStage struct {
 // refusal, an internal evidence fault, a policy-store failure, or any T7
 // failure all return no result.
 func ExecutePGGovernedDisclosed(ctx context.Context, in PGDisclosureInput) (*PGDisclosedResult, error) {
+	res, _, err := ExecutePGGovernedDisclosedOutcome(ctx, in)
+	return res, err
+}
+
+// ExecutePGGovernedDisclosedOutcome is ExecutePGGovernedDisclosed plus the
+// T10-B evidence record. The attempt's evidence arrives on every path —
+// including a cancelled request — so a caller never loses backend identity,
+// remote_state, or the classified status when no result is delivered. A
+// transform failure after a completed statement keeps the real failure and
+// marks the transform stage; remote_state still reflects the statement's
+// confirmed completion, never a row leak.
+func ExecutePGGovernedDisclosedOutcome(ctx context.Context, in PGDisclosureInput) (*PGDisclosedResult, *PGAttemptEvidence, error) {
 	if in.Policies == nil || in.TargetResourceID == 0 {
-		return nil, ErrQueryValidationFailed
+		return nil, &PGAttemptEvidence{Stage: PGStageInput, Status: pgAttemptStatus(ErrQueryValidationFailed)}, ErrQueryValidationFailed
 	}
 	stage := &pgDisclosureStage{target: in.TargetResourceID, reader: in.Policies}
-	verified, err := runPGGovernedAttempt(ctx, in.Execute, stage)
+	verified, ev, err := runPGGovernedAttempt(ctx, in.Execute, stage)
 	if err != nil {
-		return nil, err
+		return nil, ev, err
 	}
-	return applyPGDisclosure(stage.plan, verified)
+	out, err := applyPGDisclosure(stage.plan, verified)
+	if err != nil {
+		ev.Stage = PGStageTransform
+		ev.Status = pgAttemptStatus(err)
+		return nil, ev, err
+	}
+	return out, ev, nil
 }
 
 // disclosurePreflight resolves every public column's governed sources into

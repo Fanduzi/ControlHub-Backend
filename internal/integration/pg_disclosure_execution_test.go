@@ -88,6 +88,10 @@ func newPGDiscFixture(t *testing.T) pgDiscFixture {
 		`GRANT USAGE ON SCHEMA app TO ` + pgDiscRole,
 		`GRANT USAGE ON SCHEMA analytics TO ` + pgDiscRole,
 		`CREATE TABLE app.orders (id bigint PRIMARY KEY, qty integer, note text)`,
+		// 50-row generator for the cancel test's CPU-bound cartesian count —
+		// no SRF in FROM, so nothing spills to pgsql_tmp.
+		`CREATE TABLE app.smallvals (id integer PRIMARY KEY, tag text)`,
+		`INSERT INTO app.smallvals SELECT g, 'tag-' || g::text FROM generate_series(1, 50) g`,
 		`CREATE TABLE analytics.orders (id bigint PRIMARY KEY, total numeric)`,
 		`CREATE TABLE app."trail " (id bigint PRIMARY KEY, "v " text)`,
 		`INSERT INTO app.orders VALUES (1, 10, 'n1'), (2, 20, NULL)`,
