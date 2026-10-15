@@ -504,10 +504,12 @@ func TestPGDisclosureExecute_FailureClasses(t *testing.T) {
 	stmt := `SELECT id FROM app.orders /*MARKER-SQL-9f3*/`
 
 	// Store failure → backend failure (distinct from policy refusal), zero
-	// wire, no leak of the statement marker.
+	// wire, and NO leakage: neither the statement marker, the store's own
+	// error text/object, nor an invalid stored mode may escape the boundary.
 	before := pgExecTransportCalls.Load()
+	markerErr := errors.New("policy store unreachable marker-STORE-7b1")
 	failReader := pgReader(lab, policySet{})
-	failReader.err = fmt.Errorf("policy store unreachable marker-STORE-7b1")
+	failReader.err = markerErr
 	_, err := ExecutePGGovernedDisclosed(context.Background(), pgDiscInput(t, lab, stmt, 42, failReader))
 	if !errors.Is(err, ErrQueryDisclosureBackendFailure) {
 		t.Fatalf("store failure err = %v", err)
@@ -515,20 +517,53 @@ func TestPGDisclosureExecute_FailureClasses(t *testing.T) {
 	if errors.Is(err, ErrQueryDisclosureBlocked) {
 		t.Fatal("store failure collapsed into policy refusal")
 	}
-	if strings.Contains(err.Error(), "MARKER-SQL-9f3") {
-		t.Fatalf("error leaked statement text: %q", err.Error())
+	if errors.Is(err, markerErr) {
+		t.Fatal("store error object escaped through the unwrap chain")
 	}
-	// The store's own text is allowed (it is the backend cause) but the SQL
-	// marker must never appear.
+	if strings.Contains(err.Error(), "MARKER-SQL-9f3") || strings.Contains(err.Error(), "marker-STORE-7b1") {
+		t.Fatalf("error leaked sensitive text: %q", err.Error())
+	}
+	requireNoWire(t, lab, before)
+
+	// Multi-layer wrapped marker: still only the fixed sentinel.
+	failReader.err = fmt.Errorf("outer layer: %w", fmt.Errorf("mid: %w", markerErr))
+	_, err = ExecutePGGovernedDisclosed(context.Background(), pgDiscInput(t, lab, stmt, 42, failReader))
+	if !errors.Is(err, ErrQueryDisclosureBackendFailure) || errors.Is(err, markerErr) ||
+		strings.Contains(err.Error(), "marker-STORE-7b1") {
+		t.Fatalf("wrapped store failure leaked: %v", err)
+	}
+	requireNoWire(t, lab, before)
+
+	// errors.Join(marker, context sentinel): context classification survives
+	// as the bare sentinel; the marker object/text never does.
+	joinCancelReader := pgReader(lab, policySet{})
+	joinCancelReader.err = errors.Join(markerErr, context.Canceled)
+	_, err = ExecutePGGovernedDisclosed(context.Background(), pgDiscInput(t, lab, stmt, 42, joinCancelReader))
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("joined cancel: %v, want context.Canceled", err)
+	}
+	if errors.Is(err, markerErr) || strings.Contains(err.Error(), "marker-STORE-7b1") {
+		t.Fatalf("joined cancel leaked marker: %v", err)
+	}
+	requireNoWire(t, lab, before)
+
+	// Invalid stored mode carrying a marker value: fail closed, no echo of
+	// the mode text or its validation error.
+	badModeReader := &fakePGPolicyReader{rawModes: map[pgPolicyKey]model.ResultDisclosureMode{
+		{database: lab.db, schema: "app", object: "orders", column: "id"}: "SECRET_MODE_7z",
+	}}
+	_, err = ExecutePGGovernedDisclosed(context.Background(), pgDiscInput(t, lab, stmt, 42, badModeReader))
+	if !errors.Is(err, ErrQueryDisclosureBlocked) {
+		t.Fatalf("invalid stored mode: %v, want blocked", err)
+	}
+	if strings.Contains(err.Error(), "SECRET_MODE_7z") {
+		t.Fatalf("invalid-mode value leaked: %q", err.Error())
+	}
 	requireNoWire(t, lab, before)
 
 	// Cancel during the policy read → context.Canceled, zero wire.
 	cancelReader := pgReader(lab, policySet{})
 	ctx, cancel := context.WithCancel(context.Background())
-	orig := cancelReader.policies
-	_ = orig
-	// Cancel once the reader is entered — an injected gate.
-	cancelReader.err = nil
 	wrapped := &cancelingReader{inner: cancelReader, cancel: cancel}
 	_, err = ExecutePGGovernedDisclosed(ctx, pgDiscInput(t, lab, stmt, 42, wrapped))
 	if !errors.Is(err, context.Canceled) {

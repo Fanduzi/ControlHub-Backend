@@ -207,11 +207,24 @@ func resolvePGDisclosurePlan(ctx context.Context, reader QueryDisclosureReader, 
 						return nil, fmt.Errorf("%w: no policy for %s.%s.%s.%s",
 							ErrQueryDisclosureBlocked, key.database, key.schema, key.object, key.column)
 					}
-					return nil, fmt.Errorf("%w: %w", ErrQueryDisclosureBackendFailure, err)
+					// Store failures surface only the fixed sentinel — the
+					// driver/store error text and object never leave the
+					// disclosure boundary. Context identity is preserved as
+					// the bare standard sentinel so cancellation/deadline
+					// still classify without re-wrapping sensitive text.
+					if errors.Is(err, context.Canceled) {
+						return nil, context.Canceled
+					}
+					if errors.Is(err, context.DeadlineExceeded) {
+						return nil, context.DeadlineExceeded
+					}
+					return nil, ErrQueryDisclosureBackendFailure
 				}
 				if err := policy.Mode.Validate(); err != nil {
-					return nil, fmt.Errorf("%w: invalid stored mode for %s.%s.%s.%s: %v",
-						ErrQueryDisclosureBlocked, key.database, key.schema, key.object, key.column, err)
+					// Fail closed without echoing the stored mode or its
+					// validation error — only the scope is named.
+					return nil, fmt.Errorf("%w: invalid stored mode for %s.%s.%s.%s",
+						ErrQueryDisclosureBlocked, key.database, key.schema, key.object, key.column)
 				}
 				mode = policy.Mode
 				cache[key] = mode
@@ -263,10 +276,10 @@ func applyPGDisclosure(plan *pgDisclosurePlan, verified *PGVerifiedResult) (*PGD
 		Columns:      make([]PGDisclosedColumn, len(verified.Columns)),
 		Rows:         make([][]*string, len(verified.Rows)),
 		Page:         verified.Page,
-		Refs:         verified.Refs,
-		PublicProofs: verified.PublicProofs,
-		Sources:      verified.Sources,
-		BoundRefs:    verified.BoundRefs,
+		Refs:         clonePGRefSlice(verified.Refs),
+		PublicProofs: clonePGProofSlice(verified.PublicProofs),
+		Sources:      clonePGSourceCatalog(verified.Sources),
+		BoundRefs:    clonePGBoundRefMap(verified.BoundRefs),
 	}
 	for i, dec := range plan.columns {
 		out.Columns[i] = PGDisclosedColumn{
@@ -281,14 +294,80 @@ func applyPGDisclosure(plan *pgDisclosurePlan, verified *PGVerifiedResult) (*PGD
 				ErrQueryDisclosureBackendFailure, r, len(row), len(plan.columns))
 		}
 		outRow := make([]*string, len(row))
-		copy(outRow, row)
 		for c, dec := range plan.columns {
-			if dec.mode == model.ResultDisclosureMaskedNoCopy && outRow[c] != nil {
+			cell := row[c]
+			if cell == nil {
+				continue // SQL NULL stays NULL
+			}
+			if dec.mode == model.ResultDisclosureMaskedNoCopy {
 				masked := maskedReplacement
 				outRow[c] = &masked
+				continue // the original value pointer is never retained
 			}
+			v := *cell // fresh *string — the immutable bytes may be shared
+			outRow[c] = &v
 		}
 		out.Rows[r] = outRow
 	}
 	return out, nil
+}
+
+// clonePGRefSlice copies the ref slice plus each entry's RefPath — the frame
+// values are immutable, only the slice header must be detached.
+func clonePGRefSlice(in []pgsql.RangeVarRef) []pgsql.RangeVarRef {
+	if in == nil {
+		return nil
+	}
+	out := make([]pgsql.RangeVarRef, len(in))
+	for i, ref := range in {
+		out[i] = ref
+		out[i].Path = append(pgsql.RefPath(nil), ref.Path...)
+	}
+	return out
+}
+
+// clonePGProofSlice copies proofs and their dependency slices.
+func clonePGProofSlice(in []pgsql.PublicColumnProof) []pgsql.PublicColumnProof {
+	if in == nil {
+		return nil
+	}
+	out := make([]pgsql.PublicColumnProof, len(in))
+	for i, p := range in {
+		out[i] = p
+		out[i].Dependencies = append([]pgsql.SourceRef(nil), p.Dependencies...)
+	}
+	return out
+}
+
+// clonePGSourceCatalog copies the occurrence map — the records are all-value
+// structs, so a map copy detaches them.
+func clonePGSourceCatalog(in map[pgsql.SourceOccurrenceID]pgsql.SourceOccurrence) map[pgsql.SourceOccurrenceID]pgsql.SourceOccurrence {
+	if in == nil {
+		return nil
+	}
+	out := make(map[pgsql.SourceOccurrenceID]pgsql.SourceOccurrence, len(in))
+	for k, v := range in {
+		out[k] = v
+	}
+	return out
+}
+
+// clonePGBoundRefMap copies the map, each bound-ref record, and each locked
+// attribute slice — the whole structure the plan read must be unreachable
+// from caller-held mutations.
+func clonePGBoundRefMap(in map[pgsql.RefID]*PGBoundRef) map[pgsql.RefID]*PGBoundRef {
+	if in == nil {
+		return nil
+	}
+	out := make(map[pgsql.RefID]*PGBoundRef, len(in))
+	for k, v := range in {
+		if v == nil {
+			out[k] = nil
+			continue
+		}
+		c := *v
+		c.Columns = append([]pgsql.ColumnMetadata(nil), v.Columns...)
+		out[k] = &c
+	}
+	return out
 }
