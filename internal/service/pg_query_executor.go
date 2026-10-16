@@ -14,7 +14,9 @@
 // second-conn lock audit → ROLLBACK + release → bounded remote-state
 // observation → observer teardown → witness strip → deliver; every exit
 // converges resources under bounded cleanup, produces one evidence record,
-// and maps failures onto timeout/cancelled/rejected/failed
+// and maps failures onto timeout/cancelled/rejected/failed. T10-B-R1:
+// backend pid captured at Acquire; remote fate folded from the read+close
+// pair (pgStmtFateAfterRead) — a driver pre-send mark proves unsent
 // note: if this file changes, update this header and module README.md.
 package service
 
@@ -158,6 +160,24 @@ var pgExecPostRewriteHook func(rw *pgsql.RewriteResult) error
 // result is projected — the point a cleanup-stage fault can still prove
 // that verified data is never delivered when teardown fails.
 var pgExecAfterAuditHook func(ctx context.Context, tx pgx.Tx) error
+
+// pgExecAfterAcquireHook is a test-only seam fired once the execution
+// connection is acquired, immediately before BEGIN — it simulates a caller
+// cancellation landing between connection acquisition and transaction
+// setup. Production leaves it nil.
+var pgExecAfterAcquireHook func(ctx context.Context)
+
+// pgExecPreIdentityHook is a test-only seam fired inside
+// readTransactionIdentity after the statement budget is armed and before
+// the identity SELECT — it simulates a caller cancellation landing during
+// session/identity setup. Production leaves it nil.
+var pgExecPreIdentityHook func(ctx context.Context)
+
+// pgExecPreSendHook is a test-only seam fired inside executeAndMaterialize
+// after the statement budget is armed and immediately before the transport
+// dispatch — it simulates a caller cancellation landing in the gap between
+// a successful arm and the driver send. Production leaves it nil.
+var pgExecPreSendHook func(ctx context.Context)
 
 // pgExecObserverConfig lets a test mutate the validated ConnConfig before
 // the independent observation pool is built — the only way to make the
@@ -376,6 +396,15 @@ func (a *pgExecAttempt) openExecution() error {
 		return err
 	}
 	a.execConn = conn
+	// The backend pid is known the moment Acquire returns — record it now
+	// so a later BEGIN/session/identity failure cannot erase an identity
+	// the connection already proved. backend_start and the virtual xid are
+	// still filled by the real identity query below; they stay absent if
+	// that query never completes, never fabricated.
+	a.backendPID = int32(conn.Conn().PgConn().PID())
+	if pgExecAfterAcquireHook != nil {
+		pgExecAfterAcquireHook(a.ctx)
+	}
 	tx, err := conn.BeginTx(a.ctx, pgx.TxOptions{AccessMode: pgx.ReadOnly})
 	if err != nil {
 		return err
@@ -407,6 +436,9 @@ func (a *pgExecAttempt) openExecution() error {
 func (a *pgExecAttempt) readTransactionIdentity() error {
 	if err := a.budget.arm(a.ctx, a.tx); err != nil {
 		return err
+	}
+	if pgExecPreIdentityHook != nil {
+		pgExecPreIdentityHook(a.ctx)
 	}
 	rows, err := a.tx.Query(a.ctx,
 		`SELECT pg_catalog.pg_backend_pid(), l.virtualtransaction,
@@ -456,6 +488,9 @@ func (a *pgExecAttempt) readTransactionIdentity() error {
 func (a *pgExecAttempt) executeAndMaterialize(sql string, win pgsql.PageWindow) error {
 	if err := a.budget.arm(a.ctx, a.tx); err != nil {
 		return err
+	}
+	if pgExecPreSendHook != nil {
+		pgExecPreSendHook(a.ctx)
 	}
 	pgExecTransportCalls.Add(1)
 	// Dispatched to the transport: from here the statement's remote fate is
@@ -515,23 +550,19 @@ func (a *pgExecAttempt) executeAndMaterialize(sql string, win pgsql.PageWindow) 
 		a.rows = append(a.rows, row)
 	}
 	_, closeErr := rr.Close()
-	// A delivered ErrorResponse is the server's own confirmation that the
-	// statement terminated; a clean close through ReadyForQuery proves
-	// completion. Anything else stays indeterminate — observation decides.
-	var pgErr *pgconn.PgError
-	switch {
-	case readErr != nil:
-		if errors.As(readErr, &pgErr) {
-			a.stmtFate = pgStmtErrored
-		}
+	// The remote-fate fact is folded from both outcomes — a delivered
+	// ErrorResponse is the server's own termination proof, a clean close
+	// through ReadyForQuery is completion even when a local error already
+	// ended our read, and the driver's pre-send mark proves nothing was
+	// dispatched. The primary error keeps its own priority below and
+	// never carries remote facts.
+	a.stmtFate = pgStmtFateAfterRead(readErr, closeErr)
+	if readErr != nil {
 		return classifyPGExecTransportError(readErr)
-	case closeErr != nil:
-		if errors.As(closeErr, &pgErr) {
-			a.stmtFate = pgStmtErrored
-		}
+	}
+	if closeErr != nil {
 		return classifyPGExecTransportError(closeErr)
 	}
-	a.stmtFate = pgStmtCompleted
 	return nil
 }
 

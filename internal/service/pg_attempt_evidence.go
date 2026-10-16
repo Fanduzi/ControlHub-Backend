@@ -9,15 +9,14 @@
 // never a connection, transaction, resolver, secret key, DSN, statement
 // text, parameter, cell value, or raw driver error
 // pos: T10-B cancel/remote-state evidence (issue #118, frozen G9 cancel
-// clause + G4 ownership) — pgx v5.11.0 already turns context cancel into a
-// real CancelRequest: the default DeadlineContextWatcherHandler kills the
-// net.Conn read, receiveMessage converges the error, and asyncClose sends
-// the cancellation packet over a NEW control connection before Terminate and
-// drain; pgxpool destroys the closed connection (CleanupDone) so an
-// unsynchronized connection is never redelivered. CancelRequest is
-// fire-and-forget, so remote truth comes only from a bounded independent
-// pg_stat_activity probe — never from the driver's send result and never by
-// pg_terminate_backend
+// clause + G4 ownership) — pgx v5.11.0 turns context cancel into a real
+// CancelRequest via DeadlineContextWatcherHandler + asyncClose on a NEW
+// control connection; pgxpool destroys the unsynchronized conn. Remote
+// truth comes only from the bounded independent pg_stat_activity probe.
+// T10-B-R1: pgStmtFateAfterRead folds remote facts (ErrorResponse / clean
+// close / driver pre-send mark) independently of the primary error; the
+// probe marks connect/version/poll/verdict phases and exposes test-only
+// dial/row seams
 // note: if this file changes, update this header and module README.md.
 package service
 
@@ -28,6 +27,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 
 	"github.com/fan/controlhub/internal/model"
 	"github.com/fan/controlhub/internal/pgsql"
@@ -125,6 +125,31 @@ const (
 	pgStmtErrored
 )
 
+// pgStmtFateAfterRead folds the transport read/close outcome into the
+// statement's remote-fate fact — independent of which error is chosen as
+// the attempt's primary error. Priority:
+//  1. a delivered server ErrorResponse (*pgconn.PgError) in either error —
+//     the server itself confirmed termination → errored;
+//  2. a clean Close through ReadyForQuery → completed, even when a local
+//     budget or context error already ended our read;
+//  3. the driver's own "occurred before any data was sent" mark
+//     (pgconn.SafeToRetry) → unsent — consumed as evidence only, never a
+//     retry trigger and never part of the returned error chain;
+//  4. everything else stays indeterminate for the independent probe.
+func pgStmtFateAfterRead(readErr, closeErr error) pgStmtFate {
+	var pgErr *pgconn.PgError
+	switch {
+	case errors.As(readErr, &pgErr), errors.As(closeErr, &pgErr):
+		return pgStmtErrored
+	case closeErr == nil:
+		return pgStmtCompleted
+	case pgconn.SafeToRetry(readErr) || pgconn.SafeToRetry(closeErr):
+		return pgStmtUnsent
+	default:
+		return pgStmtIndeterminate
+	}
+}
+
 // pgRemoteStateFromObservation is the frozen verdict over one probed
 // pg_stat_activity row (or its absence). Only a missing row or an
 // identity-matching idle session proves stopped; an active backend, an
@@ -136,8 +161,10 @@ func pgRemoteStateFromObservation(found bool, state *string, backendStart, wantS
 		// statement is gone.
 		return model.QueryExecutionRemoteStopped
 	}
-	if !wantStart.IsZero() && !backendStart.Equal(wantStart) {
-		// The pid now names a different session — reuse, not our backend.
+	if wantStart.IsZero() || !backendStart.Equal(wantStart) {
+		// A missing expected start can never attribute this row to our
+		// session, and a mismatched one is pid reuse — either way the row
+		// is not evidence about our backend.
 		return model.QueryExecutionRemoteUnknown
 	}
 	if state == nil {
@@ -171,6 +198,19 @@ var pgExecProbeLog func(string)
 // other packages; nil restores silence. Test-only — production never calls
 // it.
 func PGExecProbeLogForTest(f func(string)) { pgExecProbeLog = f }
+
+// pgProbeDialOverride is a test-only seam for the probe connection's
+// transport dial — it lets a test slow or refuse the probe's own dial to
+// prove the shared window without touching the execution connection's
+// identity. Production leaves it nil.
+var pgProbeDialOverride pgconn.DialFunc
+
+// pgProbeRowHook is a test-only seam over the pg_stat_activity row read:
+// when it reports handled=true its synthetic result replaces the real
+// query, letting a test hold the backend "active" or stall the read
+// mid-flight to prove the single-window contract. Production leaves it
+// nil; handled=false falls through to the real query.
+var pgProbeRowHook func(ctx context.Context, conn *pgx.Conn, pid int32) (found bool, state *string, start time.Time, err error, handled bool)
 
 // observeRemoteState resolves this attempt's remote_state once per attempt,
 // inside the release path. It never touches the execution pool again: the
@@ -212,12 +252,37 @@ func pgProbeBackendState(ctx context.Context, cfg *pgx.ConnConfig, pid int32, ba
 	probeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), pgRemoteProbeWindow)
 	defer cancel()
 	logf := pgExecProbeLog
+	start := time.Now()
+	if logf != nil {
+		logf("probe begin")
+	}
 
+	verdict := pgProbeBackendStateInner(probeCtx, cfg, pid, backendStart, logf)
+	if logf != nil {
+		// The verdict window is the observation budget only — the probe
+		// connection's own release is logged separately inside the inner
+		// call and is never folded into this number.
+		logf(fmt.Sprintf("probe verdict=%s window=%s", verdict, time.Since(start)))
+	}
+	return verdict
+}
+
+// pgProbeBackendStateInner is the observable half of the probe: connect,
+// version gate, then polls — all inside the caller's single probeCtx. Phase
+// marks go to the test log seam so a test can time dial/gate/poll/verdict
+// without seeing credentials or query text.
+func pgProbeBackendStateInner(probeCtx context.Context, cfg *pgx.ConnConfig, pid int32, backendStart time.Time, logf func(string)) model.QueryExecutionRemoteState {
 	pcfg := cfg.Copy()
 	if pcfg.ConnectTimeout <= 0 || pcfg.ConnectTimeout > pgRemoteProbeWindow {
 		// The observation copy may tighten operational timeouts; identity —
 		// endpoint, database, user, TLS — is never altered.
 		pcfg.ConnectTimeout = pgRemoteProbeWindow
+	}
+	if pgProbeDialOverride != nil {
+		pcfg.DialFunc = pgProbeDialOverride
+	}
+	if logf != nil {
+		logf("probe connect begin")
 	}
 	conn, err := pgx.ConnectConfig(probeCtx, pcfg)
 	if err != nil {
@@ -226,14 +291,23 @@ func pgProbeBackendState(ctx context.Context, cfg *pgx.ConnConfig, pid int32, ba
 		}
 		return model.QueryExecutionRemoteUnknown
 	}
+	if logf != nil {
+		logf("probe connect done")
+	}
 	defer func() {
 		// Close is a local release; the probe budget must not be spent
 		// waiting on an already-dead socket.
 		cctx, ccancel := context.WithTimeout(context.Background(), 2*time.Second)
 		defer ccancel()
 		_ = conn.Close(cctx)
+		if logf != nil {
+			logf("probe conn released")
+		}
 	}()
 
+	if logf != nil {
+		logf("probe version begin")
+	}
 	version, err := readPGServerVersionNum(probeCtx, conn)
 	if err != nil || !pgServerVersionSupported(version) {
 		if logf != nil {
@@ -241,9 +315,12 @@ func pgProbeBackendState(ctx context.Context, cfg *pgx.ConnConfig, pid int32, ba
 		}
 		return model.QueryExecutionRemoteUnknown
 	}
+	if logf != nil {
+		logf("probe version done")
+	}
 
 	for {
-		found, state, start, err := pgProbeBackendRow(probeCtx, conn, pid)
+		found, state, start, err := pgProbeBackendRowSeamed(probeCtx, conn, pid)
 		if err != nil {
 			if logf != nil {
 				logf("probe row read failed")
@@ -272,6 +349,17 @@ func pgProbeBackendState(ctx context.Context, cfg *pgx.ConnConfig, pid int32, ba
 		case <-time.After(pgRemoteProbePoll):
 		}
 	}
+}
+
+// pgProbeBackendRowSeamed routes the row read through the test hook before
+// falling back to the real query.
+func pgProbeBackendRowSeamed(ctx context.Context, conn *pgx.Conn, pid int32) (bool, *string, time.Time, error) {
+	if pgProbeRowHook != nil {
+		if found, state, start, err, handled := pgProbeRowHook(ctx, conn, pid); handled {
+			return found, state, start, err
+		}
+	}
+	return pgProbeBackendRow(ctx, conn, pid)
 }
 
 // pgProbeBackendRow reads the single pg_stat_activity row for our pid. It
