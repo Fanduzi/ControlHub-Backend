@@ -14,7 +14,9 @@
 // pos: T10-B real-PostgreSQL acceptance (issue #118, frozen G9 cancel
 // clause) — ro_bind runs the production Outcome chain; the CancelRequest
 // tiers observe the wire without storing secrets, the remote verdict is a
-// real second connection's pg_stat_activity read in one window
+// real second connection's pg_stat_activity read in one window, and its
+// in-flight observation is pinned to the exact probe pid + per-run marker
+// (admin self-match and unrelated sleepers proven unable to satisfy it)
 // note: if this file changes, update this header and module README.md.
 package service
 
@@ -56,9 +58,19 @@ type cancelPacketDialer struct {
 	// Wire tiers for CancelRequest connections — kept distinct on purpose:
 	// frame shape recognized at Write entry, a successful underlying write,
 	// and the postmaster closing the control connection after processing.
+	// More than one frame can legitimately appear on the instrumented
+	// dialer: the EXEC backend's asyncClose sends one, and the probe conn's
+	// own asyncClose sends another for the PROBE backend if the probe ctx
+	// deadline lands while its row query is in flight. Tiers are therefore
+	// recorded per TARGET pid (frame bytes 8:12 — the pid is evidence-grade,
+	// the secret key is never read).
 	cancelFrames  atomic.Int64
 	cancelWriteOK atomic.Int64
 	cancelPeerEOF atomic.Int64
+	mu            sync.Mutex
+	targetPIDs    []int32 // frames whose shape was recognized
+	writeOKPIDs   []int32 // frames whose underlying write succeeded
+	peerEOFPIDs   []int32 // frames whose control conn was closed by the peer
 	// fault modes armed atomically: refuse fails new dials at once;
 	// blackhole holds them until the caller's own ctx ends — a dial that
 	// connects but never answers; dropCancelWrite fails the cancel frame's
@@ -66,6 +78,27 @@ type cancelPacketDialer struct {
 	faultRefuse          atomic.Bool
 	faultBlackhole       atomic.Bool
 	faultDropCancelWrite atomic.Bool
+}
+
+func (d *cancelPacketDialer) targetFrames(pid int32) (frames, wroteOK, peerEOF int) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	for _, p := range d.targetPIDs {
+		if p == pid {
+			frames++
+		}
+	}
+	for _, p := range d.writeOKPIDs {
+		if p == pid {
+			wroteOK++
+		}
+	}
+	for _, p := range d.peerEOFPIDs {
+		if p == pid {
+			peerEOF++
+		}
+	}
+	return frames, wroteOK, peerEOF
 }
 
 func (d *cancelPacketDialer) dial(ctx context.Context, network, addr string) (net.Conn, error) {
@@ -89,6 +122,7 @@ type cancelPacketConn struct {
 	dialer *cancelPacketDialer
 	framed atomic.Bool
 	eof    atomic.Bool
+	target int32
 }
 
 // isCancelFrame reports whether b is the single length-prefixed frame a
@@ -102,7 +136,13 @@ func isCancelFrame(b []byte) bool {
 func (c *cancelPacketConn) Write(b []byte) (int, error) {
 	isCancel := !c.framed.Load() && isCancelFrame(b)
 	if isCancel {
+		// The target backend pid sits at bytes 8:12 — evidence-grade, read
+		// for tier attribution only; the secret key is never touched.
+		c.target = int32(binary.BigEndian.Uint32(b[8:12]))
 		c.dialer.cancelFrames.Add(1)
+		c.dialer.mu.Lock()
+		c.dialer.targetPIDs = append(c.dialer.targetPIDs, c.target)
+		c.dialer.mu.Unlock()
 		if c.dialer.faultDropCancelWrite.Load() {
 			// The request is never transmitted — the negative control that
 			// proves the wire path is load-bearing.
@@ -116,6 +156,9 @@ func (c *cancelPacketConn) Write(b []byte) (int, error) {
 			// Bytes left the socket — a stronger tier than shape, still
 			// weaker than the server consuming them.
 			c.dialer.cancelWriteOK.Add(1)
+			c.dialer.mu.Lock()
+			c.dialer.writeOKPIDs = append(c.dialer.writeOKPIDs, c.target)
+			c.dialer.mu.Unlock()
 		}
 	}
 	return n, err
@@ -127,6 +170,9 @@ func (c *cancelPacketConn) Read(b []byte) (int, error) {
 		// The server closed the cancel control connection — pgx issues
 		// this read after the frame write exactly for this signal.
 		c.dialer.cancelPeerEOF.Add(1)
+		c.dialer.mu.Lock()
+		c.dialer.peerEOFPIDs = append(c.dialer.peerEOFPIDs, c.target)
+		c.dialer.mu.Unlock()
 	}
 	return n, err
 }
@@ -146,9 +192,10 @@ func waitPGBackend(t *testing.T, lab pgPoolLab, appName, wantState, queryMark st
 // age: the barrier holds only once pg_stat_activity reports the backend's
 // live (mark-matching) query has been running for at least minAge. That is
 // a phase barrier on steady execution — measured by the server — not a
-// blind client-side sleep guessing at execution timing. It exists because
-// a cancel fired in the first instants of backend activity lands inside
-// the executor's startup edge where the signal is not yet honored.
+// blind client-side sleep guessing at execution timing. minAge=250ms is an
+// EMPIRICAL barrier adopted by this test: a cancel fired in the first
+// instants of reported backend activity was observed to not always take
+// effect within the probe window (the exact mechanism is not confirmed).
 func waitPGBackendAged(t *testing.T, lab pgPoolLab, appName, wantState, queryMark string, minAge time.Duration) {
 	t.Helper()
 	admin := lab.adminConn(t)
@@ -275,6 +322,86 @@ func (c *probeLogCapture) count(prefix string) int {
 	return n
 }
 
+// probePIDFromCapture resolves the real pid of THIS attempt's probe
+// connection from the "probe connect done pid=" phase mark, polling the
+// capture until the mark lands or the budget expires. A missing mark means
+// no probe connection exists to observe — ok=false, never a guess.
+func probePIDFromCapture(t *testing.T, cap *probeLogCapture, budget time.Duration) (int32, bool) {
+	t.Helper()
+	deadline := time.Now().Add(budget)
+	for {
+		if m, ok := cap.first("probe connect done pid="); ok {
+			var pid int
+			if _, err := fmt.Sscanf(m.line, "probe connect done pid=%d", &pid); err != nil || pid == 0 {
+				t.Fatalf("probe pid unparsable in %q", m.line)
+			}
+			return int32(pid), true
+		}
+		if time.Now().After(deadline) {
+			return 0, false
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+// awaitProbeQueryInFlight polls pg_stat_activity through the admin
+// connection until THIS attempt's probe backend — exactly probePID, never
+// the execution backend, never the monitor's own backend — is observed
+// state=active running a query that carries this run's unique marker. The
+// marker arrives as a BOUND parameter: the monitor's own SQL text never
+// contains it, so the monitor cannot satisfy its own predicate. The probe
+// backend's backend_start is pinned on first sight and must stay stable —
+// a changed start means the pid was recycled and this is no longer the
+// same connection. Returns true only when that exact backend+query is
+// observed inside the budget; false when it never appears.
+func awaitProbeQueryInFlight(t *testing.T, admin *pgx.Conn, probePID, execPID, adminPID int32, marker string, budget time.Duration) bool {
+	t.Helper()
+	if probePID == 0 {
+		t.Fatal("probe pid 0 — no real probe connection was resolved")
+	}
+	if probePID == execPID {
+		t.Fatalf("probe pid %d equals exec pid — the observer must be an independent connection", probePID)
+	}
+	if probePID == adminPID {
+		t.Fatalf("probe pid %d equals the monitor pid — the observer must not be the monitor itself", probePID)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), budget)
+	defer cancel()
+	deadline := time.Now().Add(budget - 100*time.Millisecond)
+	var (
+		pinnedStart time.Time
+		haveStart   bool
+	)
+	for {
+		var (
+			start time.Time
+			match bool
+		)
+		err := admin.QueryRow(ctx,
+			`SELECT a.backend_start,
+			        a.state = 'active' AND position($2 in a.query) > 0
+			   FROM pg_catalog.pg_stat_activity a
+			  WHERE a.pid = $1`, probePID, marker).Scan(&start, &match)
+		if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+			t.Fatalf("poll probe backend: %v", err)
+		}
+		if err == nil {
+			if !haveStart {
+				pinnedStart, haveStart = start, true
+			} else if !start.Equal(pinnedStart) {
+				t.Fatalf("probe pid %d backend_start changed — pid reuse is not this connection", probePID)
+			}
+			if match {
+				return true
+			}
+		}
+		if time.Now().After(deadline) {
+			return false
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+}
+
 // pgLongRunningSQL is the deterministic "still executing" user statement: a
 // CPU-bound cartesian count over the 30-row fixture table — every executor
 // iteration reaches an interrupt point so a dispatched CancelRequest kills
@@ -327,8 +454,8 @@ func TestPGCancel_RealChainStopped(t *testing.T) {
 		}()
 
 		// Deterministic interleave: cancel only after the server reports the
-		// user statement in steady execution (past the startup edge — an
-		// early cancel can land before the backend honors signals).
+		// user statement in steady execution (an immediate cancel was
+		// observed to not always take effect — mechanism not confirmed).
 		waitPGBackendAged(t, lab, "ch-t7s34-exec", "active", pgLongRunningMark, 250*time.Millisecond)
 		execPID, execStart, ok := pgBackendIdentity(t, lab, "ch-t7s34-exec")
 		if !ok {
@@ -368,13 +495,16 @@ func TestPGCancel_RealChainStopped(t *testing.T) {
 			t.Fatalf("stage = %q, want execute", ev.Stage)
 		}
 		// Protocol proof: a control connection whose first frame is a
-		// CancelRequest packet — the pgx asyncClose chain was exercised for
-		// real, not inferred from context errors.
-		if got := dialer.cancelFrames.Load(); got != 1 {
-			t.Fatalf("cancel frames on wire = %d, want 1 (dials=%d)", got, dialer.dials.Load())
+		// CancelRequest packet targeting THIS exec backend — the pgx
+		// asyncClose chain was exercised for real, not inferred from
+		// context errors. (A probe-conn self-cancel frame for the probe's
+		// own backend is legitimate traffic and does not count here.)
+		execFrames, execWriteOK, execPeerEOF := dialer.targetFrames(execPID)
+		if execFrames != 1 {
+			t.Fatalf("cancel frames targeting exec backend = %d, want 1 (all frames=%d dials=%d)", execFrames, dialer.cancelFrames.Load(), dialer.dials.Load())
 		}
-		t.Logf("attempt %d wire tiers: frames=%d writeOK=%d peerEOF=%d", attempt,
-			dialer.cancelFrames.Load(), dialer.cancelWriteOK.Load(), dialer.cancelPeerEOF.Load())
+		t.Logf("attempt %d wire tiers: execFrames=%d execWriteOK=%d execPeerEOF=%d all=%d", attempt,
+			execFrames, execWriteOK, execPeerEOF, dialer.cancelFrames.Load())
 		// The error carries no driver text.
 		if out.err.Error() != "context canceled" {
 			t.Fatalf("cancel error text = %q", out.err.Error())
@@ -388,7 +518,7 @@ func TestPGCancel_RealChainStopped(t *testing.T) {
 		// cancel was dispatched (packet counted) and every attempt's
 		// invariants held — the server's dispatch simply never landed
 		// inside the frozen window this run. The deterministic stopped
-		// proof is TestPGCancel_RemoteStopObserved.
+		// proof is TestPGCancel_NativeCancelStopped.
 		t.Logf("observation trial: 3 real cancels, 0 stopped within the 2s window — dispatch not observed (root cause unconfirmed)")
 	}
 
@@ -475,17 +605,20 @@ func TestPGCancel_NativeCancelStopped(t *testing.T) {
 	if ev.BackendPID != execPID || !ev.BackendStart.Equal(execStart) {
 		t.Fatalf("backend identity ev=(%d,%v) server=(%d,%v)", ev.BackendPID, ev.BackendStart, execPID, execStart)
 	}
-	// Wire tiers, reported separately: the frame shape was recognized, the
-	// write succeeded, and the peer closed the control connection — the
-	// strongest client-visible signal that the server consumed the request.
-	if got := dialer.cancelFrames.Load(); got != 1 {
-		t.Fatalf("cancel frames = %d, want 1", got)
+	// Wire tiers, reported separately and attributed to THIS exec backend:
+	// the frame shape was recognized, the write succeeded, and the peer
+	// closed the control connection — the strongest client-visible signal
+	// that the server consumed the request. (Any probe self-cancel frame
+	// targets the probe's own backend and is unrelated traffic here.)
+	execFrames, execWriteOK, execPeerEOF := dialer.targetFrames(execPID)
+	if execFrames != 1 {
+		t.Fatalf("cancel frames targeting exec backend = %d, want 1 (all=%d)", execFrames, dialer.cancelFrames.Load())
 	}
-	if got := dialer.cancelWriteOK.Load(); got != 1 {
-		t.Fatalf("cancel frames written = %d, want 1", got)
+	if execWriteOK != 1 {
+		t.Fatalf("cancel frames written for exec backend = %d, want 1", execWriteOK)
 	}
-	if got := dialer.cancelPeerEOF.Load(); got != 1 {
-		t.Fatalf("cancel control conn peer-closes = %d, want 1 — server-side consumption not observed", got)
+	if execPeerEOF != 1 {
+		t.Fatalf("cancel control conn peer-closes for exec backend = %d, want 1 — server-side consumption not observed", execPeerEOF)
 	}
 	// The probe must be load-bearing: it ran, it ran on a connection that
 	// is NOT the execution backend, and it really read this backend's row.
@@ -596,14 +729,15 @@ func TestPGCancel_NativeCancelBlockedNoStop(t *testing.T) {
 	if !ev.UserSQLSent || ev.BackendPID != execPID || !ev.BackendStart.Equal(execStart) {
 		t.Fatalf("evidence = %+v — the user statement really dispatched before the blocked cancel", ev)
 	}
-	if got := dialer.cancelFrames.Load(); got != 1 {
-		t.Fatalf("cancel frames = %d, want 1 — the shape was still attempted", got)
+	execFrames, execWriteOK, execPeerEOF := dialer.targetFrames(execPID)
+	if execFrames != 1 {
+		t.Fatalf("cancel frames targeting exec backend = %d, want 1 — the shape was still attempted (all=%d)", execFrames, dialer.cancelFrames.Load())
 	}
-	if got := dialer.cancelWriteOK.Load(); got != 0 {
-		t.Fatalf("cancel frames written = %d, want 0 — nothing may leave the socket", got)
+	if execWriteOK != 0 {
+		t.Fatalf("cancel frames written for exec backend = %d, want 0 — nothing may leave the socket", execWriteOK)
 	}
-	if got := dialer.cancelPeerEOF.Load(); got != 0 {
-		t.Fatalf("cancel conn peer-closes = %d, want 0", got)
+	if execPeerEOF != 0 {
+		t.Fatalf("cancel conn peer-closes for exec backend = %d, want 0", execPeerEOF)
 	}
 	// The probe still ran and honestly reports a live backend.
 	if _, ok := cap.first("probe begin"); !ok || cap.count("poll found=true") == 0 {
@@ -696,10 +830,11 @@ func TestPGCancel_ExternalTerminationObserved(t *testing.T) {
 		t.Fatalf("stage = %q, want execute", ev.Stage)
 	}
 	// The caller cancel still ran the real asyncClose chain — a
-	// CancelRequest packet went out even though the assisted kill is what
-	// made the death land inside the window.
-	if got := dialer.cancelFrames.Load(); got != 1 {
-		t.Fatalf("cancel frames on wire = %d, want 1", got)
+	// CancelRequest packet targeting this exec backend went out even
+	// though the assisted kill is what made the death land inside the
+	// window.
+	if execFrames, _, _ := dialer.targetFrames(execPID); execFrames != 1 {
+		t.Fatalf("cancel frames targeting exec backend = %d, want 1", execFrames)
 	}
 	waitNoPGBackends(t, lab, "ch-t7s34-exec")
 }
@@ -1263,7 +1398,7 @@ func TestPGCancel_ProbeWindow(t *testing.T) {
 		}
 	}
 
-	run := func(t *testing.T, afterCancel func(t *testing.T)) *PGAttemptEvidence {
+	run := func(t *testing.T, afterCancel func(t *testing.T, execPID int32, execStart time.Time)) *PGAttemptEvidence {
 		t.Helper()
 		cap.reset()
 
@@ -1281,9 +1416,17 @@ func TestPGCancel_ProbeWindow(t *testing.T) {
 			}{ev, err}
 		}()
 		waitPGBackendAged(t, lab, "ch-t7s34-exec", "active", pgLongRunningMark, 250*time.Millisecond)
+		// The execution backend's identity is captured BEFORE the cancel —
+		// never re-derived from application_name afterwards, and a failed
+		// lookup fails the test rather than feeding zero values onward.
+		execPID, execStart, ok := pgBackendIdentity(t, lab, "ch-t7s34-exec")
+		if !ok {
+			cancel()
+			t.Fatal("exec backend identity not visible before cancel")
+		}
 		cancel()
 		if afterCancel != nil {
-			afterCancel(t)
+			afterCancel(t, execPID, execStart)
 		}
 		var out struct {
 			ev  *PGAttemptEvidence
@@ -1311,6 +1454,10 @@ func TestPGCancel_ProbeWindow(t *testing.T) {
 	// stall is REAL: the row query is swapped for a delayed state probe
 	// (a pg_stat_activity read joined with pg_sleep) that the server itself
 	// executes on the real probe connection under the real shared ctx.
+	// The server-side entry barrier matches THIS attempt's probe backend
+	// exactly — the probe pid resolved from its own phase mark, the run's
+	// unique marker bound into the monitor SQL — so neither the monitor's
+	// own query nor an unrelated sleeper can satisfy it.
 	t.Run("dial then real in-flight query consumes only the remaining window", func(t *testing.T) {
 		realDial := pgExecLabConfig(t, lab).DialFunc
 		if realDial == nil {
@@ -1330,38 +1477,31 @@ func TestPGCancel_ProbeWindow(t *testing.T) {
 		// Test-only delayed state probe: the pg_sleep arm is FIRST in the
 		// UNION ALL so the append node evaluates it before the real row —
 		// the query is genuinely in flight for 30s regardless of whether
-		// the execution backend's row still exists.
-		pgProbeRowSQL = `SELECT NULL::text, NULL::timestamptz FROM pg_catalog.pg_sleep(30)
+		// the execution backend's row still exists. The marker comment is
+		// unique to this run; the monitor observes it as a bound parameter.
+		marker := fmt.Sprintf("t10b-r3-delayed-probe-%d", time.Now().UnixNano())
+		pgProbeRowSQL = `SELECT NULL::text, NULL::timestamptz /* ` + marker + ` */ FROM pg_catalog.pg_sleep(30)
 		   UNION ALL
 		  SELECT a.state::text, a.backend_start
 		   FROM pg_catalog.pg_stat_activity a WHERE a.pid = $1`
 		defer func() { pgProbeRowSQL = "" }()
 
-		var execPID int32
-		ev := run(t, func(t *testing.T) {
-			// While the attempt's probe is alive, the delayed state query
-			// must be visible server-side on a DIFFERENT backend — proof a
-			// real probe statement is genuinely in flight.
-			execPID, _, _ = pgBackendIdentity(t, lab, "ch-t7s34-exec")
+		ev := run(t, func(t *testing.T, execPID int32, execStart time.Time) {
 			admin := lab.adminConn(t)
-			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-			defer cancel()
-			deadline := time.Now().Add(4 * time.Second)
-			for {
-				var n int64
-				if err := admin.QueryRow(ctx,
-					`SELECT count(*) FROM pg_catalog.pg_stat_activity
-					  WHERE pid <> $1 AND state = 'active'
-					    AND position('pg_sleep(30)' in query) > 0`, execPID).Scan(&n); err != nil {
-					t.Fatalf("poll probe backend: %v", err)
-				}
-				if n > 0 {
-					return
-				}
-				if time.Now().After(deadline) {
-					t.Fatal("delayed probe query never observed in flight")
-				}
-				time.Sleep(20 * time.Millisecond)
+			var adminPID int32
+			if err := admin.QueryRow(context.Background(),
+				`SELECT pg_catalog.pg_backend_pid()`).Scan(&adminPID); err != nil {
+				t.Fatalf("monitor pid: %v", err)
+			}
+			// The probe must exist on the wire before it can be observed:
+			// its real pid comes from the phase mark, not from re-guessing
+			// by application_name after the cancel.
+			probePID, ok := probePIDFromCapture(t, cap, 4*time.Second)
+			if !ok {
+				t.Fatal("probe connection never established — nothing to observe")
+			}
+			if !awaitProbeQueryInFlight(t, admin, probePID, execPID, adminPID, marker, 3*time.Second) {
+				t.Fatalf("delayed probe query (marker %s) never observed in flight on probe pid %d", marker, probePID)
 			}
 		})
 		if ev.RemoteState != model.QueryExecutionRemoteUnknown {
@@ -1388,6 +1528,147 @@ func TestPGCancel_ProbeWindow(t *testing.T) {
 			t.Fatalf("probe verdict window %s — phases must share one 2s deadline", w)
 		}
 		releaseAfterVerdict(t, 0)
+		waitNoPGBackends(t, lab, "ch-t7s34-exec")
+	})
+
+	// legacyBarrierHits replays the PRE-FIX monitor predicate once: its own
+	// query text literally carries 'pg_sleep(30)', so a monitor executing it
+	// satisfies its own WHERE clause — the recorded self-match defect.
+	// Kept as a red record only; the real barrier never uses this shape.
+	legacyBarrierHits := func(t *testing.T, admin *pgx.Conn, execPID int32) int64 {
+		t.Helper()
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		var n int64
+		if err := admin.QueryRow(ctx,
+			`SELECT count(*) FROM pg_catalog.pg_stat_activity
+			  WHERE pid <> $1 AND state = 'active'
+			    AND position('pg_sleep(30)' in query) > 0`, execPID).Scan(&n); err != nil {
+			t.Fatalf("legacy monitor poll: %v", err)
+		}
+		return n
+	}
+	monitorPID := func(t *testing.T, admin *pgx.Conn) int32 {
+		t.Helper()
+		var pid int32
+		if err := admin.QueryRow(context.Background(),
+			`SELECT pg_catalog.pg_backend_pid()`).Scan(&pid); err != nil {
+			t.Fatalf("monitor pid: %v", err)
+		}
+		return pid
+	}
+
+	// A + temporary reverse control: the probe connection establishes for
+	// real, but its row read is stalled inside the hook BEFORE any query is
+	// sent — no delayed statement ever reaches the server on it. The
+	// corrected barrier must stay unsatisfied for its whole budget. The
+	// legacy predicate is replayed once first to record that it would have
+	// self-matched the monitor's own active query on this exact setup.
+	// The stall hook is armed ONLY here — it never enters the success path.
+	t.Run("monitor self-match cannot satisfy the barrier", func(t *testing.T) {
+		pgProbeRowHook = func(ctx context.Context, _ *pgx.Conn, _ int32) (bool, *string, time.Time, error, bool) {
+			<-ctx.Done()
+			return false, nil, time.Time{}, ctx.Err(), true
+		}
+		defer func() { pgProbeRowHook = nil }()
+		marker := fmt.Sprintf("t10b-r3-delayed-probe-%d", time.Now().UnixNano())
+
+		ev := run(t, func(t *testing.T, execPID int32, _ time.Time) {
+			admin := lab.adminConn(t)
+			if hits := legacyBarrierHits(t, admin, execPID); hits == 0 {
+				t.Fatal("expected the pre-fix predicate to self-match the monitor's own query")
+			} else {
+				t.Logf("red record: pre-fix predicate matched %d row(s) with no probe query in flight", hits)
+			}
+			probePID, ok := probePIDFromCapture(t, cap, 4*time.Second)
+			if !ok {
+				t.Fatal("probe connection never established — the stall was supposed to keep it alive")
+			}
+			if awaitProbeQueryInFlight(t, admin, probePID, execPID, monitorPID(t, admin), marker, 1300*time.Millisecond) {
+				t.Fatal("barrier passed although the probe never sent its query — self-match or unrelated row")
+			}
+		})
+		if ev.RemoteState != model.QueryExecutionRemoteUnknown {
+			t.Fatalf("remote_state = %q, want unknown — a stalled read resolves as unknown", ev.RemoteState)
+		}
+		waitNoPGBackends(t, lab, "ch-t7s34-exec")
+	})
+
+	// B: an unrelated backend IS running a similar long pg_sleep query —
+	// enough for the pre-fix predicate, never for the corrected one. The
+	// real probe's row read is stalled again so no marker query exists.
+	t.Run("an unrelated pg_sleep backend cannot satisfy the barrier", func(t *testing.T) {
+		pgProbeRowHook = func(ctx context.Context, _ *pgx.Conn, _ int32) (bool, *string, time.Time, error, bool) {
+			<-ctx.Done()
+			return false, nil, time.Time{}, ctx.Err(), true
+		}
+		defer func() { pgProbeRowHook = nil }()
+
+		sleeper, err := pgx.ConnectConfig(context.Background(), lab.config(t, "ch-t10b-sleeper"))
+		if err != nil {
+			t.Fatalf("sleeper connect: %v", err)
+		}
+		t.Cleanup(func() { sleeper.Close(context.Background()) })
+		sleeperCtx, stopSleep := context.WithCancel(context.Background())
+		sleptDone := make(chan struct{})
+		go func() {
+			_, _ = sleeper.Exec(sleeperCtx, `SELECT pg_catalog.pg_sleep(30)`)
+			close(sleptDone)
+		}()
+		defer func() {
+			stopSleep()
+			select {
+			case <-sleptDone:
+			case <-time.After(5 * time.Second):
+				t.Error("sleeper query never returned after cancel")
+			}
+		}()
+		// The unrelated sleeper must be genuinely in flight before the
+		// counterexample is exercised.
+		waitPGBackend(t, lab, "ch-t10b-sleeper", "active", "pg_sleep(30)")
+
+		marker := fmt.Sprintf("t10b-r3-delayed-probe-%d", time.Now().UnixNano())
+		ev := run(t, func(t *testing.T, execPID int32, _ time.Time) {
+			admin := lab.adminConn(t)
+			if hits := legacyBarrierHits(t, admin, execPID); hits == 0 {
+				t.Fatal("expected the pre-fix predicate to match the unrelated sleeper (plus itself)")
+			} else {
+				t.Logf("red record: pre-fix predicate matched %d row(s) while no probe query ran", hits)
+			}
+			probePID, ok := probePIDFromCapture(t, cap, 4*time.Second)
+			if !ok {
+				t.Fatal("probe connection never established")
+			}
+			if awaitProbeQueryInFlight(t, admin, probePID, execPID, monitorPID(t, admin), marker, 1300*time.Millisecond) {
+				t.Fatal("barrier passed although only an unrelated pg_sleep backend was active")
+			}
+		})
+		if ev.RemoteState != model.QueryExecutionRemoteUnknown {
+			t.Fatalf("remote_state = %q, want unknown", ev.RemoteState)
+		}
+		waitNoPGBackends(t, lab, "ch-t7s34-exec")
+	})
+
+	// No probe connection at all: a blackholed dial never produces a
+	// connect-done mark, so no probe pid exists to observe — the barrier
+	// exits unsatisfied inside its own budget instead of fabricating one.
+	t.Run("no probe connection leaves nothing to observe", func(t *testing.T) {
+		pgProbeDialOverride = func(ctx context.Context, _, _ string) (net.Conn, error) {
+			<-ctx.Done()
+			return nil, ctx.Err()
+		}
+		defer func() { pgProbeDialOverride = nil }()
+
+		ev := run(t, func(t *testing.T, _ int32, _ time.Time) {
+			if pid, ok := probePIDFromCapture(t, cap, 2600*time.Millisecond); ok {
+				t.Fatalf("probe pid %d resolved on a blackholed dial", pid)
+			} else {
+				t.Logf("no probe connection established — the barrier has no target and stays unsatisfied")
+			}
+		})
+		if ev.RemoteState != model.QueryExecutionRemoteUnknown {
+			t.Fatalf("remote_state = %q, want unknown", ev.RemoteState)
+		}
 		waitNoPGBackends(t, lab, "ch-t7s34-exec")
 	})
 
