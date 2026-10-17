@@ -1106,7 +1106,7 @@ func (auditFailingExecRepo) GetCredential(_ context.Context, _ uint64, _ string)
 func (auditFailingExecRepo) InsertExecution(_ context.Context, _ model.QueryExecutionRecord) (uint64, error) {
 	return 0, nil
 }
-func (auditFailingExecRepo) ListExecutions(_ context.Context, _ model.QueryExecutionListQuery) ([]model.QueryExecutionRecord, int, error) {
+func (auditFailingExecRepo) ListExecutions(_ context.Context, _ model.QueryExecutionListQuery) ([]model.QueryExecutionListItem, int, error) {
 	return nil, 0, nil
 }
 func (r auditFailingExecRepo) InsertAuditEvent(_ context.Context, _, _ uint64, _, _ string) error {

@@ -28,7 +28,7 @@ var qeTestNow = time.Date(2026, 6, 22, 8, 0, 0, 0, time.UTC)
 type stubQueryExec struct {
 	executeResp    model.QueryExecuteResponse
 	executeErr     error
-	listItems      []model.QueryExecutionRecord
+	listItems      []model.QueryExecutionListItem
 	listErr        error
 	navResp        model.RelatedRecordNavigationResponse
 	navErr         error
@@ -91,9 +91,9 @@ func (s *stubQueryExec) ExecuteSavedStatement(_ context.Context, actorUserID, ta
 	return s.templateResp, s.templateErr
 }
 
-func (s *stubQueryExec) ListHistory(_ context.Context, actorUserID uint64, actorRole string, targetID uint64, q model.QueryExecutionListQuery) (*model.QueryExecutionCursorPage, error) {
+func (s *stubQueryExec) ListHistory(_ context.Context, identity model.QueryExecutionIdentity, actorRole string, targetID uint64, q model.QueryExecutionListQuery) (*model.QueryExecutionCursorPage, error) {
 	s.listCalled = true
-	s.gotIdentity = model.QueryExecutionIdentity{Kind: model.QueryExecutionActorUser, ID: actorUserID}
+	s.gotIdentity = identity
 	s.gotTargetID = targetID
 	s.gotRole = actorRole
 	s.gotQuery = q
@@ -112,6 +112,40 @@ func (s *stubQueryExec) ListHistory(_ context.Context, actorUserID uint64, actor
 // QueryEvidencePersistenceFailures returns the stub counter (0); the live
 // counter path is covered by repository/integration tests.
 func (s *stubQueryExec) QueryEvidencePersistenceFailures() int64 { return 0 }
+
+// execItems projects persisted terminal rows into the mixed-history item
+// shape the handler serializes — the service performs this projection for
+// real; the stub mirrors it so handler tests see the v2 wire shape.
+func execItems(recs ...model.QueryExecutionRecord) []model.QueryExecutionListItem {
+	items := make([]model.QueryExecutionListItem, 0, len(recs))
+	for _, rec := range recs {
+		id := rec.ID
+		created := rec.CreatedAt
+		items = append(items, model.QueryExecutionListItem{
+			Kind:                    model.QueryExecutionListItemExecution,
+			ID:                      &id,
+			TargetResourceID:        rec.TargetResourceID,
+			ClientExecutionID:       rec.ClientExecutionID,
+			ActorUserID:             rec.ActorUserID,
+			ActorMachinePrincipalID: rec.ActorMachinePrincipalID,
+			Actor:                   rec.Actor,
+			Engine:                  rec.Engine,
+			DatabaseName:            rec.DatabaseName,
+			SchemaName:              rec.SchemaName,
+			StatementDigest:         rec.StatementDigest,
+			StatementPreview:        rec.StatementPreview,
+			CanRestore:              rec.CanRestore,
+			Status:                  model.QueryExecutionViewStatus(rec.Status),
+			RemoteState:             rec.RemoteState,
+			RowCount:                rec.RowCount,
+			DurationMs:              rec.DurationMs,
+			ErrorCode:               rec.ErrorCode,
+			ErrorMessage:            rec.ErrorMessage,
+			CreatedAt:               &created,
+		})
+	}
+	return items
+}
 
 func (s *stubQueryExec) NavigateRelatedRecords(_ context.Context, actorUserID uint64, targetID uint64, req model.RelatedRecordNavigationRequest) (model.RelatedRecordNavigationResponse, error) {
 	s.navCalled = true
@@ -421,7 +455,7 @@ func TestQueryExecution_ListHistory(t *testing.T) {
 			Status: model.QueryExecutionRejected, CreatedAt: qeTestNow,
 		},
 	}
-	stub := &stubQueryExec{listItems: items}
+	stub := &stubQueryExec{listItems: execItems(items...)}
 	router := newQueryExecRouter(stub)
 	token := mintToken(t, "qe-test-secret", 42, "admin", qeTestNow)
 
@@ -477,7 +511,7 @@ func TestQueryExecution_ListHistory_UnknownTarget(t *testing.T) {
 }
 
 func TestQueryExecution_ListHistory_PassesNonAdminRole(t *testing.T) {
-	stub := &stubQueryExec{listItems: []model.QueryExecutionRecord{}}
+	stub := &stubQueryExec{listItems: nil}
 	router := newQueryExecRouter(stub)
 	token := mintToken(t, "qe-test-secret", 7, "editor", qeTestNow)
 
@@ -506,7 +540,7 @@ func TestQueryExecution_ListHistory_MissingBearer(t *testing.T) {
 // --- cursor-based pagination filter tests ---
 
 func TestQueryExecution_ListHistory_ValidFiltersParsed(t *testing.T) {
-	stub := &stubQueryExec{listItems: []model.QueryExecutionRecord{}}
+	stub := &stubQueryExec{listItems: nil}
 	router := newQueryExecRouter(stub)
 	token := mintToken(t, "qe-test-secret", 42, "admin", qeTestNow)
 
@@ -525,6 +559,54 @@ func TestQueryExecution_ListHistory_ValidFiltersParsed(t *testing.T) {
 	}
 	if stub.gotQuery.To == nil {
 		t.Fatal("to filter not passed")
+	}
+}
+
+func TestQueryExecution_ListHistory_ScopedFiltersParsed(t *testing.T) {
+	stub := &stubQueryExec{listItems: nil}
+	router := newQueryExecRouter(stub)
+	token := mintToken(t, "qe-test-secret", 42, "admin", qeTestNow)
+
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, qeRequest(http.MethodGet,
+		"/query-targets/22/executions?database=appdb&clientExecutionId=req-7", "", token))
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", rec.Code, rec.Body.String())
+	}
+	if stub.gotQuery.Database != "appdb" {
+		t.Fatalf("database filter = %q, want appdb", stub.gotQuery.Database)
+	}
+	if stub.gotQuery.ClientExecutionID != "req-7" {
+		t.Fatalf("clientExecutionId filter = %q, want req-7", stub.gotQuery.ClientExecutionID)
+	}
+}
+
+// WHY: every filter is single-valued fail-closed — a repeated or empty value
+// can never silently collapse into one scope.
+func TestQueryExecution_ListHistory_ScopedFilterRejections(t *testing.T) {
+	token := mintToken(t, "qe-test-secret", 42, "admin", qeTestNow)
+	cases := map[string]string{
+		"empty database":              "/query-targets/22/executions?database=",
+		"repeated database":           "/query-targets/22/executions?database=a&database=b",
+		"oversized database":          "/query-targets/22/executions?database=" + strings.Repeat("d", model.MaxIdentifierLength+1),
+		"empty clientExecutionId":     "/query-targets/22/executions?clientExecutionId=",
+		"repeated clientExecutionId":  "/query-targets/22/executions?clientExecutionId=a&clientExecutionId=b",
+		"oversized clientExecutionId": "/query-targets/22/executions?clientExecutionId=" + strings.Repeat("k", 65),
+		"NUL clientExecutionId":       "/query-targets/22/executions?clientExecutionId=%00",
+	}
+	for name, path := range cases {
+		t.Run(name, func(t *testing.T) {
+			router := newQueryExecRouter(&stubQueryExec{})
+			rec := httptest.NewRecorder()
+			router.ServeHTTP(rec, qeRequest(http.MethodGet, path, "", token))
+			if rec.Code != http.StatusBadRequest {
+				t.Fatalf("status = %d, want 400; body=%s", rec.Code, rec.Body.String())
+			}
+			if !strings.Contains(rec.Body.String(), "validation_failed") {
+				t.Fatalf("body = %s, want validation_failed", rec.Body.String())
+			}
+		})
 	}
 }
 
@@ -598,7 +680,7 @@ func TestQueryExecution_ListHistory_PageAndCursorReturns400(t *testing.T) {
 
 func TestQueryExecution_ListHistory_CursorPassedToService(t *testing.T) {
 	cursorVal := "test-cursor-value"
-	stub := &stubQueryExec{listItems: []model.QueryExecutionRecord{}}
+	stub := &stubQueryExec{listItems: nil}
 	router := newQueryExecRouter(stub)
 	token := mintToken(t, "qe-test-secret", 42, "admin", qeTestNow)
 
@@ -615,7 +697,7 @@ func TestQueryExecution_ListHistory_CursorPassedToService(t *testing.T) {
 }
 
 func TestQueryExecution_ListHistory_DefaultPaginationUsed(t *testing.T) {
-	stub := &stubQueryExec{listItems: []model.QueryExecutionRecord{}}
+	stub := &stubQueryExec{listItems: nil}
 	router := newQueryExecRouter(stub)
 	token := mintToken(t, "qe-test-secret", 42, "admin", qeTestNow)
 
@@ -734,7 +816,7 @@ func TestQueryExecution_ListHistory_CursorEnvelopeShape(t *testing.T) {
 	items := []model.QueryExecutionRecord{
 		{ID: 1, TargetResourceID: 22, ActorUserID: 42, Actor: model.QueryExecutionActor{DisplayName: "Admin"}, Engine: "mysql", StatementDigest: "select 1", StatementPreview: "select 1", Status: model.QueryExecutionSuccess, CreatedAt: qeTestNow},
 	}
-	stub := &stubQueryExec{listItems: items}
+	stub := &stubQueryExec{listItems: execItems(items...)}
 	router := newQueryExecRouter(stub)
 	token := mintToken(t, "qe-test-secret", 42, "admin", qeTestNow)
 
@@ -763,7 +845,7 @@ func TestQueryExecution_ListHistory_OffsetEnvelopeShape(t *testing.T) {
 	items := []model.QueryExecutionRecord{
 		{ID: 1, TargetResourceID: 22, ActorUserID: 42, Actor: model.QueryExecutionActor{DisplayName: "Admin"}, Engine: "mysql", StatementDigest: "select 1", StatementPreview: "select 1", Status: model.QueryExecutionSuccess, CreatedAt: qeTestNow},
 	}
-	stub := &stubQueryExec{listItems: items}
+	stub := &stubQueryExec{listItems: execItems(items...)}
 	router := newQueryExecRouter(stub)
 	token := mintToken(t, "qe-test-secret", 42, "admin", qeTestNow)
 
@@ -810,7 +892,7 @@ func TestQueryExecution_ListHistory_InvalidPageReturns400(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			stub := &stubQueryExec{listItems: []model.QueryExecutionRecord{}}
+			stub := &stubQueryExec{listItems: nil}
 			router := newQueryExecRouter(stub)
 			token := mintToken(t, "qe-test-secret", 42, "admin", qeTestNow)
 
@@ -848,7 +930,7 @@ func TestQueryExecution_ListHistory_InvalidPageSizeReturns400(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			stub := &stubQueryExec{listItems: []model.QueryExecutionRecord{}}
+			stub := &stubQueryExec{listItems: nil}
 			router := newQueryExecRouter(stub)
 			token := mintToken(t, "qe-test-secret", 42, "admin", qeTestNow)
 
@@ -887,7 +969,7 @@ func TestQueryExecution_ListHistory_PageAndCursorConflictPrecedence(t *testing.T
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			stub := &stubQueryExec{listItems: []model.QueryExecutionRecord{}}
+			stub := &stubQueryExec{listItems: nil}
 			router := newQueryExecRouter(stub)
 			token := mintToken(t, "qe-test-secret", 42, "admin", qeTestNow)
 
@@ -929,7 +1011,7 @@ func TestQueryExecution_ListHistory_ValidPageStaysOffset(t *testing.T) {
 			items := []model.QueryExecutionRecord{
 				{ID: 1, TargetResourceID: 22, ActorUserID: 42, Actor: model.QueryExecutionActor{DisplayName: "Admin"}, Status: model.QueryExecutionSuccess, CreatedAt: qeTestNow},
 			}
-			stub := &stubQueryExec{listItems: items}
+			stub := &stubQueryExec{listItems: execItems(items...)}
 			router := newQueryExecRouter(stub)
 			token := mintToken(t, "qe-test-secret", 42, "admin", qeTestNow)
 
@@ -971,7 +1053,7 @@ func TestQueryExecution_ListHistory_ValidPageSizeAccepted(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			stub := &stubQueryExec{listItems: []model.QueryExecutionRecord{}}
+			stub := &stubQueryExec{listItems: nil}
 			router := newQueryExecRouter(stub)
 			token := mintToken(t, "qe-test-secret", 42, "admin", qeTestNow)
 
@@ -1270,7 +1352,7 @@ func (applyPathRepo) GetCredential(_ context.Context, resourceID uint64, _ strin
 	}, nil
 }
 
-func (applyPathRepo) ListExecutions(context.Context, model.QueryExecutionListQuery) ([]model.QueryExecutionRecord, int, error) {
+func (applyPathRepo) ListExecutions(context.Context, model.QueryExecutionListQuery) ([]model.QueryExecutionListItem, int, error) {
 	return nil, 0, nil
 }
 

@@ -29,6 +29,7 @@ func claimTestInput() model.QueryExecutionClaimInput {
 		SchemaName:        "app",
 		RequestDigest:     "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
 		ClaimedAt:         time.Now().UTC(),
+		AttemptTimeoutMs:  5000,
 	}
 }
 

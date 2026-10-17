@@ -1,5 +1,5 @@
 // Package main provides the ControlHub application entry point.
-// input: config.LoadDotEnv/Load/ValidateJWTSecret/ErrQueryExecutionTokenMaxAgeRejected, mysql repositories, api.NewRouter, service constructors, os/signal Notify (SIGTERM/SIGINT), net.Listen
+// input: config.LoadDotEnv/Load/ValidateJWTSecret/ErrQueryExecutionTokenMaxAgeRejected, mysql repositories, api.NewRouter, service constructors, pgsql.GuardPG warm-up (T10-C wasm compile outside attempt budgets), os/signal Notify (SIGTERM/SIGINT), net.Listen
 // output: main() binary entry point; runServer() graceful-drain lifecycle
 // pos: Application bootstrap and lifecycle: validates the signing secret before opening the database, wires resource completeness, governed query, owner workspace/private statement reads, saved-statement template reads (with the T11 PG context resolver for restore revalidation), and independent machine credentials, then serves HTTP; SIGTERM/SIGINT stop new traffic and drain in-flight handlers for at most ten seconds (Issue #37)
 // note: if wiring, startup validation, or the shutdown contract changes, update this header and cmd/server/README.md
@@ -19,6 +19,7 @@ import (
 
 	"github.com/fan/controlhub/internal/api"
 	"github.com/fan/controlhub/internal/config"
+	"github.com/fan/controlhub/internal/pgsql"
 	"github.com/fan/controlhub/internal/repository/mysql"
 	"github.com/fan/controlhub/internal/service"
 )
@@ -108,7 +109,19 @@ func buildDependencies(db *sql.DB, cfg config.Config) api.Dependencies {
 		realClock{},
 		service.NewMySQLSchemaInspector(),
 		queryDisclosureSvc,
-	).WithTemplateExecution(querySavedStatementRepo, service.NewTemplateStatementCompiler())
+	).WithTemplateExecution(querySavedStatementRepo, service.NewTemplateStatementCompiler()).
+		// T10-C: the internal keyed PG entry shares the same five-part
+		// disclosure policy store its provenance preflight consults. No HTTP
+		// route exposes it — PG POST execution stays closed.
+		WithPGClaimOrchestration(queryDisclosureRepo)
+
+	// The wazero-backed pg_query compiler loads lazily on the first GuardPG
+	// call — a multi-second, process-wide cost that would otherwise be paid
+	// inside the first real attempt's frozen statement budget. Warm it at
+	// startup so no governed attempt loses its budget to the compile.
+	if _, err := pgsql.GuardPG("select 1"); err != nil {
+		log.Fatalf("pg guard warm-up: %v", err)
+	}
 
 	accessResolver := service.NewTargetAccessResolver(queryTargetRepo, queryExecutionRepo, credentialResolver)
 	querySchemaSvc := service.NewQuerySchemaService(

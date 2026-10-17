@@ -1,5 +1,10 @@
 //go:build integration
 
+// Package integration hosts the shared Testcontainers environment.
+// input: testcontainers MySQL 8.0, goose migrations, internal/pgsql GuardPG warm-up
+// output: globalEnv (container + migrated *sql.DB) and setupTestDB per-test connections
+// pos: suite-level fixture for every real-MySQL integration test in this package
+// note: if this file changes, update this header and module README.md.
 package integration
 
 import (
@@ -13,6 +18,8 @@ import (
 	"time"
 
 	"github.com/pressly/goose/v3"
+
+	"github.com/fan/controlhub/internal/pgsql"
 	"github.com/testcontainers/testcontainers-go"
 	tcmysql "github.com/testcontainers/testcontainers-go/modules/mysql"
 	"github.com/testcontainers/testcontainers-go/wait"
@@ -33,6 +40,17 @@ type testEnv struct {
 
 func TestMain(m *testing.M) {
 	ctx := context.Background()
+
+	// The wazero-backed pg_query compiler loads lazily on the first GuardPG
+	// parse — a multi-second, process-wide cost that would otherwise be paid
+	// inside whichever governed attempt reaches the guard first, shrinking
+	// that attempt's frozen statement budget by an unpredictable amount.
+	// Warm it before any test so every attempt's budget covers only what the
+	// attempt itself does.
+	if _, err := pgsql.GuardPG("select 1"); err != nil {
+		fmt.Fprintf(os.Stderr, "pg guard warm-up: %v\n", err)
+		os.Exit(1)
+	}
 
 	c, err := tcmysql.Run(ctx,
 		"mysql:8.0",

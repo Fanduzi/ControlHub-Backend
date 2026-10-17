@@ -393,14 +393,14 @@ func TestOpenAPIExecutionsPageSizeContract(t *testing.T) {
 	assertQueryParamIntegerBounds(t, doc, "/query-targets/{id}/executions", "get", "pageSize", 20, 1, 500)
 }
 
-// TestOpenAPIExecutionsCursorExampleIsVersion1 decodes the documented `cursor`
+// TestOpenAPIExecutionsCursorExampleIsVersion2 decodes the documented `cursor`
 // response example nextCursor value and asserts it is a structurally valid
-// version-1 CursorPayload (v=1, RFC3339 t, decimal-string id, 64-hex q).
+// version-2 CursorPayload (v=2, RFC3339 t, mixed-ordering kind+ref, 64-hex q).
 // WHY: the prior example `eyJpZCI6MTAwMn0=` decoded to `{"id":1002}` — a legacy
 // non-versioned payload that does not match the versioned CursorPayload the
 // server actually emits. Consumers decoding by the spec sample would hit a
 // version mismatch.
-func TestOpenAPIExecutionsCursorExampleIsVersion1(t *testing.T) {
+func TestOpenAPIExecutionsCursorExampleIsVersion2(t *testing.T) {
 	loader := openapi3.NewLoader()
 	doc, err := loader.LoadFromData(openapi.YAML)
 	if err != nil {
@@ -436,10 +436,13 @@ func TestOpenAPIExecutionsCursorExampleIsVersion1(t *testing.T) {
 	// Decode the cursor using the model.DecodeCursor contract.
 	payload, err := model.DecodeCursor(nextCursor)
 	if err != nil {
-		t.Fatalf("documented cursor example must decode as version-1 CursorPayload; got error: %v; cursor=%q", err, nextCursor)
+		t.Fatalf("documented cursor example must decode as version-2 CursorPayload; got error: %v; cursor=%q", err, nextCursor)
 	}
-	if payload.Version != 1 {
-		t.Fatalf("cursor example version = %d, want 1", payload.Version)
+	if payload.Version != 2 {
+		t.Fatalf("cursor example version = %d, want 2", payload.Version)
+	}
+	if payload.Kind != "e" {
+		t.Fatalf("cursor example kind = %q, want %q", payload.Kind, "e")
 	}
 	if payload.CreatedAt.IsZero() {
 		t.Fatal("cursor example missing createdAt")
@@ -449,8 +452,8 @@ func TestOpenAPIExecutionsCursorExampleIsVersion1(t *testing.T) {
 	if _, perr := time.Parse(time.RFC3339, payload.CreatedAt.Format(time.RFC3339)); perr != nil {
 		t.Fatalf("cursor example createdAt is not RFC3339: %v", perr)
 	}
-	if _, perr := strconv.ParseUint(payload.ID, 10, 64); perr != nil {
-		t.Fatalf("cursor example id %q is not a canonical positive uint64 string: %v", payload.ID, perr)
+	if _, perr := strconv.ParseUint(payload.Ref, 10, 64); perr != nil {
+		t.Fatalf("cursor example ref %q is not a canonical positive uint64 string: %v", payload.Ref, perr)
 	}
 	// WHY: q must be a 64-char lowercase hex SHA256 digest.
 	if len(payload.QueryHash) != 64 {

@@ -16,29 +16,14 @@ import (
 
 // Claim-protocol sentinels. Admission refusals are not persistence failures:
 // they never increment the evidence-pair failure counter and never write
-// history or audit rows.
+// history or audit rows. The shared vocabulary lives in internal/model so
+// service orchestration can classify without importing this package.
 var (
-	// ErrQueryExecutionClaimInvalid marks a malformed admission or finalize
-	// input (bad key/digest/actor/scope shape, non-terminal status, unknown
-	// remote-state enum).
-	ErrQueryExecutionClaimInvalid = errors.New("invalid query execution claim")
-	// ErrQueryExecutionClaimExists marks a same-key, same-digest admission:
-	// the attempt was already recorded; the requester is not the occupant.
-	ErrQueryExecutionClaimExists = errors.New("query execution claim already exists")
-	// ErrQueryExecutionClaimConflict marks a same-key, different-digest
-	// admission: a different request already owns the key.
-	ErrQueryExecutionClaimConflict = errors.New("query execution claim conflict")
-	// ErrQueryExecutionClaimNotLinked marks a finalize whose (target, key)
-	// claim is missing, already linked, or whose actor/connection-scope
-	// columns do not match the stored occupancy — the input is not the
-	// occupant, so nothing is written.
-	ErrQueryExecutionClaimNotLinked = errors.New("query execution claim not linked to this input")
-	// ErrQueryExecutionClaimBrokenLink marks a structural violation: a claim
-	// whose execution_id is set but whose execution row is absent or whose
-	// stored identity (target, actor, scope, key) does not match the claim.
-	// Readers get an evidence error, never a fabricated running state or a
-	// forged id.
-	ErrQueryExecutionClaimBrokenLink = errors.New("query execution claim link is broken")
+	ErrQueryExecutionClaimInvalid    = model.ErrQueryExecutionClaimInvalid
+	ErrQueryExecutionClaimExists     = model.ErrQueryExecutionClaimExists
+	ErrQueryExecutionClaimConflict   = model.ErrQueryExecutionClaimConflict
+	ErrQueryExecutionClaimNotLinked  = model.ErrQueryExecutionClaimNotLinked
+	ErrQueryExecutionClaimBrokenLink = model.ErrQueryExecutionClaimBrokenLink
 	// errQueryExecutionClaimStore is the safe internal failure for claim-store
 	// reads/writes: a fixed text with no driver, statement, request, or
 	// identity details. Cancellation/deadline stay classifiable through a
@@ -49,8 +34,8 @@ var (
 const (
 	insertExecutionClaimSQL = `INSERT INTO query_execution_claims
 		(target_resource_id, client_execution_id, actor_user_id, actor_machine_principal_id,
-		 database_name, schema_name, request_digest, claimed_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+		 database_name, schema_name, request_digest, attempt_timeout_ms, claimed_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
 	selectClaimDigestSQL = `SELECT request_digest FROM query_execution_claims
 		WHERE target_resource_id = ? AND client_execution_id = ?`
 	// selectClaimForUpdateSQL locks the (target, key) claim row inside the
@@ -111,7 +96,8 @@ func (r *QueryExecutionRepository) TryClaimExecution(ctx context.Context, in mod
 	}
 	if _, err := r.db.ExecContext(ctx, insertExecutionClaimSQL,
 		in.TargetResourceID, in.ClientExecutionID, actorUserID, actorMachineID,
-		in.DatabaseName, in.SchemaName, in.RequestDigest, in.ClaimedAt.UTC()); err != nil {
+		in.DatabaseName, in.SchemaName, in.RequestDigest, in.AttemptTimeoutMs,
+		in.ClaimedAt.UTC()); err != nil {
 		if !isDuplicateKey(err) {
 			return claimStoreError(ctx, err)
 		}
@@ -245,6 +231,7 @@ func (r *QueryExecutionRepository) GetClaimWithExecution(ctx context.Context, ta
 	const q = `SELECT c.target_resource_id, c.client_execution_id,
 			c.actor_user_id, c.actor_machine_principal_id,
 			c.database_name, c.schema_name, c.request_digest, c.execution_id, c.claimed_at,
+			c.attempt_timeout_ms,
 			e.id, e.target_resource_id, e.actor_user_id, e.actor_machine_principal_id,
 			e.engine, e.status, e.row_count, e.duration_ms, e.error_code, e.error_message,
 			e.database_name, e.schema_name, e.backend_pid, e.remote_state, e.client_execution_id, e.created_at
@@ -259,6 +246,7 @@ func (r *QueryExecutionRepository) GetClaimWithExecution(ctx context.Context, ta
 		view         model.QueryExecutionClaimView
 		cUser, cMach nullableUint64
 		execID       nullableUint64
+		cTimeout     nullableUint64
 		// Nullable join columns for the linked execution row.
 		eID          nullableUint64
 		eTarget      nullableUint64
@@ -281,6 +269,7 @@ func (r *QueryExecutionRepository) GetClaimWithExecution(ctx context.Context, ta
 		&cUser, &cMach,
 		&view.Claim.DatabaseName, &view.Claim.SchemaName,
 		&view.Claim.RequestDigest, &execID, &view.Claim.ClaimedAt,
+		&cTimeout,
 		&eID, &eTarget, &eUser, &eMach,
 		&eEngine, &eStatus, &eRowCount, &eDuration, &eErrCode, &eErrMsg,
 		&eDB, &eSchema, &eBackendPID, &eRemote, &eKey, &eCreated,
@@ -296,6 +285,9 @@ func (r *QueryExecutionRepository) GetClaimWithExecution(ctx context.Context, ta
 	}
 	if cMach.Valid {
 		view.Claim.ActorMachinePrincipalID = cMach.Uint64
+	}
+	if cTimeout.Valid {
+		view.Claim.AttemptTimeoutMs = int64(cTimeout.Uint64)
 	}
 	if !execID.Valid {
 		return view, nil // unlinked claim — no derived state fabricated here

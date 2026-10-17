@@ -156,6 +156,75 @@ const UnknownHistoryActorDisplayName = "Unknown user"
 
 const UnknownHistoryMachineActorDisplayName = "Unknown machine principal"
 
+// QueryExecutionViewStatus is the read-model status shown on history items:
+// a stored terminal QueryExecutionStatus on execution rows, or a derived
+// claim state on claim entries. Derived states are display values only —
+// they are never persisted and never pass ValidateStatus.
+type QueryExecutionViewStatus string
+
+const (
+	// QueryExecutionViewRunning marks an unlinked claim whose expiry
+	// threshold (claimed_at + recorded attempt budget + grace) has not
+	// elapsed, or whose budget is unrecoverable (pre-T10-C claim).
+	QueryExecutionViewRunning QueryExecutionViewStatus = "running"
+	// QueryExecutionViewUnknown marks an unlinked claim past its expiry
+	// threshold. It asserts only "no terminal result was observed" — never
+	// that the backend died, the statement failed, or remote work stopped.
+	QueryExecutionViewUnknown QueryExecutionViewStatus = "unknown"
+)
+
+// QueryExecutionListItemKind discriminates one mixed-history row.
+type QueryExecutionListItemKind string
+
+const (
+	// QueryExecutionListItemExecution is a persisted terminal execution row.
+	QueryExecutionListItemExecution QueryExecutionListItemKind = "execution"
+	// QueryExecutionListItemClaim is an entry derived from a claim
+	// occupancy row — ID stays null; Status is the derived running/unknown.
+	QueryExecutionListItemClaim QueryExecutionListItemKind = "claim"
+)
+
+// QueryExecutionListItem is one mixed execution-history read-model row: a
+// persisted terminal execution (kind=execution, ID non-null, stored status)
+// or a claim-derived entry (kind=claim, ID null, derived status). Exactly
+// one of CreatedAt (execution rows) and ClaimedAt (claim entries) is set.
+// BackendPID and the claim bookkeeping fields are internal evidence — they
+// never serialize to the API.
+type QueryExecutionListItem struct {
+	Kind              QueryExecutionListItemKind `json:"kind"`
+	ID                *uint64                    `json:"id"` // null for claim-derived entries
+	TargetResourceID  uint64                     `json:"targetResourceId"`
+	ClientExecutionID *string                    `json:"clientExecutionId"` // null = row carries no claim identity
+	Actor             QueryExecutionActor        `json:"actor"`
+	Engine            string                     `json:"engine"`
+	DatabaseName      string                     `json:"database"`
+	SchemaName        string                     `json:"schema"`
+	StatementDigest   string                     `json:"statementDigest"`
+	StatementPreview  string                     `json:"statementPreview"`
+	CanRestore        bool                       `json:"canRestore"`
+	Status            QueryExecutionViewStatus   `json:"status"`
+	// RemoteState is the T10-B backend-state observation on terminal rows;
+	// omitted when the attempt never probed or on claim entries.
+	RemoteState  QueryExecutionRemoteState `json:"remoteState,omitempty"`
+	RowCount     int                       `json:"rowCount"`
+	DurationMs   int64                     `json:"durationMs"`
+	ErrorCode    string                    `json:"errorCode"`
+	ErrorMessage string                    `json:"errorMessage"`
+	CreatedAt    *time.Time                `json:"createdAt,omitempty"`
+	ClaimedAt    *time.Time                `json:"claimedAt,omitempty"`
+
+	// Internal evidence — never serialized.
+	ActorUserID             uint64 `json:"-"`
+	ActorMachinePrincipalID uint64 `json:"-"`
+	HasFullStatement        bool   `json:"-"`
+	BackendPID              *int64 `json:"-"`
+	// Claim bookkeeping returned by the consistent snapshot for service-side
+	// derivation: the budget recorded at admission (0 = unrecoverable on
+	// pre-T10-C claims) and the link verdict.
+	ClaimAttemptTimeoutMs int64 `json:"-"`
+	ClaimLinkBroken       bool  `json:"-"`
+}
+
 // QueryExecutionRemoteState is the backend-side state probed for cancel and
 // verification evidence. Empty means the execution never needed a probe or the
 // engine does not expose one.
@@ -255,54 +324,88 @@ const (
 	PaginationModeOffset
 )
 
-// QueryExecutionListQuery carries pagination and optional actor visibility scope
-// for execution history. When ActorUserID is non-nil, only that actor's rows for
-// the target are returned (non-admin). Nil means all actors for the target (admin).
+// QueryExecutionListQuery carries pagination and optional actor visibility
+// scope for execution history. When Actor is non-nil, only rows owned by that
+// typed identity are returned (non-admin scope): a user identity matches
+// actor_user_id only, a machine identity matches actor_machine_principal_id
+// only — user:7 and machine:7 never see each other's rows. Nil means all
+// actors for the target (admin). Database and ClientExecutionID are optional
+// connection-scope / claim-key filters; ClientExecutionID addresses the
+// keyed point read.
+//
+// The result set mixes persisted terminal execution rows with entries
+// derived from unlinked claim occupancy rows — see QueryExecutionListItem.
 //
 // Mode must be set explicitly by the service layer; the repository does not
 // infer it from whether Cursor is nil. In cursor mode the first page has
 // Cursor == nil and no boundary predicate; continuation pages have Cursor
 // pointing at the last row of the previous page.
 type QueryExecutionListQuery struct {
-	TargetResourceID uint64
-	Page             int
-	PageSize         int
-	ActorUserID      *uint64
-	Status           *QueryExecutionStatus
-	From             *time.Time
-	To               *time.Time
-	Cursor           *string
-	Mode             PaginationMode
+	TargetResourceID  uint64
+	Page              int
+	PageSize          int
+	Actor             *QueryExecutionIdentity
+	Database          string
+	ClientExecutionID string
+	Status            *QueryExecutionStatus
+	From              *time.Time
+	To                *time.Time
+	Cursor            *string
+	Mode              PaginationMode
 }
 
 // QueryExecutionCursorPage is the envelope for cursor-based execution history.
 // When PageInfo is set (offset mode via explicit ?page=), NextCursor is nil.
 // When NextCursor is set (cursor mode), PageInfo is nil.
 type QueryExecutionCursorPage struct {
-	Items      []QueryExecutionRecord `json:"items"`
-	NextCursor *string                `json:"nextCursor"`
-	PageInfo   *PageInfo              `json:"pageInfo,omitempty"`
+	Items      []QueryExecutionListItem `json:"items"`
+	NextCursor *string                  `json:"nextCursor"`
+	PageInfo   *PageInfo                `json:"pageInfo,omitempty"`
 }
 
-// CursorVersion is the current cursor wire format version.
-const CursorVersion = 1
+// CursorVersion is the current cursor wire format version. Version 1 was the
+// terminal-only format: its (created_at, id) ordering position cannot be
+// resumed faithfully inside the mixed execution+claim ordering, so v1
+// cursors are rejected as unsupported rather than silently reinterpreted.
+const CursorVersion = 2
 
-// CursorPayload is the decoded cursor wire format.
+// Cursor row kinds encoded in the payload.
+const (
+	cursorKindExecution = "e"
+	cursorKindClaim     = "c"
+)
+
+// CursorPayload is the decoded cursor wire format. The boundary row is
+// identified by the mixed ordering — activity timestamp, then row kind
+// (execution rows sort before claim entries at the same timestamp), then the
+// stable within-kind identity (execution id decimal for "e", the claim key
+// for "c").
 type CursorPayload struct {
 	Version   int       `json:"v"`
 	CreatedAt time.Time `json:"t"`
-	ID        string    `json:"id"`
+	Kind      string    `json:"k"`
+	Ref       string    `json:"r"`
 	QueryHash string    `json:"q"`
 }
 
 const maxCursorBytes = 1024
 
-// EncodeCursor produces a base64url-encoded cursor from execution metadata.
-func EncodeCursor(createdAt time.Time, id uint64, queryHash string) (string, error) {
+// CursorRefKind returns the wire kind a boundary row encodes.
+func CursorRefKind(kind QueryExecutionListItemKind) string {
+	if kind == QueryExecutionListItemClaim {
+		return cursorKindClaim
+	}
+	return cursorKindExecution
+}
+
+// EncodeCursor produces a base64url-encoded cursor from a boundary row's
+// mixed-ordering position.
+func EncodeCursor(createdAt time.Time, kind QueryExecutionListItemKind, ref, queryHash string) (string, error) {
 	payload := CursorPayload{
 		Version:   CursorVersion,
 		CreatedAt: createdAt.UTC(),
-		ID:        strconv.FormatUint(id, 10),
+		Kind:      CursorRefKind(kind),
+		Ref:       ref,
 		QueryHash: queryHash,
 	}
 	raw, err := json.Marshal(payload)
@@ -312,10 +415,11 @@ func EncodeCursor(createdAt time.Time, id uint64, queryHash string) (string, err
 	return base64.RawURLEncoding.EncodeToString(raw), nil
 }
 
-// DecodeCursor decodes a base64url cursor, validates version, size, and that
-// the ID field is a canonical positive uint64 string. This prevents a
-// structurally valid but tampered cursor from reaching the repository and
-// causing a strconv.ParseUint failure (which would surface as HTTP 500).
+// DecodeCursor decodes a base64url cursor and validates version, size, row
+// kind, and the boundary reference shape (a canonical positive uint64 for
+// execution rows; a non-empty claim key otherwise). A structurally valid but
+// tampered or stale-version cursor is rejected here rather than reaching the
+// repository — it is never decoded as page one.
 func DecodeCursor(raw string) (CursorPayload, error) {
 	if len(raw) > base64.RawURLEncoding.EncodedLen(maxCursorBytes) {
 		return CursorPayload{}, fmt.Errorf("cursor exceeds maximum size")
@@ -337,8 +441,17 @@ func DecodeCursor(raw string) (CursorPayload, error) {
 	if p.CreatedAt.IsZero() {
 		return CursorPayload{}, fmt.Errorf("cursor missing created_at")
 	}
-	if _, err := strconv.ParseUint(p.ID, 10, 64); err != nil {
-		return CursorPayload{}, fmt.Errorf("cursor id is not a valid uint64: %w", err)
+	switch p.Kind {
+	case cursorKindExecution:
+		if _, err := strconv.ParseUint(p.Ref, 10, 64); err != nil {
+			return CursorPayload{}, fmt.Errorf("cursor ref is not a valid uint64: %w", err)
+		}
+	case cursorKindClaim:
+		if p.Ref == "" {
+			return CursorPayload{}, fmt.Errorf("cursor claim ref is empty")
+		}
+	default:
+		return CursorPayload{}, fmt.Errorf("cursor kind is invalid")
 	}
 	return p, nil
 }
@@ -346,7 +459,9 @@ func DecodeCursor(raw string) (CursorPayload, error) {
 // NormalizeFilters produces a canonical string for hash computation.
 // Uses RFC3339Nano to preserve fractional seconds so that two timestamps in
 // the same second but with different fractional parts produce different hashes.
-func NormalizeFilters(status *QueryExecutionStatus, from, to *time.Time) string {
+// Database and ClientExecutionID are connection/claim-key scope; pageSize is
+// pinned so a cursor minted for one page shape cannot resume under another.
+func NormalizeFilters(status *QueryExecutionStatus, from, to *time.Time, database, clientExecutionID string, pageSize int) string {
 	var sb strings.Builder
 	if status != nil {
 		sb.WriteString(string(*status))
@@ -359,13 +474,25 @@ func NormalizeFilters(status *QueryExecutionStatus, from, to *time.Time) string 
 	if to != nil {
 		sb.WriteString(to.UTC().Format(time.RFC3339Nano))
 	}
+	sb.WriteByte('|')
+	sb.WriteString(strconv.Itoa(len(database)))
+	sb.WriteByte(':')
+	sb.WriteString(database)
+	sb.WriteByte('|')
+	sb.WriteString(strconv.Itoa(len(clientExecutionID)))
+	sb.WriteByte(':')
+	sb.WriteString(clientExecutionID)
+	sb.WriteByte('|')
+	sb.WriteString(strconv.Itoa(pageSize))
 	return sb.String()
 }
 
-// ComputeQueryHash returns a SHA256 hex digest of the canonical filter string.
-func ComputeQueryHash(targetID uint64, status *QueryExecutionStatus, from, to *time.Time, scope string) string {
+// ComputeQueryHash returns a SHA256 hex digest of the canonical filter
+// string. The scope segment carries the typed actor ("user:7",
+// "machine:7", or "all") so a cursor can never cross actor scope.
+func ComputeQueryHash(targetID uint64, status *QueryExecutionStatus, from, to *time.Time, database, clientExecutionID string, pageSize int, scope string) string {
 	canonical := strconv.FormatUint(targetID, 10) + "|" +
-		NormalizeFilters(status, from, to) + "|" +
+		NormalizeFilters(status, from, to, database, clientExecutionID, pageSize) + "|" +
 		scope
 	h := sha256.Sum256([]byte(canonical))
 	return fmt.Sprintf("%x", h)
@@ -504,7 +631,7 @@ type QueryCredentialMetadata struct {
 // contract on a credential row (frozen spec G1): a postgresql row MUST carry a
 // non-empty database_name and default_schema (the composite connection
 // identity); every other engine's row MUST leave both empty — the legacy
-// MySQL/TiDB identity is (resource_id, ''). Applied on the write path
+// MySQL/TiDB identity is (resource_id, ”). Applied on the write path
 // (upsert/seed) so a malformed row can never be persisted.
 func (m QueryCredentialMetadata) ValidateConnectionIdentity() error {
 	if m.Engine == "postgresql" {

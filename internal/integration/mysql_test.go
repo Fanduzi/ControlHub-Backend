@@ -2,7 +2,7 @@
 
 // Package integration provides real-MySQL schema proofs for goose migrations.
 // input: database/sql, Testcontainers database, and schema migrations
-// output: migration-31 schema, collector/user/machine constraints and indexes, seed, and no-FK proofs
+// output: migration-32 schema, collector/user/machine constraints and indexes, seed, and no-FK proofs
 // pos: real-MySQL clean-migration schema contract coverage
 // note: if this file changes, update this header and module README.md.
 package integration
@@ -68,7 +68,7 @@ func TestSchemaUsesBigintPrimaryKeysWithoutForeignKeys(t *testing.T) {
 	// query_execution_claims is the composite-keyed occupancy ledger: its
 	// primary key is (target_resource_id, client_execution_id), not an id
 	// column, so it is asserted outside the id-keyed map above.
-	for _, columnName := range []string{"target_resource_id", "actor_user_id", "actor_machine_principal_id", "execution_id"} {
+	for _, columnName := range []string{"target_resource_id", "actor_user_id", "actor_machine_principal_id", "execution_id", "attempt_timeout_ms"} {
 		assertUnsignedBigintColumn(t, db, "query_execution_claims", columnName)
 	}
 	assertPrimaryKeyColumns(t, db, "query_execution_claims", "target_resource_id", "client_execution_id")
@@ -149,8 +149,8 @@ func assertSchemaChainBaseline(t *testing.T, db *sql.DB) {
 	if err != nil {
 		t.Fatalf("query max version: %v", err)
 	}
-	if maxVersion != 31 {
-		t.Fatalf("migration version = %d, want 31", maxVersion)
+	if maxVersion != 32 {
+		t.Fatalf("migration version = %d, want 32", maxVersion)
 	}
 
 	expectedTables := []string{

@@ -134,7 +134,7 @@ func TestQueryExecutionRepository_InsertAndListByTarget(t *testing.T) {
 	if items[0].RowCount < items[1].RowCount {
 		t.Fatalf("history not newest-first: items[0].RowCount=%d items[1].RowCount=%d", items[0].RowCount, items[1].RowCount)
 	}
-	if items[0].Status != model.QueryExecutionRejected {
+	if items[0].Status != model.QueryExecutionViewStatus(model.QueryExecutionRejected) {
 		t.Fatalf("newest status = %q, want rejected", items[0].Status)
 	}
 	if items[0].TargetResourceID != targetID || items[0].ActorUserID != ownerDBA {
@@ -522,11 +522,11 @@ func TestQueryExecution_HistoryWrittenForSuccessAndRejection(t *testing.T) {
 	}
 	// WHY: every attempt must be recorded — a rejected attempt still leaves a
 	// history trail for audit, not just successes.
-	statuses := map[model.QueryExecutionStatus]bool{}
+	statuses := map[model.QueryExecutionViewStatus]bool{}
 	for _, item := range items {
 		statuses[item.Status] = true
 	}
-	if !statuses[model.QueryExecutionSuccess] || !statuses[model.QueryExecutionRejected] {
+	if !statuses[model.QueryExecutionViewStatus(model.QueryExecutionSuccess)] || !statuses[model.QueryExecutionViewStatus(model.QueryExecutionRejected)] {
 		t.Fatalf("history missing success/rejected: items=%+v", items)
 	}
 }
@@ -883,7 +883,7 @@ func TestQueryExecutionRepository_ActorProjectionAndScope(t *testing.T) {
 	}
 
 	own, ownTotal, err := repo.ListExecutions(ctx, model.QueryExecutionListQuery{
-		TargetResourceID: targetID, Page: 1, PageSize: 20, ActorUserID: &adminID,
+		TargetResourceID: targetID, Page: 1, PageSize: 20, Actor: &model.QueryExecutionIdentity{Kind: model.QueryExecutionActorUser, ID: adminID},
 		Mode: model.PaginationModeOffset,
 	})
 	if err != nil {
@@ -935,7 +935,7 @@ func TestQueryExecutionRepository_CursorPagination(t *testing.T) {
 
 	// Encode cursor from last item in page1.
 	last := page1[len(page1)-1]
-	cursor, err := model.EncodeCursor(last.CreatedAt, last.ID, "test-hash")
+	cursor, err := model.EncodeCursor(*last.CreatedAt, model.QueryExecutionListItemExecution, strconv.FormatUint(*last.ID, 10), "test-hash")
 	if err != nil {
 		t.Fatalf("encode cursor: %v", err)
 	}
@@ -958,10 +958,10 @@ func TestQueryExecutionRepository_CursorPagination(t *testing.T) {
 	// Ensure no overlap between page1 and page2.
 	page1IDs := map[uint64]bool{}
 	for _, item := range page1 {
-		page1IDs[item.ID] = true
+		page1IDs[*item.ID] = true
 	}
 	for _, item := range page2 {
-		if page1IDs[item.ID] {
+		if page1IDs[*item.ID] {
 			t.Fatalf("page2 item ID=%d overlaps with page1", item.ID)
 		}
 	}
@@ -1021,19 +1021,19 @@ func TestQueryExecutionRepository_CursorInitial_NoPageNoCursor(t *testing.T) {
 	// WHY: ordering must be created_at DESC, id DESC so the keyset cursor
 	// (created_at, id) is deterministic and the newest row comes first.
 	for i := 1; i < len(items); i++ {
-		if items[i].CreatedAt.After(items[i-1].CreatedAt) {
+		if items[i].CreatedAt.After(*items[i-1].CreatedAt) {
 			t.Fatalf("cursor-initial not ordered DESC by created_at: items[%d]=%v > items[%d]=%v",
 				i, items[i].CreatedAt, i-1, items[i-1].CreatedAt)
 		}
-		if items[i].CreatedAt.Equal(items[i-1].CreatedAt) && items[i].ID >= items[i-1].ID {
+		if items[i].CreatedAt.Equal(*items[i-1].CreatedAt) && *items[i].ID >= *items[i-1].ID {
 			t.Fatalf("cursor-initial same-ts not ordered DESC by id: items[%d].ID=%d >= items[%d].ID=%d",
 				i, items[i].ID, i-1, items[i-1].ID)
 		}
 	}
 
 	// The newest row must be the one with the latest created_at (i=4).
-	if items[0].CreatedAt != baseTime.Add(4*time.Second) {
-		t.Fatalf("cursor-initial first item = %v, want newest %v", items[0].CreatedAt, baseTime.Add(4*time.Second))
+	if !items[0].CreatedAt.Equal(baseTime.Add(4 * time.Second)) {
+		t.Fatalf("cursor-initial first item = %v, want newest %v", *items[0].CreatedAt, baseTime.Add(4*time.Second))
 	}
 }
 
@@ -1075,7 +1075,7 @@ func TestQueryExecutionRepository_CursorContinuation(t *testing.T) {
 
 	// Encode cursor from last row of page 1.
 	last := page1[len(page1)-1]
-	cursor, err := model.EncodeCursor(last.CreatedAt, last.ID, "test-hash")
+	cursor, err := model.EncodeCursor(*last.CreatedAt, model.QueryExecutionListItemExecution, strconv.FormatUint(*last.ID, 10), "test-hash")
 	if err != nil {
 		t.Fatalf("encode cursor: %v", err)
 	}
@@ -1098,10 +1098,10 @@ func TestQueryExecutionRepository_CursorContinuation(t *testing.T) {
 	// WHY: every page2 row must be strictly older than the cursor (last row of
 	// page1) in the (created_at, id) keyset ordering.
 	for _, item := range page2 {
-		if item.CreatedAt.After(last.CreatedAt) {
+		if item.CreatedAt.After(*last.CreatedAt) {
 			t.Fatalf("page2 item %d is newer than cursor in created_at", item.ID)
 		}
-		if item.CreatedAt.Equal(last.CreatedAt) && item.ID >= last.ID {
+		if item.CreatedAt.Equal(*last.CreatedAt) && *item.ID >= *last.ID {
 			t.Fatalf("page2 item %d is not strictly older than cursor in id", item.ID)
 		}
 	}
@@ -1109,10 +1109,10 @@ func TestQueryExecutionRepository_CursorContinuation(t *testing.T) {
 	// No overlap between page1 and page2.
 	page1IDs := map[uint64]bool{}
 	for _, item := range page1 {
-		page1IDs[item.ID] = true
+		page1IDs[*item.ID] = true
 	}
 	for _, item := range page2 {
-		if page1IDs[item.ID] {
+		if page1IDs[*item.ID] {
 			t.Fatalf("page2 item ID=%d overlaps with page1", item.ID)
 		}
 	}
@@ -1172,7 +1172,7 @@ func TestQueryExecutionRepository_CursorNewerInsertBetweenPages(t *testing.T) {
 
 	// Page 2: continuation using cursor from page1's last row.
 	last := page1[len(page1)-1]
-	cursor, err := model.EncodeCursor(last.CreatedAt, last.ID, "test-hash")
+	cursor, err := model.EncodeCursor(*last.CreatedAt, model.QueryExecutionListItemExecution, strconv.FormatUint(*last.ID, 10), "test-hash")
 	if err != nil {
 		t.Fatalf("encode cursor: %v", err)
 	}
@@ -1187,7 +1187,7 @@ func TestQueryExecutionRepository_CursorNewerInsertBetweenPages(t *testing.T) {
 	// WHY: the newer insert must NOT appear in page2 — keyset continuation
 	// returns rows strictly older than the cursor, regardless of newer inserts.
 	for _, item := range page2 {
-		if item.CreatedAt.After(last.CreatedAt) {
+		if item.CreatedAt.After(*last.CreatedAt) {
 			t.Fatalf("page2 contains newer insert (id=%d, created_at=%v) that should not be returned",
 				item.ID, item.CreatedAt)
 		}
@@ -1239,7 +1239,7 @@ func TestQueryExecutionRepository_CursorStatusFilter(t *testing.T) {
 		t.Fatalf("success items = %d, want 2", len(items))
 	}
 	for _, item := range items {
-		if item.Status != model.QueryExecutionSuccess {
+		if item.Status != model.QueryExecutionViewStatus(model.QueryExecutionSuccess) {
 			t.Fatalf("item status = %q, want success", item.Status)
 		}
 	}
@@ -1320,7 +1320,7 @@ func TestQueryExecutionRepository_IdenticalTimestampsOrderedByID(t *testing.T) {
 	// WHY: when timestamps are identical, rows must be ordered by ID descending
 	// so cursor pagination (created_at, id) keyset is deterministic.
 	for i := 1; i < len(items); i++ {
-		if items[i].CreatedAt.Equal(items[i-1].CreatedAt) && items[i].ID >= items[i-1].ID {
+		if items[i].CreatedAt.Equal(*items[i-1].CreatedAt) && *items[i].ID >= *items[i-1].ID {
 			t.Fatalf("same-timestamp items not ordered by ID desc: items[%d].ID=%d >= items[%d].ID=%d",
 				i, items[i].ID, i-1, items[i-1].ID)
 		}
@@ -1328,7 +1328,7 @@ func TestQueryExecutionRepository_IdenticalTimestampsOrderedByID(t *testing.T) {
 
 	// Cursor pagination with same timestamps must use ID tiebreaker.
 	last := items[0]
-	cursor, err := model.EncodeCursor(last.CreatedAt, last.ID, "test-hash")
+	cursor, err := model.EncodeCursor(*last.CreatedAt, model.QueryExecutionListItemExecution, strconv.FormatUint(*last.ID, 10), "test-hash")
 	if err != nil {
 		t.Fatalf("encode cursor: %v", err)
 	}
@@ -1343,7 +1343,7 @@ func TestQueryExecutionRepository_IdenticalTimestampsOrderedByID(t *testing.T) {
 		t.Fatalf("page2 items = %d, want 2", len(page2))
 	}
 	for _, item := range page2 {
-		if item.ID >= last.ID {
+		if *item.ID >= *last.ID {
 			t.Fatalf("page2 item ID=%d should be < cursor ID=%d", item.ID, last.ID)
 		}
 	}
@@ -1484,7 +1484,7 @@ func TestQueryExecution_PaginatedSelectRejectsPageAtMaxRowsBoundaryBeforeTargetE
 	if total != 1 || len(items) != 1 {
 		t.Fatalf("cap-boundary history total/len = %d/%d, want 1/1", total, len(items))
 	}
-	if items[0].Status != model.QueryExecutionRejected || items[0].RowCount != 0 || items[0].StatementPreview != "" || items[0].ErrorCode != "validation_failed" {
+	if items[0].Status != model.QueryExecutionViewStatus(model.QueryExecutionRejected) || items[0].RowCount != 0 || items[0].StatementPreview != "" || items[0].ErrorCode != "validation_failed" {
 		t.Fatalf("cap-boundary history = %+v, want rejected with no executable statement", items[0])
 	}
 
@@ -1576,7 +1576,7 @@ func TestQueryExecution_PaginatedSelectRecordsEachPageInHistoryAndAudit(t *testi
 		t.Fatalf("page history total/len = %d/%d, want 2/2", total, len(items))
 	}
 	for _, item := range items {
-		if item.Status != model.QueryExecutionSuccess || item.RowCount != 10 || item.ErrorCode != "" || item.ErrorMessage != "" {
+		if item.Status != model.QueryExecutionViewStatus(model.QueryExecutionSuccess) || item.RowCount != 10 || item.ErrorCode != "" || item.ErrorMessage != "" {
 			t.Fatalf("page history item = %+v, want normal success attempt", item)
 		}
 		if strings.Contains(strings.ToLower(item.StatementPreview), "offset") || strings.Contains(strings.ToLower(item.StatementPreview), "limit") {
@@ -1768,7 +1768,7 @@ func TestQueryExecution_PaginatedOversizedPagePayloadIsControlledRejection(t *te
 	if total != 1 || len(items) != 1 {
 		t.Fatalf("oversized-page history total/len = %d/%d, want 1/1", total, len(items))
 	}
-	if items[0].Status != model.QueryExecutionRejected || items[0].RowCount != 0 || items[0].ErrorCode != "validation_failed" {
+	if items[0].Status != model.QueryExecutionViewStatus(model.QueryExecutionRejected) || items[0].RowCount != 0 || items[0].ErrorCode != "validation_failed" {
 		t.Fatalf("oversized-page history = %+v, want rejected validation_failed attempt", items[0])
 	}
 	var auditResult string

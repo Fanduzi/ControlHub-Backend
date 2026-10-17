@@ -6,10 +6,38 @@
 package model
 
 import (
+	"errors"
 	"fmt"
 	"strings"
 	"time"
 	"unicode/utf8"
+)
+
+// Claim-protocol sentinels shared by the repository writer and the service
+// orchestrator: admission refusals are not persistence failures — they never
+// write history or audit rows.
+var (
+	// ErrQueryExecutionClaimInvalid marks a malformed admission or finalize
+	// input (bad key/digest/actor/scope shape, non-terminal status, unknown
+	// remote-state enum).
+	ErrQueryExecutionClaimInvalid = errors.New("invalid query execution claim")
+	// ErrQueryExecutionClaimExists marks a same-key, same-digest admission:
+	// the attempt was already recorded; the requester is not the occupant.
+	ErrQueryExecutionClaimExists = errors.New("query execution claim already exists")
+	// ErrQueryExecutionClaimConflict marks a same-key, different-digest
+	// admission: a different request already owns the key.
+	ErrQueryExecutionClaimConflict = errors.New("query execution claim conflict")
+	// ErrQueryExecutionClaimNotLinked marks a finalize whose (target, key)
+	// claim is missing, already linked, or whose actor/connection-scope
+	// columns do not match the stored occupancy — the input is not the
+	// occupant, so nothing is written.
+	ErrQueryExecutionClaimNotLinked = errors.New("query execution claim not linked to this input")
+	// ErrQueryExecutionClaimBrokenLink marks a structural violation: a claim
+	// whose execution_id is set but whose execution row is absent or whose
+	// stored identity (target, actor, scope, key) does not match the claim.
+	// Readers get an evidence error, never a fabricated running state or a
+	// forged id.
+	ErrQueryExecutionClaimBrokenLink = errors.New("query execution claim link is broken")
 )
 
 // QueryExecutionClaimDigestLength is the fixed request-digest width: a
@@ -28,7 +56,12 @@ type QueryExecutionClaimInput struct {
 	DatabaseName  string
 	SchemaName    string
 	RequestDigest string
-	ClaimedAt     time.Time
+	// AttemptTimeoutMs is the statement-timeout budget the claimant resolved
+	// before admission, in milliseconds. The running/unknown read threshold
+	// derives from it plus the fixed grace — never from a mutable environment
+	// value read later. Positive on every new claim.
+	AttemptTimeoutMs int64
+	ClaimedAt        time.Time
 }
 
 // Validate enforces the storage shape of an occupancy admission: positive
@@ -58,6 +91,9 @@ func (c QueryExecutionClaimInput) Validate() error {
 	}
 	if err := validateClaimDigest(c.RequestDigest); err != nil {
 		return err
+	}
+	if c.AttemptTimeoutMs <= 0 {
+		return fmt.Errorf("attempt_timeout_ms must be positive")
 	}
 	if c.ClaimedAt.IsZero() {
 		return fmt.Errorf("claimed_at is required")
@@ -95,8 +131,12 @@ type QueryExecutionClaim struct {
 	DatabaseName            string
 	SchemaName              string
 	RequestDigest           string
-	ExecutionID             uint64 // 0 = NULL (unlinked)
-	ClaimedAt               time.Time
+	// AttemptTimeoutMs is the budget recorded at admission. 0 = NULL on
+	// claims written before the column existed: such a claim can only ever
+	// derive running, since its resolved budget is unrecoverable.
+	AttemptTimeoutMs int64
+	ExecutionID      uint64 // 0 = NULL (unlinked)
+	ClaimedAt        time.Time
 }
 
 // QueryExecutionClaimView is the single-snapshot point-read result: the claim

@@ -143,7 +143,7 @@ func (boundaryExecStub) ExecuteSavedStatement(_ context.Context, _, _, _ uint64,
 	return model.QueryExecuteResponse{Status: model.QueryExecutionSuccess}, nil
 }
 
-func (boundaryExecStub) ListHistory(_ context.Context, _ uint64, _ string, _ uint64, _ model.QueryExecutionListQuery) (*model.QueryExecutionCursorPage, error) {
+func (boundaryExecStub) ListHistory(_ context.Context, _ model.QueryExecutionIdentity, _ string, _ uint64, _ model.QueryExecutionListQuery) (*model.QueryExecutionCursorPage, error) {
 	return &model.QueryExecutionCursorPage{}, nil
 }
 

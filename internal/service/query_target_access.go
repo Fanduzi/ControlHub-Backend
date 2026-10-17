@@ -4,7 +4,7 @@
 // and DSN binding validation so Execute and InspectCredentialRuntime can never
 // drift on governance rules.
 // input: context, database/sql, errors, jackc/pgx/v5, internal/model
-// output: BoundTargetAccess, TargetAccessError, TargetAccessResolver, NewTargetAccessResolver, ResolveMetadata
+// output: BoundTargetAccess, TargetAccessError, TargetAccessResolver, NewTargetAccessResolver, ResolveMetadata, ResolvePGExecution
 // pos: Shared governed target access resolution — the single path from target ID to bound DSN
 // note: if this file changes, update header and README.md
 package service
@@ -190,6 +190,27 @@ func (r *TargetAccessResolver) ResolveMetadata(ctx context.Context, actorID, tar
 		return r.resolvePGMetadata(ctx, target, database)
 	}
 	return r.Resolve(ctx, actorID, targetID)
+}
+
+// ResolvePGExecution resolves governed access for the internal keyed
+// PostgreSQL execution entry. It shares the resolvePGMetadata chain — the
+// row must exist, be enabled, pass environment policy, carry a valid
+// credential_ref, and bind to the target — but returns an execution
+// denial for a non-PG engine so this entry stays fail-closed without
+// weakening the isExecutableEngine / POST-route gate. The DSN is never
+// returned; the validated ConnConfig rides inside BoundTargetAccess.
+func (r *TargetAccessResolver) ResolvePGExecution(ctx context.Context, targetID uint64, database string) (BoundTargetAccess, error) {
+	target, err := r.findTarget(ctx, targetID)
+	if err != nil {
+		return BoundTargetAccess{}, ErrQueryTargetNotFound
+	}
+	if !isPGEngine(target.ConnectionContext.Engine) {
+		return BoundTargetAccess{Target: target}, &TargetAccessError{
+			Status:  model.QueryCredentialRuntimeUnsupportedTarget,
+			message: "engine is not supported for read-only execution",
+		}
+	}
+	return r.resolvePGMetadata(ctx, target, database)
 }
 
 // resolvePGMetadata follows the G1 connection order: the row exists, then

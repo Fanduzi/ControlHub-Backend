@@ -82,7 +82,7 @@ func TestEncodeDecodeCursor_Roundtrip(t *testing.T) {
 	t.Parallel()
 	ts := time.Date(2025, 6, 1, 12, 0, 0, 0, time.UTC)
 	hash := "abc123"
-	encoded, err := EncodeCursor(ts, 42, hash)
+	encoded, err := EncodeCursor(ts, QueryExecutionListItemExecution, "42", hash)
 	if err != nil {
 		t.Fatalf("EncodeCursor() error = %v", err)
 	}
@@ -93,8 +93,11 @@ func TestEncodeDecodeCursor_Roundtrip(t *testing.T) {
 	if p.Version != CursorVersion {
 		t.Errorf("Version = %d, want %d", p.Version, CursorVersion)
 	}
-	if p.ID != "42" {
-		t.Errorf("ID = %q, want %q", p.ID, "42")
+	if p.Ref != "42" {
+		t.Errorf("Ref = %q, want %q", p.Ref, "42")
+	}
+	if p.Kind != CursorRefKind(QueryExecutionListItemExecution) {
+		t.Errorf("Kind = %q, want %q", p.Kind, CursorRefKind(QueryExecutionListItemExecution))
 	}
 	if p.QueryHash != hash {
 		t.Errorf("QueryHash = %q, want %q", p.QueryHash, hash)
@@ -113,21 +116,29 @@ func TestDecodeCursor_RejectsInvalidInputs(t *testing.T) {
 		{"empty", ""},
 		{"not_base64", "!!!not-valid-base64!!!"},
 		{"not_json", base64.RawURLEncoding.EncodeToString([]byte("not json"))},
+		{"legacy_v1_shape", base64.RawURLEncoding.EncodeToString([]byte(
+			`{"v":1,"t":"2025-06-01T12:00:00Z","id":"42","q":"abc"}`))},
 		{"wrong_version", func() string {
-			raw, _ := EncodeCursor(time.Now(), 1, "h")
+			raw, _ := EncodeCursor(time.Now(), QueryExecutionListItemExecution, "1", "h")
 			b, _ := base64.RawURLEncoding.DecodeString(raw)
-			s := strings.Replace(string(b), `"v":1`, `"v":99`, 1)
+			s := strings.Replace(string(b), `"v":2`, `"v":99`, 1)
 			return base64.RawURLEncoding.EncodeToString([]byte(s))
 		}()},
 		{"oversized", base64.RawURLEncoding.EncodeToString(make([]byte, 2048))},
-		{"tampered_id", func() string {
-			raw, _ := EncodeCursor(time.Now(), 1, "h")
+		{"tampered_ref", func() string {
+			raw, _ := EncodeCursor(time.Now(), QueryExecutionListItemExecution, "1", "h")
 			b, _ := base64.RawURLEncoding.DecodeString(raw)
-			s := strings.Replace(string(b), `"id":"1"`, `"id":"abc"`, 1)
+			s := strings.Replace(string(b), `"r":"1"`, `"r":"abc"`, 1)
+			return base64.RawURLEncoding.EncodeToString([]byte(s))
+		}()},
+		{"bad_kind", func() string {
+			raw, _ := EncodeCursor(time.Now(), QueryExecutionListItemExecution, "1", "h")
+			b, _ := base64.RawURLEncoding.DecodeString(raw)
+			s := strings.Replace(string(b), `"k":"e"`, `"k":"x"`, 1)
 			return base64.RawURLEncoding.EncodeToString([]byte(s))
 		}()},
 		{"missing_created_at", func() string {
-			raw, _ := EncodeCursor(time.Now(), 1, "h")
+			raw, _ := EncodeCursor(time.Now(), QueryExecutionListItemExecution, "1", "h")
 			b, _ := base64.RawURLEncoding.DecodeString(raw)
 			s := strings.Replace(string(b), `"t":`, `"t_x":`, 1)
 			return base64.RawURLEncoding.EncodeToString([]byte(s))
@@ -147,8 +158,8 @@ func TestComputeQueryHash_Deterministic(t *testing.T) {
 	status := QueryExecutionSuccess
 	from := time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC)
 	to := time.Date(2025, 6, 1, 0, 0, 0, 0, time.UTC)
-	h1 := ComputeQueryHash(10, &status, &from, &to, "self")
-	h2 := ComputeQueryHash(10, &status, &from, &to, "self")
+	h1 := ComputeQueryHash(10, &status, &from, &to, "", "", 20, "self")
+	h2 := ComputeQueryHash(10, &status, &from, &to, "", "", 20, "self")
 	if h1 != h2 {
 		t.Errorf("ComputeQueryHash not deterministic: %q != %q", h1, h2)
 	}
@@ -163,8 +174,8 @@ func TestComputeQueryHash_DifferentInputsProduceDifferentHashes(t *testing.T) {
 	s2 := QueryExecutionFailed
 	from := time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC)
 	to := time.Date(2025, 6, 1, 0, 0, 0, 0, time.UTC)
-	h1 := ComputeQueryHash(10, &s1, &from, &to, "self")
-	h2 := ComputeQueryHash(10, &s2, &from, &to, "self")
+	h1 := ComputeQueryHash(10, &s1, &from, &to, "", "", 20, "self")
+	h2 := ComputeQueryHash(10, &s2, &from, &to, "", "", 20, "self")
 	if h1 == h2 {
 		t.Error("different status should produce different hashes")
 	}
@@ -179,8 +190,8 @@ func TestComputeQueryHash_FractionalSecondTimestampsProduceDifferentHashes(t *te
 	status := QueryExecutionSuccess
 	from1 := time.Date(2025, 6, 1, 12, 0, 0, 100_000_000, time.UTC)
 	from2 := time.Date(2025, 6, 1, 12, 0, 0, 900_000_000, time.UTC)
-	h1 := ComputeQueryHash(10, &status, &from1, nil, "self")
-	h2 := ComputeQueryHash(10, &status, &from2, nil, "self")
+	h1 := ComputeQueryHash(10, &status, &from1, nil, "", "", 20, "self")
+	h2 := ComputeQueryHash(10, &status, &from2, nil, "", "", 20, "self")
 	if h1 == h2 {
 		t.Fatal("fractional-second timestamps in the same second must produce different hashes")
 	}
@@ -329,7 +340,7 @@ func TestValidateTimeWindow_NilFromOrToPasses(t *testing.T) {
 func TestValidateCursor_ValidPasses(t *testing.T) {
 	t.Parallel()
 	hash := "testhash123"
-	encoded, err := EncodeCursor(time.Now(), 1, hash)
+	encoded, err := EncodeCursor(time.Now(), QueryExecutionListItemExecution, "7", hash)
 	if err != nil {
 		t.Fatalf("EncodeCursor() error = %v", err)
 	}
@@ -340,7 +351,7 @@ func TestValidateCursor_ValidPasses(t *testing.T) {
 
 func TestValidateCursor_RejectsHashMismatch(t *testing.T) {
 	t.Parallel()
-	encoded, err := EncodeCursor(time.Now(), 1, "hash_a")
+	encoded, err := EncodeCursor(time.Now(), QueryExecutionListItemExecution, "7", "hash_a")
 	if err != nil {
 		t.Fatalf("EncodeCursor() error = %v", err)
 	}
@@ -361,8 +372,8 @@ func TestNormalizeFilters_ProducesCanonicalString(t *testing.T) {
 	status := QueryExecutionSuccess
 	from := time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC)
 	to := time.Date(2025, 6, 1, 0, 0, 0, 0, time.UTC)
-	s1 := NormalizeFilters(&status, &from, &to)
-	s2 := NormalizeFilters(&status, &from, &to)
+	s1 := NormalizeFilters(&status, &from, &to, "", "", 20)
+	s2 := NormalizeFilters(&status, &from, &to, "", "", 20)
 	if s1 != s2 {
 		t.Errorf("NormalizeFilters not deterministic: %q != %q", s1, s2)
 	}
@@ -373,9 +384,9 @@ func TestNormalizeFilters_ProducesCanonicalString(t *testing.T) {
 
 func TestNormalizeFilters_NilValues(t *testing.T) {
 	t.Parallel()
-	s := NormalizeFilters(nil, nil, nil)
-	if s != "||" {
-		t.Errorf("NormalizeFilters(nil,nil,nil) = %q, want %q", s, "||")
+	s := NormalizeFilters(nil, nil, nil, "", "", 20)
+	if s != "|||0:|0:|20" {
+		t.Errorf("NormalizeFilters(nil,nil,nil) = %q, want %q", s, "|||0:|0:|20")
 	}
 }
 

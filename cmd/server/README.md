@@ -40,6 +40,8 @@ SIGTERM and SIGINT stop accepting new traffic and begin a bounded graceful drain
 ## Shared Guards
 - `QueryGuard` is constructed once and reused by execution, explain, and saved-statement services.
 - The saved-statement service additionally wires `WithPGContext(queryExecutionRepo, accessResolver)` (T11): PostgreSQL context validation and the G12 `RestoreContext` revalidation reuse the shared resolver and the composite connection metadata store.
+- The execution service additionally wires `WithPGClaimOrchestration(queryDisclosureRepo)` (T10-C): the internal keyed PostgreSQL entry (`ExecutePGClaimed`) shares the canonical five-part disclosure policy store for its provenance preflight. No HTTP route exposes the keyed entry — PostgreSQL POST execution remains closed.
+- Startup warms `pgsql.GuardPG` once (T10-C): the wazero-backed pg_query compiler loads lazily and would otherwise charge a multi-second process-wide compile to the first governed attempt's frozen statement budget.
 
 ## Exports
 - (binary entry point, no exported Go symbols)

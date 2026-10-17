@@ -90,15 +90,18 @@ func TestListExecutionsProjectsMachinePrincipalIdentity(t *testing.T) {
 	defer db.Close()
 
 	createdAt := time.Date(2026, 8, 30, 6, 0, 0, 0, time.UTC)
-	mock.ExpectQuery(`SELECT qe\.id, qe\.target_resource_id, qe\.actor_user_id, qe\.actor_machine_principal_id.*qe\.full_statement IS NOT NULL.*LEFT JOIN machine_principals mp ON mp\.id = qe\.actor_machine_principal_id`).
-		WithArgs(uint64(22), 20).
+	// The mixed history read is one consistent UNION: the execution arm plus
+	// the claim arm (unlinked/broken-link occupancy rows), ordered by activity.
+	mock.ExpectQuery(`SELECT \* FROM \(SELECT 0 AS kind, qe\.created_at AS activity_at.*UNION ALL SELECT 1 AS kind, c\.claimed_at AS activity_at.*LEFT JOIN machine_principals mp ON mp\.id = c\.actor_machine_principal_id.*ORDER BY u\.activity_at DESC, u\.kind ASC, u\.ref_num DESC, u\.ref_str DESC LIMIT \?`).
+		WithArgs(uint64(22), uint64(22), 20).
 		WillReturnRows(sqlmock.NewRows([]string{
-			"id", "target_resource_id", "actor_user_id", "actor_machine_principal_id", "engine",
+			"kind", "activity_at", "ref_num", "ref_str",
+			"target_resource_id", "actor_user_id", "actor_machine_principal_id", "engine",
 			"database_name", "schema_name",
-			"statement_digest", "statement_preview", "has_full_statement", "status", "row_count", "duration_ms",
+			"statement_digest", "statement_preview", "has_full", "status", "row_count", "duration_ms",
 			"error_code", "error_message", "backend_pid", "remote_state", "client_execution_id",
-			"created_at", "user_display_name", "machine_name",
-		}).AddRow(101, 22, nil, 91, "mysql", "", "", "digest", "preview", false, "success", 1, 7, "", "", nil, "", nil, createdAt, nil, "inventory-agent"))
+			"attempt_timeout_ms", "claim_execution_id", "user_display_name", "machine_name",
+		}).AddRow(0, createdAt, 101, nil, 22, nil, 91, "mysql", "", "", "digest", "preview", false, "success", 1, 7, "", "", nil, "", nil, nil, nil, nil, "inventory-agent"))
 
 	items, _, err := NewQueryExecutionRepository(db).ListExecutions(context.Background(), model.QueryExecutionListQuery{
 		TargetResourceID: 22,

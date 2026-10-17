@@ -89,7 +89,7 @@ type QueryExecutionRepository interface {
 	// GetCredential reads one connection's credential row by composite key
 	// (resourceID, databaseName); '' addresses the legacy MySQL/TiDB row.
 	GetCredential(ctx context.Context, resourceID uint64, databaseName string) (model.QueryCredentialMetadata, error)
-	ListExecutions(ctx context.Context, q model.QueryExecutionListQuery) ([]model.QueryExecutionRecord, int, error)
+	ListExecutions(ctx context.Context, q model.QueryExecutionListQuery) ([]model.QueryExecutionListItem, int, error)
 	// InsertAuditEvent is the audit-ONLY write for operations that intentionally
 	// create no execution-history row (explain, schema reads). Governed query
 	// execution and related-record navigation never call it — every
@@ -182,6 +182,9 @@ type QueryExecutionService struct {
 	// saved-statement (template) execution route; nil until then.
 	statements QuerySavedStatementReader
 	compiler   *TemplateStatementCompiler
+	// pgPolicies is the five-part disclosure reader for the keyed PG entry;
+	// wired via WithPGClaimOrchestration, nil until then.
+	pgPolicies QueryDisclosureReader
 }
 
 // QueryEvidencePersistenceFailures exposes the dimensionless persistence-
@@ -433,37 +436,49 @@ func (s *QueryExecutionService) reject(ctx context.Context, target model.QueryTa
 	return model.QueryExecuteResponse{}, retErr
 }
 
-// ListHistory returns execution history (metadata only) for a target with
-// cursor-based pagination. actorRole "admin" sees all target rows; other roles
-// see only their own. History is readable without credential readiness — it is
-// an audit record. Unknown targets return ErrQueryTargetNotFound (404).
+// ListHistory returns the mixed execution history for a target — terminal
+// execution rows plus entries derived from unlinked claim occupancy rows —
+// with cursor-based pagination. actorRole "admin" sees all target rows; other
+// roles see only the typed identity's own rows (a user identity never sees
+// machine rows and vice versa). History is readable without credential
+// readiness — it is an audit record, and a disabled connection never blocks
+// reads. Unknown targets return ErrQueryTargetNotFound (404).
+//
+// Claim-derived entries carry a derived display status only: running inside
+// the recorded-budget expiry window, unknown past it. A broken claim link is
+// an evidence fault — the read fails closed, never fabricating a state.
 //
 // Mode selection is explicit and unambiguous:
-//   - No ?page= supplied (Page == 0): cursor mode. The first page has no
-//     boundary predicate (Cursor == nil) and starts from the newest row.
-//     Continuation pages (Cursor != nil) add a strictly-older-than predicate on
-//     (created_at, id). Cursor mode never runs COUNT, never uses OFFSET, and
-//     requests PageSize+1 rows to detect whether a next page exists.
+//   - No ?page= supplied (Page == 0): cursor mode over the mixed ordering
+//     (activity time, row kind, stable identity). The first page has no
+//     boundary predicate (Cursor == nil); continuation pages add a
+//     strictly-older-than predicate. Cursor mode never runs COUNT, never
+//     uses OFFSET, and requests PageSize+1 rows to detect a next page.
 //   - ?page= supplied (Page > 0): legacy offset mode with COUNT and OFFSET.
 //     NextCursor is nil; PageInfo is populated.
 //
 // The handler rejects page+cursor together with a 400 validation_failed, so the
 // service never sees both.
-func (s *QueryExecutionService) ListHistory(ctx context.Context, actorUserID uint64, actorRole string, targetID uint64, q model.QueryExecutionListQuery) (*model.QueryExecutionCursorPage, error) {
-	if _, err := s.findTarget(ctx, targetID); err != nil {
+func (s *QueryExecutionService) ListHistory(ctx context.Context, identity model.QueryExecutionIdentity, actorRole string, targetID uint64, q model.QueryExecutionListQuery) (*model.QueryExecutionCursorPage, error) {
+	target, err := s.findTarget(ctx, targetID)
+	if err != nil {
 		return nil, err
+	}
+	if err := identity.Validate(); err != nil {
+		return nil, fmt.Errorf("%w: invalid execution identity", ErrQueryValidationFailed)
 	}
 
 	scope := "all"
 	if actorRole != "admin" {
-		scope = fmt.Sprintf("user:%d", actorUserID)
+		scope = fmt.Sprintf("%s:%d", identity.Kind, identity.ID)
 	}
-	queryHash := model.ComputeQueryHash(targetID, q.Status, q.From, q.To, scope)
+	_, pageSize := model.NormalizePagination(0, q.PageSize)
+	queryHash := model.ComputeQueryHash(targetID, q.Status, q.From, q.To, q.Database, q.ClientExecutionID, pageSize, scope)
 
 	if q.Page > 0 {
-		return s.listHistoryOffset(ctx, actorUserID, actorRole, targetID, q)
+		return s.listHistoryOffset(ctx, identity, actorRole, target, q)
 	}
-	return s.listHistoryCursor(ctx, actorUserID, actorRole, targetID, q, queryHash)
+	return s.listHistoryCursor(ctx, identity, actorRole, target, q, queryHash)
 }
 
 func (s *QueryExecutionService) GetExecutionStatement(ctx context.Context, actorUserID, targetID, executionID uint64) (model.QueryExecutionStatementResponse, error) {
@@ -478,7 +493,7 @@ func (s *QueryExecutionService) GetExecutionStatement(ctx context.Context, actor
 	return response, err
 }
 
-func (s *QueryExecutionService) listHistoryCursor(ctx context.Context, actorUserID uint64, actorRole string, targetID uint64, q model.QueryExecutionListQuery, queryHash string) (*model.QueryExecutionCursorPage, error) {
+func (s *QueryExecutionService) listHistoryCursor(ctx context.Context, identity model.QueryExecutionIdentity, actorRole string, target model.QueryTarget, q model.QueryExecutionListQuery, queryHash string) (*model.QueryExecutionCursorPage, error) {
 	if q.Cursor != nil {
 		if err := model.ValidateCursor(*q.Cursor, queryHash); err != nil {
 			return nil, fmt.Errorf("%w: invalid cursor: %v", ErrQueryValidationFailed, err)
@@ -490,17 +505,19 @@ func (s *QueryExecutionService) listHistoryCursor(ctx context.Context, actorUser
 	pageSize++ // sentinel: request one extra to detect next page
 
 	listQ := model.QueryExecutionListQuery{
-		TargetResourceID: targetID,
-		PageSize:         pageSize,
-		Status:           q.Status,
-		From:             q.From,
-		To:               q.To,
-		Mode:             model.PaginationModeCursor,
-		Cursor:           q.Cursor,
+		TargetResourceID:  target.ResourceID,
+		PageSize:          pageSize,
+		Database:          q.Database,
+		ClientExecutionID: q.ClientExecutionID,
+		Status:            q.Status,
+		From:              q.From,
+		To:                q.To,
+		Mode:              model.PaginationModeCursor,
+		Cursor:            q.Cursor,
 	}
 	if actorRole != "admin" {
-		id := actorUserID
-		listQ.ActorUserID = &id
+		id := identity
+		listQ.Actor = &id
 	}
 
 	items, _, err := s.executions.ListExecutions(ctx, listQ)
@@ -508,13 +525,24 @@ func (s *QueryExecutionService) listHistoryCursor(ctx context.Context, actorUser
 		return nil, err
 	}
 
-	projectHistoryItems(items, actorUserID)
+	if err := s.projectHistoryItems(items, identity, target); err != nil {
+		return nil, err
+	}
 
 	var nextCursor *string
 	if len(items) > originalPageSize {
 		items = items[:originalPageSize]
 		last := items[len(items)-1]
-		cs, encErr := model.EncodeCursor(last.CreatedAt, last.ID, queryHash)
+		var boundary time.Time
+		var ref string
+		if last.Kind == model.QueryExecutionListItemClaim {
+			boundary = *last.ClaimedAt
+			ref = *last.ClientExecutionID
+		} else {
+			boundary = *last.CreatedAt
+			ref = strconv.FormatUint(*last.ID, 10)
+		}
+		cs, encErr := model.EncodeCursor(boundary, last.Kind, ref, queryHash)
 		if encErr != nil {
 			return nil, fmt.Errorf("%w: encode cursor: %v", ErrQueryBackendFailure, encErr)
 		}
@@ -527,20 +555,22 @@ func (s *QueryExecutionService) listHistoryCursor(ctx context.Context, actorUser
 	}, nil
 }
 
-func (s *QueryExecutionService) listHistoryOffset(ctx context.Context, actorUserID uint64, actorRole string, targetID uint64, q model.QueryExecutionListQuery) (*model.QueryExecutionCursorPage, error) {
+func (s *QueryExecutionService) listHistoryOffset(ctx context.Context, identity model.QueryExecutionIdentity, actorRole string, target model.QueryTarget, q model.QueryExecutionListQuery) (*model.QueryExecutionCursorPage, error) {
 	page, pageSize := model.NormalizePagination(q.Page, q.PageSize)
 	listQ := model.QueryExecutionListQuery{
-		TargetResourceID: targetID,
-		Page:             page,
-		PageSize:         pageSize,
-		Status:           q.Status,
-		From:             q.From,
-		To:               q.To,
-		Mode:             model.PaginationModeOffset,
+		TargetResourceID:  target.ResourceID,
+		Page:              page,
+		PageSize:          pageSize,
+		Database:          q.Database,
+		ClientExecutionID: q.ClientExecutionID,
+		Status:            q.Status,
+		From:              q.From,
+		To:                q.To,
+		Mode:              model.PaginationModeOffset,
 	}
 	if actorRole != "admin" {
-		id := actorUserID
-		listQ.ActorUserID = &id
+		id := identity
+		listQ.Actor = &id
 	}
 
 	items, total, err := s.executions.ListExecutions(ctx, listQ)
@@ -548,7 +578,9 @@ func (s *QueryExecutionService) listHistoryOffset(ctx context.Context, actorUser
 		return nil, err
 	}
 
-	projectHistoryItems(items, actorUserID)
+	if err := s.projectHistoryItems(items, identity, target); err != nil {
+		return nil, err
+	}
 
 	pageInfo := model.NewPageInfo(page, pageSize, total)
 	return &model.QueryExecutionCursorPage{
@@ -557,16 +589,58 @@ func (s *QueryExecutionService) listHistoryOffset(ctx context.Context, actorUser
 	}, nil
 }
 
-func projectHistoryItems(items []model.QueryExecutionRecord, actorUserID uint64) {
-	for i := range items {
-		if items[i].Actor.DisplayName == "" {
-			items[i].Actor.DisplayName = model.UnknownHistoryActorDisplayName
-		}
-		items[i].CanRestore = items[i].ActorUserID == actorUserID &&
-			items[i].ActorMachinePrincipalID == 0 &&
-			items[i].Status == model.QueryExecutionSuccess &&
-			items[i].HasFullStatement
+// claimStateGrace is the fixed grace beyond a claim's recorded attempt budget
+// after which an unlinked claim derives "unknown" instead of "running" —
+// the frozen statement_timeout+60s threshold.
+const claimStateGrace = 60 * time.Second
+
+// deriveClaimViewStatus maps an unlinked claim to its display state. The
+// threshold is claimed_at + the budget recorded at admission + the fixed
+// grace — never a mutable environment value read later. A claim with no
+// recorded budget (pre-T10-C rows) can only ever derive running: inventing a
+// budget would fabricate an expiry. "unknown" asserts only that no terminal
+// result was observed — never that the backend died or the statement failed.
+func deriveClaimViewStatus(claimedAt time.Time, attemptTimeoutMs int64, now time.Time) model.QueryExecutionViewStatus {
+	if attemptTimeoutMs <= 0 {
+		return model.QueryExecutionViewRunning
 	}
+	expiry := claimedAt.Add(time.Duration(attemptTimeoutMs) * time.Millisecond).Add(claimStateGrace)
+	if !now.Before(expiry) {
+		return model.QueryExecutionViewUnknown
+	}
+	return model.QueryExecutionViewRunning
+}
+
+// projectHistoryItems fills read-model fields on the mixed set: claim entries
+// inherit the target's engine and derive running/unknown; execution rows get
+// restore eligibility. A flagged broken claim link is an evidence fault —
+// the read fails closed rather than rendering a fabricated state.
+func (s *QueryExecutionService) projectHistoryItems(items []model.QueryExecutionListItem, identity model.QueryExecutionIdentity, target model.QueryTarget) error {
+	now := s.clock.Now()
+	for i := range items {
+		it := &items[i]
+		if it.Actor.DisplayName == "" {
+			if it.Actor.Kind == model.QueryExecutionActorMachine {
+				it.Actor.DisplayName = model.UnknownHistoryMachineActorDisplayName
+			} else {
+				it.Actor.DisplayName = model.UnknownHistoryActorDisplayName
+			}
+		}
+		if it.Kind == model.QueryExecutionListItemClaim {
+			if it.ClaimLinkBroken {
+				return fmt.Errorf("%w: claim link is broken", ErrQueryBackendFailure)
+			}
+			it.Engine = target.ConnectionContext.Engine
+			it.Status = deriveClaimViewStatus(*it.ClaimedAt, it.ClaimAttemptTimeoutMs, now)
+			continue
+		}
+		it.CanRestore = identity.Kind == model.QueryExecutionActorUser &&
+			it.ActorUserID == identity.ID &&
+			it.ActorMachinePrincipalID == 0 &&
+			it.Status == model.QueryExecutionViewStatus(model.QueryExecutionSuccess) &&
+			it.HasFullStatement
+	}
+	return nil
 }
 
 func (s *QueryExecutionService) findTarget(ctx context.Context, targetID uint64) (model.QueryTarget, error) {
@@ -1079,6 +1153,8 @@ func auditResultFor(status model.QueryExecutionStatus) string {
 		return "timeout"
 	case model.QueryExecutionFailed:
 		return "failed"
+	case model.QueryExecutionCancelled:
+		return "cancelled"
 	default:
 		return "validation_failed"
 	}

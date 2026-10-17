@@ -1165,9 +1165,12 @@ paths:
       description: >
         Returns execution metadata (digest, status, row count, duration, errors,
         actor display name) only — never full result rows, email, or raw actor
-        ids. Ordinary users see their own rows for the target; admins see all
-        rows for the target. Unknown targets return 404. History is readable
-        without current credential readiness. Requires a fresh Bearer token.
+        ids. The list mixes persisted terminal rows (kind=execution) with
+        view-only entries derived from unlinked claim occupancy rows
+        (kind=claim, id null, status running/unknown). Ordinary users see their
+        own rows for the target; admins see all rows for the target. Unknown
+        targets return 404. History is readable without current credential
+        readiness. Requires a fresh Bearer token.
       security:
         - bearerAuth: []
       parameters:
@@ -1209,10 +1212,32 @@ paths:
             default: 20
         - name: status
           in: query
-          description: Filter by execution status (stored terminal values only).
+          description: >
+            Filter by stored terminal execution status. Derived claim states
+            (running, unknown) are not persisted statuses and are rejected
+            with `400 validation_failed` like any unknown value. When set,
+            claim-derived entries are excluded because they carry no stored
+            terminal status.
           schema:
             type: string
             enum: [success, rejected, failed, timeout, cancelled]
+        - name: database
+          in: query
+          description: >
+            Filter by connection database name. Empty or over-length values
+            (longer than the identifier limit) return `400 validation_failed`.
+          schema:
+            type: string
+            maxLength: 128
+        - name: clientExecutionId
+          in: query
+          description: >
+            Filter by the claim idempotency key (point read). Must satisfy the
+            clientExecutionId contract: at most 64 Unicode characters, no NUL.
+            Invalid values return `400 validation_failed`.
+          schema:
+            type: string
+            maxLength: 64
         - name: from
           in: query
           description: Inclusive start (RFC3339).
@@ -1246,12 +1271,16 @@ paths:
                 history:
                   value:
                     items:
-                      - id: 1001
+                      - kind: execution
+                        id: 1001
                         targetResourceId: 22
+                        clientExecutionId: null
                         actor:
                           kind: user
                           displayName: "ControlHub Admin"
                         engine: mysql
+                        database: ""
+                        schema: ""
                         statementDigest: "select id, name from resources where resource_type = ? limit ?"
                         statementPreview: "select id, name from resources where resource_type = 'service' limit 20"
                         canRestore: true
@@ -1261,16 +1290,39 @@ paths:
                         errorCode: ""
                         errorMessage: ""
                         createdAt: "2026-06-22T08:30:00Z"
+                      - kind: claim
+                        id: null
+                        targetResourceId: 22
+                        clientExecutionId: "report-2026-06-22-a"
+                        actor:
+                          kind: user
+                          displayName: "ControlHub Admin"
+                        engine: postgresql
+                        database: "appdb"
+                        schema: "public"
+                        statementDigest: ""
+                        statementPreview: ""
+                        canRestore: false
+                        status: running
+                        rowCount: 0
+                        durationMs: 0
+                        errorCode: ""
+                        errorMessage: ""
+                        claimedAt: "2026-06-22T08:29:10Z"
                     nextCursor: null
                 cursor:
                   value:
                     items:
-                      - id: 1002
+                      - kind: execution
+                        id: 1002
                         targetResourceId: 22
+                        clientExecutionId: "nightly-etl-17"
                         actor:
                           kind: user
                           displayName: "ControlHub Admin"
                         engine: mysql
+                        database: ""
+                        schema: ""
                         statementDigest: "select id, name from resources where resource_type = ? limit ?"
                         statementPreview: "select id, name from resources where resource_type = 'service' limit 20"
                         canRestore: true
@@ -1280,14 +1332,17 @@ paths:
                         errorCode: ""
                         errorMessage: ""
                         createdAt: "2026-06-22T09:15:00Z"
-                    nextCursor: "eyJ2IjoxLCJ0IjoiMjAyNi0wNi0yMlQwOToxNTowMFoiLCJpZCI6IjEwMDIiLCJxIjoiNjQwODcyNjU3MWM5ZTIzZDA5YjEwMzk4YjQyYWU3NDRiNmJiMDljMWMwODMxNGEyMDNlNGJjNjU2OTc2NTBiMiJ9"
+                    nextCursor: "eyJ2IjoyLCJ0IjoiMjAyNi0wNi0yMlQwOToxNTowMFoiLCJrIjoiZSIsInIiOiIxMDAyIiwicSI6IjY0MDg3MjY1NzFjOWUyM2QwOWIxMDM5OGI0MmFlNzQ0YjZiYjA5YzFjMDgzMTRhMjAzZTRiYzY1Njk3NjUwYjIifQ"
         "400":
           description: >
             Validation failed: invalid status enum, invalid RFC3339 timestamp,
             inverted time window (from >= to), page+cursor mutual exclusion
             conflict, invalid explicit `page` (empty, zero, negative,
-            non-integer, or repeated), or invalid explicit `pageSize` (empty,
-            zero, negative, non-integer, greater than 500, or repeated).
+            non-integer, or repeated), invalid explicit `pageSize` (empty,
+            zero, negative, non-integer, greater than 500, or repeated), an
+            over-length or repeated `database`, or an invalid, over-length,
+            empty, or repeated `clientExecutionId`. Every filter parameter is
+            single-valued: a repeated value fails closed.
           content:
             application/json:
               schema:
@@ -1313,6 +1368,14 @@ paths:
                   value:
                     error: validation_failed
                     message: "pageSize parameter must be an integer in 1..500"
+                invalidDatabase:
+                  value:
+                    error: validation_failed
+                    message: "database parameter must be a single non-empty value"
+                invalidClientExecutionId:
+                  value:
+                    error: validation_failed
+                    message: "clientExecutionId exceeds 64 characters"
         "401":
           description: Missing or invalid Bearer token (or token older than the TTL)
           content:
@@ -7688,14 +7751,38 @@ components:
             a fixed unknown label for their kind.
     QueryExecutionRecord:
       type: object
-      required: [id, targetResourceId, actor, engine, statementDigest, statementPreview, canRestore, status, rowCount, durationMs, errorCode, errorMessage, createdAt]
+      required: [kind, id, targetResourceId, clientExecutionId, actor, engine, database, schema, statementDigest, statementPreview, canRestore, status, rowCount, durationMs, errorCode, errorMessage]
+      description: >
+        One mixed execution-history item. kind=execution is a persisted
+        terminal row (id non-null, status is a stored terminal value,
+        createdAt set). kind=claim is a view-only entry derived from an
+        unlinked claim occupancy row (id is null, status is the derived
+        running/unknown, claimedAt set, and execution evidence fields are
+        empty).
       properties:
+        kind:
+          type: string
+          enum: [execution, claim]
+          description: >
+            Item discriminator: execution = persisted terminal history row;
+            claim = view-only entry derived from an unlinked claim occupancy
+            row (never fabricated terminal evidence).
         id:
           type: integer
           format: int64
+          nullable: true
+          description: >
+            Persisted execution id. Always null on kind=claim entries — no
+            synthetic id is ever invented for a derived row.
         targetResourceId:
           type: integer
           format: int64
+        clientExecutionId:
+          type: string
+          nullable: true
+          description: >
+            Idempotency key the row was claimed under. Null on legacy
+            unkeyed execution rows.
         actor:
           $ref: "#/components/schemas/QueryExecutionActor"
         engine:
@@ -7729,6 +7816,12 @@ components:
             cancelled. running and unknown are derived view-only states
             surfaced from the claim ledger; they are never persisted on an
             execution row.
+        remoteState:
+          type: string
+          enum: [stopped, unknown, completed]
+          description: >
+            Backend-side state probed as cancellation/verification evidence.
+            Omitted when the attempt never probed or on claim entries.
         rowCount:
           type: integer
         durationMs:
@@ -7740,6 +7833,11 @@ components:
         createdAt:
           type: string
           format: date-time
+          description: Activity timestamp for kind=execution items.
+        claimedAt:
+          type: string
+          format: date-time
+          description: Activity timestamp for kind=claim items.
     QueryExecutionCursorPage:
       type: object
       required: [items, nextCursor]

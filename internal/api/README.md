@@ -19,7 +19,7 @@ HTTP handlers, chi routing, CORS middleware, and fake-repo test infrastructure.
 | machine_principal_handler.go | Admin-only machine principal create/list and credential rotate/revoke handlers |
 | dictionary_handler.go | Dictionary list handlers (environments, owners, roles, resource-types, relation-types, lifecycle-statuses, health-statuses) |
 | query_schema_handler.go | Schema metadata handlers, including PostgreSQL schema list and the unsupported table-definition response |
-| query_execution_handler.go | User-or-machine POST ordinary execute plus fresh-User saved-statement execution, related-record navigation, execution history, and exact owner-only successful statement detail handlers; migration-29 contract fields (database, schema, clientExecutionId, source.schema) fail closed until their owning tickets wire them; the post-finalize result-contract refusal maps to a controlled 409 `result_contract_upgrade_required` on all three result routes (T8-B) |
+| query_execution_handler.go | User-or-machine POST ordinary execute plus fresh-User saved-statement execution, related-record navigation, execution history, and exact owner-only successful statement detail handlers; migration-29 contract fields (database, schema, clientExecutionId, source.schema) fail closed until their owning tickets wire them; the post-finalize result-contract refusal maps to a controlled 409 `result_contract_upgrade_required` on all three result routes (T8-B). T10-C: GET executions accepts single-valued `database` (≤128 chars) and `clientExecutionId` (≤64-char contract) filters — repeated or empty values fail closed — and returns the mixed execution/claim list under the v2 cursor contract |
 | query_workspace_handler.go | User-only singular query workspace GET/strict bounded PUT with controlled OCC conflict mapping |
 | query_credential_handler.go | Phase 38A credential metadata handlers (GET/PUT/DELETE) with the composite `?database=` connection selector |
 | query_disclosure_handler.go | Phase 38Q disclosure policy CRUD/list handlers (handler-admin) |
@@ -38,7 +38,7 @@ HTTP handlers, chi routing, CORS middleware, and fake-repo test infrastructure.
 | dictionary_handler_test.go | Dictionary endpoint tests |
 | query_credential_handler_test.go | Credential metadata handler tests |
 | query_disclosure_handler_test.go | Disclosure policy handler tests, including list `query_result_disclosure_blocked` and schemaName propagation through create/delete |
-| query_execution_handler_test.go | Query execution handler tests, including authenticated execution identity, per-row restore eligibility, owner-only fresh statement detail, fail-closed unwired contract fields, and controlled error mapping |
+| query_execution_handler_test.go | Query execution handler tests, including authenticated execution identity, per-row restore eligibility, owner-only fresh statement detail, fail-closed unwired contract fields, controlled error mapping, and the database/clientExecutionId list-filter pass-through plus single-valued fail-closed rejections |
 | query_workspace_handler_test.go | Authenticated owner GET/PUT, strict JSON/size, validation, and OCC mapping tests |
 | navigate_related_records_handler_test.go | Related-record navigation handler tests, including Preflight and Apply-path disclosure vs not-allowed Controlled Error Codes and fail-closed unwired contract fields |
 | query_saved_statement_handler_test.go | Saved statement handler tests |

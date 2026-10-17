@@ -168,7 +168,7 @@ func TestQueryDevTargetFixture_UnsafeSQLRejectedAndRecorded(t *testing.T) {
 	}
 	var rejected bool
 	for _, it := range items {
-		if it.Status == model.QueryExecutionRejected {
+		if it.Status == model.QueryExecutionViewStatus(model.QueryExecutionRejected) {
 			rejected = true
 		}
 	}
@@ -200,12 +200,12 @@ func TestQueryDevTargetFixture_HistoryRecordsSuccessAndRejection(t *testing.T) {
 	if err != nil {
 		t.Fatalf("list executions: %v", err)
 	}
-	seen := map[model.QueryExecutionStatus]bool{}
+	seen := map[model.QueryExecutionViewStatus]bool{}
 	for _, it := range items {
 		seen[it.Status] = true
 		assertHistoryRowHasNoDSN(t, it, globalEnv.dsn) // history is metadata-only
 	}
-	if !seen[model.QueryExecutionSuccess] || !seen[model.QueryExecutionRejected] {
+	if !seen[model.QueryExecutionViewStatus(model.QueryExecutionSuccess)] || !seen[model.QueryExecutionViewStatus(model.QueryExecutionRejected)] {
 		t.Fatalf("history missing success/rejection; statuses = %v", statusesOf(items))
 	}
 }
@@ -270,18 +270,18 @@ func TestQueryDevTargetFixture_FailClosed_OnBadBindingStaysLocked(t *testing.T) 
 	}
 }
 
-// statusesOf returns the status list of execution records (for failure messages).
-func statusesOf(items []model.QueryExecutionRecord) []model.QueryExecutionStatus {
-	out := make([]model.QueryExecutionStatus, 0, len(items))
+// statusesOf returns the status list of history items (for failure messages).
+func statusesOf(items []model.QueryExecutionListItem) []model.QueryExecutionViewStatus {
+	out := make([]model.QueryExecutionViewStatus, 0, len(items))
 	for _, it := range items {
 		out = append(out, it.Status)
 	}
 	return out
 }
 
-// assertHistoryRowHasNoDSN asserts an execution record carries no DSN-looking
+// assertHistoryRowHasNoDSN asserts a history item carries no DSN-looking
 // value in any stored text column. WHY: history is metadata-only by contract.
-func assertHistoryRowHasNoDSN(t *testing.T, rec model.QueryExecutionRecord, dsn string) {
+func assertHistoryRowHasNoDSN(t *testing.T, rec model.QueryExecutionListItem, dsn string) {
 	t.Helper()
 	for _, v := range []string{rec.StatementDigest, rec.StatementPreview, rec.ErrorCode, rec.ErrorMessage} {
 		if v == dsn || strings.Contains(v, "tcp(") || strings.Contains(v, "://") || strings.Contains(v, "@") {

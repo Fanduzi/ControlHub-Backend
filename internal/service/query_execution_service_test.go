@@ -84,6 +84,17 @@ type fakeExecRepo struct {
 	pairCtxHasDeadline bool
 	// Captures the last ListExecutions query for mode-dispatch assertions.
 	lastQuery model.QueryExecutionListQuery
+	// claimItems injects claim-arm rows (unlinked or broken-link occupancy
+	// entries) into the fake's mixed history result.
+	claimItems []model.QueryExecutionListItem
+	// T10-C claim seams: TryClaimExecution records the admitted input or
+	// returns the injected sentinel; FinalizeClaimWithAudit records each
+	// keyed finalize call and returns finalizeErr when injected.
+	claimErr      error
+	claimInputs   []model.QueryExecutionClaimInput
+	finalizeErr   error
+	finalizeCalls []model.QueryExecutionRecord
+	finalizeNext  uint64
 }
 
 func (f *fakeExecRepo) GetCredential(_ context.Context, resourceID uint64, _ string) (model.QueryCredentialMetadata, error) {
@@ -97,20 +108,58 @@ func (f *fakeExecRepo) GetCredential(_ context.Context, resourceID uint64, _ str
 	return c, nil
 }
 
-func (f *fakeExecRepo) ListExecutions(_ context.Context, q model.QueryExecutionListQuery) ([]model.QueryExecutionRecord, int, error) {
+func (f *fakeExecRepo) ListExecutions(_ context.Context, q model.QueryExecutionListQuery) ([]model.QueryExecutionListItem, int, error) {
 	f.lastQuery = q
-	items := make([]model.QueryExecutionRecord, 0, len(f.insertedAttempts))
+	items := make([]model.QueryExecutionListItem, 0, len(f.insertedAttempts)+len(f.claimItems))
+	appendExec := func(rec model.QueryExecutionRecord) {
+		id := rec.ID
+		created := rec.CreatedAt
+		items = append(items, model.QueryExecutionListItem{
+			Kind:                    model.QueryExecutionListItemExecution,
+			ID:                      &id,
+			TargetResourceID:        rec.TargetResourceID,
+			ClientExecutionID:       rec.ClientExecutionID,
+			ActorUserID:             rec.ActorUserID,
+			ActorMachinePrincipalID: rec.ActorMachinePrincipalID,
+			Actor:                   rec.Actor,
+			Engine:                  rec.Engine,
+			DatabaseName:            rec.DatabaseName,
+			SchemaName:              rec.SchemaName,
+			StatementDigest:         rec.StatementDigest,
+			StatementPreview:        rec.StatementPreview,
+			HasFullStatement:        rec.HasFullStatement,
+			Status:                  model.QueryExecutionViewStatus(rec.Status),
+			RemoteState:             rec.RemoteState,
+			RowCount:                rec.RowCount,
+			DurationMs:              rec.DurationMs,
+			ErrorCode:               rec.ErrorCode,
+			ErrorMessage:            rec.ErrorMessage,
+			CreatedAt:               &created,
+		})
+	}
 	for _, rec := range f.insertedAttempts {
-		if rec.TargetResourceID != q.TargetResourceID && q.TargetResourceID != 0 {
-			// still allow unfiltered fakes when TargetResourceID is zero
-		}
-		if q.ActorUserID != nil && rec.ActorUserID != *q.ActorUserID {
-			continue
+		if q.Actor != nil {
+			switch q.Actor.Kind {
+			case model.QueryExecutionActorUser:
+				if rec.ActorUserID != q.Actor.ID || rec.ActorMachinePrincipalID != 0 {
+					continue
+				}
+			case model.QueryExecutionActorMachine:
+				if rec.ActorMachinePrincipalID != q.Actor.ID || rec.ActorUserID != 0 {
+					continue
+				}
+			}
 		}
 		if q.TargetResourceID != 0 && rec.TargetResourceID != q.TargetResourceID {
 			continue
 		}
 		if q.Status != nil && rec.Status != *q.Status {
+			continue
+		}
+		if q.Database != "" && rec.DatabaseName != q.Database {
+			continue
+		}
+		if q.ClientExecutionID != "" && (rec.ClientExecutionID == nil || *rec.ClientExecutionID != q.ClientExecutionID) {
 			continue
 		}
 		if q.From != nil && rec.CreatedAt.Before(*q.From) {
@@ -119,7 +168,42 @@ func (f *fakeExecRepo) ListExecutions(_ context.Context, q model.QueryExecutionL
 		if q.To != nil && !rec.CreatedAt.Before(*q.To) {
 			continue
 		}
-		items = append(items, rec)
+		appendExec(rec)
+	}
+	// Claim arm: unlinked (and structurally broken-link) claim items mix in
+	// only when no stored-status filter is active — a terminal filter cannot
+	// match a derived state.
+	if q.Status == nil {
+		for _, it := range f.claimItems {
+			if q.TargetResourceID != 0 && it.TargetResourceID != q.TargetResourceID {
+				continue
+			}
+			if q.Actor != nil {
+				switch q.Actor.Kind {
+				case model.QueryExecutionActorUser:
+					if it.ActorUserID != q.Actor.ID || it.ActorMachinePrincipalID != 0 {
+						continue
+					}
+				case model.QueryExecutionActorMachine:
+					if it.ActorMachinePrincipalID != q.Actor.ID || it.ActorUserID != 0 {
+						continue
+					}
+				}
+			}
+			if q.Database != "" && it.DatabaseName != q.Database {
+				continue
+			}
+			if q.ClientExecutionID != "" && (it.ClientExecutionID == nil || *it.ClientExecutionID != q.ClientExecutionID) {
+				continue
+			}
+			if q.From != nil && it.ClaimedAt.Before(*q.From) {
+				continue
+			}
+			if q.To != nil && !it.ClaimedAt.Before(*q.To) {
+				continue
+			}
+			items = append(items, it)
+		}
 	}
 
 	if q.Cursor != nil {
@@ -127,21 +211,60 @@ func (f *fakeExecRepo) ListExecutions(_ context.Context, q model.QueryExecutionL
 		if err != nil {
 			return nil, 0, err
 		}
-		cursorID, _ := strconv.ParseUint(payload.ID, 10, 64)
-		filtered := make([]model.QueryExecutionRecord, 0, len(items))
-		for _, rec := range items {
-			if rec.CreatedAt.Before(payload.CreatedAt) || (rec.CreatedAt.Equal(payload.CreatedAt) && rec.ID < cursorID) {
-				filtered = append(filtered, rec)
+		filtered := make([]model.QueryExecutionListItem, 0, len(items))
+		for _, it := range items {
+			// Mirror the repository UNION ordering: execution rows (SQL kind
+			// 0) sort before claim entries (SQL kind 1) at the same activity
+			// timestamp; within a kind, refs compare descending (execution
+			// id numerically, claim key lexically).
+			at := it.ClaimedAt
+			isExec := it.Kind == model.QueryExecutionListItemExecution
+			if isExec {
+				at = it.CreatedAt
+			}
+			switch payload.Kind {
+			case "e":
+				cursorID, _ := strconv.ParseUint(payload.Ref, 10, 64)
+				if at.Before(payload.CreatedAt) ||
+					(at.Equal(payload.CreatedAt) && !isExec) ||
+					(at.Equal(payload.CreatedAt) && isExec && *it.ID < cursorID) {
+					filtered = append(filtered, it)
+				}
+			case "c":
+				if at.Before(payload.CreatedAt) ||
+					(at.Equal(payload.CreatedAt) && !isExec && *it.ClientExecutionID < payload.Ref) {
+					filtered = append(filtered, it)
+				}
 			}
 		}
 		items = filtered
 	}
 
 	sort.Slice(items, func(i, j int) bool {
-		if items[i].CreatedAt.Equal(items[j].CreatedAt) {
-			return items[i].ID > items[j].ID
+		atI, refINum, refIStr := items[i].CreatedAt, uint64(0), ""
+		kindI := 0
+		if items[i].Kind == model.QueryExecutionListItemClaim {
+			atI, kindI, refIStr = items[i].ClaimedAt, 1, *items[i].ClientExecutionID
+		} else {
+			refINum = *items[i].ID
 		}
-		return items[i].CreatedAt.After(items[j].CreatedAt)
+		atJ, refJNum, refJStr := items[j].CreatedAt, uint64(0), ""
+		kindJ := 0
+		if items[j].Kind == model.QueryExecutionListItemClaim {
+			atJ, kindJ, refJStr = items[j].ClaimedAt, 1, *items[j].ClientExecutionID
+		} else {
+			refJNum = *items[j].ID
+		}
+		if atI.Equal(*atJ) {
+			if kindI != kindJ {
+				return kindI < kindJ
+			}
+			if kindI == 0 {
+				return refINum > refJNum
+			}
+			return refIStr > refJStr
+		}
+		return atI.After(*atJ)
 	})
 
 	if q.PageSize > 0 && len(items) > q.PageSize {
@@ -154,6 +277,29 @@ func (f *fakeExecRepo) ListExecutions(_ context.Context, q model.QueryExecutionL
 		return items, 0, nil
 	}
 	return items, len(items), nil
+}
+
+// TryClaimExecution mirrors the atomic admission primitive: on injected
+// claimErr it returns that sentinel without recording; otherwise it records
+// the input as the occupying claim.
+func (f *fakeExecRepo) TryClaimExecution(_ context.Context, in model.QueryExecutionClaimInput) error {
+	if f.claimErr != nil {
+		return f.claimErr
+	}
+	f.claimInputs = append(f.claimInputs, in)
+	return nil
+}
+
+// FinalizeClaimWithAudit mirrors the keyed terminal write: records every
+// call's terminal record and returns the injected error — no compensating
+// write ever happens on failure (matching the repository's atomic semantics).
+func (f *fakeExecRepo) FinalizeClaimWithAudit(_ context.Context, rec model.QueryExecutionRecord, _, _ string) (uint64, error) {
+	f.finalizeCalls = append(f.finalizeCalls, rec)
+	if f.finalizeErr != nil {
+		return 0, f.finalizeErr
+	}
+	f.finalizeNext++
+	return f.finalizeNext, nil
 }
 
 // InsertAuditEvent mirrors the audit-only seam still used by explain/schema
@@ -1509,7 +1655,7 @@ func TestListHistory_AdminSeesAllActors(t *testing.T) {
 		},
 	}
 	svc := NewQueryExecutionService(fakeTargetRepo{targets: []model.QueryTarget{target}}, repo, &fakeResolver{}, &fakeExecutor{}, NewQueryGuard(QueryGuardConfig{DefaultMaxRows: 100, HardMaxRows: 500}), &fakeClock{t: time.Date(2026, 6, 22, 8, 0, 0, 0, time.UTC)}, nil, &fakeDisclosureService{})
-	result, err := svc.ListHistory(context.Background(), 1, "admin", 22, model.QueryExecutionListQuery{Page: 1, PageSize: 20})
+	result, err := svc.ListHistory(context.Background(), model.QueryExecutionIdentity{Kind: model.QueryExecutionActorUser, ID: 1}, "admin", 22, model.QueryExecutionListQuery{Page: 1, PageSize: 20})
 	if err != nil {
 		t.Fatalf("ListHistory: %v", err)
 	}
@@ -1538,7 +1684,7 @@ func TestListHistory_CanRestoreOnlyOwnSuccessfulStatement(t *testing.T) {
 	for _, q := range []model.QueryExecutionListQuery{{PageSize: 20}, {Page: 1, PageSize: 20}} {
 		repo := &fakeExecRepo{insertedAttempts: records}
 		svc := NewQueryExecutionService(fakeTargetRepo{targets: []model.QueryTarget{target}}, repo, &fakeResolver{}, &fakeExecutor{}, NewQueryGuard(QueryGuardConfig{DefaultMaxRows: 100, HardMaxRows: 500}), &fakeClock{t: time.Date(2026, 6, 22, 8, 0, 0, 0, time.UTC)}, nil, &fakeDisclosureService{})
-		result, err := svc.ListHistory(context.Background(), 1, "admin", 22, q)
+		result, err := svc.ListHistory(context.Background(), model.QueryExecutionIdentity{Kind: model.QueryExecutionActorUser, ID: 1}, "admin", 22, q)
 		if err != nil {
 			t.Fatalf("ListHistory(%+v): %v", q, err)
 		}
@@ -1546,7 +1692,7 @@ func TestListHistory_CanRestoreOnlyOwnSuccessfulStatement(t *testing.T) {
 			t.Fatalf("ListHistory(%+v) items = %d, want %d", q, len(result.Items), len(records))
 		}
 		for _, item := range result.Items {
-			want := item.ID == 1
+			want := *item.ID == 1
 			if item.CanRestore != want {
 				t.Fatalf("ListHistory(%+v) item %d canRestore = %v, want %v", q, item.ID, item.CanRestore, want)
 			}
@@ -1564,7 +1710,7 @@ func TestListHistory_NonAdminSeesOwnOnly(t *testing.T) {
 		},
 	}
 	svc := NewQueryExecutionService(fakeTargetRepo{targets: []model.QueryTarget{target}}, repo, &fakeResolver{}, &fakeExecutor{}, NewQueryGuard(QueryGuardConfig{DefaultMaxRows: 100, HardMaxRows: 500}), &fakeClock{t: time.Date(2026, 6, 22, 8, 0, 0, 0, time.UTC)}, nil, &fakeDisclosureService{})
-	result, err := svc.ListHistory(context.Background(), 7, "editor", 22, model.QueryExecutionListQuery{Page: 1, PageSize: 20})
+	result, err := svc.ListHistory(context.Background(), model.QueryExecutionIdentity{Kind: model.QueryExecutionActorUser, ID: 7}, "editor", 22, model.QueryExecutionListQuery{Page: 1, PageSize: 20})
 	if err != nil {
 		t.Fatalf("ListHistory: %v", err)
 	}
@@ -1581,7 +1727,7 @@ func TestListHistory_NonAdminSeesOwnOnly(t *testing.T) {
 
 func TestListHistory_UnknownTarget404(t *testing.T) {
 	svc := NewQueryExecutionService(fakeTargetRepo{targets: nil}, &fakeExecRepo{}, &fakeResolver{}, &fakeExecutor{}, NewQueryGuard(QueryGuardConfig{DefaultMaxRows: 100, HardMaxRows: 500}), &fakeClock{t: time.Date(2026, 6, 22, 8, 0, 0, 0, time.UTC)}, nil, &fakeDisclosureService{})
-	_, err := svc.ListHistory(context.Background(), 1, "admin", 999, model.QueryExecutionListQuery{Page: 1, PageSize: 20})
+	_, err := svc.ListHistory(context.Background(), model.QueryExecutionIdentity{Kind: model.QueryExecutionActorUser, ID: 1}, "admin", 999, model.QueryExecutionListQuery{Page: 1, PageSize: 20})
 	if !errors.Is(err, ErrQueryTargetNotFound) {
 		t.Fatalf("err = %v, want ErrQueryTargetNotFound", err)
 	}
@@ -1596,7 +1742,7 @@ func TestListHistory_UnknownActorFallback(t *testing.T) {
 		},
 	}
 	svc := NewQueryExecutionService(fakeTargetRepo{targets: []model.QueryTarget{target}}, repo, &fakeResolver{}, &fakeExecutor{}, NewQueryGuard(QueryGuardConfig{DefaultMaxRows: 100, HardMaxRows: 500}), &fakeClock{t: time.Date(2026, 6, 22, 8, 0, 0, 0, time.UTC)}, nil, &fakeDisclosureService{})
-	result, err := svc.ListHistory(context.Background(), 1, "admin", 22, model.QueryExecutionListQuery{Page: 1, PageSize: 20})
+	result, err := svc.ListHistory(context.Background(), model.QueryExecutionIdentity{Kind: model.QueryExecutionActorUser, ID: 1}, "admin", 22, model.QueryExecutionListQuery{Page: 1, PageSize: 20})
 	if err != nil {
 		t.Fatalf("ListHistory: %v", err)
 	}
@@ -1626,7 +1772,7 @@ func TestListHistory_Cursor_AdminSeesAll(t *testing.T) {
 		},
 	}
 	svc := NewQueryExecutionService(fakeTargetRepo{targets: []model.QueryTarget{target}}, repo, &fakeResolver{}, &fakeExecutor{}, NewQueryGuard(QueryGuardConfig{DefaultMaxRows: 100, HardMaxRows: 500}), &fakeClock{t: now}, nil, &fakeDisclosureService{})
-	result, err := svc.ListHistory(context.Background(), 1, "admin", 22, model.QueryExecutionListQuery{PageSize: 20})
+	result, err := svc.ListHistory(context.Background(), model.QueryExecutionIdentity{Kind: model.QueryExecutionActorUser, ID: 1}, "admin", 22, model.QueryExecutionListQuery{PageSize: 20})
 	if err != nil {
 		t.Fatalf("ListHistory: %v", err)
 	}
@@ -1647,7 +1793,7 @@ func TestListHistory_Cursor_NonAdminSeesOwnOnly(t *testing.T) {
 		},
 	}
 	svc := NewQueryExecutionService(fakeTargetRepo{targets: []model.QueryTarget{target}}, repo, &fakeResolver{}, &fakeExecutor{}, NewQueryGuard(QueryGuardConfig{DefaultMaxRows: 100, HardMaxRows: 500}), &fakeClock{t: now}, nil, &fakeDisclosureService{})
-	result, err := svc.ListHistory(context.Background(), 7, "editor", 22, model.QueryExecutionListQuery{PageSize: 20})
+	result, err := svc.ListHistory(context.Background(), model.QueryExecutionIdentity{Kind: model.QueryExecutionActorUser, ID: 7}, "editor", 22, model.QueryExecutionListQuery{PageSize: 20})
 	if err != nil {
 		t.Fatalf("ListHistory: %v", err)
 	}
@@ -1669,11 +1815,11 @@ func TestListHistory_Cursor_StatusFilter(t *testing.T) {
 	}
 	svc := NewQueryExecutionService(fakeTargetRepo{targets: []model.QueryTarget{target}}, repo, &fakeResolver{}, &fakeExecutor{}, NewQueryGuard(QueryGuardConfig{DefaultMaxRows: 100, HardMaxRows: 500}), &fakeClock{t: now}, nil, &fakeDisclosureService{})
 	status := model.QueryExecutionSuccess
-	result, err := svc.ListHistory(context.Background(), 1, "admin", 22, model.QueryExecutionListQuery{PageSize: 20, Status: &status})
+	result, err := svc.ListHistory(context.Background(), model.QueryExecutionIdentity{Kind: model.QueryExecutionActorUser, ID: 1}, "admin", 22, model.QueryExecutionListQuery{PageSize: 20, Status: &status})
 	if err != nil {
 		t.Fatalf("ListHistory: %v", err)
 	}
-	if len(result.Items) != 1 || result.Items[0].Status != model.QueryExecutionSuccess {
+	if len(result.Items) != 1 || result.Items[0].Status != model.QueryExecutionViewStatus(model.QueryExecutionSuccess) {
 		t.Fatalf("status filter items = %+v, want only success", result.Items)
 	}
 }
@@ -1695,11 +1841,11 @@ func TestListHistory_Cursor_TimeFilter(t *testing.T) {
 	svc := NewQueryExecutionService(fakeTargetRepo{targets: []model.QueryTarget{target}}, repo, &fakeResolver{}, &fakeExecutor{}, NewQueryGuard(QueryGuardConfig{DefaultMaxRows: 100, HardMaxRows: 500}), &fakeClock{t: t3}, nil, &fakeDisclosureService{})
 	from := time.Date(2026, 6, 10, 0, 0, 0, 0, time.UTC)
 	to := time.Date(2026, 6, 20, 0, 0, 0, 0, time.UTC)
-	result, err := svc.ListHistory(context.Background(), 1, "admin", 22, model.QueryExecutionListQuery{PageSize: 20, From: &from, To: &to})
+	result, err := svc.ListHistory(context.Background(), model.QueryExecutionIdentity{Kind: model.QueryExecutionActorUser, ID: 1}, "admin", 22, model.QueryExecutionListQuery{PageSize: 20, From: &from, To: &to})
 	if err != nil {
 		t.Fatalf("ListHistory: %v", err)
 	}
-	if len(result.Items) != 1 || result.Items[0].ID != 2 {
+	if len(result.Items) != 1 || *result.Items[0].ID != 2 {
 		t.Fatalf("time filter items = %+v, want only ID=2", result.Items)
 	}
 }
@@ -1719,13 +1865,14 @@ func TestListHistory_Cursor_Continuation(t *testing.T) {
 	svc := NewQueryExecutionService(fakeTargetRepo{targets: []model.QueryTarget{target}}, repo, &fakeResolver{}, &fakeExecutor{}, NewQueryGuard(QueryGuardConfig{DefaultMaxRows: 100, HardMaxRows: 500}), &fakeClock{t: now}, nil, &fakeDisclosureService{})
 
 	// Build an initial cursor pointing past the newest item so all 3 are "before" it.
-	queryHash := model.ComputeQueryHash(22, nil, nil, nil, "all")
-	initialCursor, err := model.EncodeCursor(now.Add(time.Second), 9999, queryHash)
+	// The hash must pin the same pageSize the request uses (2).
+	queryHash := model.ComputeQueryHash(22, nil, nil, nil, "", "", 2, "all")
+	initialCursor, err := model.EncodeCursor(now.Add(time.Second), model.QueryExecutionListItemExecution, "9999", queryHash)
 	if err != nil {
 		t.Fatalf("encode initial cursor: %v", err)
 	}
 
-	page1, err := svc.ListHistory(context.Background(), 1, "admin", 22, model.QueryExecutionListQuery{PageSize: 2, Cursor: &initialCursor})
+	page1, err := svc.ListHistory(context.Background(), model.QueryExecutionIdentity{Kind: model.QueryExecutionActorUser, ID: 1}, "admin", 22, model.QueryExecutionListQuery{PageSize: 2, Cursor: &initialCursor})
 	if err != nil {
 		t.Fatalf("page1: %v", err)
 	}
@@ -1736,7 +1883,7 @@ func TestListHistory_Cursor_Continuation(t *testing.T) {
 		t.Fatal("page1 NextCursor = nil, want non-nil (more pages exist)")
 	}
 
-	page2, err := svc.ListHistory(context.Background(), 1, "admin", 22, model.QueryExecutionListQuery{PageSize: 2, Cursor: page1.NextCursor})
+	page2, err := svc.ListHistory(context.Background(), model.QueryExecutionIdentity{Kind: model.QueryExecutionActorUser, ID: 1}, "admin", 22, model.QueryExecutionListQuery{PageSize: 2, Cursor: page1.NextCursor})
 	if err != nil {
 		t.Fatalf("page2: %v", err)
 	}
@@ -1755,7 +1902,7 @@ func TestListHistory_Cursor_InvalidCursorReturnsValidation(t *testing.T) {
 	now := time.Date(2026, 6, 22, 8, 0, 0, 0, time.UTC)
 	svc := NewQueryExecutionService(fakeTargetRepo{targets: []model.QueryTarget{target}}, &fakeExecRepo{}, &fakeResolver{}, &fakeExecutor{}, NewQueryGuard(QueryGuardConfig{DefaultMaxRows: 100, HardMaxRows: 500}), &fakeClock{t: now}, nil, &fakeDisclosureService{})
 	badCursor := "not-a-valid-cursor"
-	_, err := svc.ListHistory(context.Background(), 1, "admin", 22, model.QueryExecutionListQuery{PageSize: 20, Cursor: &badCursor})
+	_, err := svc.ListHistory(context.Background(), model.QueryExecutionIdentity{Kind: model.QueryExecutionActorUser, ID: 1}, "admin", 22, model.QueryExecutionListQuery{PageSize: 20, Cursor: &badCursor})
 	if !errors.Is(err, ErrQueryValidationFailed) {
 		t.Fatalf("err = %v, want ErrQueryValidationFailed", err)
 	}
@@ -1773,16 +1920,16 @@ func TestListHistory_Cursor_TamperedIDReturnsValidation(t *testing.T) {
 	svc := NewQueryExecutionService(fakeTargetRepo{targets: []model.QueryTarget{target}}, &fakeExecRepo{}, &fakeResolver{}, &fakeExecutor{}, NewQueryGuard(QueryGuardConfig{DefaultMaxRows: 100, HardMaxRows: 500}), &fakeClock{t: now}, nil, &fakeDisclosureService{})
 
 	// Build a cursor with a valid hash, then tamper the ID to "abc".
-	queryHash := model.ComputeQueryHash(22, nil, nil, nil, "all")
-	validCursor, err := model.EncodeCursor(now, 1, queryHash)
+	queryHash := model.ComputeQueryHash(22, nil, nil, nil, "", "", 20, "all")
+	validCursor, err := model.EncodeCursor(now, model.QueryExecutionListItemExecution, "1", queryHash)
 	if err != nil {
 		t.Fatalf("encode cursor: %v", err)
 	}
 	b, _ := base64.RawURLEncoding.DecodeString(validCursor)
-	tampered := strings.Replace(string(b), `"id":"1"`, `"id":"abc"`, 1)
+	tampered := strings.Replace(string(b), `"r":"1"`, `"r":"abc"`, 1)
 	tamperedCursor := base64.RawURLEncoding.EncodeToString([]byte(tampered))
 
-	_, err = svc.ListHistory(context.Background(), 1, "admin", 22, model.QueryExecutionListQuery{PageSize: 20, Cursor: &tamperedCursor})
+	_, err = svc.ListHistory(context.Background(), model.QueryExecutionIdentity{Kind: model.QueryExecutionActorUser, ID: 1}, "admin", 22, model.QueryExecutionListQuery{PageSize: 20, Cursor: &tamperedCursor})
 	if !errors.Is(err, ErrQueryValidationFailed) {
 		t.Fatalf("err = %v, want ErrQueryValidationFailed (tampered cursor ID must not cause 500)", err)
 	}
@@ -1791,7 +1938,7 @@ func TestListHistory_Cursor_TamperedIDReturnsValidation(t *testing.T) {
 func TestListHistory_Cursor_UnknownTarget404(t *testing.T) {
 	t.Parallel()
 	svc := NewQueryExecutionService(fakeTargetRepo{targets: nil}, &fakeExecRepo{}, &fakeResolver{}, &fakeExecutor{}, NewQueryGuard(QueryGuardConfig{DefaultMaxRows: 100, HardMaxRows: 500}), &fakeClock{t: time.Date(2026, 6, 22, 8, 0, 0, 0, time.UTC)}, nil, &fakeDisclosureService{})
-	_, err := svc.ListHistory(context.Background(), 1, "admin", 999, model.QueryExecutionListQuery{PageSize: 20})
+	_, err := svc.ListHistory(context.Background(), model.QueryExecutionIdentity{Kind: model.QueryExecutionActorUser, ID: 1}, "admin", 999, model.QueryExecutionListQuery{PageSize: 20})
 	if !errors.Is(err, ErrQueryTargetNotFound) {
 		t.Fatalf("err = %v, want ErrQueryTargetNotFound", err)
 	}
@@ -1815,7 +1962,7 @@ func TestListHistory_CursorInitial_SetsExplicitCursorMode(t *testing.T) {
 	}
 	svc := NewQueryExecutionService(fakeTargetRepo{targets: []model.QueryTarget{target}}, repo, &fakeResolver{}, &fakeExecutor{}, NewQueryGuard(QueryGuardConfig{DefaultMaxRows: 100, HardMaxRows: 500}), &fakeClock{t: now}, nil, &fakeDisclosureService{})
 
-	_, err := svc.ListHistory(context.Background(), 1, "admin", 22, model.QueryExecutionListQuery{PageSize: 20})
+	_, err := svc.ListHistory(context.Background(), model.QueryExecutionIdentity{Kind: model.QueryExecutionActorUser, ID: 1}, "admin", 22, model.QueryExecutionListQuery{PageSize: 20})
 	if err != nil {
 		t.Fatalf("ListHistory: %v", err)
 	}
@@ -1854,7 +2001,7 @@ func TestListHistory_Offset_SetsExplicitOffsetMode(t *testing.T) {
 	}
 	svc := NewQueryExecutionService(fakeTargetRepo{targets: []model.QueryTarget{target}}, repo, &fakeResolver{}, &fakeExecutor{}, NewQueryGuard(QueryGuardConfig{DefaultMaxRows: 100, HardMaxRows: 500}), &fakeClock{t: now}, nil, &fakeDisclosureService{})
 
-	_, err := svc.ListHistory(context.Background(), 1, "admin", 22, model.QueryExecutionListQuery{Page: 1, PageSize: 20})
+	_, err := svc.ListHistory(context.Background(), model.QueryExecutionIdentity{Kind: model.QueryExecutionActorUser, ID: 1}, "admin", 22, model.QueryExecutionListQuery{Page: 1, PageSize: 20})
 	if err != nil {
 		t.Fatalf("ListHistory: %v", err)
 	}

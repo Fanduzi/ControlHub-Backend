@@ -1,7 +1,7 @@
 // Package api provides HTTP handlers and routing for the ControlHub REST API.
 // input: bytes, context, errors, fmt, io, net/http, strconv, strings, time, chi, internal/model, internal/service
 // output: user-or-machine ordinary execute identity, user-only sibling query and owner-only statement handlers, controlled error mapping, queryExecutionAPI/queryExecutionStatementAPI interfaces
-// pos: HTTP handlers for governed execute/history/owner-only statement retrieval, saved-statement execution, and related-record navigation. Execute/related disclosure blocks publish query_result_disclosure_blocked (Issue #48); target-not-enabled remains query_not_allowed; post-finalize result-contract refusals publish 409 result_contract_upgrade_required on all three result routes (T8-B).
+// pos: HTTP handlers for governed execute/history/owner-only statement retrieval, saved-statement execution, and related-record navigation. The history list mixes terminal rows with claim-derived entries and accepts database/clientExecutionId filters plus the v2 mixed-ordering cursor (T10-C). Execute/related disclosure blocks publish query_result_disclosure_blocked (Issue #48); target-not-enabled remains query_not_allowed; post-finalize result-contract refusals publish 409 result_contract_upgrade_required on all three result routes (T8-B).
 // note: if this file changes, update header and README.md
 package api
 
@@ -15,6 +15,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/go-chi/chi/v5"
 
@@ -29,7 +30,7 @@ import (
 type queryExecutionAPI interface {
 	Execute(ctx context.Context, identity model.QueryExecutionIdentity, targetID uint64, req model.QueryExecuteRequest) (model.QueryExecuteResponse, error)
 	ExecuteSavedStatement(ctx context.Context, actorUserID, targetID, statementID uint64, req model.QuerySavedStatementExecuteRequest) (model.QueryExecuteResponse, error)
-	ListHistory(ctx context.Context, actorUserID uint64, actorRole string, targetID uint64, q model.QueryExecutionListQuery) (*model.QueryExecutionCursorPage, error)
+	ListHistory(ctx context.Context, identity model.QueryExecutionIdentity, actorRole string, targetID uint64, q model.QueryExecutionListQuery) (*model.QueryExecutionCursorPage, error)
 	QueryEvidencePersistenceFailures() int64
 	NavigateRelatedRecords(ctx context.Context, actorUserID uint64, targetID uint64, req model.RelatedRecordNavigationRequest) (model.RelatedRecordNavigationResponse, error)
 }
@@ -202,7 +203,7 @@ func handleListQueryExecutions(svc queryExecutionAPI) http.HandlerFunc {
 			return
 		}
 		actorRole, _ := actorRoleFromContext(r.Context())
-		status, from, to, cursor, err := parseExecutionFilters(r)
+		status, from, to, cursor, database, clientExecutionID, err := parseExecutionFilters(r)
 		if err != nil {
 			writeJSONError(w, http.StatusBadRequest, "validation_failed", err.Error())
 			return
@@ -216,8 +217,10 @@ func handleListQueryExecutions(svc queryExecutionAPI) http.HandlerFunc {
 			writeJSONError(w, http.StatusBadRequest, "validation_failed", err.Error())
 			return
 		}
-		result, err := svc.ListHistory(r.Context(), actorUserID, actorRole, targetID, model.QueryExecutionListQuery{
+		identity := model.QueryExecutionIdentity{Kind: model.QueryExecutionActorUser, ID: actorUserID}
+		result, err := svc.ListHistory(r.Context(), identity, actorRole, targetID, model.QueryExecutionListQuery{
 			TargetResourceID: targetID, Page: pg.Page, PageSize: pg.PageSize,
+			Database: database, ClientExecutionID: clientExecutionID,
 			Status: status, From: from, To: to, Cursor: cursor,
 		})
 		if err != nil {
@@ -258,62 +261,81 @@ func handleGetQueryExecutionStatement(svc queryExecutionStatementAPI) http.Handl
 	}
 }
 
-func parseExecutionFilters(r *http.Request) (status *model.QueryExecutionStatus, from, to *time.Time, cursor *string, err error) {
+func parseExecutionFilters(r *http.Request) (status *model.QueryExecutionStatus, from, to *time.Time, cursor *string, database, clientExecutionID string, err error) {
 	q := r.URL.Query()
 
 	if q.Has("page") && q.Has("cursor") {
-		return nil, nil, nil, nil, fmt.Errorf("cannot use both page and cursor parameters")
+		return nil, nil, nil, nil, "", "", fmt.Errorf("cannot use both page and cursor parameters")
 	}
 
-	if q.Has("status") {
-		raw := q.Get("status")
-		if raw == "" {
-			return nil, nil, nil, nil, fmt.Errorf("status parameter must not be empty")
+	if raw, present := q["status"]; present {
+		if len(raw) != 1 || raw[0] == "" {
+			return nil, nil, nil, nil, "", "", fmt.Errorf("status parameter must be a single non-empty value")
 		}
-		if err := model.ValidateStatus(raw); err != nil {
-			return nil, nil, nil, nil, err
+		if err := model.ValidateStatus(raw[0]); err != nil {
+			return nil, nil, nil, nil, "", "", err
 		}
-		s := model.QueryExecutionStatus(raw)
+		s := model.QueryExecutionStatus(raw[0])
 		status = &s
 	}
 
-	if q.Has("from") {
-		raw := q.Get("from")
-		if raw == "" {
-			return nil, nil, nil, nil, fmt.Errorf("from parameter must not be empty")
+	if raw, present := q["database"]; present {
+		if len(raw) != 1 || raw[0] == "" {
+			return nil, nil, nil, nil, "", "", fmt.Errorf("database parameter must be a single non-empty value")
 		}
-		t, err := model.ParseTimestamp(raw)
+		if utf8.RuneCountInString(raw[0]) > model.MaxIdentifierLength {
+			return nil, nil, nil, nil, "", "", fmt.Errorf("database exceeds %d characters", model.MaxIdentifierLength)
+		}
+		database = raw[0]
+	}
+
+	if raw, present := q["clientExecutionId"]; present {
+		if len(raw) != 1 || raw[0] == "" {
+			return nil, nil, nil, nil, "", "", fmt.Errorf("clientExecutionId parameter must be a single non-empty value")
+		}
+		if err := model.ValidateClientExecutionID(raw[0]); err != nil {
+			return nil, nil, nil, nil, "", "", err
+		}
+		if strings.IndexByte(raw[0], 0) >= 0 {
+			return nil, nil, nil, nil, "", "", fmt.Errorf("clientExecutionId must not contain NUL bytes")
+		}
+		clientExecutionID = raw[0]
+	}
+
+	if raw, present := q["from"]; present {
+		if len(raw) != 1 || raw[0] == "" {
+			return nil, nil, nil, nil, "", "", fmt.Errorf("from parameter must be a single non-empty value")
+		}
+		t, err := model.ParseTimestamp(raw[0])
 		if err != nil {
-			return nil, nil, nil, nil, err
+			return nil, nil, nil, nil, "", "", err
 		}
 		from = &t
 	}
 
-	if q.Has("to") {
-		raw := q.Get("to")
-		if raw == "" {
-			return nil, nil, nil, nil, fmt.Errorf("to parameter must not be empty")
+	if raw, present := q["to"]; present {
+		if len(raw) != 1 || raw[0] == "" {
+			return nil, nil, nil, nil, "", "", fmt.Errorf("to parameter must be a single non-empty value")
 		}
-		t, err := model.ParseTimestamp(raw)
+		t, err := model.ParseTimestamp(raw[0])
 		if err != nil {
-			return nil, nil, nil, nil, err
+			return nil, nil, nil, nil, "", "", err
 		}
 		to = &t
 	}
 
 	if err := model.ValidateTimeWindow(from, to); err != nil {
-		return nil, nil, nil, nil, err
+		return nil, nil, nil, nil, "", "", err
 	}
 
-	if q.Has("cursor") {
-		raw := q.Get("cursor")
-		if raw == "" {
-			return nil, nil, nil, nil, fmt.Errorf("cursor parameter must not be empty")
+	if raw, present := q["cursor"]; present {
+		if len(raw) != 1 || raw[0] == "" {
+			return nil, nil, nil, nil, "", "", fmt.Errorf("cursor parameter must be a single non-empty value")
 		}
-		cursor = &raw
+		cursor = &raw[0]
 	}
 
-	return status, from, to, cursor, nil
+	return status, from, to, cursor, database, clientExecutionID, nil
 }
 
 // writeQueryExecutionError maps a service sentinel to a controlled HTTP response.

@@ -14,6 +14,7 @@ import (
 	"log"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/fan/controlhub/internal/model"
 )
@@ -335,73 +336,157 @@ func (r *QueryExecutionRepository) GetSuccessfulExecutionStatement(ctx context.C
 	return response, nil
 }
 
-// ListExecutions returns execution history (newest first) for a target plus the
-// total row count, for pagination. It returns metadata only — never result rows.
-// When q.ActorUserID is non-nil, only that actor's rows are included (non-admin
-// scope). Actor display names come from a parameterized LEFT JOIN on users;
-// missing users project as "Unknown user".
+// ListExecutions returns the mixed execution history for a target — persisted
+// terminal execution rows unioned with entries derived from claim occupancy
+// rows — ordered by real activity time (executions by created_at, claims by
+// claimed_at), newest first, plus the total row count for offset pagination.
+// Both arms come from ONE consistent union query, so a finalize racing the
+// read can never produce a torn claim/execution pair, a duplicated entry, or
+// a linked claim surfacing beside its own terminal row.
+//
+// The claim arm yields unlinked claims plus claims whose stored execution_id
+// link is dangling or points at identity-mismatched evidence — the latter
+// rows come back flagged (ClaimLinkBroken) for the service to fail closed on,
+// never as fabricated running entries. A validly linked claim is excluded
+// here: its terminal execution row already represents it.
+//
+// When q.Actor is non-nil, only that typed identity's rows are included
+// (non-admin scope): a user identity binds actor_user_id with the machine
+// column NULL, and vice versa — user:7 can never read machine:7. When
+// q.Status is set (a stored terminal value), claim-derived entries cannot
+// match and the claim arm is omitted entirely.
 //
 // Pagination mode is selected by q.Mode (set explicitly by the service layer):
-//   - PaginationModeCursor: keyset pagination over (created_at, id). The first
-//     page (Cursor == nil) has no boundary predicate and starts from the newest
-//     row. Continuation pages (Cursor != nil) add a strictly-older-than
-//     predicate on (created_at, id). Cursor mode never runs COUNT and never
-//     uses OFFSET. The caller requests PageSize+1 rows and trims the sentinel.
+//   - PaginationModeCursor: keyset pagination over the mixed ordering
+//     (activity_at, kind, ref). Cursor mode never runs COUNT and never uses
+//     OFFSET. The caller requests PageSize+1 rows and trims the sentinel.
 //     The returned total is always 0 in this mode.
 //   - PaginationModeOffset: legacy offset pagination with COUNT and OFFSET.
-func (r *QueryExecutionRepository) ListExecutions(ctx context.Context, q model.QueryExecutionListQuery) ([]model.QueryExecutionRecord, int, error) {
-	where := `qe.target_resource_id = ?`
-	args := []any{q.TargetResourceID}
+func (r *QueryExecutionRepository) ListExecutions(ctx context.Context, q model.QueryExecutionListQuery) ([]model.QueryExecutionListItem, int, error) {
+	execWhere := `qe.target_resource_id = ?`
+	execArgs := []any{q.TargetResourceID}
+	claimWhere := `c.target_resource_id = ?`
+	claimArgs := []any{q.TargetResourceID}
 
-	if q.ActorUserID != nil {
-		where += ` AND qe.actor_user_id = ?`
-		args = append(args, *q.ActorUserID)
+	if q.Actor != nil {
+		if q.Actor.Kind == model.QueryExecutionActorUser {
+			execWhere += ` AND qe.actor_user_id = ? AND qe.actor_machine_principal_id IS NULL`
+			claimWhere += ` AND c.actor_user_id = ? AND c.actor_machine_principal_id IS NULL`
+		} else {
+			execWhere += ` AND qe.actor_machine_principal_id = ? AND qe.actor_user_id IS NULL`
+			claimWhere += ` AND c.actor_machine_principal_id = ? AND c.actor_user_id IS NULL`
+		}
+		execArgs = append(execArgs, q.Actor.ID)
+		claimArgs = append(claimArgs, q.Actor.ID)
 	}
 	if q.Status != nil {
-		where += ` AND qe.status = ?`
-		args = append(args, string(*q.Status))
+		execWhere += ` AND qe.status = ?`
+		execArgs = append(execArgs, string(*q.Status))
 	}
 	if q.From != nil {
-		where += ` AND qe.created_at >= ?`
-		args = append(args, q.From.UTC())
+		execWhere += ` AND qe.created_at >= ?`
+		claimWhere += ` AND c.claimed_at >= ?`
+		execArgs = append(execArgs, q.From.UTC())
+		claimArgs = append(claimArgs, q.From.UTC())
 	}
 	if q.To != nil {
-		where += ` AND qe.created_at < ?`
-		args = append(args, q.To.UTC())
+		execWhere += ` AND qe.created_at < ?`
+		claimWhere += ` AND c.claimed_at < ?`
+		execArgs = append(execArgs, q.To.UTC())
+		claimArgs = append(claimArgs, q.To.UTC())
+	}
+	if q.Database != "" {
+		execWhere += ` AND qe.database_name = ?`
+		claimWhere += ` AND c.database_name = ?`
+		execArgs = append(execArgs, q.Database)
+		claimArgs = append(claimArgs, q.Database)
+	}
+	if q.ClientExecutionID != "" {
+		execWhere += ` AND qe.client_execution_id = ?`
+		claimWhere += ` AND c.client_execution_id = ?`
+		execArgs = append(execArgs, q.ClientExecutionID)
+		claimArgs = append(claimArgs, q.ClientExecutionID)
+	}
+
+	const execArm = `SELECT 0 AS kind, qe.created_at AS activity_at, qe.id AS ref_num, NULL AS ref_str,
+		qe.target_resource_id, qe.actor_user_id, qe.actor_machine_principal_id, qe.engine,
+		qe.database_name, qe.schema_name, qe.statement_digest, qe.statement_preview,
+		qe.full_statement IS NOT NULL,
+		qe.status, qe.row_count, qe.duration_ms, qe.error_code, qe.error_message,
+		qe.backend_pid, qe.remote_state, qe.client_execution_id,
+		NULL AS attempt_timeout_ms, NULL AS claim_execution_id,
+		u.display_name AS user_display_name, mp.name AS machine_name
+		FROM query_executions qe
+		LEFT JOIN users u ON u.id = qe.actor_user_id
+		LEFT JOIN machine_principals mp ON mp.id = qe.actor_machine_principal_id
+		WHERE `
+
+	// The claim arm returns only unlinked claims and claims whose link is
+	// provably broken: a claim whose execution row exists AND matches every
+	// occupancy identity stays out — its terminal row is already listed.
+	claimArm := `SELECT 1 AS kind, c.claimed_at AS activity_at, NULL AS ref_num, c.client_execution_id AS ref_str,
+		c.target_resource_id, c.actor_user_id, c.actor_machine_principal_id, NULL AS engine,
+		c.database_name, c.schema_name, NULL AS statement_digest, NULL AS statement_preview,
+		NULL AS has_full,
+		NULL AS status, NULL AS row_count, NULL AS duration_ms, NULL AS error_code, NULL AS error_message,
+		NULL AS backend_pid, NULL AS remote_state, c.client_execution_id,
+		c.attempt_timeout_ms, c.execution_id AS claim_execution_id,
+		u.display_name AS user_display_name, mp.name AS machine_name
+		FROM query_execution_claims c
+		LEFT JOIN query_executions le ON le.id = c.execution_id
+		LEFT JOIN users u ON u.id = c.actor_user_id
+		LEFT JOIN machine_principals mp ON mp.id = c.actor_machine_principal_id
+		WHERE ` + claimWhere + `
+		  AND (c.execution_id IS NULL
+		       OR le.id IS NULL
+		       OR NOT (le.target_resource_id <=> c.target_resource_id)
+		       OR NOT (le.actor_user_id <=> c.actor_user_id)
+		       OR NOT (le.actor_machine_principal_id <=> c.actor_machine_principal_id)
+		       OR le.database_name <> c.database_name
+		       OR le.schema_name <> c.schema_name
+		       OR NOT (le.client_execution_id <=> c.client_execution_id))`
+
+	union := execArm + execWhere
+	args := execArgs
+	if q.Status == nil {
+		union += ` UNION ALL ` + claimArm
+		args = append(args, claimArgs...)
 	}
 
 	cursorMode := q.Mode == model.PaginationModeCursor
 	var total int
 
 	if !cursorMode {
-		countSQL := `SELECT count(*) FROM query_executions qe WHERE ` + where
+		countSQL := `SELECT count(*) FROM (` + union + `) u`
 		if err := r.db.QueryRowContext(ctx, countSQL, args...).Scan(&total); err != nil {
 			return nil, 0, fmt.Errorf("count query executions: %w", err)
 		}
-	} else if q.Cursor != nil {
+	}
+
+	listSQL := `SELECT * FROM (` + union + `) u`
+	if cursorMode && q.Cursor != nil {
 		payload, err := model.DecodeCursor(*q.Cursor)
 		if err != nil {
 			return nil, 0, fmt.Errorf("invalid cursor: %w", err)
 		}
-		cursorID, err := strconv.ParseUint(payload.ID, 10, 64)
-		if err != nil {
-			return nil, 0, fmt.Errorf("invalid cursor id: %w", err)
+		switch payload.Kind {
+		case "e":
+			listSQL += ` WHERE (u.activity_at < ? OR (u.activity_at = ? AND u.kind > 0)
+				OR (u.activity_at = ? AND u.kind = 0 AND u.ref_num < ?))`
+			cursorID, err := strconv.ParseUint(payload.Ref, 10, 64)
+			if err != nil {
+				return nil, 0, fmt.Errorf("invalid cursor ref: %w", err)
+			}
+			args = append(args, payload.CreatedAt, payload.CreatedAt, payload.CreatedAt, cursorID)
+		case "c":
+			listSQL += ` WHERE (u.activity_at < ?
+				OR (u.activity_at = ? AND u.kind = 1 AND u.ref_str < ?))`
+			args = append(args, payload.CreatedAt, payload.CreatedAt, payload.Ref)
 		}
-		where += ` AND (qe.created_at < ? OR (qe.created_at = ? AND qe.id < ?))`
-		args = append(args, payload.CreatedAt, payload.CreatedAt, cursorID)
 	}
+	listSQL += ` ORDER BY u.activity_at DESC, u.kind ASC, u.ref_num DESC, u.ref_str DESC LIMIT ?`
 
-	listSQL := `SELECT qe.id, qe.target_resource_id, qe.actor_user_id, qe.actor_machine_principal_id, qe.engine, qe.database_name, qe.schema_name, qe.statement_digest, qe.statement_preview, qe.full_statement IS NOT NULL,
-		 qe.status, qe.row_count, qe.duration_ms, qe.error_code, qe.error_message, qe.backend_pid, qe.remote_state, qe.client_execution_id, qe.created_at,
-		 u.display_name AS user_display_name, mp.name AS machine_name
-		 FROM query_executions qe
-		 LEFT JOIN users u ON u.id = qe.actor_user_id
-		 LEFT JOIN machine_principals mp ON mp.id = qe.actor_machine_principal_id
-		 WHERE ` + where + ` ORDER BY qe.created_at DESC, qe.id DESC LIMIT ?`
-
-	listArgs := make([]any, 0, len(args)+1)
-	listArgs = append(listArgs, args...)
-
+	listArgs := append([]any{}, args...)
 	if cursorMode {
 		listArgs = append(listArgs, q.PageSize)
 	} else {
@@ -416,22 +501,38 @@ func (r *QueryExecutionRepository) ListExecutions(ctx context.Context, q model.Q
 	}
 	defer rows.Close()
 
-	items := make([]model.QueryExecutionRecord, 0)
+	items := make([]model.QueryExecutionListItem, 0)
 	for rows.Next() {
 		var (
-			rec             model.QueryExecutionRecord
+			item            model.QueryExecutionListItem
+			kind            int
+			activityAt      time.Time
+			refNum          nullableUint64
+			refStr          sql.NullString
 			actorUserID     nullableUint64
 			actorMachineID  nullableUint64
+			engine          sql.NullString
+			digest          sql.NullString
+			preview         sql.NullString
+			hasFull         sql.NullBool
+			status          sql.NullString
+			rowCount        sql.NullInt64
+			duration        sql.NullInt64
+			errCode         sql.NullString
+			errMsg          sql.NullString
+			remote          sql.NullString
+			timeoutMs       nullableUint64
+			claimExecID     nullableUint64
 			userDisplayName sql.NullString
 			machineName     sql.NullString
-			status          string
 		)
 		if err := rows.Scan(
-			&rec.ID, &rec.TargetResourceID, &actorUserID, &actorMachineID, &rec.Engine,
-			&rec.DatabaseName, &rec.SchemaName,
-			&rec.StatementDigest, &rec.StatementPreview, &rec.HasFullStatement, &status,
-			&rec.RowCount, &rec.DurationMs, &rec.ErrorCode, &rec.ErrorMessage,
-			&rec.BackendPID, &rec.RemoteState, &rec.ClientExecutionID, &rec.CreatedAt,
+			&kind, &activityAt, &refNum, &refStr,
+			&item.TargetResourceID, &actorUserID, &actorMachineID, &engine,
+			&item.DatabaseName, &item.SchemaName, &digest, &preview, &hasFull,
+			&status, &rowCount, &duration, &errCode, &errMsg,
+			&item.BackendPID, &remote, &item.ClientExecutionID,
+			&timeoutMs, &claimExecID,
 			&userDisplayName, &machineName,
 		); err != nil {
 			return nil, 0, fmt.Errorf("scan query execution: %w", err)
@@ -440,20 +541,55 @@ func (r *QueryExecutionRepository) ListExecutions(ctx context.Context, q model.Q
 			return nil, 0, errors.New("scan query execution: expected exactly one actor identity")
 		}
 		if actorUserID.Valid {
-			rec.ActorUserID = actorUserID.Uint64
-			rec.Actor = model.QueryExecutionActor{Kind: model.QueryExecutionActorUser, DisplayName: model.UnknownHistoryActorDisplayName}
+			item.ActorUserID = actorUserID.Uint64
+			item.Actor = model.QueryExecutionActor{Kind: model.QueryExecutionActorUser, DisplayName: model.UnknownHistoryActorDisplayName}
 			if userDisplayName.Valid && strings.TrimSpace(userDisplayName.String) != "" {
-				rec.Actor.DisplayName = userDisplayName.String
+				item.Actor.DisplayName = userDisplayName.String
 			}
 		} else {
-			rec.ActorMachinePrincipalID = actorMachineID.Uint64
-			rec.Actor = model.QueryExecutionActor{Kind: model.QueryExecutionActorMachine, DisplayName: model.UnknownHistoryMachineActorDisplayName}
+			item.ActorMachinePrincipalID = actorMachineID.Uint64
+			item.Actor = model.QueryExecutionActor{Kind: model.QueryExecutionActorMachine, DisplayName: model.UnknownHistoryMachineActorDisplayName}
 			if machineName.Valid && strings.TrimSpace(machineName.String) != "" {
-				rec.Actor.DisplayName = machineName.String
+				item.Actor.DisplayName = machineName.String
 			}
 		}
-		rec.Status = model.QueryExecutionStatus(status)
-		items = append(items, rec)
+		if kind == 0 {
+			if !refNum.Valid || !status.Valid {
+				return nil, 0, errors.New("scan query execution: terminal row lacks identity or status")
+			}
+			if err := model.ValidateStatus(status.String); err != nil {
+				return nil, 0, errors.New("scan query execution: stored status is invalid")
+			}
+			if err := model.QueryExecutionRemoteState(remote.String).Validate(); err != nil {
+				return nil, 0, errors.New("scan query execution: stored remote state is invalid")
+			}
+			item.Kind = model.QueryExecutionListItemExecution
+			id := refNum.Uint64
+			item.ID = &id
+			item.Engine = engine.String
+			item.StatementDigest = digest.String
+			item.StatementPreview = preview.String
+			item.HasFullStatement = hasFull.Valid && hasFull.Bool
+			item.Status = model.QueryExecutionViewStatus(status.String)
+			item.RowCount = int(rowCount.Int64)
+			item.DurationMs = duration.Int64
+			item.ErrorCode = errCode.String
+			item.ErrorMessage = errMsg.String
+			item.RemoteState = model.QueryExecutionRemoteState(remote.String)
+			t := activityAt
+			item.CreatedAt = &t
+		} else {
+			item.Kind = model.QueryExecutionListItemClaim
+			if claimExecID.Valid {
+				item.ClaimLinkBroken = true
+			}
+			if timeoutMs.Valid {
+				item.ClaimAttemptTimeoutMs = int64(timeoutMs.Uint64)
+			}
+			t := activityAt
+			item.ClaimedAt = &t
+		}
+		items = append(items, item)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, 0, fmt.Errorf("iterate query executions: %w", err)

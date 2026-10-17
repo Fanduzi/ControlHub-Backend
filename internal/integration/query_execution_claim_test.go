@@ -55,6 +55,7 @@ func newClaimInput(targetID uint64, key string, id model.QueryExecutionIdentity,
 		DatabaseName:      database,
 		SchemaName:        claimTestSchema,
 		RequestDigest:     digest,
+		AttemptTimeoutMs:  5000,
 		ClaimedAt:         time.Now().UTC(),
 	}
 }
