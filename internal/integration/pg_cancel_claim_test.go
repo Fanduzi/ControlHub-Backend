@@ -125,9 +125,10 @@ func TestClaim_RealPGCancelEvidenceFlow(t *testing.T) {
 	}()
 
 	// Deterministic barrier: cancel only after the server reports OUR user
-	// statement active on the exec application's backend. The count(*)
-	// marker appears only in the (rewritten) user statement — internal
-	// probes never carry it.
+	// statement in steady execution — the count(*) marker appears only in
+	// the (rewritten) user statement, and the server-measured query age
+	// keeps the cancel out of the backend's startup edge where a signal is
+	// observed to not always take effect.
 	admin := connectPG(t, fix.host, fix.port, fix.db, pgMetaAdminUser, pgMetaAdminPassword)
 	pollCtx, pollCancel := context.WithTimeout(ctx, 10*time.Second)
 	defer pollCancel()
@@ -137,7 +138,8 @@ func TestClaim_RealPGCancelEvidenceFlow(t *testing.T) {
 		if err := admin.QueryRow(pollCtx,
 			`SELECT count(*) FROM pg_catalog.pg_stat_activity
 			  WHERE application_name = 'ch-t10b-claim' AND state = 'active'
-			    AND position('count(*)' in query) > 0`).Scan(&n); err != nil {
+			    AND position('count(*)' in query) > 0
+			    AND clock_timestamp() - query_start >= make_interval(secs => 0.25)`).Scan(&n); err != nil {
 			t.Fatalf("poll backend: %v", err)
 		}
 		if n > 0 {

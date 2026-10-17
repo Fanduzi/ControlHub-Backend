@@ -13,10 +13,10 @@
 // CancelRequest via DeadlineContextWatcherHandler + asyncClose on a NEW
 // control connection; pgxpool destroys the unsynchronized conn. Remote
 // truth comes only from the bounded independent pg_stat_activity probe.
-// T10-B-R1: pgStmtFateAfterRead folds remote facts (ErrorResponse / clean
-// close / driver pre-send mark) independently of the primary error; the
-// probe marks connect/version/poll/verdict phases and exposes test-only
-// dial/row seams
+// T10-B-R1/R2: pgStmtFateAfterRead folds remote facts independently of the
+// primary error; the probe marks connect/version/poll/verdict/release
+// phases, times the verdict window before conn release, and exposes
+// test-only dial/row/SQL seams
 // note: if this file changes, update this header and module README.md.
 package service
 
@@ -207,10 +207,17 @@ var pgProbeDialOverride pgconn.DialFunc
 
 // pgProbeRowHook is a test-only seam over the pg_stat_activity row read:
 // when it reports handled=true its synthetic result replaces the real
-// query, letting a test hold the backend "active" or stall the read
-// mid-flight to prove the single-window contract. Production leaves it
-// nil; handled=false falls through to the real query.
+// query, letting a test hold the backend "active" to prove the
+// single-window contract. Production leaves it nil; handled=false falls
+// through to the real query.
 var pgProbeRowHook func(ctx context.Context, conn *pgx.Conn, pid int32) (found bool, state *string, start time.Time, err error, handled bool)
+
+// pgProbeRowSQL is a test-only seam that swaps the probe's row query text —
+// it exists so a test can run a controllably DELAYED state probe (a real
+// statement the server executes, e.g. one joined with pg_sleep) through the
+// production QueryRow/Scan path instead of faking a stall inside a hook.
+// Production leaves it empty and the built-in query is always used.
+var pgProbeRowSQL string
 
 // observeRemoteState resolves this attempt's remote_state once per attempt,
 // inside the release path. It never touches the execution pool again: the
@@ -251,27 +258,21 @@ func pgProbeBackendState(ctx context.Context, cfg *pgx.ConnConfig, pid int32, ba
 	}
 	probeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), pgRemoteProbeWindow)
 	defer cancel()
-	logf := pgExecProbeLog
-	start := time.Now()
-	if logf != nil {
-		logf("probe begin")
-	}
-
-	verdict := pgProbeBackendStateInner(probeCtx, cfg, pid, backendStart, logf)
-	if logf != nil {
-		// The verdict window is the observation budget only — the probe
-		// connection's own release is logged separately inside the inner
-		// call and is never folded into this number.
-		logf(fmt.Sprintf("probe verdict=%s window=%s", verdict, time.Since(start)))
-	}
-	return verdict
+	return pgProbeBackendStateInner(probeCtx, cfg, pid, backendStart, pgExecProbeLog)
 }
 
 // pgProbeBackendStateInner is the observable half of the probe: connect,
 // version gate, then polls — all inside the caller's single probeCtx. Phase
 // marks go to the test log seam so a test can time dial/gate/poll/verdict
-// without seeing credentials or query text.
-func pgProbeBackendStateInner(probeCtx context.Context, cfg *pgx.ConnConfig, pid int32, backendStart time.Time, logf func(string)) model.QueryExecutionRemoteState {
+// without seeing credentials or query text. Two durations are reported
+// separately: the verdict window ends at the decision, BEFORE the probe
+// connection's own release is measured — cleanup time never folds into the
+// observation number.
+func pgProbeBackendStateInner(probeCtx context.Context, cfg *pgx.ConnConfig, pid int32, backendStart time.Time, logf func(string)) (verdict model.QueryExecutionRemoteState) {
+	start := time.Now()
+	if logf != nil {
+		logf("probe begin")
+	}
 	pcfg := cfg.Copy()
 	if pcfg.ConnectTimeout <= 0 || pcfg.ConnectTimeout > pgRemoteProbeWindow {
 		// The observation copy may tighten operational timeouts; identity —
@@ -281,6 +282,31 @@ func pgProbeBackendStateInner(probeCtx context.Context, cfg *pgx.ConnConfig, pid
 	if pgProbeDialOverride != nil {
 		pcfg.DialFunc = pgProbeDialOverride
 	}
+	var conn *pgx.Conn
+	// Registered FIRST so it runs LAST: the connection release is timed on
+	// its own mark and can never be folded into the verdict window.
+	defer func() {
+		if conn == nil {
+			return
+		}
+		// Close is a local release; the probe budget must not be spent
+		// waiting on an already-dead socket.
+		relStart := time.Now()
+		cctx, ccancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer ccancel()
+		_ = conn.Close(cctx)
+		if logf != nil {
+			logf(fmt.Sprintf("probe conn release returned elapsed=%s", time.Since(relStart)))
+		}
+	}()
+	// Registered SECOND so it runs FIRST: the verdict window is captured
+	// at the decision point, before any release work below.
+	defer func() {
+		if logf != nil {
+			logf(fmt.Sprintf("probe verdict=%s window=%s", verdict, time.Since(start)))
+		}
+	}()
+
 	if logf != nil {
 		logf("probe connect begin")
 	}
@@ -292,18 +318,8 @@ func pgProbeBackendStateInner(probeCtx context.Context, cfg *pgx.ConnConfig, pid
 		return model.QueryExecutionRemoteUnknown
 	}
 	if logf != nil {
-		logf("probe connect done")
+		logf(fmt.Sprintf("probe connect done pid=%d", conn.PgConn().PID()))
 	}
-	defer func() {
-		// Close is a local release; the probe budget must not be spent
-		// waiting on an already-dead socket.
-		cctx, ccancel := context.WithTimeout(context.Background(), 2*time.Second)
-		defer ccancel()
-		_ = conn.Close(cctx)
-		if logf != nil {
-			logf("probe conn released")
-		}
-	}()
 
 	if logf != nil {
 		logf("probe version begin")
@@ -365,10 +381,13 @@ func pgProbeBackendRowSeamed(ctx context.Context, conn *pgx.Conn, pid int32) (bo
 // pgProbeBackendRow reads the single pg_stat_activity row for our pid. It
 // requests only state and backend_start — never the query text.
 func pgProbeBackendRow(ctx context.Context, conn *pgx.Conn, pid int32) (found bool, state *string, start time.Time, err error) {
-	err = conn.QueryRow(ctx,
-		`SELECT a.state::text, a.backend_start
+	sql := `SELECT a.state::text, a.backend_start
 		   FROM pg_catalog.pg_stat_activity a
-		  WHERE a.pid = $1`, pid).Scan(&state, &start)
+		  WHERE a.pid = $1`
+	if pgProbeRowSQL != "" {
+		sql = pgProbeRowSQL
+	}
+	err = conn.QueryRow(ctx, sql, pid).Scan(&state, &start)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return false, nil, time.Time{}, nil
 	}
