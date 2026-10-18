@@ -10,7 +10,9 @@
 // verbatim for the post-claim binding gate) → request digest → atomic
 // TryClaimExecution → governed PG disclosure outcome → (result, evidence,
 // error) consistency gate → exactly one FinalizeClaimWithAudit → internal
-// result. History previews go through pgsql.SafeStatementPreview — keyed
+// result whose evidence is a verdict-aligned independent copy (never a
+// rewritten executor record). History previews go through
+// pgsql.SafeStatementPreview — keyed
 // rows store the masked preview, pre-claim pairs the fixed withheld marker.
 // This entry is not an
 // HTTP route; its result never serializes to a client response.
@@ -333,13 +335,28 @@ func (s *QueryExecutionService) ExecutePGClaimed(ctx context.Context, identity m
 		return PGClaimedOutcome{}, errPersistAttempt
 	}
 
+	// The outcome's evidence must tell the same terminal story as the
+	// persisted row and outcome status. The executor's record is its own —
+	// never rewritten in place — so when the verdict diverges from the
+	// executor's classification (a contract fault), the outcome exposes an
+	// independent copy carrying the final status while every measured fact
+	// (stage, backend identity, remote_state, send flag) is kept verbatim:
+	// a real remote_state=completed may legitimately coexist with a failed
+	// verdict and is never rewritten for cosmetic agreement.
+	outEv := ev
+	if outEv.Status != status {
+		aligned := *outEv
+		aligned.Status = status
+		outEv = &aligned
+	}
+
 	if contractFault {
-		return PGClaimedOutcome{ExecutionID: execID, Status: status, Evidence: ev}, ErrQueryBackendFailure
+		return PGClaimedOutcome{ExecutionID: execID, Status: status, Evidence: outEv}, ErrQueryBackendFailure
 	}
 	if execErr != nil {
-		return PGClaimedOutcome{ExecutionID: execID, Status: status, Evidence: ev}, execErr
+		return PGClaimedOutcome{ExecutionID: execID, Status: status, Evidence: outEv}, execErr
 	}
-	return PGClaimedOutcome{ExecutionID: execID, Status: status, Result: res, Evidence: ev}, nil
+	return PGClaimedOutcome{ExecutionID: execID, Status: status, Result: res, Evidence: outEv}, nil
 }
 
 // resolvePGClaimPagination resolves the keyed entry's mandatory page window.

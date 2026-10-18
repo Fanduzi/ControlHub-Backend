@@ -912,6 +912,13 @@ func TestExecutePGClaimed_OutcomeConsistencyGate(t *testing.T) {
 			if rec.RowCount != tc.wantRows {
 				t.Fatalf("persisted row_count = %d, want %d", rec.RowCount, tc.wantRows)
 			}
+			// The three status surfaces can never contradict: the returned
+			// outcome, its evidence, and the persisted row agree on the same
+			// terminal state — the consistency gate's verdict is the verdict.
+			if out.Evidence == nil || out.Evidence.Status != out.Status {
+				t.Fatalf("evidence status %v contradicts outcome %v",
+					out.Evidence, out.Status)
+			}
 			if out.Status != rec.Status {
 				t.Fatalf("outcome status %v diverged from persisted %v", out.Status, rec.Status)
 			}
@@ -939,5 +946,59 @@ func TestExecutePGClaimed_OutcomeConsistencyGate(t *testing.T) {
 				t.Fatalf("persisted pid = %v, want %d", rec.BackendPID, tc.ev.BackendPID)
 			}
 		})
+	}
+}
+
+// ---------------------------------------------------------------------------
+// R1-6 follow-up (internal contract fault-injection — ordinary clients can
+// never construct executor return objects): the verdict-aligned evidence is
+// an independent copy. The executor's record keeps its original status, the
+// measured facts survive verbatim — a real remote_state=completed coexists
+// with a failed verdict — and mutating the returned record never reaches
+// the input.
+// ---------------------------------------------------------------------------
+
+func TestExecutePGClaimed_ContractFaultEvidenceIsIndependentCopy(t *testing.T) {
+	t.Parallel()
+	repo := claimedPGRepo(t)
+	svc := newClaimedService(repo, &fakeResolver{dsn: mustDSN(t)})
+	start := time.Date(2026, 6, 22, 8, 59, 0, 0, time.UTC)
+	in := &PGAttemptEvidence{
+		Stage: PGStageExecute, Status: model.QueryExecutionSuccess,
+		BackendPID: 4321, BackendStart: start,
+		RemoteState: model.QueryExecutionRemoteCompleted, UserSQLSent: true,
+	}
+	svc.pgOutcomeFn = func(context.Context, PGDisclosureInput) (*PGDisclosedResult, *PGAttemptEvidence, error) {
+		return nil, in, nil
+	}
+	out, err := svc.ExecutePGClaimed(context.Background(), userExecutionIdentity(7), 9002, validClaimedRequest())
+	if !errors.Is(err, ErrQueryBackendFailure) {
+		t.Fatalf("err = %v, want ErrQueryBackendFailure", err)
+	}
+	// Independent record, aligned status, facts verbatim.
+	if out.Evidence == nil || out.Evidence == in {
+		t.Fatal("contract-fault evidence aliases the executor's record")
+	}
+	if out.Evidence.Status != model.QueryExecutionFailed || out.Status != model.QueryExecutionFailed {
+		t.Fatalf("outcome evidence = %+v, want failed", out.Evidence)
+	}
+	if out.Evidence.Stage != PGStageExecute || out.Evidence.BackendPID != 4321 ||
+		!out.Evidence.BackendStart.Equal(start) ||
+		out.Evidence.RemoteState != model.QueryExecutionRemoteCompleted ||
+		!out.Evidence.UserSQLSent {
+		t.Fatalf("measured facts rewritten: %+v", out.Evidence)
+	}
+	// The persisted row keeps the same real remote_state — a completed
+	// backend is a fact, not a status contradiction.
+	rec := repo.finalizeCalls[0]
+	if rec.RemoteState != model.QueryExecutionRemoteCompleted || rec.BackendPID == nil || *rec.BackendPID != 4321 {
+		t.Fatalf("persisted evidence facts lost: %+v", rec)
+	}
+	// Input ownership: the executor's record is untouched, and mutating the
+	// returned copy never reaches it.
+	out.Evidence.Status = model.QueryExecutionSuccess
+	out.Evidence.BackendPID = 1
+	if in.Status != model.QueryExecutionSuccess || in.BackendPID != 4321 {
+		t.Fatalf("executor record mutated: %+v", in)
 	}
 }
