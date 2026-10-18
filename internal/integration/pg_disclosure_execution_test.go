@@ -54,7 +54,7 @@ func newPGDiscFixture(t *testing.T, opts ...testcontainers.ContainerCustomizer) 
 			pgc.WithPassword(pgMetaAdminPassword),
 			testcontainers.WithWaitStrategy(
 				wait.ForLog("database system is ready to accept connections").
-					WithOccurrence(2).WithStartupTimeout(90*time.Second)),
+					WithOccurrence(2).WithStartupTimeout(90 * time.Second)),
 		}, opts...)...,
 	)
 	if err != nil {
