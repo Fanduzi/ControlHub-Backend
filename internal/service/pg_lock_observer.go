@@ -11,9 +11,10 @@
 // backend's pg_locks rows in one shot; identity is (database, relation) with
 // shared catalogs at database 0; only granted locks count as held evidence;
 // every held lock must explain through approved ∪ probe whitelist ∪
-// ownership edges (index/TOAST/inheritance), and every bound entity ref must
-// appear in the held set (derived approved records are explainable, not
-// required — a materialized view's deps are never locked)
+// ownership edges (index/TOAST/inheritance), and every bound entity ref —
+// plus the private navigation source relation when a navigation binding is
+// present — must appear in the held set (derived approved records are
+// explainable, not required — a materialized view's deps are never locked)
 // note: if this file changes, update this header and module README.md.
 package service
 
@@ -248,6 +249,13 @@ func (a *pgExecAttempt) auditLockSet() error {
 			required[ref.Identity] = true
 			requiredSet = append(requiredSet, ref.Identity)
 		}
+	}
+	// The navigation entry's bound source relation is the gate's own
+	// required lock — its ACCESS SHARE must be held until rollback, or the
+	// verify-stage re-proof no longer protects the locator read.
+	if a.bind.navigationSource != nil && !required[*a.bind.navigationSource] {
+		required[*a.bind.navigationSource] = true
+		requiredSet = append(requiredSet, *a.bind.navigationSource)
 	}
 	verdict, _ := evaluatePGLockAudit(observed, a.virtualXID, explainable, requiredSet)
 	switch verdict {

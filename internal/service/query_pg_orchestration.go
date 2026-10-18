@@ -1,21 +1,22 @@
-// Package service orchestrates the internal keyed PostgreSQL execution entry.
-// input: context, errors, fmt, strings, time, internal/model,
-// internal/pgsql
+// Package service orchestrates the internal keyed PostgreSQL execution
+// entries over the closed pgClaimedEntryKind enum (ordinary, saved, and
+// navigation).
+// input: context, errors, fmt, strings, time, internal/model, internal/pgsql
 // output: ExecutePGClaimed, PGClaimedExecuteRequest, PGClaimedOutcome,
 // ErrQueryExecutionAlreadyExists, ErrQueryExecutionConflict,
-// WithPGClaimOrchestration
-// pos: T10-C production claim orchestration (issue #118, frozen G9 order)
-// plus the T8-C delivery seam (issue #116) — request-shape validation →
-// access resolution → defaults (explicit schema verbatim) → digest →
-// atomic TryClaimExecution → governed PG disclosure outcome → (result,
-// evidence, error) + cellTruncated-structure consistency gate run on a
-// coordinator-owned pre-finalize delivery snapshot → one keyed
-// FinalizeClaimWithAudit → shared DecideResultDelivery on that snapshot
-// (capability refusal is delivery-only — the success pair stands) →
-// result rebuilt from the decision's owned rows/matrix, never the
-// producer's object, evidence a verdict-aligned copy. History previews
-// run through pgsql.SafeStatementPreview — keyed rows store the masked
-// preview, pre-claim pairs the fixed withheld marker. Not an HTTP route.
+// WithPGClaimOrchestration — plus the private pgClaimedPrepared runner
+// pos: T10-C keyed claim orchestration (issue #118, frozen G9 order) plus
+// the T8-C delivery seam (issue #116) — each entry's front half validates
+// shape, resolves access, resolves defaults (explicit schema verbatim),
+// and computes its digest; ONE executePGClaimedPrepared runner then owns
+// atomic TryClaimExecution → governed outcome → consistency gate on a
+// coordinator-owned pre-finalize snapshot → the sole keyed
+// FinalizeClaimWithAudit → DecideResultDelivery on that snapshot → result
+// rebuilt from the decision's owned rows/matrix. The kind picks the audit
+// event (query.executed for ordinary/saved, related_record_navigation for
+// navigation) and statement persistence: only ordinary stores the masked
+// preview and owner-only full statement; saved/navigation always persist
+// the withheld preview and empty FullStatement. Not an HTTP route.
 // note: if this file changes, update this header and module README.md.
 package service
 
@@ -115,6 +116,89 @@ func pgClaimedStatementPreview(stmt string) string {
 	return pgClaimedWithheldPreview
 }
 
+// pgClaimedEntryKind is the closed enum of keyed PG entry sources. The
+// server selects it — it is never a client input — and it decides only the
+// audit-event family and the statement-persistence policy; the
+// claim/finalize/delivery machinery is identical for every member.
+// All three entries use this closed event selection rather than accepting
+// an open-ended event type from callers.
+type pgClaimedEntryKind int
+
+const (
+	pgClaimedEntryOrdinary pgClaimedEntryKind = iota
+	pgClaimedEntrySaved
+	pgClaimedEntryNavigation
+)
+
+// keyedAuditEvent selects the fixed server-owned audit event type the keyed
+// finalize writes: ordinary and saved executions share query.executed;
+// related-record navigation carries its own event.
+func (k pgClaimedEntryKind) keyedAuditEvent() string {
+	if k == pgClaimedEntryNavigation {
+		return "related_record_navigation"
+	}
+	return "query.executed"
+}
+
+// evidenceKind selects the same fixed event family for the NULL-key
+// evidence pairs written before any claim exists.
+func (k pgClaimedEntryKind) evidenceKind() executionEvidenceKind {
+	if k == pgClaimedEntryNavigation {
+		return executionEvidenceNavigation
+	}
+	return executionEvidenceQuery
+}
+
+// persistsStatement reports whether the entry may store statement-derived
+// history content. Only the ordinary entry keeps the masked preview and the
+// owner-only full statement; saved and navigation entries must never let
+// compiled/generated SQL, template identifiers, declarations, or parameter
+// values reach history — every terminal row carries the fixed withheld
+// preview and an empty FullStatement.
+func (k pgClaimedEntryKind) persistsStatement() bool {
+	return k == pgClaimedEntryOrdinary
+}
+
+// pgClaimedPrepared is the single prepared request the shared keyed runner
+// consumes. Every field is already resolved by the entry's own front half —
+// the runner never re-validates shape, never re-reads access, and never
+// re-derives defaults. statement is exactly the text the guarded attempt
+// receives (compiled $k text for parameterized entries); digest is the
+// entry's resolved request digest. nullKey* fields carry the scope the
+// pre-claim evidence helpers persist — for the ordinary entry those are the
+// raw request values, for the saved entry a deterministic value-free scope.
+type pgClaimedPrepared struct {
+	kind         pgClaimedEntryKind
+	access       BoundTargetAccess
+	identity     model.QueryExecutionIdentity
+	targetID     uint64
+	clientKey    string
+	database     string
+	schema       string
+	page         int
+	pageSize     int
+	maxRows      int
+	timeout      time.Duration
+	start        time.Time
+	statement    string
+	digest       string
+	capabilities []string
+
+	nullKeyDatabase string
+	nullKeySchema   string
+	nullKeyDigest   string
+
+	// parameters is the optional trusted text-parameter plan (nil on the
+	// ordinary unbound path); requirePinnedSchema strengthens the binding
+	// gate so saved/navigation attempts prove pinned-schema existence/USAGE
+	// even when every reference is already qualified. navigation carries the
+	// prepared related-record binding only for the navigation entry — the
+	// executor snapshots it and the binding gate proves it still holds.
+	parameters          *pgParameterPlan
+	requirePinnedSchema bool
+	navigation          *pgNavigationBinding
+}
+
 // WithPGClaimOrchestration wires the disclosure policy reader the keyed PG
 // entry needs for its provenance-bound preflight. The concrete reader is the
 // same five-part canonical store T9-B consumes.
@@ -182,8 +266,7 @@ func (s *QueryExecutionService) ExecutePGClaimed(ctx context.Context, identity m
 	if s.pgPolicies == nil || s.pgOutcomeFn == nil {
 		return PGClaimedOutcome{}, ErrQueryBackendFailure
 	}
-	claimStore, ok := s.executions.(pgClaimStore)
-	if !ok {
+	if _, ok := s.executions.(pgClaimStore); !ok {
 		return PGClaimedOutcome{}, ErrQueryBackendFailure
 	}
 	start := s.clock.Now()
@@ -205,9 +288,9 @@ func (s *QueryExecutionService) ExecutePGClaimed(ctx context.Context, identity m
 		// disabled connection, policy block, binding mismatch): record the
 		// existing NULL-key rejected pair; the key stays unoccupied so a
 		// later, permitted request can claim it.
-		return s.rejectPGClaimedAccess(ctx, access.Target, identity, req, accessErrMessage(err), start)
+		return s.rejectPGClaimedAccess(ctx, access.Target, identity, pgClaimedEntryOrdinary,
+			req.Database, req.Schema, pgClaimedOrdinaryRawDigest(req), accessErrMessage(err), start)
 	}
-	target := access.Target
 	cred := access.Credential
 
 	// 3. Default resolution — an empty schema falls back to the connection's
@@ -216,15 +299,7 @@ func (s *QueryExecutionService) ExecutePGClaimed(ctx context.Context, identity m
 	//    USAGE are real database judgments the binding gate makes after
 	//    claim, so a valid-but-missing schema is a keyed terminal outcome,
 	//    never a pre-claim access denial.
-	schema := req.Schema
-	if schema == "" {
-		schema = cred.DefaultSchema
-	}
-	maxRows := resolvePGClaimMaxRows(target.ConnectionContext.Environment, req.MaxRows)
-	timeout := defaultQueryTimeout
-	if isProductionEnvironment(target.ConnectionContext.Environment) {
-		timeout = productionQueryTimeout
-	}
+	schema, maxRows, timeout := resolvePGClaimedDefaults(access, req.Schema, req.MaxRows)
 
 	// 4. Request digest over resolved values — the statement's original bytes
 	//    and never capabilities/clientExecutionId.
@@ -233,15 +308,75 @@ func (s *QueryExecutionService) ExecutePGClaimed(ctx context.Context, identity m
 		Page: page, PageSize: pageSize, MaxRows: maxRows,
 	})
 
+	// Steps 5-7 (atomic admission → governed attempt → consistency gate →
+	// sole keyed finalize → delivery decision) are the shared runner every
+	// keyed PG entry converges on — the ordinary entry fills the prepared
+	// request with raw request text and no parameter plan.
+	return s.executePGClaimedPrepared(ctx, pgClaimedPrepared{
+		kind:         pgClaimedEntryOrdinary,
+		access:       access,
+		identity:     identity,
+		targetID:     targetID,
+		clientKey:    req.ClientExecutionID,
+		database:     cred.DatabaseName,
+		schema:       schema,
+		page:         page,
+		pageSize:     pageSize,
+		maxRows:      maxRows,
+		timeout:      timeout,
+		start:        start,
+		statement:    req.Statement,
+		digest:       digest,
+		capabilities: req.Capabilities,
+		// NULL-key evidence keeps the raw request scope/digest — the same
+		// fields the pre-extraction helpers persisted.
+		nullKeyDatabase: req.Database,
+		nullKeySchema:   req.Schema,
+		nullKeyDigest:   pgClaimedOrdinaryRawDigest(req),
+	})
+}
+
+// pgClaimedOrdinaryRawDigest is the digest the ordinary entry's NULL-key
+// evidence rows carry: raw request fields, exactly as the pre-extraction
+// record builder computed them — never the resolved claim digest.
+func pgClaimedOrdinaryRawDigest(req PGClaimedExecuteRequest) string {
+	return DigestOrdinaryExecute(OrdinaryExecuteDigestInput{
+		Database: req.Database, Schema: req.Schema, Statement: req.Statement,
+		Page: req.Page, PageSize: req.PageSize, MaxRows: req.MaxRows,
+	})
+}
+
+// executePGClaimedPrepared is the single keyed-execution runner every PG
+// entry converges on once its front half has produced a fully resolved
+// pgClaimedPrepared. It owns the frozen order: atomic claim admission →
+// governed disclosure outcome → consistency gate on a coordinator-owned
+// pre-finalize delivery snapshot → exactly one keyed FinalizeClaimWithAudit
+// → DecideResultDelivery on that same snapshot → result rebuilt from the
+// decision's owned payload. No other code path may claim or finalize.
+func (s *QueryExecutionService) executePGClaimedPrepared(ctx context.Context, p pgClaimedPrepared) (PGClaimedOutcome, error) {
+	claimStore, ok := s.executions.(pgClaimStore)
+	if !ok {
+		return PGClaimedOutcome{}, ErrQueryBackendFailure
+	}
+	// The entry kind is a closed server-owned enum: an out-of-range value is
+	// a wiring defect — fail before any claim rather than pick an arbitrary
+	// audit family or statement policy.
+	switch p.kind {
+	case pgClaimedEntryOrdinary, pgClaimedEntrySaved, pgClaimedEntryNavigation:
+	default:
+		return PGClaimedOutcome{}, ErrQueryBackendFailure
+	}
+	target := p.access.Target
+
 	// 5. Atomic admission — the single INSERT that decides occupancy.
 	claim := model.QueryExecutionClaimInput{
-		TargetResourceID:  targetID,
-		ClientExecutionID: req.ClientExecutionID,
-		Identity:          identity,
-		DatabaseName:      cred.DatabaseName,
-		SchemaName:        schema,
-		RequestDigest:     digest,
-		AttemptTimeoutMs:  timeout.Milliseconds(),
+		TargetResourceID:  p.targetID,
+		ClientExecutionID: p.clientKey,
+		Identity:          p.identity,
+		DatabaseName:      p.database,
+		SchemaName:        p.schema,
+		RequestDigest:     p.digest,
+		AttemptTimeoutMs:  p.timeout.Milliseconds(),
 		ClaimedAt:         s.clock.Now(),
 	}
 	if err := claimStore.TryClaimExecution(ctx, claim); err != nil {
@@ -254,7 +389,8 @@ func (s *QueryExecutionService) ExecutePGClaimed(ctx context.Context, identity m
 			// Non-duplicate admission failure: no user SQL ran, and the key
 			// must not masquerade as occupied — record the NULL-key failed
 			// pair and surface the backend failure. Bounded single attempt.
-			return s.failPGClaimedAccess(ctx, target, identity, req, start)
+			return s.failPGClaimedAccess(ctx, target, p.identity, p.kind,
+				p.nullKeyDatabase, p.nullKeySchema, p.nullKeyDigest, p.start)
 		}
 	}
 
@@ -262,14 +398,18 @@ func (s *QueryExecutionService) ExecutePGClaimed(ctx context.Context, identity m
 	//    statement budget inside the remaining request context.
 	res, ev, execErr := s.pgOutcomeFn(ctx, PGDisclosureInput{
 		Execute: PGExecuteInput{
-			ConnConfig:   access.pgConfig,
-			Database:     cred.DatabaseName,
-			PinnedSchema: schema,
-			Statement:    req.Statement,
-			Page:         pgsql.PageOptions{Page: page, PageSize: pageSize, MaxRows: maxRows},
-			Timeout:      timeout,
+			ConnConfig:   p.access.pgConfig,
+			Database:     p.database,
+			PinnedSchema: p.schema,
+			Statement:    p.statement,
+			Page:         pgsql.PageOptions{Page: p.page, PageSize: p.pageSize, MaxRows: p.maxRows},
+
+			Timeout:             p.timeout,
+			parameters:          p.parameters,
+			requirePinnedSchema: p.requirePinnedSchema,
+			navigation:          p.navigation,
 		},
-		TargetResourceID: targetID,
+		TargetResourceID: p.targetID,
 		Policies:         s.pgPolicies,
 	})
 
@@ -338,29 +478,38 @@ func (s *QueryExecutionService) ExecutePGClaimed(ctx context.Context, identity m
 	default:
 		code, msg = pgClaimedTerminalEvidence(execErr, status)
 	}
+	// Statement persistence is entry-selected: only the ordinary entry stores
+	// the masked preview and (for a user-actor success) the full statement;
+	// saved and navigation rows always carry the withheld preview and an
+	// empty FullStatement — compiled text, template identifiers,
+	// declarations, and parameter values never persist.
+	preview := pgClaimedWithheldPreview
+	if p.kind.persistsStatement() {
+		preview = pgClaimedStatementPreview(p.statement)
+	}
 	rec := model.QueryExecutionRecord{
-		TargetResourceID:  targetID,
+		TargetResourceID:  p.targetID,
 		Engine:            target.ConnectionContext.Engine,
-		DatabaseName:      cred.DatabaseName,
-		SchemaName:        schema,
-		StatementDigest:   digest,
-		StatementPreview:  pgClaimedStatementPreview(req.Statement),
+		DatabaseName:      p.database,
+		SchemaName:        p.schema,
+		StatementDigest:   p.digest,
+		StatementPreview:  preview,
 		Status:            status,
 		RowCount:          rowCount,
-		DurationMs:        s.clock.Now().Sub(start).Milliseconds(),
+		DurationMs:        s.clock.Now().Sub(p.start).Milliseconds(),
 		ErrorCode:         code,
 		ErrorMessage:      msg,
 		RemoteState:       ev.RemoteState,
-		ClientExecutionID: &req.ClientExecutionID,
+		ClientExecutionID: &p.clientKey,
 		CreatedAt:         s.clock.Now(),
 	}
-	if identity.Kind == model.QueryExecutionActorUser {
-		rec.ActorUserID = identity.ID
-		if status == model.QueryExecutionSuccess {
-			rec.FullStatement = req.Statement
+	if p.identity.Kind == model.QueryExecutionActorUser {
+		rec.ActorUserID = p.identity.ID
+		if status == model.QueryExecutionSuccess && p.kind.persistsStatement() {
+			rec.FullStatement = p.statement
 		}
 	} else {
-		rec.ActorMachinePrincipalID = identity.ID
+		rec.ActorMachinePrincipalID = p.identity.ID
 	}
 	if ev.BackendPID != 0 {
 		pid := int64(ev.BackendPID)
@@ -369,7 +518,7 @@ func (s *QueryExecutionService) ExecutePGClaimed(ctx context.Context, identity m
 
 	windowCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), evidencePersistenceWindow)
 	defer cancel()
-	execID, ferr := claimStore.FinalizeClaimWithAudit(windowCtx, rec, "query.executed", auditResultFor(status))
+	execID, ferr := claimStore.FinalizeClaimWithAudit(windowCtx, rec, p.kind.keyedAuditEvent(), auditResultFor(status))
 	if ferr != nil {
 		return PGClaimedOutcome{}, errPersistAttempt
 	}
@@ -407,7 +556,7 @@ func (s *QueryExecutionService) ExecutePGClaimed(ctx context.Context, identity m
 		Columns:       gateCols,
 		Rows:          gateRows,
 		CellTruncated: gateMatrix,
-		Capabilities:  req.Capabilities,
+		Capabilities:  p.capabilities,
 	})
 	if derr != nil {
 		return PGClaimedOutcome{ExecutionID: execID, Status: status, Evidence: outEv}, derr
@@ -499,6 +648,24 @@ func resolvePGClaimPagination(page, pageSize int) (int, int, error) {
 	return page, pageSize, nil
 }
 
+// resolvePGClaimedDefaults resolves the three environment-dependent defaults
+// every keyed entry shares: an empty schema falls back to the connection's
+// configured default_schema (an explicit name is kept verbatim), maxRows
+// takes the default then the shared caps, and the attempt timeout follows the
+// environment class. Schema existence/USAGE stays the post-claim binding
+// gate's judgment — never a pre-claim access verdict.
+func resolvePGClaimedDefaults(access BoundTargetAccess, schema string, maxRows int) (string, int, time.Duration) {
+	if schema == "" {
+		schema = access.Credential.DefaultSchema
+	}
+	maxRows = resolvePGClaimMaxRows(access.Target.ConnectionContext.Environment, maxRows)
+	timeout := defaultQueryTimeout
+	if isProductionEnvironment(access.Target.ConnectionContext.Environment) {
+		timeout = productionQueryTimeout
+	}
+	return schema, maxRows, timeout
+}
+
 // resolvePGClaimMaxRows applies the default then the shared caps: production
 // clamps to productionHardMaxRows first, then the workbench hard bound.
 func resolvePGClaimMaxRows(environment string, requested int) int {
@@ -553,42 +720,43 @@ func accessErrMessage(err error) string {
 
 // rejectPGClaimedAccess records the existing NULL-key rejected pair for an
 // access refusal after a resolved target, then returns the refusal. The key
-// is untouched — a later permitted request may still occupy it.
-func (s *QueryExecutionService) rejectPGClaimedAccess(ctx context.Context, target model.QueryTarget, identity model.QueryExecutionIdentity, req PGClaimedExecuteRequest, msg string, start time.Time) (PGClaimedOutcome, error) {
-	rec := s.buildPGClaimEvidenceRecord(target, identity, req, model.QueryExecutionRejected,
-		"query_not_allowed", msg, start)
-	if _, perr := s.persistEvidencePair(ctx, rec, executionEvidenceQuery); perr != nil {
+// is untouched — a later permitted request may still occupy it. The caller
+// supplies the entry kind (which fixes the audit event family) and the
+// connection scope/digest the evidence row carries; ordinary callers pass
+// the raw request scope so the row's fields are unchanged.
+func (s *QueryExecutionService) rejectPGClaimedAccess(ctx context.Context, target model.QueryTarget, identity model.QueryExecutionIdentity, kind pgClaimedEntryKind, database, schema, digest, msg string, start time.Time) (PGClaimedOutcome, error) {
+	rec := s.buildPGClaimEvidenceRecord(target, identity, kind, database, schema, digest,
+		model.QueryExecutionRejected, "query_not_allowed", msg, start)
+	if _, perr := s.persistEvidencePair(ctx, rec, kind.evidenceKind()); perr != nil {
 		return PGClaimedOutcome{}, errPersistAttempt
 	}
 	return PGClaimedOutcome{}, fmt.Errorf("%w: %s", ErrQueryNotAllowed, msg)
 }
 
 // failPGClaimedAccess records the NULL-key failed pair for a claim-store
-// admission failure: no user SQL ran and the key never became the occupant.
-// The write is the single bounded evidence attempt — no retry.
-func (s *QueryExecutionService) failPGClaimedAccess(ctx context.Context, target model.QueryTarget, identity model.QueryExecutionIdentity, req PGClaimedExecuteRequest, start time.Time) (PGClaimedOutcome, error) {
-	rec := s.buildPGClaimEvidenceRecord(target, identity, req, model.QueryExecutionFailed,
-		"query_backend_error", "target database query failed", start)
-	if _, perr := s.persistEvidencePair(ctx, rec, executionEvidenceQuery); perr != nil {
+// admission failure or a backend read fault: no user SQL ran and the key
+// never became the occupant. The write is the single bounded evidence
+// attempt — no retry.
+func (s *QueryExecutionService) failPGClaimedAccess(ctx context.Context, target model.QueryTarget, identity model.QueryExecutionIdentity, kind pgClaimedEntryKind, database, schema, digest string, start time.Time) (PGClaimedOutcome, error) {
+	rec := s.buildPGClaimEvidenceRecord(target, identity, kind, database, schema, digest,
+		model.QueryExecutionFailed, "query_backend_error", "target database query failed", start)
+	if _, perr := s.persistEvidencePair(ctx, rec, kind.evidenceKind()); perr != nil {
 		return PGClaimedOutcome{}, errPersistAttempt
 	}
 	return PGClaimedOutcome{}, ErrQueryBackendFailure
 }
 
 // buildPGClaimEvidenceRecord constructs the NULL-key evidence row for a
-// pre-claim refusal/failure under the real request actor: request connection
-// scope, fixed codes, NULL key — the row must never pretend the client key
-// occupied anything.
-func (s *QueryExecutionService) buildPGClaimEvidenceRecord(target model.QueryTarget, identity model.QueryExecutionIdentity, req PGClaimedExecuteRequest, status model.QueryExecutionStatus, code, msg string, start time.Time) model.QueryExecutionRecord {
+// pre-claim refusal/failure under the real request actor: the caller-owned
+// connection scope and digest, fixed codes, NULL key — the row must never
+// pretend the client key occupied anything.
+func (s *QueryExecutionService) buildPGClaimEvidenceRecord(target model.QueryTarget, identity model.QueryExecutionIdentity, kind pgClaimedEntryKind, database, schema, digest string, status model.QueryExecutionStatus, code, msg string, start time.Time) model.QueryExecutionRecord {
 	rec := model.QueryExecutionRecord{
 		TargetResourceID: target.ResourceID,
 		Engine:           target.ConnectionContext.Engine,
-		DatabaseName:     req.Database,
-		SchemaName:       req.Schema,
-		StatementDigest: DigestOrdinaryExecute(OrdinaryExecuteDigestInput{
-			Database: req.Database, Schema: req.Schema, Statement: req.Statement,
-			Page: req.Page, PageSize: req.PageSize, MaxRows: req.MaxRows,
-		}),
+		DatabaseName:     database,
+		SchemaName:       schema,
+		StatementDigest:  digest,
 		StatementPreview: pgClaimedWithheldPreview,
 		Status:           status,
 		DurationMs:       s.clock.Now().Sub(start).Milliseconds(),

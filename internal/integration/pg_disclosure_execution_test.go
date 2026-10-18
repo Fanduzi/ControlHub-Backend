@@ -43,17 +43,19 @@ type pgDiscFixture struct {
 	db   string
 }
 
-func newPGDiscFixture(t *testing.T) pgDiscFixture {
+func newPGDiscFixture(t *testing.T, opts ...testcontainers.ContainerCustomizer) pgDiscFixture {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 	defer cancel()
 	container, err := pgc.Run(ctx, "postgres:16-alpine",
-		pgc.WithDatabase("discdb"),
-		pgc.WithUsername(pgMetaAdminUser),
-		pgc.WithPassword(pgMetaAdminPassword),
-		testcontainers.WithWaitStrategy(
-			wait.ForLog("database system is ready to accept connections").
-				WithOccurrence(2).WithStartupTimeout(90*time.Second)),
+		append([]testcontainers.ContainerCustomizer{
+			pgc.WithDatabase("discdb"),
+			pgc.WithUsername(pgMetaAdminUser),
+			pgc.WithPassword(pgMetaAdminPassword),
+			testcontainers.WithWaitStrategy(
+				wait.ForLog("database system is ready to accept connections").
+					WithOccurrence(2).WithStartupTimeout(90*time.Second)),
+		}, opts...)...,
 	)
 	if err != nil {
 		t.Fatalf("start postgres: %s", redactPGMeta(err.Error()))

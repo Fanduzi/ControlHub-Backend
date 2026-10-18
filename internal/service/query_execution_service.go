@@ -191,6 +191,10 @@ type QueryExecutionService struct {
 	// inject inconsistent (result, evidence, error) triples to prove the
 	// pre-finalize consistency gate fails closed.
 	pgOutcomeFn func(context.Context, PGDisclosureInput) (*PGDisclosedResult, *PGAttemptEvidence, error)
+	// pgNavPrepare is the navigation entry's fixed metadata preparation —
+	// the production constructor installs preparePGNavigation, which runs
+	// the one bounded READ ONLY FK-mapping probe before claim.
+	pgNavPrepare pgNavPrepareFunc
 }
 
 // QueryEvidencePersistenceFailures exposes the dimensionless persistence-
@@ -214,16 +218,17 @@ func NewQueryExecutionService(
 	disclosure QueryDisclosurePlanner,
 ) *QueryExecutionService {
 	return &QueryExecutionService{
-		targets:     targets,
-		executions:  executions,
-		credentials: credentials,
-		executor:    executor,
-		guard:       guard,
-		clock:       clock,
-		access:      NewTargetAccessResolver(targets, executions, credentials),
-		inspector:   inspector,
-		disclosure:  disclosure,
-		pgOutcomeFn: ExecutePGGovernedDisclosedOutcome,
+		targets:      targets,
+		executions:   executions,
+		credentials:  credentials,
+		executor:     executor,
+		guard:        guard,
+		clock:        clock,
+		access:       NewTargetAccessResolver(targets, executions, credentials),
+		inspector:    inspector,
+		disclosure:   disclosure,
+		pgOutcomeFn:  ExecutePGGovernedDisclosedOutcome,
+		pgNavPrepare: preparePGNavigation,
 	}
 }
 

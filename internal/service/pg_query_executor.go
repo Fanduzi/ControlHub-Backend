@@ -1,22 +1,22 @@
 // Package service runs the governed PostgreSQL execution attempt end to end.
-// input: attempt context with deadline, T2-validated *pgx.ConnConfig, resolved
-// database/pinned schema, user statement text, pgsql.PageOptions, timeout
+// input: attempt context with deadline, T2-validated *pgx.ConnConfig,
+// resolved database/pinned schema, user statement text, optional private
+// trusted parameter plan, optional requirePinnedSchema (saved/navigation
+// entries prove the pinned schema even for constant/fully-qualified
+// statements), pgsql.PageOptions, timeout
 // output: ExecutePGGoverned, ExecutePGGovernedOutcome, PGExecuteInput,
-// PGVerifiedResult, PGResultColumn, errPGExecInternal — internal verified
-// result plus the per-attempt PGAttemptEvidence (stage/status/backend
-// identity/remote_state/sql-sent facts) or the frozen classified error; no
-// live connection, transaction, cursor, or resolver leaves the attempt
-// pos: T7-S3/S4 internal execution closure (frozen G4 steps 1–10, G10 5b/5c)
-// — guard → OpenPostgresPool → BEGIN READ ONLY + G4 session → in-transaction
-// virtualxid + backend identity → PGBind → RewriteFromGuardPaginated →
-// pre-wire expected-record validation → ExecParams fresh parse + text
-// format → bounded private materialization → per-position FD verification →
-// second-conn lock audit → ROLLBACK + release → bounded remote-state
-// observation → observer teardown → witness strip → deliver; every exit
-// converges resources under bounded cleanup, produces one evidence record,
-// and maps failures onto timeout/cancelled/rejected/failed. T10-B-R1:
-// backend pid captured at Acquire; remote fate folded from the read+close
-// pair (pgStmtFateAfterRead) — a driver pre-send mark proves unsent
+// PGVerifiedResult, PGResultColumn, errPGExecInternal — verified result
+// plus per-attempt PGAttemptEvidence (stage/status/backend identity/
+// remote_state/sql-sent facts) or the frozen classified error
+// pos: T7-S3/S4 internal execution closure (frozen G4 steps 1–10, G10
+// 5b/5c) — guard + plan snapshot → dense $k ParamRef contract (unbound path
+// admits none) → OpenPostgresPool → BEGIN READ ONLY + G4 session →
+// in-transaction virtualxid + backend identity → PGBind →
+// RewriteFromGuardPaginated → pre-wire expected-record validation →
+// ExecParams fresh parse + owned text values → bounded materialization →
+// per-position FD verification → lock audit → ROLLBACK + bounded remote
+// observation → teardown → witness strip → deliver. T10-B-R1: backend pid
+// captured at Acquire; remote fate folded from the read+close pair
 // note: if this file changes, update this header and module README.md.
 package service
 
@@ -72,6 +72,24 @@ type PGExecuteInput struct {
 	Statement    string
 	Page         pgsql.PageOptions
 	Timeout      time.Duration // caller-resolved attempt budget (non-prod 5s / prod 3s)
+	// parameters is the optional private trusted parameter plan — produced
+	// only through the closed-source producers (template compiler and
+	// navigation builder). Nil keeps the ordinary unbound path where
+	// no ParamRef may exist in the statement at all.
+	parameters *pgParameterPlan
+	// navigation is the optional prepared related-record FK binding —
+	// non-nil only for the navigation entry kind, alongside a
+	// navigation-sourced plan whose locator count matches the pair list.
+	// The attempt snapshots it independently and the binding gate re-proves
+	// the entire mapping under held locks before any user SQL.
+	navigation *pgNavigationBinding
+	// requirePinnedSchema strengthens the binding gate for the saved/
+	// navigation entries: the pinned schema's existence and USAGE are
+	// proven inside the real transaction even when every reference is
+	// already qualified or the statement touches no relation at all — a
+	// saved statement pins its execution context by contract, not by
+	// incidental reference. The ordinary entry leaves this unset.
+	requirePinnedSchema bool
 }
 
 // PGResultColumn is one delivered public column: G7 type identity plus the
@@ -130,6 +148,15 @@ type pgExecAttempt struct {
 	derived []PGRelationIdentity // toast-attributed identities beyond the gate's set
 	fds     []pgconn.FieldDescription
 	rows    [][]*string
+
+	// parameters is the attempt-owned snapshot of the caller's trusted
+	// parameter plan; paramValues is its owned transport encoding — a
+	// non-nil []byte per bound value, never caller storage. navigation is
+	// the attempt-owned snapshot of the prepared FK binding (nil for the
+	// ordinary and saved entries).
+	parameters  *pgParameterPlan
+	paramValues [][]byte
+	navigation  *pgNavigationBinding
 
 	// T10-B attempt facts: the furthest stage reached, what the transport
 	// knows about the user statement's remote fate, and the scalar evidence
@@ -265,9 +292,57 @@ func runPGGovernedAttempt(ctx context.Context, in PGExecuteInput, disc *pgDisclo
 	if err := attemptCtx.Err(); err != nil {
 		return nil, nil, a.fail(err)
 	}
+	// Attempt-owned plan and binding snapshots — before any guard work so a
+	// contract fault (untrusted source, plan for different text, malformed
+	// mapping) can never reach a connection. The snapshots share no storage
+	// with the caller's values.
+	plan, err := snapshotPGParameterPlan(in.parameters, in.Statement)
+	if err != nil {
+		return nil, nil, a.fail(err)
+	}
+	nav, err := snapshotPGNavigationBinding(in.navigation)
+	if err != nil {
+		return nil, nil, a.fail(err)
+	}
+	// The plan source and binding must agree: a navigation plan requires a
+	// navigation binding with one locator value per FK column pair, and a
+	// binding requires exactly that plan — anything else is an internal
+	// wiring defect, never a user error.
+	if nav == nil && plan != nil && plan.source == pgParameterSourceNavigation {
+		return nil, nil, a.fail(fmt.Errorf("%w: navigation plan without binding", pgsql.ErrEvidenceUnavailable))
+	}
+	if nav != nil && (plan == nil || plan.source != pgParameterSourceNavigation || len(plan.values) != len(nav.pairs)) {
+		return nil, nil, a.fail(fmt.Errorf("%w: navigation binding/plan mismatch", pgsql.ErrEvidenceUnavailable))
+	}
+	if nav != nil {
+		// The statement must be exactly what the trusted builder produces
+		// from the owned binding and owned values — a caller or wiring
+		// defect that swapped the predicate columns (same target, same
+		// parameter count) fails closed before any guard or connection.
+		expected, err := newPGNavigationPlan(nav, plan.values)
+		if err != nil || expected.statement != in.Statement {
+			return nil, nil, a.fail(fmt.Errorf("%w: navigation statement does not match binding", pgsql.ErrEvidenceUnavailable))
+		}
+	}
+	a.parameters = plan
+	a.navigation = nav
+	if plan != nil {
+		a.paramValues = plan.wireValues()
+	}
+
 	a.stage = PGStageGuard
 	gr, err := pgsql.GuardPG(in.Statement)
 	if err != nil {
+		return nil, nil, a.fail(err)
+	}
+	// The parameter contract binds on the guard's immutable tree: a bound
+	// plan owes a dense {1..n} reference set, and the ordinary unbound path
+	// permits no ParamRef at all — native $k never reaches the wire.
+	paramCount := 0
+	if a.parameters != nil {
+		paramCount = len(a.parameters.values)
+	}
+	if err := pgsql.ValidateParameterBindings(gr, paramCount); err != nil {
 		return nil, nil, a.fail(err)
 	}
 	if err := attemptCtx.Err(); err != nil {
@@ -285,6 +360,8 @@ func runPGGovernedAttempt(ctx context.Context, in PGExecuteInput, disc *pgDisclo
 	a.stage = PGStageBind
 	bind, err := PGBind(attemptCtx, PGBindInput{
 		Tx: a.tx, Database: in.Database, PinnedSchema: in.PinnedSchema, Guard: gr,
+		requirePinnedSchema: in.requirePinnedSchema,
+		navigation:          a.navigation,
 	})
 	if err != nil {
 		return nil, nil, a.fail(err)
@@ -503,7 +580,7 @@ func (a *pgExecAttempt) executeAndMaterialize(sql string, win pgsql.PageWindow) 
 	// indeterminate until the reader proves completion or the server
 	// delivers an ErrorResponse.
 	a.stmtFate = pgStmtIndeterminate
-	rr := a.tx.Conn().PgConn().ExecParams(a.ctx, sql, nil, nil, nil, []int16{0})
+	rr := a.tx.Conn().PgConn().ExecParams(a.ctx, sql, a.paramValues, nil, nil, []int16{0})
 
 	fds := rr.FieldDescriptions()
 	a.fds = make([]pgconn.FieldDescription, len(fds))
@@ -564,10 +641,10 @@ func (a *pgExecAttempt) executeAndMaterialize(sql string, win pgsql.PageWindow) 
 	// never carries remote facts.
 	a.stmtFate = pgStmtFateAfterRead(readErr, closeErr)
 	if readErr != nil {
-		return classifyPGExecTransportError(readErr)
+		return a.classifyTransportError(readErr)
 	}
 	if closeErr != nil {
-		return classifyPGExecTransportError(closeErr)
+		return a.classifyTransportError(closeErr)
 	}
 	return nil
 }
@@ -582,6 +659,39 @@ func classifyPGExecTransportError(err error) error {
 		return c
 	}
 	return err
+}
+
+// pgParamTypeRejectCodes are the parameter-context SQLSTATEs that mean a
+// bound text value cannot take the type the statement context imposes: the
+// data-conversion family (invalid text representation 22P02, numeric out of
+// range 22003, bad datetime/interval/escape/character forms 22007/22008/
+// 22018/22021), a parameter type the server could not infer (42P18), the
+// context-imposed type the value cannot satisfy (42804), and an ambiguous
+// parameter (42P08). They are consulted only when a trusted plan carries
+// bound values — a zero-value plan maps nothing, and unrelated server
+// failures (division by zero, constraint violations) keep the ordinary
+// backend taxonomy.
+var pgParamTypeRejectCodes = map[string]struct{}{
+	"22P02": {}, "22003": {}, "22007": {}, "22008": {}, "22018": {}, "22021": {},
+	"42P18": {}, "42804": {}, "42P08": {},
+}
+
+// classifyTransportError is classifyPGExecTransportError plus the
+// bound-parameter verdict: a parameter-context failure against a statement
+// that actually carries values becomes one fixed safe rejection — the raw
+// PgError is never unwrapped or echoed. Timeout and cancel classification
+// keep their existing priority downstream in fail().
+func (a *pgExecAttempt) classifyTransportError(err error) error {
+	if a.parameters != nil && len(a.parameters.values) > 0 {
+		var pgErr *pgconn.PgError
+		if errors.As(err, &pgErr) {
+			if _, typed := pgParamTypeRejectCodes[pgErr.Code]; typed {
+				return &pgsql.RejectError{Code: "query_not_allowed",
+					Message: "pgsql: parameter type is not supported by statement context"}
+			}
+		}
+	}
+	return classifyPGExecTransportError(err)
 }
 
 // fail maps an executor error onto the frozen terminal vocabulary, mirroring

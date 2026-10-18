@@ -2,7 +2,7 @@
 // (spec G4/G5/G10 stage: parse → guard → classify → qualify → inject).
 // input: user SQL statement or matching *GuardResult, pinned schema, ColumnResolver, optional PageOptions (RewritePaginated/RewriteFromGuardPaginated)
 // output: Rewrite, RewritePaginated, RewriteFromGuardPaginated, RewriteResult — executable transport SQL + witness records + public output names/proofs + original entity refs + qualified text (+ PageWindow when paginated)
-// pos: the T4 transform pipeline — guard original text, qualify by byte insertion, reparse, G6-paginate the root window (RewritePaginated only), witness-inject, deparse once to internal transport, then reparse-verify the deparsed form before it may reach a connection; deparsed SQL is never persisted or displayed
+// pos: the T4 transform pipeline — guard original text, qualify by byte insertion, reparse, G6-paginate the root window (RewritePaginated only), witness-inject, deparse once to internal transport, then reparse-verify the deparsed form before it may reach a connection; the ParamRef number set is a pipeline invariant checked at qualification, injection, and round-trip (duplicated reference nodes stay legal — set identity only); deparsed SQL is never persisted or displayed
 // note: if this file changes, update header and README.md
 package pgsql
 
@@ -61,6 +61,10 @@ func rewriteFromGuard(statement, pinnedSchema string, gr *GuardResult, res Colum
 	if err := validateGuardResult(statement, gr); err != nil {
 		return nil, PageWindow{}, err
 	}
+	// The statement's ParamRef number set is pipeline invariant: every stage
+	// below must preserve it exactly — duplicated reference nodes are legal,
+	// an appeared or vanished number never is.
+	params := paramRefNumbers(gr.Tree)
 	qualified, err := QualifyEntities(statement, pinnedSchema, gr.Refs)
 	if err != nil {
 		return nil, PageWindow{}, err
@@ -70,6 +74,9 @@ func rewriteFromGuard(statement, pinnedSchema string, gr *GuardResult, res Colum
 	reTree, err := pgquery.Parse(qualified)
 	if err != nil {
 		return nil, PageWindow{}, &RejectError{Code: "query_not_allowed", Message: "pgsql: qualified rewrite failed to reparse"}
+	}
+	if err := requireSameParamSet(params, reTree); err != nil {
+		return nil, PageWindow{}, err
 	}
 	byNode, err := mapCanonicalRefs(gr.Refs, reTree, pinnedSchema)
 	if err != nil {
@@ -86,6 +93,9 @@ func rewriteFromGuard(statement, pinnedSchema string, gr *GuardResult, res Colum
 	if err != nil {
 		return nil, PageWindow{}, err
 	}
+	if err := requireSameParamSet(params, inj.Tree); err != nil {
+		return nil, PageWindow{}, err
+	}
 	deparsed, err := deparseTree(inj.Tree)
 	if err != nil {
 		return nil, PageWindow{}, &RejectError{Code: "query_not_allowed", Message: "pgsql: injected rewrite failed to deparse"}
@@ -97,6 +107,9 @@ func rewriteFromGuard(statement, pinnedSchema string, gr *GuardResult, res Colum
 	verify, err := pgquery.Parse(deparsed)
 	if err != nil || len(verify.GetStmts()) != 1 {
 		return nil, PageWindow{}, &RejectError{Code: "query_not_allowed", Message: "pgsql: injected rewrite failed to reparse"}
+	}
+	if err := requireSameParamSet(params, verify); err != nil {
+		return nil, PageWindow{}, err
 	}
 	return &RewriteResult{
 		SQL:              deparsed,

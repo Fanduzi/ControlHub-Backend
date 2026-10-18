@@ -2,7 +2,7 @@
 
 // Package integration provides Testcontainers-backed tests for governed saved statement persistence.
 // input: shared MySQL fixture, saved-statement repository, target fixtures
-// output: owner-scoped CRUD/visibility lifecycle and the legacy empty-context regression anchor (T11)
+// output: owner-scoped CRUD/visibility lifecycle, the legacy empty-context regression anchor (T11), and TestSavedStatementSnapshot_ConsistentAcrossConcurrentUpdate — GetByID must return one coherent statement/declaration version under concurrent UpdateWithAudit
 // pos: Real-MySQL persistence boundary for Phase 38R saved statements
 // note: if this file changes, update this header and module README.md.
 package integration
@@ -11,6 +11,10 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
+	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 
 	"github.com/fan/controlhub/internal/model"
@@ -154,5 +158,112 @@ func TestQuerySavedStatementRepositoryGetNotFound(t *testing.T) {
 	_, err := repo.GetByID(context.Background(), 8800000021, 8800000022)
 	if !errors.Is(err, sql.ErrNoRows) {
 		t.Fatalf("GetByID error = %v, want sql.ErrNoRows", err)
+	}
+}
+
+// GetByID returns one statement-level snapshot: a concurrent UpdateWithAudit
+// swaps statement text and declarations atomically, so every observed read
+// must be exactly version A or exactly version B — never a mixed pair. A
+// two-query header+parameters read could observe a header committed after
+// the update together with declarations deleted/inserted by it.
+func TestSavedStatementSnapshot_ConsistentAcrossConcurrentUpdate(t *testing.T) {
+	db := setupTestDB(t)
+	repo := mysql.NewQuerySavedStatementRepository(db)
+	ctx := context.Background()
+	const targetID uint64 = 8800000031
+	const ownerID uint64 = 8800000032
+
+	created, err := repo.CreateWithAudit(ctx, ownerID, targetID, model.QuerySavedStatementCreateRequest{
+		Name:      "Snapshot probe",
+		Statement: "SELECT 1 WHERE tag = :v1",
+		Scope:     model.QuerySavedStatementPersonal,
+		Parameters: []model.QuerySavedStatementParameterDefinition{
+			{Name: "v1", Type: model.QuerySavedStatementParameterString},
+		},
+	})
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+
+	versionA := model.QuerySavedStatementUpdateRequest{
+		Name:      "Snapshot probe",
+		Statement: "SELECT 1 WHERE tag = :v1",
+		Parameters: []model.QuerySavedStatementParameterDefinition{
+			{Name: "v1", Type: model.QuerySavedStatementParameterString},
+		},
+	}
+	versionB := model.QuerySavedStatementUpdateRequest{
+		Name:      "Snapshot probe",
+		Statement: "SELECT 2 WHERE tag = :v2",
+		Parameters: []model.QuerySavedStatementParameterDefinition{
+			{Name: "v2", Type: model.QuerySavedStatementParameterInteger},
+		},
+	}
+
+	isCoherent := func(s model.QuerySavedStatement) bool {
+		a := strings.Contains(s.Statement, ":v1") &&
+			len(s.Parameters) == 1 && s.Parameters[0].Name == "v1" &&
+			s.Parameters[0].Type == model.QuerySavedStatementParameterString
+		b := strings.Contains(s.Statement, ":v2") &&
+			len(s.Parameters) == 1 && s.Parameters[0].Name == "v2" &&
+			s.Parameters[0].Type == model.QuerySavedStatementParameterInteger
+		return a || b
+	}
+
+	// Bounded work: the updater applies 40 alternating versions while each
+	// of 40 readers takes a fixed 20 reads — a start barrier maximizes
+	// overlap and an updater error can never leave readers waiting on a
+	// stop signal that never closes. Every goroutine reports through errCh
+	// (capacity covers all writers); nothing calls t.Fatal off the main
+	// goroutine.
+	const updates, readers, readsEach = 40, 40, 20
+	start := make(chan struct{})
+	var wg sync.WaitGroup
+	var observed atomic.Int64
+	errCh := make(chan error, readers+1)
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		<-start
+		for i := 0; i < updates; i++ {
+			version := versionA
+			if i%2 == 1 {
+				version = versionB
+			}
+			if err := repo.UpdateWithAudit(ctx, ownerID, targetID, created.ID, version, false); err != nil {
+				errCh <- fmt.Errorf("update %d: %w", i, err)
+				return
+			}
+		}
+	}()
+	for r := 0; r < readers; r++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			for i := 0; i < readsEach; i++ {
+				s, err := repo.GetByID(ctx, targetID, created.ID)
+				if err != nil {
+					errCh <- fmt.Errorf("get: %w", err)
+					return
+				}
+				observed.Add(1)
+				if !isCoherent(s) {
+					errCh <- fmt.Errorf("mixed snapshot: statement=%q parameters=%+v", s.Statement, s.Parameters)
+					return
+				}
+			}
+		}()
+	}
+	close(start)
+	wg.Wait()
+	close(errCh)
+	for err := range errCh {
+		if err != nil {
+			t.Fatalf("snapshot consistency: %v", err)
+		}
+	}
+	if observed.Load() == 0 {
+		t.Fatal("no snapshots observed — coherence was never exercised")
 	}
 }

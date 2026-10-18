@@ -1,14 +1,16 @@
 // Package mysql provides MySQL-backed repository implementations.
 // input: database/sql, context, errors, fmt, strings, internal/model
 // output: NewQuerySavedStatementRepository, MySQLQuerySavedStatementRepository (QuerySavedStatementReader, QuerySavedStatementWriter)
-// pos: MySQL data access for Phase 38R governed saved statements CRUD with atomic audit
+// pos: MySQL data access for Phase 38R governed saved statements CRUD with
+// atomic audit; GetByID reads the statement header and parameter
+// declarations in ONE LEFT JOIN snapshot so a concurrent UpdateWithAudit can
+// never yield a mixed statement/declaration version
 // note: if this file changes, update header and README.md
 package mysql
 
 import (
 	"context"
 	"database/sql"
-	"errors"
 	"fmt"
 	"strings"
 
@@ -114,28 +116,70 @@ func (r *MySQLQuerySavedStatementRepository) ListVisible(ctx context.Context, qu
 }
 
 // GetByID returns a saved statement by target and ID. Returns sql.ErrNoRows
-// when not found.
+// when not found. The header row and its parameter declarations come from ONE
+// joined statement-level snapshot: two separate SELECTs could observe
+// different committed versions under a concurrent UpdateWithAudit and hand
+// the caller a statement that never existed with those declarations.
 func (r *MySQLQuerySavedStatementRepository) GetByID(ctx context.Context, targetResourceID, id uint64) (model.QuerySavedStatement, error) {
-	const q = `SELECT id, target_resource_id, owner_user_id, database_name, schema_name, name, statement, scope, created_at, updated_at
-		FROM query_saved_statements
-		WHERE target_resource_id = ? AND id = ?`
-	var s model.QuerySavedStatement
-	var scope string
-	err := r.db.QueryRowContext(ctx, q, targetResourceID, id).Scan(
-		&s.ID, &s.TargetResourceID, &s.OwnerUserID, &s.DatabaseName, &s.SchemaName, &s.Name, &s.Statement, &scope, &s.CreatedAt, &s.UpdatedAt,
-	)
+	const q = `SELECT s.id, s.target_resource_id, s.owner_user_id,
+	       s.database_name, s.schema_name, s.name, s.statement, s.scope,
+	       s.created_at, s.updated_at,
+	       p.name, p.type, p.ordinal
+	FROM query_saved_statements s
+	LEFT JOIN query_saved_statement_parameters p ON p.statement_id = s.id
+	WHERE s.target_resource_id = ? AND s.id = ?
+	ORDER BY p.ordinal`
+	rows, err := r.db.QueryContext(ctx, q, targetResourceID, id)
 	if err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			return model.QuerySavedStatement{}, sql.ErrNoRows
-		}
 		return model.QuerySavedStatement{}, fmt.Errorf("get saved statement: %w", err)
 	}
-	s.Scope = model.QuerySavedStatementScope(scope)
-	loaded, err := r.loadParameterDefinitions(ctx, []model.QuerySavedStatement{s})
-	if err != nil {
-		return model.QuerySavedStatement{}, err
+	defer rows.Close()
+
+	var s model.QuerySavedStatement
+	var scope string
+	found := false
+	for rows.Next() {
+		var paramName, paramType sql.NullString
+		var ordinal sql.NullInt64
+		if err := rows.Scan(
+			&s.ID, &s.TargetResourceID, &s.OwnerUserID, &s.DatabaseName, &s.SchemaName,
+			&s.Name, &s.Statement, &scope, &s.CreatedAt, &s.UpdatedAt,
+			&paramName, &paramType, &ordinal,
+		); err != nil {
+			return model.QuerySavedStatement{}, fmt.Errorf("scan saved statement: %w", err)
+		}
+		if !found {
+			found = true
+			s.Parameters = make([]model.QuerySavedStatementParameterDefinition, 0)
+		}
+		if paramName.Valid || paramType.Valid || ordinal.Valid {
+			// A joined parameter row must carry all three projection columns
+			// — a NULL/non-NULL mixture is malformed storage, never a
+			// declaration to fabricate.
+			if !paramName.Valid || !paramType.Valid || !ordinal.Valid {
+				return model.QuerySavedStatement{}, fmt.Errorf("saved statement parameter row is malformed")
+			}
+			// Ordinals must be the contiguous set 0..n-1 — a gap or duplicate
+			// would silently shift the caller's parameter positions.
+			if int(ordinal.Int64) != len(s.Parameters) {
+				return model.QuerySavedStatement{}, fmt.Errorf("saved statement parameter order is invalid")
+			}
+			if len(s.Parameters) >= model.MaxSavedStatementParameters {
+				return model.QuerySavedStatement{}, fmt.Errorf("saved statement parameters exceed %d definitions", model.MaxSavedStatementParameters)
+			}
+			s.Parameters = append(s.Parameters, model.QuerySavedStatementParameterDefinition{
+				Name: paramName.String,
+				Type: model.QuerySavedStatementParameterType(paramType.String),
+			})
+		}
 	}
-	s = loaded[0]
+	if err := rows.Err(); err != nil {
+		return model.QuerySavedStatement{}, fmt.Errorf("iterate saved statement: %w", err)
+	}
+	if !found {
+		return model.QuerySavedStatement{}, sql.ErrNoRows
+	}
+	s.Scope = model.QuerySavedStatementScope(scope)
 	return s, nil
 }
 

@@ -1,7 +1,7 @@
 // Package service provides tests for the Phase 37/38S query execution service.
 // input: context, errors, fmt, strings, testing, time, internal/model
 // output: TestExecute_* including successful-User full SQL, owner-only statement retrieval/history restore eligibility, machine identity terminal outcomes, readiness/credential tests, and repository/resolver/executor/clock fakes
-// pos: Unit boundary for identity-aware governed execution, private statement access and restore projection, atomic terminal evidence, paging, cancellation durability, credential fail-closed behavior, disclosure error mapping, and executor-fake cellTruncated contract fill (T8-B); fakeExecRepo's finalizeHook is the only seam for producer-side mutation at the keyed persistence boundary (T8-C-R1)
+// pos: Unit boundary for identity-aware governed execution, private statement access and restore projection, atomic terminal evidence, paging, cancellation durability, credential fail-closed behavior, disclosure error mapping, and executor-fake cellTruncated contract fill (T8-B); fakeExecRepo's finalizeHook is the only seam for producer-side mutation at the keyed persistence boundary (T8-C-R1), and its finalizeEvents capture records the (eventType:result) pair the keyed finalize received so entry-kind event selection is assertable (PG-MULTI-ENTRY)
 // note: if this file changes, update header and README.md
 package service
 
@@ -97,7 +97,10 @@ type fakeExecRepo struct {
 	claims        map[string]string
 	finalizeErr   error
 	finalizeCalls []model.QueryExecutionRecord
-	finalizeNext  uint64
+	// finalizeEvents records the (eventType, result) pair each keyed
+	// finalize received — the entry kind decides the audit event family.
+	finalizeEvents []string
+	finalizeNext   uint64
 	// finalizeHook, when set, runs inside the fake's keyed finalize after
 	// the call is recorded — the only seam for injecting producer-side
 	// mutations at the persistence boundary (the real keyed finalize takes
@@ -312,8 +315,9 @@ func (f *fakeExecRepo) TryClaimExecution(_ context.Context, in model.QueryExecut
 // FinalizeClaimWithAudit mirrors the keyed terminal write: records every
 // call's terminal record and returns the injected error — no compensating
 // write ever happens on failure (matching the repository's atomic semantics).
-func (f *fakeExecRepo) FinalizeClaimWithAudit(_ context.Context, rec model.QueryExecutionRecord, _, _ string) (uint64, error) {
+func (f *fakeExecRepo) FinalizeClaimWithAudit(_ context.Context, rec model.QueryExecutionRecord, eventType, result string) (uint64, error) {
 	f.finalizeCalls = append(f.finalizeCalls, rec)
+	f.finalizeEvents = append(f.finalizeEvents, eventType+":"+result)
 	if f.finalizeHook != nil {
 		f.finalizeHook()
 	}

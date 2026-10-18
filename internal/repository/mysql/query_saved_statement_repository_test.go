@@ -1,12 +1,13 @@
 // Package mysql provides sqlmock-backed tests for the saved-statement repository.
 // input: database/sql, testing, time, DATA-DOG/go-sqlmock, internal/model
-// output: TestCreateWithAudit*/TestUpdateWithAudit*/read-path tests — exact SQL and argument binding incl. the database_name/schema_name context columns (T11)
+// output: TestCreateWithAudit*/TestUpdateWithAudit*/read-path tests — exact SQL and argument binding incl. the database_name/schema_name context columns (T11); GetByID asserts the single joined header+declarations snapshot contract: one LEFT JOIN query, contiguous ordinals, no partial NULL parameter rows, bounded count
 // pos: Write-path SQL shape and atomic audit coverage for governed saved statements
 // note: if this file changes, update header and README.md
 package mysql
 
 import (
 	"database/sql"
+	"fmt"
 	"testing"
 	"time"
 
@@ -280,9 +281,9 @@ func TestGetByID_NotFound(t *testing.T) {
 	defer db.Close()
 	repo := NewQuerySavedStatementRepository(db)
 
-	mock.ExpectQuery("SELECT id, target_resource_id").
+	mock.ExpectQuery("SELECT s.id, s.target_resource_id").
 		WithArgs(uint64(10), uint64(999)).
-		WillReturnError(sql.ErrNoRows)
+		WillReturnRows(sqlmock.NewRows([]string{"id", "target_resource_id", "owner_user_id", "database_name", "schema_name", "name", "statement", "scope", "created_at", "updated_at", "p_name", "p_type", "p_ordinal"}))
 
 	_, err = repo.GetByID(t.Context(), 10, 999)
 	if err == nil {
@@ -306,13 +307,10 @@ func TestGetByID_Found(t *testing.T) {
 	repo := NewQuerySavedStatementRepository(db)
 
 	now := time.Date(2026, 7, 28, 12, 0, 0, 0, time.UTC)
-	mock.ExpectQuery("SELECT id, target_resource_id").
+	mock.ExpectQuery("SELECT s.id, s.target_resource_id").
 		WithArgs(uint64(10), uint64(1)).
-		WillReturnRows(sqlmock.NewRows([]string{"id", "target_resource_id", "owner_user_id", "database_name", "schema_name", "name", "statement", "scope", "created_at", "updated_at"}).
-			AddRow(1, 10, 5, "", "", "my query", "SELECT 1", "personal", now, now))
-	mock.ExpectQuery("SELECT statement_id, name, type, ordinal").
-		WithArgs(uint64(1)).
-		WillReturnRows(sqlmock.NewRows([]string{"statement_id", "name", "type", "ordinal"}))
+		WillReturnRows(sqlmock.NewRows([]string{"id", "target_resource_id", "owner_user_id", "database_name", "schema_name", "name", "statement", "scope", "created_at", "updated_at", "p_name", "p_type", "p_ordinal"}).
+			AddRow(1, 10, 5, "", "", "my query", "SELECT 1", "personal", now, now, nil, nil, nil))
 
 	s, err := repo.GetByID(t.Context(), 10, 1)
 	if err != nil {
@@ -324,9 +322,114 @@ func TestGetByID_Found(t *testing.T) {
 	if s.Scope != model.QuerySavedStatementPersonal {
 		t.Errorf("expected personal scope, got %s", s.Scope)
 	}
+	if len(s.Parameters) != 0 {
+		t.Fatalf("static parameters = %+v, want none (NULL join row stays empty)", s.Parameters)
+	}
 
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Errorf("unmet expectations: %v", err)
+	}
+}
+
+// GetByID must read the statement header and its parameter declarations in
+// ONE joined statement-level snapshot — two separate SELECTs can observe
+// different committed versions under a concurrent update and hand the caller
+// a mixed (statement, declarations) pair.
+func TestGetByID_SingleJoinedSnapshot(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock.New: %v", err)
+	}
+	defer db.Close()
+	repo := NewQuerySavedStatementRepository(db)
+
+	now := time.Date(2026, 7, 28, 12, 0, 0, 0, time.UTC)
+	// Exactly one joined read; a second parameters query would be an
+	// unexpected call under sqlmock and fail the test.
+	mock.ExpectQuery("LEFT JOIN query_saved_statement_parameters").
+		WithArgs(uint64(10), uint64(1)).
+		WillReturnRows(sqlmock.NewRows([]string{"id", "target_resource_id", "owner_user_id", "database_name", "schema_name", "name", "statement", "scope", "created_at", "updated_at", "p_name", "p_type", "p_ordinal"}).
+			AddRow(1, 10, 5, "appdb", "app", "typed pick", "SELECT :status::text", "personal", now, now, "status", "string", 0).
+			AddRow(1, 10, 5, "appdb", "app", "typed pick", "SELECT :status::text", "personal", now, now, "minimum", "decimal", 1))
+
+	s, err := repo.GetByID(t.Context(), 10, 1)
+	if err != nil {
+		t.Fatalf("GetByID: %v", err)
+	}
+	if len(s.Parameters) != 2 || s.Parameters[0].Name != "status" || s.Parameters[1].Name != "minimum" {
+		t.Fatalf("parameters = %+v, want ordinal-ordered [status minimum]", s.Parameters)
+	}
+
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Errorf("unmet expectations: %v", err)
+	}
+}
+
+// A non-contiguous ordinal (gap at 0..n-1) is malformed storage: fail closed
+// with an internal error rather than return a shifted parameter list.
+func TestGetByID_RejectsOrdinalGap(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock.New: %v", err)
+	}
+	defer db.Close()
+	repo := NewQuerySavedStatementRepository(db)
+
+	now := time.Date(2026, 7, 28, 12, 0, 0, 0, time.UTC)
+	mock.ExpectQuery("LEFT JOIN query_saved_statement_parameters").
+		WithArgs(uint64(10), uint64(1)).
+		WillReturnRows(sqlmock.NewRows([]string{"id", "target_resource_id", "owner_user_id", "database_name", "schema_name", "name", "statement", "scope", "created_at", "updated_at", "p_name", "p_type", "p_ordinal"}).
+			AddRow(1, 10, 5, "", "", "typed", "SELECT :a::text", "personal", now, now, "a", "string", 0).
+			AddRow(1, 10, 5, "", "", "typed", "SELECT :a::text", "personal", now, now, "b", "string", 2))
+
+	if _, err := repo.GetByID(t.Context(), 10, 1); err == nil {
+		t.Fatal("ordinal gap must fail closed")
+	}
+}
+
+// A parameter row mixing NULL and non-NULL projection columns is malformed:
+// the joined snapshot must reject it instead of fabricating a declaration.
+func TestGetByID_RejectsPartialNullParameter(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock.New: %v", err)
+	}
+	defer db.Close()
+	repo := NewQuerySavedStatementRepository(db)
+
+	now := time.Date(2026, 7, 28, 12, 0, 0, 0, time.UTC)
+	mock.ExpectQuery("LEFT JOIN query_saved_statement_parameters").
+		WithArgs(uint64(10), uint64(1)).
+		WillReturnRows(sqlmock.NewRows([]string{"id", "target_resource_id", "owner_user_id", "database_name", "schema_name", "name", "statement", "scope", "created_at", "updated_at", "p_name", "p_type", "p_ordinal"}).
+			AddRow(1, 10, 5, "", "", "typed", "SELECT :a::text", "personal", now, now, "a", "string", nil))
+
+	if _, err := repo.GetByID(t.Context(), 10, 1); err == nil {
+		t.Fatal("partial-NULL parameter row must fail closed")
+	}
+}
+
+// More declarations than MaxSavedStatementParameters can never be a legal
+// stored shape — the read fails closed rather than hand the executor an
+// unbounded parameter list.
+func TestGetByID_RejectsOverBoundParameters(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock.New: %v", err)
+	}
+	defer db.Close()
+	repo := NewQuerySavedStatementRepository(db)
+
+	now := time.Date(2026, 7, 28, 12, 0, 0, 0, time.UTC)
+	rows := sqlmock.NewRows([]string{"id", "target_resource_id", "owner_user_id", "database_name", "schema_name", "name", "statement", "scope", "created_at", "updated_at", "p_name", "p_type", "p_ordinal"})
+	for i := 0; i <= model.MaxSavedStatementParameters; i++ {
+		rows.AddRow(1, 10, 5, "", "", "typed", "SELECT :a::text", "personal", now, now, fmt.Sprintf("p%d", i), "string", i)
+	}
+	mock.ExpectQuery("LEFT JOIN query_saved_statement_parameters").
+		WithArgs(uint64(10), uint64(1)).
+		WillReturnRows(rows)
+
+	if _, err := repo.GetByID(t.Context(), 10, 1); err == nil {
+		t.Fatal("over-bound parameter count must fail closed")
 	}
 }
 

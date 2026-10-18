@@ -1,20 +1,22 @@
 // Package service binds governed PostgreSQL entity references inside the
 // attempt transaction and exposes the attempt-scoped metadata resolver.
 // input: attempt context with deadline, caller-held pgx.Tx (BEGIN READ ONLY,
-// search_path="<pinned>,pg_catalog", TimeZone='UTC' and an initial
-// statement_timeout already applied by the caller), resolved database/pinned
-// schema, and the GuardResult the rewrite will reuse
+// search_path="<pinned>,pg_catalog", TimeZone='UTC', initial
+// statement_timeout), resolved database/pinned schema, the GuardResult
 // output: PGBind, PGBindInput, PGBindResult, PGBoundRef, PGRelationIdentity,
 // PGViewDependency, PGInheritEdge, PGIndexEdge — RefID-keyed touch-confirmed
-// bindings with locked attribute maps, view dependency closure, pg_inherits
-// children, table-index approval, fixed probe whitelist, and the
-// in-transaction pgsql.ColumnMetadataResolver
-// pos: T7-S2 binding gate (frozen G4 step 6 / G10 mechanism 2) — pinned USAGE
-// check, canonical to_regclass resolution, per-entity self-proof touch whose
-// FieldDescription DataTypeOID must equal the gate-resolved reltype, attmap
-// under the held ACCESS SHARE lock, recursive view-dependency namespace
-// boundary, inheritance-child collection, and native common-type verdicts;
-// probe SQL only — user statements and transport SQL never execute here
+// bindings, locked attribute maps, view-dependency closure, pg_inherits
+// children, table-index approval, probe whitelist, in-transaction
+// pgsql.ColumnMetadataResolver
+// pos: T7-S2 binding gate (frozen G4 step 6 / G10 mechanism 2) — pinned
+// USAGE check (unconditional under private requirePinnedSchema, set by the
+// saved/navigation claimed entries), canonical to_regclass resolution,
+// per-entity self-proof touch (FieldDescription DataTypeOID must equal the
+// gate-resolved reltype), attmap under held ACCESS SHARE, recursive
+// view-dependency boundary, inheritance children, native common-type
+// verdicts; private navigationSource re-binds/re-verifies the exact FK
+// definition; pg_constraint joins the probe whitelist only under a nav
+// binding; probe SQL only — user/transport SQL never executes here
 // note: if this file changes, update this header and module README.md.
 package service
 
@@ -120,6 +122,11 @@ type PGBindResult struct {
 	Indexes      []PGIndexEdge        // table→index edges for held-lock attribution
 	Probes       []PGRelationIdentity // fixed probe whitelist identities
 	Resolver     pgsql.ColumnResolver // also implements pgsql.ColumnMetadataResolver
+	// navigationSource is the required-lock identity of the navigation
+	// entry's source relation — nil for ordinary/saved attempts. The lock
+	// audit must see its ACCESS SHARE still held; it never widens Approved
+	// as a generic caller-writable list.
+	navigationSource *PGRelationIdentity
 }
 
 // PGBindInput bundles the gate inputs. The caller owns the transaction and
@@ -132,6 +139,18 @@ type PGBindInput struct {
 	Database     string
 	PinnedSchema string
 	Guard        *pgsql.GuardResult
+	// requirePinnedSchema makes stagePinnedUsage unconditional: callers
+	// whose entry pins the execution schema by contract (saved statements,
+	// navigation) prove existence/USAGE even for constant or fully
+	// qualified statements. The ordinary entry never sets it.
+	requirePinnedSchema bool
+	// navigation is the optional prepared related-record FK binding — set
+	// only by the navigation entry. The gate then binds the source relation
+	// through the same physical pipeline (no synthetic RefID), proves the
+	// target's guard ref is exactly the generated qualified reference, and
+	// re-runs the fixed metadata probe on this same transaction — any remap
+	// is query_binding_mismatch before the user statement is sent.
+	navigation *pgNavigationBinding
 }
 
 // PGBind runs the in-transaction binding gate. On success the result's Refs
@@ -150,16 +169,18 @@ func PGBind(ctx context.Context, in PGBindInput) (*PGBindResult, error) {
 
 func newPGBindingGate(ctx context.Context, in PGBindInput, budget pgAttemptBudget) *pgBindingGate {
 	return &pgBindingGate{
-		ctx:           ctx,
-		tx:            in.Tx,
-		database:      in.Database,
-		pinned:        in.PinnedSchema,
-		guard:         in.Guard,
-		budget:        budget,
-		byName:        map[pgRelKey]*pgBoundRelation{},
-		byOID:         map[uint32]*pgBoundRelation{},
-		refs:          map[pgsql.RefID]*PGBoundRef{},
-		extraApproved: map[PGRelationIdentity]bool{},
+		ctx:                 ctx,
+		tx:                  in.Tx,
+		database:            in.Database,
+		pinned:              in.PinnedSchema,
+		guard:               in.Guard,
+		budget:              budget,
+		requirePinnedSchema: in.requirePinnedSchema,
+		navigation:          in.navigation,
+		byName:              map[pgRelKey]*pgBoundRelation{},
+		byOID:               map[uint32]*pgBoundRelation{},
+		refs:                map[pgsql.RefID]*PGBoundRef{},
+		extraApproved:       map[PGRelationIdentity]bool{},
 	}
 }
 
@@ -179,12 +200,18 @@ type pgBoundRelation struct {
 }
 
 type pgBindingGate struct {
-	ctx      context.Context
-	tx       pgx.Tx
-	database string
-	pinned   string
-	guard    *pgsql.GuardResult
-	budget   pgAttemptBudget
+	ctx                 context.Context
+	tx                  pgx.Tx
+	database            string
+	pinned              string
+	guard               *pgsql.GuardResult
+	budget              pgAttemptBudget
+	requirePinnedSchema bool
+	// navigation is the prepared FK binding (nil for ordinary/saved);
+	// navSource is the source relation's own bound physical record once
+	// stageNavigationBindSource proves it.
+	navigation *pgNavigationBinding
+	navSource  *pgBoundRelation
 
 	dbOID         uint32
 	byName        map[pgRelKey]*pgBoundRelation
@@ -210,7 +237,9 @@ func (g *pgBindingGate) run() (*PGBindResult, error) {
 		g.stageDatabaseIdentity,
 		g.stagePinnedUsage,
 		g.stageEntityBind,
+		g.stageNavigationBindSource,
 		g.stageAttributes,
+		g.stageNavigationVerify,
 		g.stageViewDeps,
 		g.stageInheritChildren,
 		g.stageEntityIndexes,
@@ -373,11 +402,13 @@ func (g *pgBindingGate) stageDatabaseIdentity() error {
 	return nil
 }
 
-// stagePinnedUsage checks the pinned schema only when unqualified entity
-// references exist (they would resolve there): a missing pinned schema is
-// schema_not_found, an unusable one is query_schema_not_usable.
+// stagePinnedUsage checks the pinned schema when unqualified entity
+// references exist (they would resolve there) — or unconditionally when the
+// entry requires the pinned schema as part of its execution context
+// (saved/navigation entries, never the ordinary path): a missing pinned
+// schema is schema_not_found, an unusable one is query_schema_not_usable.
 func (g *pgBindingGate) stagePinnedUsage() error {
-	unqualified := false
+	unqualified := g.requirePinnedSchema
 	for _, r := range g.guard.Refs {
 		if r.Kind == pgsql.RefEntity {
 			unqualified = true
@@ -438,7 +469,31 @@ func (g *pgBindingGate) bindEntity(ref pgsql.RangeVarRef) error {
 	if ref.Kind == pgsql.RefEntity {
 		schema = g.pinned
 	}
-	canonical := pgQualifiedName(schema, ref.Name)
+	rel, err := g.bindPhysicalRelation(schema, ref.Name)
+	if err != nil {
+		return err
+	}
+	g.refs[ref.RefID] = &PGBoundRef{
+		RefID:          ref.RefID,
+		Schema:         rel.schema,
+		Name:           ref.Name,
+		CatalogName:    rel.name,
+		Identity:       g.identityOf(rel),
+		RelTypeOID:     rel.reltype,
+		RelKind:        rel.relkind,
+		TouchConfirmed: true,
+	}
+	return nil
+}
+
+// bindPhysicalRelation resolves one (schema, name) pair to its physical
+// record: canonical to_regclass resolution, the self-proof touch whose
+// FieldDescription DataTypeOID must equal the resolved reltype, the
+// supplementary name recheck, and the (schema, name)/OID caches. This is the
+// same algorithm entity binding always ran — the navigation source binds
+// through it too, with no synthetic RefID.
+func (g *pgBindingGate) bindPhysicalRelation(schema, name string) (*pgBoundRelation, error) {
+	canonical := pgQualifiedName(schema, name)
 
 	row, err := g.row(
 		`SELECT c.oid::pg_catalog.oid, c.reltype::pg_catalog.oid, c.relkind::text,
@@ -447,7 +502,7 @@ func (g *pgBindingGate) bindEntity(ref pgsql.RangeVarRef) error {
 		   JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
 		  WHERE c.oid = pg_catalog.to_regclass($1)`, canonical)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	var (
 		oid, reltype uint32
@@ -458,25 +513,25 @@ func (g *pgBindingGate) bindEntity(ref pgsql.RangeVarRef) error {
 	)
 	if err := row.Scan(&oid, &reltype, &relkind, &shared, &nspname, &relname); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
-			return &pgsql.RejectError{Code: "query_object_not_found", Message: "pgsql: relation not found"}
+			return nil, &pgsql.RejectError{Code: "query_object_not_found", Message: "pgsql: relation not found"}
 		}
 		// to_regclass checks schema USAGE itself: an inaccessible schema
 		// makes the object invisible to this account.
-		return g.failStage(err, classifyPGRelationAccess)
+		return nil, g.failStage(err, classifyPGRelationAccess)
 	}
 
 	if g.afterEntityResolve != nil {
 		g.afterEntityResolve()
 	}
 
-	touchOID, err := g.touch(schema, ref.Name)
+	touchOID, err := g.touch(schema, name)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	if touchOID != reltype {
 		// The touch self-witness bound a different composite type than the
 		// gate-resolved relation — the name moved between resolution and lock.
-		return &pgsql.RejectError{Code: "query_binding_mismatch", Message: "pgsql: touch bound an unexpected relation"}
+		return nil, &pgsql.RejectError{Code: "query_binding_mismatch", Message: "pgsql: touch bound an unexpected relation"}
 	}
 
 	// Supplementary name re-check: it can only report the name already moved
@@ -485,17 +540,17 @@ func (g *pgBindingGate) bindEntity(ref pgsql.RangeVarRef) error {
 	recheck, err := g.row(
 		`SELECT (pg_catalog.to_regclass($1))::pg_catalog.oid`, canonical)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	var again *uint32
 	if err := recheck.Scan(&again); err != nil {
-		return g.failStage(err, classifyPGNameRemap)
+		return nil, g.failStage(err, classifyPGNameRemap)
 	}
 	if again == nil || *again != oid {
-		return &pgsql.RejectError{Code: "query_binding_mismatch", Message: "pgsql: relation name remapped during binding"}
+		return nil, &pgsql.RejectError{Code: "query_binding_mismatch", Message: "pgsql: relation name remapped during binding"}
 	}
 
-	key := pgRelKey{schema: schema, name: ref.Name}
+	key := pgRelKey{schema: schema, name: name}
 	rel, dup := g.byName[key]
 	if !dup {
 		rel = &pgBoundRelation{oid: oid, reltype: reltype, relkind: relkind, shared: shared, schema: nspname, name: relname}
@@ -504,17 +559,85 @@ func (g *pgBindingGate) bindEntity(ref pgsql.RangeVarRef) error {
 	} else if rel.oid != oid || rel.reltype != reltype {
 		// Same (schema, name) produced an incompatible record — fail loud
 		// instead of picking one or silently overwriting.
-		return errPGBindInternal
+		return nil, errPGBindInternal
 	}
-	g.refs[ref.RefID] = &PGBoundRef{
-		RefID:          ref.RefID,
-		Schema:         nspname,
-		Name:           ref.Name,
-		CatalogName:    rel.name,
-		Identity:       g.identityOf(rel),
-		RelTypeOID:     reltype,
-		RelKind:        relkind,
-		TouchConfirmed: true,
+	return rel, nil
+}
+
+// stageNavigationBindSource binds the navigation entry's source relation
+// through the same physical pipeline as any entity — resolve, self-proof
+// touch, recheck, cache — but records no RefID: the source is the gate's own
+// required lock, not a user statement reference. Its ACCESS SHARE is the
+// lock that makes the verify-stage metadata recheck a locked re-proof, and
+// it enters the audit's required set via PGBindResult.navigationSource.
+func (g *pgBindingGate) stageNavigationBindSource() error {
+	if g.navigation == nil {
+		return nil
+	}
+	rel, err := g.bindPhysicalRelation(g.navigation.source.schema, g.navigation.source.name)
+	if err != nil {
+		return err
+	}
+	g.navSource = rel
+	// The source's own physical record enters the approved set by identity,
+	// so held source locks (and its indexes'/children's) are explainable.
+	g.noteApproved(rel.oid, rel.shared)
+	return nil
+}
+
+// stageNavigationVerify re-proves the prepared FK mapping under the locks
+// this transaction now holds: the guard must name exactly the generated
+// qualified target reference, that ref's bound record and the bound source
+// record must match the prepared identities, and the fixed metadata probe —
+// re-run on this same transaction — must return the identical mapping
+// (constraint OID, both physical identities, ordered column pairs). Any
+// remap between preparation and now is query_binding_mismatch: the rejected
+// attempt terminates keyed, and the user statement is never sent.
+func (g *pgBindingGate) stageNavigationVerify() error {
+	nav := g.navigation
+	if nav == nil {
+		return nil
+	}
+	mismatch := &pgsql.RejectError{Code: "query_binding_mismatch", Message: "pgsql: navigation binding changed since preparation"}
+
+	if len(g.guard.Refs) != 1 {
+		return mismatch
+	}
+	ref := g.guard.Refs[0]
+	if ref.Kind != pgsql.RefQualified || ref.Schema != nav.target.schema || ref.Name != nav.target.name || ref.Catalog != "" {
+		return mismatch
+	}
+	bound := g.refs[ref.RefID]
+	if bound == nil ||
+		bound.Identity.RelationOID != nav.target.oid || bound.RelTypeOID != nav.target.reltype ||
+		bound.Schema != nav.target.schema || bound.CatalogName != nav.target.name ||
+		bound.RelKind != nav.target.kind {
+		return mismatch
+	}
+	if g.navSource == nil ||
+		g.navSource.oid != nav.source.oid || g.navSource.reltype != nav.source.reltype ||
+		g.navSource.schema != nav.source.schema || g.navSource.name != nav.source.name ||
+		g.navSource.relkind != nav.source.kind {
+		return mismatch
+	}
+
+	rows, err := g.query(pgNavigationMetadataSQL, nav.source.schema, nav.source.name, nav.fkName)
+	if err != nil {
+		return err
+	}
+	fresh, err := readPGNavigationBinding(rows, nav.fkName)
+	if err != nil {
+		var re *pgsql.RejectError
+		if errors.As(err, &re) {
+			return re
+		}
+		if cerr := g.ctx.Err(); cerr != nil {
+			return g.fail(cerr)
+		}
+		return g.fail(err)
+	}
+	if fresh == nil || !fresh.sameAs(nav) || fresh.databaseOID != g.dbOID {
+		return mismatch
 	}
 	return nil
 }
@@ -695,6 +818,11 @@ func (g *pgBindingGate) stageInheritChildren() error {
 	for _, d := range g.deps {
 		parentSet[d.RelationOID] = true
 	}
+	// The navigation source is a gate-approved base relation too — its
+	// partition children lock at parse like any referenced table.
+	if g.navSource != nil {
+		parentSet[g.navSource.oid] = true
+	}
 	parents := make([]int64, 0, len(parentSet))
 	for oid := range parentSet {
 		parents = append(parents, int64(oid))
@@ -749,6 +877,10 @@ func (g *pgBindingGate) stageEntityIndexes() error {
 	for _, e := range g.inherits {
 		baseSet[e.ChildOID] = true
 	}
+	// The bound navigation source's indexes are held at parse as well.
+	if g.navSource != nil {
+		baseSet[g.navSource.oid] = true
+	}
 	if len(baseSet) == 0 {
 		return nil
 	}
@@ -782,8 +914,14 @@ func (g *pgBindingGate) stageEntityIndexes() error {
 
 // stageProbeWhitelist resolves the fixed probe catalog names to their
 // (database, relation) identities. A missing catalog is an internal defect —
-// the whitelist is a constant, not learned evidence.
+// the whitelist is a constant, not learned evidence. When the attempt carries
+// a navigation binding the whitelist gains exactly pg_constraint — the
+// verify-stage metadata probe locks it — never a blanket catalog allowlist.
 func (g *pgBindingGate) stageProbeWhitelist() error {
+	names := pgProbeCatalogNames
+	if g.navigation != nil {
+		names = append(append([]string(nil), pgProbeCatalogNames...), "pg_constraint")
+	}
 	rows, err := g.query(
 		`SELECT c.relname, c.oid::pg_catalog.oid, c.relisshared, true AS is_table
 		   FROM pg_catalog.pg_class c
@@ -797,7 +935,7 @@ func (g *pgBindingGate) stageProbeWhitelist() error {
 		   JOIN pg_catalog.pg_class t ON t.oid = i.indrelid
 		   JOIN pg_catalog.pg_namespace tn ON tn.oid = t.relnamespace
 		  WHERE tn.nspname = 'pg_catalog'
-		    AND t.relname = ANY($1::text[])`, pgProbeCatalogNames)
+		    AND t.relname = ANY($1::text[])`, names)
 	if err != nil {
 		return err
 	}
@@ -822,7 +960,7 @@ func (g *pgBindingGate) stageProbeWhitelist() error {
 	if err := rows.Err(); err != nil {
 		return g.fail(err)
 	}
-	for _, name := range pgProbeCatalogNames {
+	for _, name := range names {
 		if !foundTables[name] {
 			return errPGBindInternal
 		}
@@ -875,14 +1013,20 @@ func (g *pgBindingGate) result() *PGBindResult {
 		}
 		return g.indexes[i].IndexOID < g.indexes[j].IndexOID
 	})
+	var navSource *PGRelationIdentity
+	if g.navSource != nil {
+		id := g.identityOf(g.navSource)
+		navSource = &id
+	}
 	return &PGBindResult{
-		Refs:         g.refs,
-		DatabaseOID:  g.dbOID,
-		Approved:     set,
-		Dependencies: g.deps,
-		Inherits:     g.inherits,
-		Indexes:      g.indexes,
-		Probes:       g.probes,
+		Refs:             g.refs,
+		DatabaseOID:      g.dbOID,
+		Approved:         set,
+		Dependencies:     g.deps,
+		Inherits:         g.inherits,
+		Indexes:          g.indexes,
+		Probes:           g.probes,
+		navigationSource: navSource,
 		Resolver: &pgTxResolver{
 			ctx:    g.ctx,
 			tx:     g.tx,
