@@ -4,7 +4,9 @@
 // duplicate/conflict classification, keyed finalize, and deriveClaimViewStatus
 // pos: T10-C claim-orchestration unit coverage for issue #118 — every test
 // encodes the frozen G9 order; no real PostgreSQL or MySQL is involved, the
-// governed chain either rejects at the guard or fails at the DSN endpoint
+// governed chain either rejects at the guard or fails at the DSN endpoint;
+// T8-C-R1 adds the delivery-snapshot ownership proofs (bidirectional
+// isolation plus finalize-boundary mutation via the fake's finalizeHook)
 // note: if this file changes, update this header and module README.md.
 package service
 
@@ -1175,4 +1177,165 @@ func TestExecutePGClaimed_FinalizeFailureOutranksDelivery(t *testing.T) {
 	if len(repo.pairCalls) != 0 {
 		t.Fatal("finalize failure wrote a compensating pair")
 	}
+}
+
+// ---------------------------------------------------------------------------
+// T8-C-R1: the delivery snapshot/ownership boundary. The coordinator gates
+// and returns its own pre-finalize snapshot — never the producer's live
+// object. Mutations injected inside the fake finalize (an internal ownership
+// fault — the real keyed finalize takes no result pointer) cannot reach the
+// validated snapshot, and writes into the returned payload cannot reach
+// upstream records. Every assertion checks the final returned rows AND the
+// matrix, not just the decision's internals or the last error code.
+// ---------------------------------------------------------------------------
+
+func TestExecutePGClaimed_DeliverySnapshotOwnership(t *testing.T) {
+	t.Parallel()
+	oneCol := func() []PGDisclosedColumn {
+		return []PGDisclosedColumn{{
+			PGResultColumn: PGResultColumn{Name: "v", DatabaseType: "TEXT"},
+			DisplayMode:    model.ResultDisclosureRawCopyAllowed,
+			CopyAllowed:    true,
+		}}
+	}
+	successEvidence := func() *PGAttemptEvidence {
+		return &PGAttemptEvidence{Stage: PGStageExecute, Status: model.QueryExecutionSuccess, BackendPID: 42}
+	}
+
+	// After a successful return neither side can write through to the
+	// other: upstream cells/matrix and delivered cells/matrix are detached
+	// in both directions, and the returned object is never the producer's.
+	t.Run("post-return bidirectional isolation", func(t *testing.T) {
+		t.Parallel()
+		repo := claimedPGRepo(t)
+		svc := newClaimedService(repo, &fakeResolver{dsn: mustDSN(t)})
+		safe, empty, lit := "safe", "", "NULL"
+		res := &PGDisclosedResult{
+			Columns: append(oneCol(), PGDisclosedColumn{
+				PGResultColumn: PGResultColumn{Name: "w", DatabaseType: "TEXT"},
+				DisplayMode:    model.ResultDisclosureRawCopyAllowed, CopyAllowed: true}),
+			Rows:          [][]*string{{&safe, nil}, {&empty, &lit}},
+			CellTruncated: [][]bool{{false, false}, {false, false}},
+		}
+		svc.pgOutcomeFn = func(context.Context, PGDisclosureInput) (*PGDisclosedResult, *PGAttemptEvidence, error) {
+			return res, successEvidence(), nil
+		}
+		out, err := svc.ExecutePGClaimed(context.Background(), userExecutionIdentity(7), 9002, validClaimedRequest())
+		if err != nil {
+			t.Fatalf("execute: %v", err)
+		}
+		got := out.Result
+		if got == nil {
+			t.Fatal("no result delivered")
+		}
+		if got == res {
+			t.Fatal("returned the producer's own result object")
+		}
+		// Multi-row / NULL / empty / literal "NULL" survive verbatim.
+		if len(got.Rows) != 2 || len(got.Rows[0]) != 2 || len(got.Rows[1]) != 2 {
+			t.Fatalf("rows = %v, want the 2x2 page", got.Rows)
+		}
+		if got.Rows[0][0] == nil || *got.Rows[0][0] != "safe" ||
+			got.Rows[0][1] != nil ||
+			got.Rows[1][0] == nil || *got.Rows[1][0] != "" ||
+			got.Rows[1][1] == nil || *got.Rows[1][1] != "NULL" {
+			t.Fatalf("delivered cells = %v, want safe/NULL/empty/literal-NULL", got.Rows)
+		}
+		if got.Rows[0][0] == res.Rows[0][0] {
+			t.Fatal("delivered cell aliases the producer's pointer")
+		}
+		// Upstream writes cannot reach the delivered payload.
+		*res.Rows[0][0] = "tampered-upstream"
+		res.CellTruncated[0][0] = true
+		if *got.Rows[0][0] != "safe" || got.CellTruncated[0][0] {
+			t.Fatal("upstream mutation reached the delivered payload")
+		}
+		// Delivered writes cannot reach upstream state.
+		*got.Rows[0][0] = "tampered-returned"
+		got.CellTruncated[1][1] = true
+		if *res.Rows[0][0] != "tampered-upstream" || res.CellTruncated[1][1] {
+			t.Fatal("delivered mutation reached the producer's records")
+		}
+	})
+
+	// A producer-side mutation inside the keyed finalize never reaches the
+	// snapshot the coordinator validated, gated, and returned.
+	t.Run("finalize-boundary mutation keeps validated snapshot", func(t *testing.T) {
+		t.Parallel()
+		cases := map[string]struct {
+			matrix   [][]bool
+			hook     func(res *PGDisclosedResult)
+			wantErr  error
+			wantFlag bool
+		}{
+			"cell rewritten inside finalize": {
+				matrix: [][]bool{{false}},
+				hook: func(res *PGDisclosedResult) {
+					*res.Rows[0][0] = strings.Repeat("x", 9000)
+				},
+				wantFlag: false,
+			},
+			"row widened inside finalize": {
+				matrix: [][]bool{{false}},
+				hook: func(res *PGDisclosedResult) {
+					extra := "extra"
+					res.Rows[0] = append(res.Rows[0], &extra)
+				},
+				wantFlag: false,
+			},
+			"flag flipped clean inside finalize": {
+				matrix: [][]bool{{true}},
+				hook: func(res *PGDisclosedResult) {
+					res.CellTruncated[0][0] = false
+				},
+				wantErr: ErrResultContractUpgradeRequired,
+			},
+		}
+		for name, tc := range cases {
+			tc := tc
+			t.Run(name, func(t *testing.T) {
+				t.Parallel()
+				repo := claimedPGRepo(t)
+				svc := newClaimedService(repo, &fakeResolver{dsn: mustDSN(t)})
+				safe := "safe"
+				res := &PGDisclosedResult{
+					Columns:       oneCol(),
+					Rows:          [][]*string{{&safe}},
+					CellTruncated: tc.matrix,
+				}
+				repo.finalizeHook = func() { tc.hook(res) }
+				svc.pgOutcomeFn = func(context.Context, PGDisclosureInput) (*PGDisclosedResult, *PGAttemptEvidence, error) {
+					return res, successEvidence(), nil
+				}
+				out, err := svc.ExecutePGClaimed(context.Background(), userExecutionIdentity(7), 9002, validClaimedRequest())
+				switch {
+				case tc.wantErr == nil && err != nil:
+					t.Fatalf("err = %v, want nil", err)
+				case tc.wantErr != nil && !errors.Is(err, tc.wantErr):
+					t.Fatalf("err = %v, want %v", err, tc.wantErr)
+				}
+				// The single keyed finalize still persisted success — a
+				// boundary mutation never rewrote the recorded outcome.
+				if len(repo.finalizeCalls) != 1 || repo.finalizeCalls[0].Status != model.QueryExecutionSuccess {
+					t.Fatalf("finalize = %+v, want exactly one success row", repo.finalizeCalls)
+				}
+				if tc.wantErr != nil {
+					if out.Result != nil {
+						t.Fatalf("refusal leaked rows: %+v", out.Result)
+					}
+					return
+				}
+				got := out.Result
+				if got == nil || len(got.Rows) != 1 || len(got.Rows[0]) != 1 {
+					t.Fatalf("rows = %+v, want the validated 1x1 snapshot", got)
+				}
+				if got.Rows[0][0] == nil || *got.Rows[0][0] != "safe" {
+					t.Fatalf("cell = %v, want the validated snapshot value", got.Rows[0][0])
+				}
+				if len(got.CellTruncated) != 1 || len(got.CellTruncated[0]) != 1 || got.CellTruncated[0][0] != tc.wantFlag {
+					t.Fatalf("matrix = %v, want the validated flag %v", got.CellTruncated, tc.wantFlag)
+				}
+			})
+		}
+	})
 }

@@ -8,14 +8,14 @@
 // plus the T8-C delivery seam (issue #116) — request-shape validation →
 // access resolution → defaults (explicit schema verbatim) → digest →
 // atomic TryClaimExecution → governed PG disclosure outcome → (result,
-// evidence, error) + cellTruncated-structure consistency gate → one
-// FinalizeClaimWithAudit → shared DecideResultDelivery (capability refusal
-// is delivery-only — the persisted success pair stands) → internal result
-// whose evidence is a verdict-aligned independent copy. History previews
-// go through pgsql.SafeStatementPreview — keyed rows store the masked
-// preview, pre-claim pairs the fixed withheld marker.
-// This entry is not an
-// HTTP route; its result never serializes to a client response.
+// evidence, error) + cellTruncated-structure consistency gate run on a
+// coordinator-owned pre-finalize delivery snapshot → one keyed
+// FinalizeClaimWithAudit → shared DecideResultDelivery on that snapshot
+// (capability refusal is delivery-only — the success pair stands) →
+// result rebuilt from the decision's owned rows/matrix, never the
+// producer's object, evidence a verdict-aligned copy. History previews
+// run through pgsql.SafeStatementPreview — keyed rows store the masked
+// preview, pre-claim pairs the fixed withheld marker. Not an HTTP route.
 // note: if this file changes, update this header and module README.md.
 package service
 
@@ -288,13 +288,31 @@ func (s *QueryExecutionService) ExecutePGClaimed(ctx context.Context, identity m
 	// or misaligned matrix is producer damage, folded into the same internal
 	// contract fault: it is never repaired by fabricating all-false marks,
 	// never classified as a disclosure refusal, and never discovered only
-	// after the success pair already persisted. The shared validator runs on
-	// the delivery-shape rows; the same adapted rows are reused by the
-	// post-finalize gate below.
-	var anyRows [][]any
+	// after the success pair already persisted.
+	//
+	// The coordinator takes its own delivery snapshot here — before the
+	// keyed finalize: the native-text rows, the cloned matrix, and the
+	// cloned columns/provenance are what the pre-finalize shape check, the
+	// post-finalize capability gate, and the returned payload all consume.
+	// The producer's object is never re-read for delivery data after this
+	// point and is never returned.
+	var delivery *PGDisclosedResult
+	var gateCols []model.QueryResultColumn
+	var gateRows [][]any
+	var gateMatrix [][]bool
 	if res != nil {
-		anyRows = pgDisclosedRowsAny(res.Rows)
-		if !contractFault && validateCellTruncatedMatrix(len(res.Columns), anyRows, res.CellTruncated) != nil {
+		delivery = &PGDisclosedResult{
+			Columns:      append([]PGDisclosedColumn(nil), res.Columns...),
+			Page:         res.Page,
+			Refs:         clonePGRefSlice(res.Refs),
+			PublicProofs: clonePGProofSlice(res.PublicProofs),
+			Sources:      clonePGSourceCatalog(res.Sources),
+			BoundRefs:    clonePGBoundRefMap(res.BoundRefs),
+		}
+		gateCols = pgDisclosedModelColumns(delivery.Columns)
+		gateRows = pgDisclosedRowsAny(res.Rows)
+		gateMatrix = CloneCellTruncated(res.CellTruncated)
+		if !contractFault && validateCellTruncatedMatrix(len(gateCols), gateRows, gateMatrix) != nil {
 			contractFault = true
 		}
 	}
@@ -386,18 +404,23 @@ func (s *QueryExecutionService) ExecutePGClaimed(ctx context.Context, identity m
 	// and no rows. A persistence failure above already won over any
 	// capability error — this gate only runs after finalize succeeded.
 	decision, derr := DecideResultDelivery(ResultDeliveryInput{
-		Columns:       pgDisclosedModelColumns(res.Columns),
-		Rows:          anyRows,
-		CellTruncated: res.CellTruncated,
+		Columns:       gateCols,
+		Rows:          gateRows,
+		CellTruncated: gateMatrix,
 		Capabilities:  req.Capabilities,
 	})
 	if derr != nil {
 		return PGClaimedOutcome{ExecutionID: execID, Status: status, Evidence: outEv}, derr
 	}
-	// The decision's matrix is the independently owned delivery payload;
-	// the disclosed rows are already ownership-clean native text.
-	res.CellTruncated = decision.CellTruncated
-	return PGClaimedOutcome{ExecutionID: execID, Status: status, Result: res, Evidence: outEv}, nil
+	// The returned object is the coordinator's own snapshot — never the
+	// producer's: its rows are rebuilt from the decision's owned payload
+	// (nil → SQL NULL, string → a fresh *string over the immutable bytes)
+	// and its matrix is the decision's clone. Producer-side mutation at or
+	// after the finalize boundary cannot reach what was validated, gated,
+	// and delivered.
+	delivery.Rows = pgDecisionRowsDisclosed(decision.Rows)
+	delivery.CellTruncated = decision.CellTruncated
+	return PGClaimedOutcome{ExecutionID: execID, Status: status, Result: delivery, Evidence: outEv}, nil
 }
 
 // pgDisclosedRowsAny adapts native-text cells to the shared [][]any
@@ -413,6 +436,30 @@ func pgDisclosedRowsAny(rows [][]*string) [][]any {
 		for j, cell := range row {
 			if cell != nil {
 				r[j] = *cell
+			}
+		}
+		out[i] = r
+	}
+	return out
+}
+
+// pgDecisionRowsDisclosed converts the delivery decision's payload back to
+// the native-text cell shape: nil becomes SQL NULL, a string becomes a new
+// string variable and pointer (the immutable bytes may be shared — no
+// strings.Clone copy). The gate input came from pgDisclosedRowsAny, so
+// string and nil are the only shapes that can appear; nothing is
+// re-truncated, reformatted, or fmt.Sprint-ed.
+func pgDecisionRowsDisclosed(rows [][]any) [][]*string {
+	if rows == nil {
+		return nil
+	}
+	out := make([][]*string, len(rows))
+	for i, row := range rows {
+		r := make([]*string, len(row))
+		for j, cell := range row {
+			if s, ok := cell.(string); ok {
+				v := s
+				r[j] = &v
 			}
 		}
 		out[i] = r

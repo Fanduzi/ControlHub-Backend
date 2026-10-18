@@ -1,7 +1,7 @@
 // Package service provides tests for the Phase 37/38S query execution service.
 // input: context, errors, fmt, strings, testing, time, internal/model
 // output: TestExecute_* including successful-User full SQL, owner-only statement retrieval/history restore eligibility, machine identity terminal outcomes, readiness/credential tests, and repository/resolver/executor/clock fakes
-// pos: Unit boundary for identity-aware governed execution, private statement access and restore projection, atomic terminal evidence, paging, cancellation durability, credential fail-closed behavior, disclosure error mapping, and executor-fake cellTruncated contract fill (T8-B)
+// pos: Unit boundary for identity-aware governed execution, private statement access and restore projection, atomic terminal evidence, paging, cancellation durability, credential fail-closed behavior, disclosure error mapping, and executor-fake cellTruncated contract fill (T8-B); fakeExecRepo's finalizeHook is the only seam for producer-side mutation at the keyed persistence boundary (T8-C-R1)
 // note: if this file changes, update header and README.md
 package service
 
@@ -98,6 +98,11 @@ type fakeExecRepo struct {
 	finalizeErr   error
 	finalizeCalls []model.QueryExecutionRecord
 	finalizeNext  uint64
+	// finalizeHook, when set, runs inside the fake's keyed finalize after
+	// the call is recorded — the only seam for injecting producer-side
+	// mutations at the persistence boundary (the real keyed finalize takes
+	// no result pointer; this exists for ownership fault injection only).
+	finalizeHook func()
 }
 
 func (f *fakeExecRepo) GetCredential(_ context.Context, resourceID uint64, _ string) (model.QueryCredentialMetadata, error) {
@@ -309,6 +314,9 @@ func (f *fakeExecRepo) TryClaimExecution(_ context.Context, in model.QueryExecut
 // write ever happens on failure (matching the repository's atomic semantics).
 func (f *fakeExecRepo) FinalizeClaimWithAudit(_ context.Context, rec model.QueryExecutionRecord, _, _ string) (uint64, error) {
 	f.finalizeCalls = append(f.finalizeCalls, rec)
+	if f.finalizeHook != nil {
+		f.finalizeHook()
+	}
 	if f.finalizeErr != nil {
 		return 0, f.finalizeErr
 	}
