@@ -46,16 +46,19 @@ type PGDisclosedColumn struct {
 // PGDisclosedResult is the internal output after disclosure transformation.
 // Rows keep native text: nil is SQL NULL, a non-nil empty string is a
 // zero-length value, and a masked non-NULL value is the fixed replacement —
-// the original is never retained. Provenance records pass through read-only
-// for downstream evidence stages.
+// the original is never retained. CellTruncated is the verified page's
+// public-coordinate flag matrix: masking replaces a cell's text but never
+// the recorded fact that its raw form was cut. Provenance records pass
+// through read-only for downstream evidence stages.
 type PGDisclosedResult struct {
-	Columns      []PGDisclosedColumn
-	Rows         [][]*string
-	Page         pgsql.PageResult
-	Refs         []pgsql.RangeVarRef
-	PublicProofs []pgsql.PublicColumnProof
-	Sources      map[pgsql.SourceOccurrenceID]pgsql.SourceOccurrence
-	BoundRefs    map[pgsql.RefID]*PGBoundRef
+	Columns       []PGDisclosedColumn
+	Rows          [][]*string
+	CellTruncated [][]bool
+	Page          pgsql.PageResult
+	Refs          []pgsql.RangeVarRef
+	PublicProofs  []pgsql.PublicColumnProof
+	Sources       map[pgsql.SourceOccurrenceID]pgsql.SourceOccurrence
+	BoundRefs     map[pgsql.RefID]*PGBoundRef
 }
 
 // pgPolicyKey is one canonical five-part disclosure scope.
@@ -267,9 +270,12 @@ func resolvePGDisclosurePlan(ctx context.Context, reader QueryDisclosureReader, 
 
 // applyPGDisclosure transforms the verified result per the plan after the
 // attempt fully converged. Structural damage — plan/column/row-shape
-// mismatch — is disclosure machinery failure, never a policy refusal. The
-// input rows and provenance records are never mutated; masked cells replace
-// non-NULL values with the fixed marker while NULL stays nil.
+// mismatch, or a missing/misaligned truncation matrix on a non-empty page —
+// is disclosure machinery failure, never a policy refusal and never repaired
+// by fabricating all-false marks. The input rows, matrix, and provenance
+// records are never mutated; masked cells replace non-NULL values with the
+// fixed marker while NULL stays nil, and a cell's true flag survives even
+// when its text becomes the mask.
 func applyPGDisclosure(plan *pgDisclosurePlan, verified *PGVerifiedResult) (*PGDisclosedResult, error) {
 	if plan == nil || verified == nil {
 		return nil, fmt.Errorf("%w: disclosure transform input missing", ErrQueryDisclosureBackendFailure)
@@ -280,6 +286,9 @@ func applyPGDisclosure(plan *pgDisclosurePlan, verified *PGVerifiedResult) (*PGD
 	if len(plan.columns) != len(verified.Columns) {
 		return nil, fmt.Errorf("%w: plan has %d columns but result has %d",
 			ErrQueryDisclosureBackendFailure, len(plan.columns), len(verified.Columns))
+	}
+	if err := checkPGCellTruncatedShape(len(verified.Columns), verified.Rows, verified.CellTruncated); err != nil {
+		return nil, err
 	}
 	for i, dec := range plan.columns {
 		if err := dec.mode.Validate(); err != nil {
@@ -293,13 +302,14 @@ func applyPGDisclosure(plan *pgDisclosurePlan, verified *PGVerifiedResult) (*PGD
 		}
 	}
 	out := &PGDisclosedResult{
-		Columns:      make([]PGDisclosedColumn, len(verified.Columns)),
-		Rows:         make([][]*string, len(verified.Rows)),
-		Page:         verified.Page,
-		Refs:         clonePGRefSlice(verified.Refs),
-		PublicProofs: clonePGProofSlice(verified.PublicProofs),
-		Sources:      clonePGSourceCatalog(verified.Sources),
-		BoundRefs:    clonePGBoundRefMap(verified.BoundRefs),
+		Columns:       make([]PGDisclosedColumn, len(verified.Columns)),
+		Rows:          make([][]*string, len(verified.Rows)),
+		CellTruncated: CloneCellTruncated(verified.CellTruncated),
+		Page:          verified.Page,
+		Refs:          clonePGRefSlice(verified.Refs),
+		PublicProofs:  clonePGProofSlice(verified.PublicProofs),
+		Sources:       clonePGSourceCatalog(verified.Sources),
+		BoundRefs:     clonePGBoundRefMap(verified.BoundRefs),
 	}
 	for i, dec := range plan.columns {
 		out.Columns[i] = PGDisclosedColumn{
@@ -329,7 +339,35 @@ func applyPGDisclosure(plan *pgDisclosurePlan, verified *PGVerifiedResult) (*PGD
 		}
 		out.Rows[r] = outRow
 	}
+	if err := checkPGCellTruncatedShape(len(out.Columns), out.Rows, out.CellTruncated); err != nil {
+		return nil, err
+	}
 	return out, nil
+}
+
+// checkPGCellTruncatedShape applies the shared matrix contract to native
+// PG rows: a non-empty page must carry a complete row/column-aligned
+// matrix; a zero-row page legitimately has nil, but residual matrix rows
+// are themselves corrupt. Mismatches are machinery failures — callers must
+// not repair them by fabricating all-false marks.
+func checkPGCellTruncatedShape(cols int, rows [][]*string, matrix [][]bool) error {
+	if matrix == nil {
+		if len(rows) == 0 {
+			return nil
+		}
+		return fmt.Errorf("%w: non-empty page lacks a cellTruncated matrix", ErrQueryDisclosureBackendFailure)
+	}
+	if len(matrix) != len(rows) {
+		return fmt.Errorf("%w: cellTruncated has %d rows for %d result rows",
+			ErrQueryDisclosureBackendFailure, len(matrix), len(rows))
+	}
+	for r, m := range matrix {
+		if len(m) != cols {
+			return fmt.Errorf("%w: cellTruncated row %d has %d flags for %d columns",
+				ErrQueryDisclosureBackendFailure, r, len(m), cols)
+		}
+	}
+	return nil
 }
 
 // clonePGRefSlice copies the ref slice plus each entry's RefPath — the frame

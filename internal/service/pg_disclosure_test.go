@@ -248,6 +248,9 @@ func TestPGDisclosureApply(t *testing.T) {
 	verified := &PGVerifiedResult{
 		Columns: []PGResultColumn{{Name: "id", DatabaseType: "INT8"}, {Name: "note", DatabaseType: "TEXT"}},
 		Rows:    [][]*string{{str("1"), str("plain")}, {str("2"), nil}},
+		// A true flag records the raw page's cut — it survives masking even
+		// though the masked text is short, and stays false for NULL.
+		CellTruncated: [][]bool{{false, true}, {false, false}},
 	}
 	plan := &pgDisclosurePlan{columns: []pgColumnDecision{
 		{mode: model.ResultDisclosureRawCopyAllowed, copyAllowed: true},
@@ -264,6 +267,18 @@ func TestPGDisclosureApply(t *testing.T) {
 	if *out.Rows[1][0] != "2" || out.Rows[1][1] != nil {
 		t.Fatalf("row1 = %v — NULL must stay NULL", out.Rows[1])
 	}
+	// The matrix describes the raw page: masking changed the cell's text,
+	// never the recorded fact that its raw form was truncated.
+	if !out.CellTruncated[0][1] || out.CellTruncated[0][0] ||
+		out.CellTruncated[1][0] || out.CellTruncated[1][1] {
+		t.Fatalf("matrix not preserved through masking: %v", out.CellTruncated)
+	}
+	// The output matrix is independently owned — mutating it never reaches
+	// the verified input.
+	out.CellTruncated[0][1] = false
+	if !verified.CellTruncated[0][1] {
+		t.Fatal("output matrix aliases the verified input")
+	}
 	// Input untouched.
 	if *verified.Rows[0][1] != "plain" {
 		t.Fatalf("input row mutated: %q", *verified.Rows[0][1])
@@ -273,7 +288,9 @@ func TestPGDisclosureApply(t *testing.T) {
 		t.Fatalf("col1 = %+v", out.Columns[1])
 	}
 
-	// Shape mismatches are machinery failures — never blocked.
+	// Shape mismatches — including a missing/misaligned matrix on a
+	// non-empty page — are machinery failures — never blocked and never
+	// repaired by fabricated all-false marks.
 	for name, tc := range map[string]struct {
 		plan *pgDisclosurePlan
 		v    *PGVerifiedResult
@@ -281,7 +298,13 @@ func TestPGDisclosureApply(t *testing.T) {
 		"nil plan":      {nil, verified},
 		"empty plan":    {&pgDisclosurePlan{}, verified},
 		"column drift":  {&pgDisclosurePlan{columns: make([]pgColumnDecision, 3)}, verified},
-		"row too short": {plan, &PGVerifiedResult{Columns: verified.Columns, Rows: [][]*string{{str("1")}}}},
+		"row too short": {plan, &PGVerifiedResult{Columns: verified.Columns, Rows: [][]*string{{str("1")}}, CellTruncated: [][]bool{{false, false}}}},
+		"missing matrix": {plan, &PGVerifiedResult{Columns: verified.Columns,
+			Rows: [][]*string{{str("1"), str("x")}}}},
+		"matrix row drift": {plan, &PGVerifiedResult{Columns: verified.Columns,
+			Rows: verified.Rows, CellTruncated: [][]bool{{false, false}}}},
+		"matrix width drift": {plan, &PGVerifiedResult{Columns: verified.Columns,
+			Rows: verified.Rows, CellTruncated: [][]bool{{false, false}, {false}}}},
 	} {
 		_, err := applyPGDisclosure(tc.plan, tc.v)
 		if !errors.Is(err, ErrQueryDisclosureBackendFailure) || errors.Is(err, ErrQueryDisclosureBlocked) {
@@ -393,6 +416,7 @@ func TestPGDisclosureApply_OwnershipIsolation(t *testing.T) {
 			{str("1"), str("plain")},
 			{str("2"), nil},
 		},
+		CellTruncated: [][]bool{{false, false}, {false, false}},
 		Refs: []pgsql.RangeVarRef{
 			{RefID: 7, Name: "orders", Schema: "app", Path: make(pgsql.RefPath, 2)},
 		},

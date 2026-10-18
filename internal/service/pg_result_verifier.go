@@ -469,8 +469,16 @@ func pgSourceRefIn(refs []pgsql.SourceRef, want pgsql.SourceRef) bool {
 
 // projectPGPublicResult strips witness columns by recorded position and
 // names each public column's database type from the connection TypeMap.
-// Cells keep their materialized text verbatim — nothing is reformatted.
-func projectPGPublicResult(fds []pgconn.FieldDescription, rows [][]*string, rw *pgsql.RewriteResult, tm *pgtype.Map) *PGVerifiedResult {
+// Each delivered public cell passes through the shared 8192-byte display
+// contract in the same pass that picks it: TruncateCellText returns the
+// retained prefix and the flag together, so the mark can never be
+// reconstructed from an already-shortened value. Witness cells are
+// internal transport — they are never treated as public text and never
+// appear in the public matrix, which is public-coordinate aligned over
+// exactly the delivered rows (the caller slices sentinels off first).
+// Cell text is the only thing reformatted — by contract prefix cut, never
+// by value rewriting.
+func projectPGPublicResult(fds []pgconn.FieldDescription, rows [][]*string, rw *pgsql.RewriteResult, tm *pgtype.Map) (*PGVerifiedResult, error) {
 	cols := make([]PGResultColumn, len(rw.Public))
 	for i, p := range rw.PublicProofs {
 		fd := fds[p.TransportIndex]
@@ -484,14 +492,33 @@ func projectPGPublicResult(fds []pgconn.FieldDescription, rows [][]*string, rw *
 		}
 	}
 	out := make([][]*string, len(rows))
+	truncated := make([][]bool, len(rows))
 	for r, row := range rows {
+		if len(row) != len(fds) {
+			return nil, fmt.Errorf("%w: transport row %d has %d cells for %d columns",
+				pgsql.ErrEvidenceUnavailable, r, len(row), len(fds))
+		}
 		pub := make([]*string, len(rw.Public))
+		marks := make([]bool, len(rw.Public))
 		for i, p := range rw.PublicProofs {
-			pub[i] = row[p.TransportIndex]
+			cell := row[p.TransportIndex]
+			if cell == nil {
+				continue // SQL NULL keeps nil and flag false
+			}
+			retained, cut, err := TruncateCellText(*cell, ResultCellMaxBytes)
+			if err != nil {
+				// Wire text that is not valid UTF-8 is an evidence anomaly,
+				// not user data to sanitize — fail as an internal fault.
+				return nil, fmt.Errorf("%w: public cell %d.%d invalid", pgsql.ErrEvidenceUnavailable, r, i)
+			}
+			kept := retained // fresh *string — truncated output never pins
+			pub[i] = &kept   // the original cell's potentially large buffer
+			marks[i] = cut
 		}
 		out[r] = pub
+		truncated[r] = marks
 	}
-	return &PGVerifiedResult{Columns: cols, Rows: out}
+	return &PGVerifiedResult{Columns: cols, Rows: out, CellTruncated: truncated}, nil
 }
 
 // pgColumnTypeName resolves a FieldDescription OID through the connection

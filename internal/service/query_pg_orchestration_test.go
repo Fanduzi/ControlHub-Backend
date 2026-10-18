@@ -1002,3 +1002,177 @@ func TestExecutePGClaimed_ContractFaultEvidenceIsIndependentCopy(t *testing.T) {
 		t.Fatalf("executor record mutated: %+v", in)
 	}
 }
+
+// ---------------------------------------------------------------------------
+// T8-C: the post-finalize delivery gate. The success pair is already
+// persisted when capabilities decide delivery: a truncated page without the
+// declared capability returns the upgrade error while the recorded outcome
+// stays success and no rows escape; unknown/duplicate capabilities never
+// satisfy the exact-match rule. Internal fault-injection only — ordinary
+// clients cannot construct executor return objects.
+// ---------------------------------------------------------------------------
+
+func TestExecutePGClaimed_DeliveryGate(t *testing.T) {
+	t.Parallel()
+	truncatedResult := func() *PGDisclosedResult {
+		short := "8192-byte prefix"
+		return &PGDisclosedResult{
+			Columns: []PGDisclosedColumn{
+				{PGResultColumn: PGResultColumn{Name: "v", DatabaseType: "TEXT"},
+					DisplayMode: model.ResultDisclosureRawCopyAllowed, CopyAllowed: true},
+			},
+			Rows:          [][]*string{{&short}},
+			CellTruncated: [][]bool{{true}},
+		}
+	}
+	cleanResult := func() *PGDisclosedResult {
+		v := "ok"
+		return &PGDisclosedResult{
+			Columns: []PGDisclosedColumn{
+				{PGResultColumn: PGResultColumn{Name: "v", DatabaseType: "TEXT"},
+					DisplayMode: model.ResultDisclosureRawCopyAllowed, CopyAllowed: true},
+			},
+			Rows:          [][]*string{{&v}},
+			CellTruncated: [][]bool{{false}},
+		}
+	}
+	cases := map[string]struct {
+		res         func() *PGDisclosedResult
+		caps        []string
+		wantErr     error
+		wantResult  bool
+		wantMatrixV bool // expected flag at [0][0]
+	}{
+		"truncated page, no capability":        {truncatedResult, nil, ErrResultContractUpgradeRequired, false, false},
+		"truncated page, exact capability":     {truncatedResult, []string{CapabilityCellTruncated}, nil, true, true},
+		"truncated page, unknown capabilities": {truncatedResult, []string{"bogus", "cellTruncated-extra", "bogus"}, ErrResultContractUpgradeRequired, false, false},
+		"clean page, no capability":            {cleanResult, nil, nil, true, false},
+		"clean page, capability":               {cleanResult, []string{CapabilityCellTruncated}, nil, true, false},
+	}
+	for name, tc := range cases {
+		tc := tc
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			repo := claimedPGRepo(t)
+			svc := newClaimedService(repo, &fakeResolver{dsn: mustDSN(t)})
+			res := tc.res()
+			svc.pgOutcomeFn = func(context.Context, PGDisclosureInput) (*PGDisclosedResult, *PGAttemptEvidence, error) {
+				return res, &PGAttemptEvidence{Stage: PGStageExecute, Status: model.QueryExecutionSuccess, BackendPID: 42}, nil
+			}
+			req := validClaimedRequest()
+			req.Capabilities = tc.caps
+			out, err := svc.ExecutePGClaimed(context.Background(), userExecutionIdentity(7), 9002, req)
+			switch {
+			case tc.wantErr == nil && err != nil:
+				t.Fatalf("err = %v, want nil", err)
+			case tc.wantErr != nil && !errors.Is(err, tc.wantErr):
+				t.Fatalf("err = %v, want %v", err, tc.wantErr)
+			}
+			// Delivery refusal is post-finalize only: exactly one keyed
+			// finalize, the persisted outcome stays success, and the true
+			// execution id survives — never a rejected row or a second pair.
+			if len(repo.finalizeCalls) != 1 {
+				t.Fatalf("finalizeCalls = %d, want 1", len(repo.finalizeCalls))
+			}
+			rec := repo.finalizeCalls[0]
+			if rec.Status != model.QueryExecutionSuccess || rec.RowCount != 1 {
+				t.Fatalf("persisted = %+v, want success row_count 1", rec)
+			}
+			if out.ExecutionID == 0 || out.Status != model.QueryExecutionSuccess ||
+				out.Evidence == nil || out.Evidence.Status != model.QueryExecutionSuccess {
+				t.Fatalf("outcome = %+v, want delivered-fact success", out)
+			}
+			if tc.wantResult {
+				if out.Result == nil || len(out.Result.Rows) != 1 {
+					t.Fatalf("delivery = %+v, want the disclosed page", out.Result)
+				}
+				if out.Result.CellTruncated[0][0] != tc.wantMatrixV {
+					t.Fatalf("matrix[0][0] = %v, want %v", out.Result.CellTruncated[0][0], tc.wantMatrixV)
+				}
+			} else if out.Result != nil {
+				t.Fatalf("refused delivery leaked rows: %+v", out.Result)
+			}
+		})
+	}
+}
+
+// A non-empty disclosed page with a missing or misaligned matrix is producer
+// damage: the attempt finalizes as one keyed failed row under the internal
+// contract code — never a disclosure refusal, never an all-false repair,
+// never a success discovered too late.
+func TestExecutePGClaimed_MatrixContractFault(t *testing.T) {
+	t.Parallel()
+	v := "x"
+	base := func() *PGDisclosedResult {
+		return &PGDisclosedResult{
+			Columns: []PGDisclosedColumn{{PGResultColumn: PGResultColumn{Name: "v"}}},
+			Rows:    [][]*string{{&v}},
+		}
+	}
+	cases := map[string]func() *PGDisclosedResult{
+		"missing matrix": base,
+		"matrix row drift": func() *PGDisclosedResult {
+			r := base()
+			r.CellTruncated = [][]bool{{false}, {false}}
+			return r
+		},
+		"matrix width drift": func() *PGDisclosedResult {
+			r := base()
+			r.CellTruncated = [][]bool{{false, false}}
+			return r
+		},
+	}
+	for name, build := range cases {
+		name, build := name, build
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			repo := claimedPGRepo(t)
+			svc := newClaimedService(repo, &fakeResolver{dsn: mustDSN(t)})
+			svc.pgOutcomeFn = func(context.Context, PGDisclosureInput) (*PGDisclosedResult, *PGAttemptEvidence, error) {
+				return build(), &PGAttemptEvidence{Stage: PGStageExecute, Status: model.QueryExecutionSuccess, BackendPID: 42}, nil
+			}
+			out, err := svc.ExecutePGClaimed(context.Background(), userExecutionIdentity(7), 9002, validClaimedRequest())
+			if !errors.Is(err, ErrQueryBackendFailure) {
+				t.Fatalf("err = %v, want ErrQueryBackendFailure", err)
+			}
+			if len(repo.finalizeCalls) != 1 {
+				t.Fatalf("finalizeCalls = %d, want 1", len(repo.finalizeCalls))
+			}
+			rec := repo.finalizeCalls[0]
+			if rec.Status != model.QueryExecutionFailed || rec.ErrorCode != "query_internal_error" || rec.RowCount != 0 {
+				t.Fatalf("persisted = %+v, want failed/query_internal_error/0", rec)
+			}
+			if out.Result != nil || out.Status != model.QueryExecutionFailed {
+				t.Fatalf("outcome = %+v, want failed with no result", out)
+			}
+		})
+	}
+}
+
+// A finalize failure outranks any delivery refusal: the truncated page
+// without capability still surfaces the persistence error, never the
+// upgrade error, and no compensating pair is written.
+func TestExecutePGClaimed_FinalizeFailureOutranksDelivery(t *testing.T) {
+	t.Parallel()
+	repo := claimedPGRepo(t)
+	repo.finalizeErr = errors.New("deadlock")
+	svc := newClaimedService(repo, &fakeResolver{dsn: mustDSN(t)})
+	v := "x"
+	svc.pgOutcomeFn = func(context.Context, PGDisclosureInput) (*PGDisclosedResult, *PGAttemptEvidence, error) {
+		return &PGDisclosedResult{
+			Columns:       []PGDisclosedColumn{{PGResultColumn: PGResultColumn{Name: "v"}}},
+			Rows:          [][]*string{{&v}},
+			CellTruncated: [][]bool{{true}},
+		}, &PGAttemptEvidence{Stage: PGStageExecute, Status: model.QueryExecutionSuccess}, nil
+	}
+	out, err := svc.ExecutePGClaimed(context.Background(), userExecutionIdentity(7), 9002, validClaimedRequest())
+	if !errors.Is(err, errPersistAttempt) || errors.Is(err, ErrResultContractUpgradeRequired) {
+		t.Fatalf("err = %v, want the persistence failure, not a capability refusal", err)
+	}
+	if out.Result != nil || out.ExecutionID != 0 {
+		t.Fatalf("outcome = %+v, want empty on persistence failure", out)
+	}
+	if len(repo.pairCalls) != 0 {
+		t.Fatal("finalize failure wrote a compensating pair")
+	}
+}

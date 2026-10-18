@@ -4,16 +4,16 @@
 // output: ExecutePGClaimed, PGClaimedExecuteRequest, PGClaimedOutcome,
 // ErrQueryExecutionAlreadyExists, ErrQueryExecutionConflict,
 // WithPGClaimOrchestration
-// pos: T10-C production claim orchestration (issue #118, frozen G9 order) —
-// full request-shape validation → access resolution → default resolution
-// (schema falls back to the credential default; an explicit name stays
-// verbatim for the post-claim binding gate) → request digest → atomic
-// TryClaimExecution → governed PG disclosure outcome → (result, evidence,
-// error) consistency gate → exactly one FinalizeClaimWithAudit → internal
-// result whose evidence is a verdict-aligned independent copy (never a
-// rewritten executor record). History previews go through
-// pgsql.SafeStatementPreview — keyed
-// rows store the masked preview, pre-claim pairs the fixed withheld marker.
+// pos: T10-C production claim orchestration (issue #118, frozen G9 order)
+// plus the T8-C delivery seam (issue #116) — request-shape validation →
+// access resolution → defaults (explicit schema verbatim) → digest →
+// atomic TryClaimExecution → governed PG disclosure outcome → (result,
+// evidence, error) + cellTruncated-structure consistency gate → one
+// FinalizeClaimWithAudit → shared DecideResultDelivery (capability refusal
+// is delivery-only — the persisted success pair stands) → internal result
+// whose evidence is a verdict-aligned independent copy. History previews
+// go through pgsql.SafeStatementPreview — keyed rows store the masked
+// preview, pre-claim pairs the fixed withheld marker.
 // This entry is not an
 // HTTP route; its result never serializes to a client response.
 // note: if this file changes, update this header and module README.md.
@@ -72,8 +72,9 @@ type PGClaimedExecuteRequest struct {
 	Page      int
 	PageSize  int
 	MaxRows   int
-	// Capabilities is reserved for the post-finalize delivery gate (T8-PG);
-	// it is not part of the claim identity and changes no behavior here.
+	// Capabilities feeds only the post-finalize delivery gate (T8-PG): it
+	// never reaches the request digest or claim identity, so a same-key
+	// retry that changes it still belongs to the same claimed request.
 	Capabilities []string
 }
 
@@ -124,12 +125,16 @@ func (s *QueryExecutionService) WithPGClaimOrchestration(policies QueryDisclosur
 
 // ExecutePGClaimed runs one ordinary keyed PostgreSQL execution through the
 // frozen G9 order: validate → resolve access → resolve defaults → digest →
-// atomic claim → governed disclosure outcome → exactly one keyed finalize.
-// The idempotency key is consumed only after access resolution succeeds, so
-// shape failures and access denials never occupy it. Every post-claim
-// terminal outcome — guard/binding/disclosure rejection, cancellation,
-// timeout, driver failure, or success — is persisted by the sole claimant's
-// keyed finalize; the claim is never released or re-occupied.
+// atomic claim → governed disclosure outcome → consistency + result-matrix
+// structure gate → exactly one keyed finalize → post-finalize delivery
+// decision. The idempotency key is consumed only after access resolution
+// succeeds, so shape failures and access denials never occupy it. Every
+// post-claim terminal outcome — guard/binding/disclosure rejection,
+// cancellation, timeout, driver failure, or success — is persisted by the
+// sole claimant's keyed finalize; the claim is never released or
+// re-occupied. The shared delivery gate then judges only delivery: a
+// truncated page without the declared capability returns the upgrade error
+// while the recorded outcome stays success and no rows escape.
 //
 // Access denials after a resolved target write one NULL-key rejected pair
 // along the existing refusal contract; a claim-store failure writes one
@@ -277,6 +282,22 @@ func (s *QueryExecutionService) ExecutePGClaimed(ctx context.Context, identity m
 	// failure, and a missing backend PID or remote_state is never invented.
 	contractFault := (execErr == nil && (res == nil || ev == nil || ev.Status != model.QueryExecutionSuccess)) ||
 		(execErr != nil && ev != nil && ev.Status == model.QueryExecutionSuccess)
+
+	// Structure evidence — a non-nil disclosed result must carry a complete
+	// cellTruncated matrix aligned with its delivered page (T8-C). A missing
+	// or misaligned matrix is producer damage, folded into the same internal
+	// contract fault: it is never repaired by fabricating all-false marks,
+	// never classified as a disclosure refusal, and never discovered only
+	// after the success pair already persisted. The shared validator runs on
+	// the delivery-shape rows; the same adapted rows are reused by the
+	// post-finalize gate below.
+	var anyRows [][]any
+	if res != nil {
+		anyRows = pgDisclosedRowsAny(res.Rows)
+		if !contractFault && validateCellTruncatedMatrix(len(res.Columns), anyRows, res.CellTruncated) != nil {
+			contractFault = true
+		}
+	}
 	if ev == nil {
 		// The executor contract guarantees evidence on every post-validation
 		// path; a nil record is a wiring fault — finalize as failed rather
@@ -356,7 +377,63 @@ func (s *QueryExecutionService) ExecutePGClaimed(ctx context.Context, identity m
 	if execErr != nil {
 		return PGClaimedOutcome{ExecutionID: execID, Status: status, Evidence: outEv}, execErr
 	}
+
+	// Post-finalize delivery gate (G2): the success pair is already
+	// persisted, so a capability refusal is a delivery refusal only — the
+	// keyed terminal record stays success, no rejected row is appended, and
+	// no second finalize happens. The request's real capabilities decide;
+	// a refusal returns the fixed upgrade error with the true execution id
+	// and no rows. A persistence failure above already won over any
+	// capability error — this gate only runs after finalize succeeded.
+	decision, derr := DecideResultDelivery(ResultDeliveryInput{
+		Columns:       pgDisclosedModelColumns(res.Columns),
+		Rows:          anyRows,
+		CellTruncated: res.CellTruncated,
+		Capabilities:  req.Capabilities,
+	})
+	if derr != nil {
+		return PGClaimedOutcome{ExecutionID: execID, Status: status, Evidence: outEv}, derr
+	}
+	// The decision's matrix is the independently owned delivery payload;
+	// the disclosed rows are already ownership-clean native text.
+	res.CellTruncated = decision.CellTruncated
 	return PGClaimedOutcome{ExecutionID: execID, Status: status, Result: res, Evidence: outEv}, nil
+}
+
+// pgDisclosedRowsAny adapts native-text cells to the shared [][]any
+// delivery shape: a non-NULL cell dereferences to string, NULL stays nil.
+// No *string, []byte, or other undeclared shape crosses the boundary.
+func pgDisclosedRowsAny(rows [][]*string) [][]any {
+	if rows == nil {
+		return nil
+	}
+	out := make([][]any, len(rows))
+	for i, row := range rows {
+		r := make([]any, len(row))
+		for j, cell := range row {
+			if cell != nil {
+				r[j] = *cell
+			}
+		}
+		out[i] = r
+	}
+	return out
+}
+
+// pgDisclosedModelColumns adapts disclosed columns to the shared delivery
+// contract's column shape. Nullable carries no evidence on this path and
+// stays zero — the gate reads only count, display mode, and copyability.
+func pgDisclosedModelColumns(cols []PGDisclosedColumn) []model.QueryResultColumn {
+	out := make([]model.QueryResultColumn, len(cols))
+	for i, c := range cols {
+		out[i] = model.QueryResultColumn{
+			Name:         c.Name,
+			DatabaseType: c.DatabaseType,
+			DisplayMode:  c.DisplayMode,
+			CopyAllowed:  c.CopyAllowed,
+		}
+	}
+	return out
 }
 
 // resolvePGClaimPagination resolves the keyed entry's mandatory page window.

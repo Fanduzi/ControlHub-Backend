@@ -87,17 +87,20 @@ type PGResultColumn struct {
 
 // PGVerifiedResult is the internal execution output after both verification
 // layers pass. Rows carry database-native text: nil is SQL NULL, a non-nil
-// empty string is a zero-length value — the two never collapse. Refs,
+// empty string is a zero-length value — the two never collapse; each public
+// cell is the ≤8192-byte contract prefix and CellTruncated is its
+// public-coordinate flag matrix over exactly the delivered rows. Refs,
 // PublicProofs, Sources, and BoundRefs preserve the provenance a later
 // disclosure stage needs; nothing here can resume a query.
 type PGVerifiedResult struct {
-	Columns      []PGResultColumn
-	Rows         [][]*string
-	Page         pgsql.PageResult
-	Refs         []pgsql.RangeVarRef
-	PublicProofs []pgsql.PublicColumnProof
-	Sources      map[pgsql.SourceOccurrenceID]pgsql.SourceOccurrence
-	BoundRefs    map[pgsql.RefID]*PGBoundRef
+	Columns       []PGResultColumn
+	Rows          [][]*string
+	CellTruncated [][]bool
+	Page          pgsql.PageResult
+	Refs          []pgsql.RangeVarRef
+	PublicProofs  []pgsql.PublicColumnProof
+	Sources       map[pgsql.SourceOccurrenceID]pgsql.SourceOccurrence
+	BoundRefs     map[pgsql.RefID]*PGBoundRef
 }
 
 // pgExecAttempt owns every resource of one governed attempt: the execution
@@ -365,7 +368,10 @@ func runPGGovernedAttempt(ctx context.Context, in PGExecuteInput, disc *pgDisclo
 	if err != nil {
 		return nil, nil, a.fail(fmt.Errorf("%w: %v", pgsql.ErrEvidenceUnavailable, err))
 	}
-	out := projectPGPublicResult(a.fds, a.rows[:page.RowCount], rw, a.execConn.Conn().TypeMap())
+	out, err := projectPGPublicResult(a.fds, a.rows[:page.RowCount], rw, a.execConn.Conn().TypeMap())
+	if err != nil {
+		return nil, nil, a.fail(err)
+	}
 	out.Page = page
 	out.Refs = rw.Refs
 	out.PublicProofs = rw.PublicProofs

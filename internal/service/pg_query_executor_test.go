@@ -16,6 +16,7 @@ package service
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/jackc/pgx/v5"
@@ -514,12 +515,62 @@ func TestPGProjectPublicResult(t *testing.T) {
 	rw, _ := pgRewriteFixture()
 	id, item := "42", "widget"
 	rows := [][]*string{{&id, nil}, {&item, nil}}
-	out := projectPGPublicResult(fds, rows, rw, pgtype.NewMap())
+	out, err := projectPGPublicResult(fds, rows, rw, pgtype.NewMap())
+	if err != nil {
+		t.Fatalf("project: %v", err)
+	}
 	if len(out.Columns) != 1 || out.Columns[0].Name != "id" || out.Columns[0].DatabaseType != "INT8" {
 		t.Fatalf("columns = %+v", out.Columns)
 	}
 	if len(out.Rows) != 2 || len(out.Rows[0]) != 1 || out.Rows[0][0] == nil || *out.Rows[0][0] != "42" {
 		t.Fatalf("rows = %+v", out.Rows)
+	}
+	// The delivered page carries a complete all-false matrix — witness cells
+	// never produce marks and a NULL keeps flag false.
+	if len(out.CellTruncated) != 2 || len(out.CellTruncated[0]) != 1 ||
+		out.CellTruncated[0][0] || out.CellTruncated[1][0] {
+		t.Fatalf("matrix = %+v", out.CellTruncated)
+	}
+}
+
+// T8-C: an oversized public cell is cut to the byte-budget prefix and marked
+// in the same projection pass; witness cells are internal transport only —
+// their size never truncates public values and never enters the matrix.
+func TestPGProjectPublicResult_TruncatesAndMarks(t *testing.T) {
+	fds := []pgconn.FieldDescription{
+		{Name: "v", DataTypeOID: 25},
+		{Name: "__chub_w0", DataTypeOID: 900},
+	}
+	rw, _ := pgRewriteFixture()
+	big := strings.Repeat("a", ResultCellMaxBytes+1)
+	atBoundary := strings.Repeat("b", ResultCellMaxBytes)
+	witnessHuge := strings.Repeat("w", ResultCellMaxBytes*4)
+	rows := [][]*string{
+		{&big, &witnessHuge},
+		{&atBoundary, nil},
+		{nil, &witnessHuge},
+	}
+	out, err := projectPGPublicResult(fds, rows, rw, pgtype.NewMap())
+	if err != nil {
+		t.Fatalf("project: %v", err)
+	}
+	if got := *out.Rows[0][0]; len(got) != ResultCellMaxBytes || got != big[:ResultCellMaxBytes] {
+		t.Fatalf("truncated cell len = %d", len(got))
+	}
+	if !out.CellTruncated[0][0] {
+		t.Fatalf("over-budget cell not marked: %v", out.CellTruncated)
+	}
+	if *out.Rows[1][0] != atBoundary || out.CellTruncated[1][0] {
+		t.Fatalf("8192-byte boundary must not be cut or marked")
+	}
+	if out.Rows[2][0] != nil || out.CellTruncated[2][0] {
+		t.Fatalf("NULL must stay NULL with flag false")
+	}
+	// Non-UTF-8 wire text is an evidence anomaly, never sanitized data.
+	bad := "\xff\xfe"
+	_, err = projectPGPublicResult(fds, [][]*string{{&bad, nil}}, rw, pgtype.NewMap())
+	if err == nil || !errors.Is(err, pgsql.ErrEvidenceUnavailable) {
+		t.Fatalf("invalid UTF-8 cell: err = %v", err)
 	}
 }
 

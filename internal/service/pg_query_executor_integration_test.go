@@ -1519,14 +1519,20 @@ func TestPGExecute_ToastDetoastHeldLock(t *testing.T) {
 	defer func() { pgExecAfterMaterializeHook = nil }()
 
 	// Ownership edges on: the injected toast lock is explained and the real
-	// out-of-line value still verifies byte-for-byte.
+	// out-of-line value still verifies byte-for-byte — under the T8-C
+	// display contract the delivered cell is the 8192-byte prefix of the
+	// 10000-byte detoasted text, flagged in the aligned matrix.
 	res, err := ExecutePGGoverned(ctx, pgExecInput(t, lab,
 		`SELECT g.s FROM app.g7types g WHERE g.i = 4`, pageOpts(1, 25)))
 	if err != nil {
 		t.Fatalf("detoast read: %v", err)
 	}
-	if len(res.Rows) != 1 || res.Rows[0][0] == nil || len(*res.Rows[0][0]) != 10000 {
-		t.Fatalf("detoasted value = %v", res.Rows)
+	if len(res.Rows) != 1 || res.Rows[0][0] == nil ||
+		*res.Rows[0][0] != strings.Repeat("x", ResultCellMaxBytes) {
+		t.Fatalf("detoasted value = %v, want the 8192-byte prefix", res.Rows)
+	}
+	if len(res.CellTruncated) != 1 || !res.CellTruncated[0][0] {
+		t.Fatalf("detoasted cell must carry its truncation flag: %v", res.CellTruncated)
 	}
 	if !toastHeld {
 		t.Fatalf("injected toast lock absent — held set %v (toast %d)",
