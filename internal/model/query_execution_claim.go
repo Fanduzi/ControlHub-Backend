@@ -132,8 +132,9 @@ type QueryExecutionClaim struct {
 	SchemaName              string
 	RequestDigest           string
 	// AttemptTimeoutMs is the budget recorded at admission. 0 = NULL on
-	// claims written before the column existed: such a claim can only ever
-	// derive running, since its resolved budget is unrecoverable.
+	// claims written before the column existed: with the resolved budget
+	// unrecoverable such a claim derives unknown — the missing budget is an
+	// evidence gap, never a proven expiry.
 	AttemptTimeoutMs int64
 	ExecutionID      uint64 // 0 = NULL (unlinked)
 	ClaimedAt        time.Time

@@ -89,9 +89,12 @@ type fakeExecRepo struct {
 	claimItems []model.QueryExecutionListItem
 	// T10-C claim seams: TryClaimExecution records the admitted input or
 	// returns the injected sentinel; FinalizeClaimWithAudit records each
-	// keyed finalize call and returns finalizeErr when injected.
+	// keyed finalize call and returns finalizeErr when injected. claims
+	// tracks (target,key) → digest so a second admission under an occupied
+	// key classifies exists/conflict exactly like the real INSERT.
 	claimErr      error
 	claimInputs   []model.QueryExecutionClaimInput
+	claims        map[string]string
 	finalizeErr   error
 	finalizeCalls []model.QueryExecutionRecord
 	finalizeNext  uint64
@@ -286,6 +289,17 @@ func (f *fakeExecRepo) TryClaimExecution(_ context.Context, in model.QueryExecut
 	if f.claimErr != nil {
 		return f.claimErr
 	}
+	if f.claims == nil {
+		f.claims = map[string]string{}
+	}
+	k := fmt.Sprintf("%d\x00%s", in.TargetResourceID, in.ClientExecutionID)
+	if digest, occupied := f.claims[k]; occupied {
+		if digest == in.RequestDigest {
+			return model.ErrQueryExecutionClaimExists
+		}
+		return model.ErrQueryExecutionClaimConflict
+	}
+	f.claims[k] = in.RequestDigest
 	f.claimInputs = append(f.claimInputs, in)
 	return nil
 }

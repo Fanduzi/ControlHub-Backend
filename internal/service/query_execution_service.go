@@ -1,5 +1,5 @@
 // Package service provides business logic for the Phase 37/38S read-only query sandbox.
-// input: context, database/sql, errors, fmt, net, strconv, strings, time, go-sql-driver/mysql, internal/model
+// input: context, database/sql, errors, fmt, math, net, strconv, strings, time, go-sql-driver/mysql, internal/model
 // output: QueryExecutionService, validated user/machine Execute identity, owner-only successful statement retrieval and history restore eligibility, repository/resolver/executor/clock interfaces, sentinel errors, ListHistory, validateDSNBinding
 // pos: Orchestrates ordinary user/machine governed execution plus user-only template/navigation and private statement retrieval/restore projection through one atomic identity-aware evidence implementation while preserving cancellation and disclosure behavior; validates producer result evidence before disclosure (T8-B-R1) and evaluates the shared post-finalize result-delivery gate after each committed success pair (T8-B)
 // note: if this file changes, update this header and module README.md.
@@ -10,6 +10,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"math"
 	"net"
 	"strconv"
 	"strings"
@@ -185,6 +186,11 @@ type QueryExecutionService struct {
 	// pgPolicies is the five-part disclosure reader for the keyed PG entry;
 	// wired via WithPGClaimOrchestration, nil until then.
 	pgPolicies QueryDisclosureReader
+	// pgOutcomeFn runs one governed PG disclosure outcome for the keyed
+	// entry — production ExecutePGGovernedDisclosedOutcome by default. Tests
+	// inject inconsistent (result, evidence, error) triples to prove the
+	// pre-finalize consistency gate fails closed.
+	pgOutcomeFn func(context.Context, PGDisclosureInput) (*PGDisclosedResult, *PGAttemptEvidence, error)
 }
 
 // QueryEvidencePersistenceFailures exposes the dimensionless persistence-
@@ -217,6 +223,7 @@ func NewQueryExecutionService(
 		access:      NewTargetAccessResolver(targets, executions, credentials),
 		inspector:   inspector,
 		disclosure:  disclosure,
+		pgOutcomeFn: ExecutePGGovernedDisclosedOutcome,
 	}
 }
 
@@ -597,12 +604,15 @@ const claimStateGrace = 60 * time.Second
 // deriveClaimViewStatus maps an unlinked claim to its display state. The
 // threshold is claimed_at + the budget recorded at admission + the fixed
 // grace — never a mutable environment value read later. A claim with no
-// recorded budget (pre-T10-C rows) can only ever derive running: inventing a
-// budget would fabricate an expiry. "unknown" asserts only that no terminal
-// result was observed — never that the backend died or the statement failed.
+// recorded budget (pre-T10-C rows) derives unknown: the missing budget is an
+// evidence gap — "we cannot show the attempt is unfinished" — never a proven
+// expiry, and inventing a budget would fabricate a window that never existed.
+// A budget that cannot form a duration is corrupt evidence, not a valid
+// window. "unknown" asserts only that no terminal result was observed —
+// never that the backend died or the statement failed.
 func deriveClaimViewStatus(claimedAt time.Time, attemptTimeoutMs int64, now time.Time) model.QueryExecutionViewStatus {
-	if attemptTimeoutMs <= 0 {
-		return model.QueryExecutionViewRunning
+	if attemptTimeoutMs <= 0 || attemptTimeoutMs > math.MaxInt64/int64(time.Millisecond) {
+		return model.QueryExecutionViewUnknown
 	}
 	expiry := claimedAt.Add(time.Duration(attemptTimeoutMs) * time.Millisecond).Add(claimStateGrace)
 	if !now.Before(expiry) {

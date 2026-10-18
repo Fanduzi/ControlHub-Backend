@@ -396,14 +396,21 @@ func (r *QueryExecutionRepository) ListExecutions(ctx context.Context, q model.Q
 		claimArgs = append(claimArgs, q.To.UTC())
 	}
 	if q.Database != "" {
-		execWhere += ` AND qe.database_name = ?`
-		claimWhere += ` AND c.database_name = ?`
+		// Connection-identity scope is exact on both arms: the claims columns
+		// are utf8mb4_0900_bin by DDL, while query_executions.database_name
+		// inherits the case/accent-insensitive, pad-folding default — without
+		// the explicit collation 'AppDB' rows would match a 'appdb' filter
+		// here and not in the claim arm. client_execution_id carries 0900_bin
+		// on both tables already; the explicit COLLATE keeps the filter
+		// byte-exact at the query level rather than relying on column DDL.
+		execWhere += ` AND qe.database_name COLLATE utf8mb4_0900_bin = ?`
+		claimWhere += ` AND c.database_name COLLATE utf8mb4_0900_bin = ?`
 		execArgs = append(execArgs, q.Database)
 		claimArgs = append(claimArgs, q.Database)
 	}
 	if q.ClientExecutionID != "" {
-		execWhere += ` AND qe.client_execution_id = ?`
-		claimWhere += ` AND c.client_execution_id = ?`
+		execWhere += ` AND qe.client_execution_id COLLATE utf8mb4_0900_bin = ?`
+		claimWhere += ` AND c.client_execution_id COLLATE utf8mb4_0900_bin = ?`
 		execArgs = append(execArgs, q.ClientExecutionID)
 		claimArgs = append(claimArgs, q.ClientExecutionID)
 	}

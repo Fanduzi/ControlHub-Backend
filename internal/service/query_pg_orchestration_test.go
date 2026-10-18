@@ -11,6 +11,7 @@ package service
 import (
 	"context"
 	"errors"
+	"math"
 	"os"
 	"strings"
 	"testing"
@@ -65,8 +66,15 @@ func pgClaimFixture() (model.QueryTarget, model.QueryCredentialMetadata, string)
 // orchestration precondition holds.
 func newClaimedService(repo *fakeExecRepo, resolver *fakeResolver) *QueryExecutionService {
 	target, _, _ := pgClaimFixture()
+	return newClaimedServiceOn(repo, resolver, fakeTargetRepo{targets: []model.QueryTarget{target}})
+}
+
+// newClaimedServiceOn wires the same keyed-PG service over a caller-supplied
+// target repository so tests can count access-resolution work (shape failures
+// must never reach it).
+func newClaimedServiceOn(repo *fakeExecRepo, resolver *fakeResolver, targets QueryTargetRepository) *QueryExecutionService {
 	svc := NewQueryExecutionService(
-		fakeTargetRepo{targets: []model.QueryTarget{target}},
+		targets,
 		repo, resolver, &fakeExecutor{},
 		NewQueryGuard(QueryGuardConfig{DefaultMaxRows: 100, HardMaxRows: 500}),
 		&fakeClock{t: time.Date(2026, 6, 22, 9, 0, 0, 0, time.UTC)},
@@ -89,26 +97,55 @@ func validClaimedRequest() PGClaimedExecuteRequest {
 	}
 }
 
-// Request-shape failures happen before access work: no claim, no pair.
+// Request-shape failures happen before access work: no target lookup, no
+// credential resolution, no claim, no evidence pair, no user SQL.
 func TestExecutePGClaimed_RequestShapeFailures(t *testing.T) {
 	t.Parallel()
 	cases := map[string]func(*PGClaimedExecuteRequest){
-		"missing key":      func(r *PGClaimedExecuteRequest) { r.ClientExecutionID = "" },
-		"oversized key":    func(r *PGClaimedExecuteRequest) { r.ClientExecutionID = strings.Repeat("x", 65) },
-		"empty statement":  func(r *PGClaimedExecuteRequest) { r.Statement = "   " },
-		"half pagination":  func(r *PGClaimedExecuteRequest) { r.Page = 2 },
-		"negative maxRows": func(r *PGClaimedExecuteRequest) { r.MaxRows = -1 },
+		"missing key":     func(r *PGClaimedExecuteRequest) { r.ClientExecutionID = "" },
+		"oversized key":   func(r *PGClaimedExecuteRequest) { r.ClientExecutionID = strings.Repeat("x", 65) },
+		"key with NUL":    func(r *PGClaimedExecuteRequest) { r.ClientExecutionID = "a\x00b" },
+		"empty statement": func(r *PGClaimedExecuteRequest) { r.Statement = "   " },
+		"oversized statement": func(r *PGClaimedExecuteRequest) {
+			r.Statement = strings.Repeat("s", model.MaxStatementLength+1)
+		},
+		"oversized unicode statement": func(r *PGClaimedExecuteRequest) {
+			// The bound counts runes: 65537 multi-byte characters fail the
+			// same check even though the byte count is far larger.
+			r.Statement = strings.Repeat("é", model.MaxStatementLength+1)
+		},
+		"missing database": func(r *PGClaimedExecuteRequest) { r.Database = "" },
+		"oversized database": func(r *PGClaimedExecuteRequest) {
+			r.Database = strings.Repeat("d", model.MaxIdentifierLength+1)
+		},
+		"database with NUL": func(r *PGClaimedExecuteRequest) { r.Database = "app\x00db" },
+		"oversized schema": func(r *PGClaimedExecuteRequest) {
+			r.Schema = strings.Repeat("s", model.MaxIdentifierLength+1)
+		},
+		"schema with NUL":      func(r *PGClaimedExecuteRequest) { r.Schema = "pub\x00lic" },
+		"half pagination":      func(r *PGClaimedExecuteRequest) { r.Page = 2 },
+		"disallowed page size": func(r *PGClaimedExecuteRequest) { r.Page, r.PageSize = 1, 11 },
+		"negative maxRows":     func(r *PGClaimedExecuteRequest) { r.MaxRows = -1 },
 	}
 	for name, mutate := range cases {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 			repo := claimedPGRepo(t)
-			svc := newClaimedService(repo, &fakeResolver{dsn: mustDSN(t)})
+			target, _, _ := pgClaimFixture()
+			var targetQueries []model.QueryTargetListQuery
+			resolver := &fakeResolver{dsn: mustDSN(t)}
+			svc := newClaimedServiceOn(repo, resolver, fakeTargetRepo{targets: []model.QueryTarget{target}, queries: &targetQueries})
 			req := validClaimedRequest()
 			mutate(&req)
 			_, err := svc.ExecutePGClaimed(context.Background(), userExecutionIdentity(7), 9002, req)
 			if !errors.Is(err, ErrQueryValidationFailed) {
 				t.Fatalf("error = %v, want ErrQueryValidationFailed", err)
+			}
+			if len(targetQueries) != 0 {
+				t.Fatalf("shape failure reached target access: %+v", targetQueries)
+			}
+			if resolver.calls != 0 {
+				t.Fatalf("shape failure resolved credentials %d times", resolver.calls)
 			}
 			if len(repo.claimInputs) != 0 {
 				t.Fatalf("claim attempted on shape failure: %+v", repo.claimInputs)
@@ -117,6 +154,30 @@ func TestExecutePGClaimed_RequestShapeFailures(t *testing.T) {
 				t.Fatalf("evidence pair written on shape failure")
 			}
 		})
+	}
+}
+
+// The 65536-rune boundary statement passes shape and reaches the keyed chain
+// — claim admitted, exactly one keyed finalize. Trailing spaces, case, and
+// Unicode in names stay verbatim: only shape is checked.
+func TestExecutePGClaimed_ShapeBoundaryAccepted(t *testing.T) {
+	t.Parallel()
+	repo := claimedPGRepo(t)
+	svc := newClaimedService(repo, &fakeResolver{dsn: mustDSN(t)})
+	req := validClaimedRequest()
+	req.Statement = "SELECT " + strings.Repeat("é", model.MaxStatementLength-7)
+	req.Schema = "MiXeD Case Schema "
+	if _, err := svc.ExecutePGClaimed(context.Background(), userExecutionIdentity(7), 9002, req); err == nil {
+		t.Fatal("boundary statement must terminate through the keyed chain")
+	}
+	if len(repo.claimInputs) != 1 {
+		t.Fatalf("claimInputs = %d, want 1 — the boundary shape must pass", len(repo.claimInputs))
+	}
+	if repo.claimInputs[0].SchemaName != "MiXeD Case Schema " {
+		t.Fatalf("schema = %q, want the explicit name verbatim (no trim/fold)", repo.claimInputs[0].SchemaName)
+	}
+	if len(repo.finalizeCalls) != 1 {
+		t.Fatalf("finalizeCalls = %d, want exactly one keyed finalize", len(repo.finalizeCalls))
 	}
 }
 
@@ -353,28 +414,69 @@ func TestExecutePGClaimed_FinalizeFailure(t *testing.T) {
 	}
 }
 
-// An explicit schema outside the pinned connection identity is refused as
-// access denial — the key stays unoccupied.
-func TestExecutePGClaimed_SchemaOutsidePinnedIdentity(t *testing.T) {
+// An explicit schema is no longer a connection-identity whitelist: it claims
+// the key, runs the governed chain under the pinned explicit name, and lands
+// exactly one keyed finalize (here the dead DSN surfaces as a keyed driver
+// failure) — never a pre-claim NULL-key denial. An omitted schema still
+// resolves the credential's default_schema into the same digest/claim scope.
+func TestExecutePGClaimed_ExplicitSchemaClaimsAndFinalizes(t *testing.T) {
 	t.Parallel()
 	repo := claimedPGRepo(t)
 	svc := newClaimedService(repo, &fakeResolver{dsn: mustDSN(t)})
 	req := validClaimedRequest()
-	req.Schema = "other"
-	_, err := svc.ExecutePGClaimed(context.Background(), userExecutionIdentity(7), 9002, req)
-	if !errors.Is(err, ErrQueryNotAllowed) {
-		t.Fatalf("error = %v, want ErrQueryNotAllowed", err)
+	req.Schema = "analytics"
+	out, err := svc.ExecutePGClaimed(context.Background(), userExecutionIdentity(7), 9002, req)
+	if err == nil {
+		t.Fatalf("explicit schema with dead DSN = %+v, want classified failure", out)
 	}
-	if len(repo.claimInputs) != 0 {
-		t.Fatal("unpinned schema occupied the key")
+	if len(repo.claimInputs) != 1 {
+		t.Fatalf("explicit schema claimInputs = %d, want 1 — the key must be occupied", len(repo.claimInputs))
 	}
-	if len(repo.pairCalls) != 1 {
-		t.Fatalf("pairCalls = %d, want 1", len(repo.pairCalls))
+	if repo.claimInputs[0].SchemaName != "analytics" {
+		t.Fatalf("claim schema = %q, want the explicit name verbatim", repo.claimInputs[0].SchemaName)
+	}
+	if len(repo.pairCalls) != 0 {
+		t.Fatalf("post-claim outcome wrote %d NULL-key pairs, want 0", len(repo.pairCalls))
+	}
+	if len(repo.finalizeCalls) != 1 {
+		t.Fatalf("finalizeCalls = %d, want exactly one keyed finalize", len(repo.finalizeCalls))
+	}
+	rec := repo.finalizeCalls[0]
+	if rec.SchemaName != "analytics" || rec.ClientExecutionID == nil || *rec.ClientExecutionID != "req-1" {
+		t.Fatalf("keyed record scope = %q/%v, want analytics/req-1", rec.SchemaName, rec.ClientExecutionID)
+	}
+}
+
+// The omitted/explicit-default schema equivalence keeps its digest contract:
+// explicit "public" under the same key is already-exists, not a second
+// admission, while a different explicit schema conflicts.
+func TestExecutePGClaimed_SchemaDefaultEquivalence(t *testing.T) {
+	t.Parallel()
+	repo := claimedPGRepo(t)
+	svc := newClaimedService(repo, &fakeResolver{dsn: mustDSN(t)})
+	req := validClaimedRequest()
+	if _, err := svc.ExecutePGClaimed(context.Background(), userExecutionIdentity(7), 9002, req); err == nil {
+		t.Fatal("first execute must terminate (keyed finalize)")
+	}
+	explicit := validClaimedRequest()
+	explicit.Schema = "public" // the credential's default_schema
+	if _, err := svc.ExecutePGClaimed(context.Background(), userExecutionIdentity(7), 9002, explicit); !errors.Is(err, ErrQueryExecutionAlreadyExists) {
+		t.Fatalf("explicit-default retry = %v, want already_exists", err)
+	}
+	different := validClaimedRequest()
+	different.Schema = "analytics"
+	if _, err := svc.ExecutePGClaimed(context.Background(), userExecutionIdentity(7), 9002, different); !errors.Is(err, ErrQueryExecutionConflict) {
+		t.Fatalf("different-schema same-key = %v, want conflict", err)
+	}
+	if len(repo.claimInputs) != 1 || len(repo.finalizeCalls) != 1 {
+		t.Fatalf("claims/finalizes = %d/%d, want 1/1 — no second admission", len(repo.claimInputs), len(repo.finalizeCalls))
 	}
 }
 
 // The derived view status is a function of claimed_at + recorded budget:
-// unexpired → running, expired → unknown, absent budget → running forever.
+// unexpired → running, expired → unknown. A missing or unusable budget is an
+// evidence gap → unknown — never an invented expiry window, and never a
+// fabricated "still running".
 func TestDeriveClaimViewStatus(t *testing.T) {
 	t.Parallel()
 	now := time.Date(2026, 6, 22, 9, 0, 0, 0, time.UTC)
@@ -391,9 +493,17 @@ func TestDeriveClaimViewStatus(t *testing.T) {
 	if got := deriveClaimViewStatus(at, 5_000, now); got != model.QueryExecutionViewUnknown {
 		t.Fatalf("boundary claim = %v, want unknown", got)
 	}
-	// NULL budget (pre-T10-C row) can never expire.
-	if got := deriveClaimViewStatus(stale, 0, now); got != model.QueryExecutionViewRunning {
-		t.Fatalf("legacy claim = %v, want running", got)
+	// NULL budget (pre-T10-C row): evidence missing → unknown even when fresh.
+	if got := deriveClaimViewStatus(claimed, 0, now); got != model.QueryExecutionViewUnknown {
+		t.Fatalf("legacy claim = %v, want unknown", got)
+	}
+	// A corrupt budget — negative, or too large to form a duration — must
+	// not overflow into a seemingly valid expiry window either way.
+	if got := deriveClaimViewStatus(stale, -5, now); got != model.QueryExecutionViewUnknown {
+		t.Fatalf("negative budget = %v, want unknown", got)
+	}
+	if got := deriveClaimViewStatus(claimed, math.MaxInt64, now); got != model.QueryExecutionViewUnknown {
+		t.Fatalf("overflowing budget = %v, want unknown", got)
 	}
 }
 
@@ -407,8 +517,9 @@ func timePtr(t time.Time) *time.Time { return &t }
 func strPtr(s string) *string        { return &s }
 
 // Unlinked claims surface as derived entries: unexpired → running, expired →
-// unknown, and a NULL budget (pre-T10-C) can never expire. The read writes
-// nothing — no claim, no finalize, no evidence pair.
+// unknown, and a NULL budget (pre-T10-C) derives unknown — the budget evidence
+// is missing, not a proven expiry. The read writes nothing — no claim, no
+// finalize, no evidence pair.
 func TestListHistory_ClaimDerivedStates(t *testing.T) {
 	t.Parallel()
 	repo := claimedPGRepo(t)
@@ -455,8 +566,8 @@ func TestListHistory_ClaimDerivedStates(t *testing.T) {
 	if got["stale"] != model.QueryExecutionViewUnknown {
 		t.Fatalf("stale claim = %v, want unknown", got["stale"])
 	}
-	if got["legacy"] != model.QueryExecutionViewRunning {
-		t.Fatalf("legacy claim = %v, want running", got["legacy"])
+	if got["legacy"] != model.QueryExecutionViewUnknown {
+		t.Fatalf("legacy claim = %v, want unknown", got["legacy"])
 	}
 	if len(repo.claimInputs) != 0 || len(repo.finalizeCalls) != 0 || len(repo.pairCalls) != 0 {
 		t.Fatal("a read wrote claim, finalize, or evidence rows")
@@ -571,5 +682,262 @@ func TestListHistory_TypedActorIsolation(t *testing.T) {
 	}
 	if len(page.Items) != 1 || *page.Items[0].ClientExecutionID != "machine-claim" {
 		t.Fatalf("machine scope leaked items: %+v", page.Items)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// R1-2: the history preview column never stores statement content. Post-claim
+// records carry the lexical mask; pre-claim evidence pairs carry the fixed
+// withheld marker. The owner-only full-statement contract is untouched.
+// ---------------------------------------------------------------------------
+
+func TestExecutePGClaimed_PreviewMasksOnFinalize(t *testing.T) {
+	t.Parallel()
+	stmt := `SELECT a FROM app.t WHERE a = 'SECRET-X1' AND b = E'pre\'SECRET-X2' AND c = $tag$SECRET-X3$tag$ -- SECRET-X4
+	/* SECRET-X5 */ AND d = 424242`
+	repo := claimedPGRepo(t)
+	svc := newClaimedService(repo, &fakeResolver{dsn: mustDSN(t)})
+	svc.pgOutcomeFn = func(context.Context, PGDisclosureInput) (*PGDisclosedResult, *PGAttemptEvidence, error) {
+		return &PGDisclosedResult{Rows: [][]*string{}},
+			&PGAttemptEvidence{Stage: PGStageExecute, Status: model.QueryExecutionSuccess, BackendPID: 77}, nil
+	}
+	req := validClaimedRequest()
+	req.Statement = stmt
+	_, err := svc.ExecutePGClaimed(context.Background(), userExecutionIdentity(7), 9002, req)
+	if err != nil {
+		t.Fatalf("execute: %v", err)
+	}
+	if len(repo.finalizeCalls) != 1 {
+		t.Fatalf("finalizeCalls = %d, want 1", len(repo.finalizeCalls))
+	}
+	rec := repo.finalizeCalls[0]
+	for _, marker := range []string{"SECRET-X1", "SECRET-X2", "SECRET-X3", "SECRET-X4", "SECRET-X5", "424242"} {
+		if strings.Contains(rec.StatementPreview, marker) {
+			t.Fatalf("history preview leaked %q: %q", marker, rec.StatementPreview)
+		}
+	}
+	if !strings.Contains(rec.StatementPreview, "SELECT a FROM app.t") {
+		t.Fatalf("preview lost statement shape: %q", rec.StatementPreview)
+	}
+	// The user+success owner contract still stores the verbatim statement —
+	// preview masking is a separate, always-on boundary.
+	if rec.FullStatement != stmt {
+		t.Fatal("user success lost its owner-only full statement")
+	}
+	// Digest still runs on original bytes.
+	claim := repo.claimInputs[0]
+	want := DigestOrdinaryExecute(OrdinaryExecuteDigestInput{
+		Database: "appdb", Schema: "public", Statement: stmt,
+		Page: 1, PageSize: pgClaimDefaultPageSize, MaxRows: pgClaimDefaultMaxRows,
+	})
+	if claim.RequestDigest != want || rec.StatementDigest != want {
+		t.Fatal("digest diverged from the original statement bytes")
+	}
+}
+
+// A machine actor's successful attempt masks the preview AND saves no full
+// statement — the owner-only contract never applies to machines.
+func TestExecutePGClaimed_MachinePreviewNoFullStatement(t *testing.T) {
+	t.Parallel()
+	stmt := `SELECT 'SECRET-M1' FROM app.t`
+	repo := claimedPGRepo(t)
+	svc := newClaimedService(repo, &fakeResolver{dsn: mustDSN(t)})
+	svc.pgOutcomeFn = func(context.Context, PGDisclosureInput) (*PGDisclosedResult, *PGAttemptEvidence, error) {
+		return &PGDisclosedResult{Rows: [][]*string{}},
+			&PGAttemptEvidence{Stage: PGStageExecute, Status: model.QueryExecutionSuccess}, nil
+	}
+	req := validClaimedRequest()
+	req.Statement = stmt
+	machine := model.QueryExecutionIdentity{Kind: model.QueryExecutionActorMachine, ID: 7}
+	_, err := svc.ExecutePGClaimed(context.Background(), machine, 9002, req)
+	if err != nil {
+		t.Fatalf("execute: %v", err)
+	}
+	rec := repo.finalizeCalls[0]
+	if strings.Contains(rec.StatementPreview, "SECRET-M1") {
+		t.Fatalf("machine preview leaked: %q", rec.StatementPreview)
+	}
+	if rec.FullStatement != "" {
+		t.Fatal("machine actor acquired a full statement")
+	}
+}
+
+// Every pre-claim evidence row carries the fixed withheld marker — no
+// scanning of an unadmitted statement is ever needed.
+func TestExecutePGClaimed_PreClaimPreviewWithheld(t *testing.T) {
+	t.Parallel()
+	// Access denial path.
+	_, cred, dsn := pgClaimFixture()
+	cred.Enabled = false
+	repo := &fakeExecRepo{credentials: map[uint64]model.QueryCredentialMetadata{9002: cred}}
+	svc := newClaimedService(repo, &fakeResolver{dsn: dsn})
+	req := validClaimedRequest()
+	req.Statement = `SELECT 'SECRET-P1' FROM app.t`
+	if _, err := svc.ExecutePGClaimed(context.Background(), userExecutionIdentity(7), 9002, req); !errors.Is(err, ErrQueryNotAllowed) {
+		t.Fatalf("access denial = %v", err)
+	}
+	if len(repo.pairCalls) != 1 || repo.pairCalls[0].rec.StatementPreview != pgClaimedWithheldPreview {
+		t.Fatalf("access-denial preview = %q, want withheld", repo.pairCalls[0].rec.StatementPreview)
+	}
+	// Claim-store failure path.
+	repo2 := claimedPGRepo(t)
+	repo2.claimErr = errors.New("store down")
+	svc2 := newClaimedService(repo2, &fakeResolver{dsn: mustDSN(t)})
+	if _, err := svc2.ExecutePGClaimed(context.Background(), userExecutionIdentity(7), 9002, req); !errors.Is(err, ErrQueryBackendFailure) {
+		t.Fatalf("claim-store failure = %v", err)
+	}
+	if len(repo2.pairCalls) != 1 || repo2.pairCalls[0].rec.StatementPreview != pgClaimedWithheldPreview {
+		t.Fatalf("claim-failure preview = %q, want withheld", repo2.pairCalls[0].rec.StatementPreview)
+	}
+}
+
+// A guard-rejected statement is still masked in its keyed terminal row.
+func TestExecutePGClaimed_RejectedPreviewMasked(t *testing.T) {
+	t.Parallel()
+	repo := claimedPGRepo(t)
+	svc := newClaimedService(repo, &fakeResolver{dsn: mustDSN(t)})
+	req := validClaimedRequest()
+	req.Statement = `DELETE FROM app.t WHERE a = 'SECRET-R1'`
+	if _, err := svc.ExecutePGClaimed(context.Background(), userExecutionIdentity(7), 9002, req); err == nil {
+		t.Fatal("guard rejection must surface")
+	}
+	rec := repo.finalizeCalls[0]
+	if rec.Status != model.QueryExecutionRejected {
+		t.Fatalf("status = %v, want rejected", rec.Status)
+	}
+	if strings.Contains(rec.StatementPreview, "SECRET-R1") {
+		t.Fatalf("rejected preview leaked: %q", rec.StatementPreview)
+	}
+	if rec.FullStatement != "" {
+		t.Fatal("a rejected attempt saved a full statement")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// R1-6: the pre-finalize consistency gate. These inject impossible (result,
+// evidence, error) triples an executor could never produce — an internal
+// contract fault proves the gate fails closed instead of persisting a
+// success that contradicts its own evidence.
+// ---------------------------------------------------------------------------
+
+func TestExecutePGClaimed_OutcomeConsistencyGate(t *testing.T) {
+	t.Parallel()
+	successEvidence := func() *PGAttemptEvidence {
+		return &PGAttemptEvidence{Stage: PGStageExecute, Status: model.QueryExecutionSuccess, BackendPID: 42}
+	}
+	nonEmptyResult := func() *PGDisclosedResult {
+		return &PGDisclosedResult{Rows: [][]*string{}}
+	}
+	cases := map[string]struct {
+		res        *PGDisclosedResult
+		ev         *PGAttemptEvidence
+		err        error
+		wantErr    error
+		wantReject bool
+		wantStatus model.QueryExecutionStatus
+		wantCode   string
+		wantRows   int
+	}{
+		"result without evidence or error": {
+			res: nonEmptyResult(), ev: nil, err: nil,
+			wantErr: ErrQueryBackendFailure, wantStatus: model.QueryExecutionFailed, wantCode: "query_internal_error",
+		},
+		"success evidence without result": {
+			res: nil, ev: successEvidence(), err: nil,
+			wantErr: ErrQueryBackendFailure, wantStatus: model.QueryExecutionFailed, wantCode: "query_internal_error",
+		},
+		"failed evidence under non-empty result": {
+			res: nonEmptyResult(), ev: &PGAttemptEvidence{Stage: PGStageExecute, Status: model.QueryExecutionFailed}, err: nil,
+			wantErr: ErrQueryBackendFailure, wantStatus: model.QueryExecutionFailed, wantCode: "query_internal_error",
+		},
+		"success evidence under trusted error": {
+			res: nonEmptyResult(), ev: successEvidence(), err: ErrQueryTimeout,
+			wantErr: ErrQueryBackendFailure, wantStatus: model.QueryExecutionFailed, wantCode: "query_internal_error",
+		},
+		"error without evidence": {
+			res: nil, ev: nil, err: ErrQueryTimeout,
+			wantErr: ErrQueryTimeout, wantStatus: model.QueryExecutionFailed, wantCode: "query_backend_error",
+		},
+		"normal success": {
+			res: nonEmptyResult(), ev: successEvidence(), err: nil,
+			wantErr: nil, wantStatus: model.QueryExecutionSuccess, wantCode: "", wantRows: 0,
+		},
+		"normal cancelled": {
+			res: nil, ev: &PGAttemptEvidence{Stage: PGStageExecute, Status: model.QueryExecutionCancelled, BackendPID: 9}, err: context.Canceled,
+			wantErr: context.Canceled, wantStatus: model.QueryExecutionCancelled, wantCode: "query_cancelled",
+		},
+		"normal timeout": {
+			res: nil, ev: &PGAttemptEvidence{Stage: PGStageExecute, Status: model.QueryExecutionTimeout, BackendPID: 9}, err: ErrQueryTimeout,
+			wantErr: ErrQueryTimeout, wantStatus: model.QueryExecutionTimeout, wantCode: "query_timeout",
+		},
+		"normal rejected": {
+			res: nil, ev: &PGAttemptEvidence{Stage: PGStageGuard, Status: model.QueryExecutionRejected}, err: &pgsql.RejectError{Code: "query_forbidden", Message: "no"},
+			wantReject: true, wantStatus: model.QueryExecutionRejected, wantCode: "query_forbidden",
+		},
+	}
+	for name, tc := range cases {
+		tc := tc
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			repo := claimedPGRepo(t)
+			svc := newClaimedService(repo, &fakeResolver{dsn: mustDSN(t)})
+			svc.pgOutcomeFn = func(context.Context, PGDisclosureInput) (*PGDisclosedResult, *PGAttemptEvidence, error) {
+				return tc.res, tc.ev, tc.err
+			}
+			out, err := svc.ExecutePGClaimed(context.Background(), userExecutionIdentity(7), 9002, validClaimedRequest())
+			switch {
+			case tc.wantReject:
+				var re *pgsql.RejectError
+				if !errors.As(err, &re) {
+					t.Fatalf("err = %v, want *pgsql.RejectError", err)
+				}
+			case tc.wantErr == nil:
+				if err != nil {
+					t.Fatalf("err = %v, want nil", err)
+				}
+			case !errors.Is(err, tc.wantErr):
+				t.Fatalf("err = %v, want %v", err, tc.wantErr)
+			}
+			// Exactly one keyed finalize regardless of the triple.
+			if len(repo.finalizeCalls) != 1 {
+				t.Fatalf("finalizeCalls = %d, want 1", len(repo.finalizeCalls))
+			}
+			rec := repo.finalizeCalls[0]
+			if rec.Status != tc.wantStatus {
+				t.Fatalf("persisted status = %v, want %v", rec.Status, tc.wantStatus)
+			}
+			if rec.ErrorCode != tc.wantCode {
+				t.Fatalf("persisted error_code = %q, want %q", rec.ErrorCode, tc.wantCode)
+			}
+			if rec.RowCount != tc.wantRows {
+				t.Fatalf("persisted row_count = %d, want %d", rec.RowCount, tc.wantRows)
+			}
+			if out.Status != rec.Status {
+				t.Fatalf("outcome status %v diverged from persisted %v", out.Status, rec.Status)
+			}
+			// Rows leave the entry only on a true consistent success.
+			if tc.wantStatus != model.QueryExecutionSuccess && out.Result != nil {
+				t.Fatal("a non-success outcome delivered result rows")
+			}
+			if tc.wantStatus == model.QueryExecutionSuccess && out.Result == nil {
+				t.Fatal("consistent success dropped its result")
+			}
+			// Evidence is never fabricated: a nil evidence input surfaces the
+			// failed wiring-fault record, never invented scalars.
+			if tc.ev == nil {
+				if out.Evidence == nil || out.Evidence.BackendPID != 0 || out.Evidence.RemoteState != "" {
+					t.Fatalf("fabricated evidence scalars: %+v", out.Evidence)
+				}
+				if rec.BackendPID != nil || rec.RemoteState != "" {
+					t.Fatalf("persisted fabricated evidence: %+v", rec)
+				}
+			} else if tc.ev.BackendPID == 0 {
+				if rec.BackendPID != nil {
+					t.Fatalf("persisted fabricated backend pid: %+v", rec)
+				}
+			} else if rec.BackendPID == nil || *rec.BackendPID != int64(tc.ev.BackendPID) {
+				t.Fatalf("persisted pid = %v, want %d", rec.BackendPID, tc.ev.BackendPID)
+			}
+		})
 	}
 }

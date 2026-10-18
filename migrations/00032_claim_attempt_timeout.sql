@@ -10,11 +10,11 @@
 -- from claimed_at + attempt_timeout_ms + grace: the threshold must reflect
 -- THIS attempt's resolved budget, not a mutable environment value read later.
 -- Nullable, never backfilled: rows claimed before this column existed keep
--- NULL and can only derive 'running' — inventing a budget for them would
--- fabricate an expiry that never existed.
+-- NULL and derive 'unknown' — the missing budget is an evidence gap, and
+-- inventing one would fabricate an expiry that never existed.
 ALTER TABLE query_execution_claims
   ADD COLUMN attempt_timeout_ms BIGINT UNSIGNED NULL
-    COMMENT 'Statement-timeout budget (ms) resolved at claim time; NULL = pre-T10-C claim, derive running only'
+    COMMENT 'Statement-timeout budget (ms) resolved at claim time; NULL = pre-T10-C claim, budget evidence missing'
     AFTER request_digest;
 
 -- +goose Down

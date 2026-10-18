@@ -165,11 +165,14 @@ type QueryExecutionViewStatus string
 const (
 	// QueryExecutionViewRunning marks an unlinked claim whose expiry
 	// threshold (claimed_at + recorded attempt budget + grace) has not
-	// elapsed, or whose budget is unrecoverable (pre-T10-C claim).
+	// elapsed.
 	QueryExecutionViewRunning QueryExecutionViewStatus = "running"
 	// QueryExecutionViewUnknown marks an unlinked claim past its expiry
-	// threshold. It asserts only "no terminal result was observed" — never
-	// that the backend died, the statement failed, or remote work stopped.
+	// threshold, or one whose recorded budget is missing or unusable — a
+	// missing budget is an evidence gap ("no expiry can be shown"), never a
+	// fabricated one. Either way it asserts only "no terminal result was
+	// observed" — never that the backend died, the statement failed, or
+	// remote work stopped.
 	QueryExecutionViewUnknown QueryExecutionViewStatus = "unknown"
 )
 
@@ -219,8 +222,9 @@ type QueryExecutionListItem struct {
 	HasFullStatement        bool   `json:"-"`
 	BackendPID              *int64 `json:"-"`
 	// Claim bookkeeping returned by the consistent snapshot for service-side
-	// derivation: the budget recorded at admission (0 = unrecoverable on
-	// pre-T10-C claims) and the link verdict.
+	// derivation: the budget recorded at admission (0 = NULL — the budget is
+	// unrecoverable on pre-T10-C claims and derives unknown as an evidence
+	// gap, not a proven expiry) and the link verdict.
 	ClaimAttemptTimeoutMs int64 `json:"-"`
 	ClaimLinkBroken       bool  `json:"-"`
 }
@@ -251,6 +255,11 @@ func (s QueryExecutionRemoteState) Validate() error {
 
 // MaxClientExecutionIDLength bounds the client-supplied idempotency key.
 const MaxClientExecutionIDLength = 64
+
+// MaxStatementLength bounds one user statement in Unicode code points —
+// counted like the identifier/key bounds, not UTF-8 bytes. The keyed PG
+// entry enforces it at request shape, before any access or claim work.
+const MaxStatementLength = 65536
 
 // ValidateClientExecutionID enforces the ≤64-character bound on the
 // client-supplied idempotency key, counted in Unicode code points like the

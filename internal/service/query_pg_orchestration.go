@@ -5,9 +5,14 @@
 // ErrQueryExecutionAlreadyExists, ErrQueryExecutionConflict,
 // WithPGClaimOrchestration
 // pos: T10-C production claim orchestration (issue #118, frozen G9 order) —
-// request validation → access resolution → default resolution → request
-// digest → atomic TryClaimExecution → governed PG disclosure outcome →
-// exactly one FinalizeClaimWithAudit → internal result. This entry is not an
+// full request-shape validation → access resolution → default resolution
+// (schema falls back to the credential default; an explicit name stays
+// verbatim for the post-claim binding gate) → request digest → atomic
+// TryClaimExecution → governed PG disclosure outcome → (result, evidence,
+// error) consistency gate → exactly one FinalizeClaimWithAudit → internal
+// result. History previews go through pgsql.SafeStatementPreview — keyed
+// rows store the masked preview, pre-claim pairs the fixed withheld marker.
+// This entry is not an
 // HTTP route; its result never serializes to a client response.
 // note: if this file changes, update this header and module README.md.
 package service
@@ -18,6 +23,7 @@ import (
 	"fmt"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/fan/controlhub/internal/model"
 	"github.com/fan/controlhub/internal/pgsql"
@@ -54,9 +60,11 @@ const (
 type PGClaimedExecuteRequest struct {
 	ClientExecutionID string
 	Database          string
-	// Schema selects the pinned schema; empty resolves to the connection's
-	// configured default_schema. A non-empty schema outside the pinned
-	// connection identity is refused during access resolution.
+	// Schema selects the schema the governed chain pins for the attempt;
+	// empty resolves to the connection's configured default_schema. An
+	// explicit name is kept verbatim — never trimmed or case-folded — and
+	// schema existence/USAGE is decided by the real database binding gate
+	// after claim, not by the connection identity.
 	Schema    string
 	Statement string
 	Page      int
@@ -84,6 +92,24 @@ type PGClaimedOutcome struct {
 type pgClaimStore interface {
 	TryClaimExecution(ctx context.Context, in model.QueryExecutionClaimInput) error
 	FinalizeClaimWithAudit(ctx context.Context, rec model.QueryExecutionRecord, eventType, result string) (uint64, error)
+}
+
+// pgClaimedWithheldPreview is the fixed history preview for rows that must
+// carry no statement content at all: pre-claim evidence pairs (access
+// denial, claim-store failure) and any post-claim attempt whose masked
+// preview renders empty. The original statement is never a fallback.
+const pgClaimedWithheldPreview = "[statement withheld]"
+
+// pgClaimedStatementPreview renders the keyed terminal row's history preview
+// through the PG lexical masker: literal bodies and comments are replaced by
+// fixed markers so no user value persists in the general preview column.
+// The owner-only full-statement contract is unaffected — it saves the
+// original text under its own permission boundary.
+func pgClaimedStatementPreview(stmt string) string {
+	if preview := pgsql.SafeStatementPreview(stmt, 512); strings.TrimSpace(preview) != "" {
+		return preview
+	}
+	return pgClaimedWithheldPreview
 }
 
 // WithPGClaimOrchestration wires the disclosure policy reader the keyed PG
@@ -126,6 +152,19 @@ func (s *QueryExecutionService) ExecutePGClaimed(ctx context.Context, identity m
 	if strings.TrimSpace(req.Statement) == "" {
 		return PGClaimedOutcome{}, fmt.Errorf("%w: statement is required", ErrQueryValidationFailed)
 	}
+	if utf8.RuneCountInString(req.Statement) > model.MaxStatementLength {
+		return PGClaimedOutcome{}, fmt.Errorf("%w: statement exceeds %d characters", ErrQueryValidationFailed, model.MaxStatementLength)
+	}
+	// Connection-scope shape: database is mandatory, schema optional. Both
+	// stay byte-verbatim — a legal name that does not resolve is a later
+	// database-gate outcome, not a shape failure. These checks run before
+	// any target/credential access so a malformed request never touches it.
+	if err := model.ValidateIdentifierShape("database", req.Database, true); err != nil {
+		return PGClaimedOutcome{}, fmt.Errorf("%w: %v", ErrQueryValidationFailed, err)
+	}
+	if err := model.ValidateIdentifierShape("schema", req.Schema, false); err != nil {
+		return PGClaimedOutcome{}, fmt.Errorf("%w: %v", ErrQueryValidationFailed, err)
+	}
 	page, pageSize, err := resolvePGClaimPagination(req.Page, req.PageSize)
 	if err != nil {
 		return PGClaimedOutcome{}, fmt.Errorf("%w: %v", ErrQueryValidationFailed, err)
@@ -133,7 +172,7 @@ func (s *QueryExecutionService) ExecutePGClaimed(ctx context.Context, identity m
 	if req.MaxRows < 0 {
 		return PGClaimedOutcome{}, fmt.Errorf("%w: maxRows must not be negative", ErrQueryValidationFailed)
 	}
-	if s.pgPolicies == nil {
+	if s.pgPolicies == nil || s.pgOutcomeFn == nil {
 		return PGClaimedOutcome{}, ErrQueryBackendFailure
 	}
 	claimStore, ok := s.executions.(pgClaimStore)
@@ -164,16 +203,15 @@ func (s *QueryExecutionService) ExecutePGClaimed(ctx context.Context, identity m
 	target := access.Target
 	cred := access.Credential
 
-	// 3. Default resolution — schema falls back to the pinned default; the
-	//    claim identity then binds the resolved scope. An explicit schema
-	//    outside the pinned connection identity names a connection context
-	//    that does not exist — access denial, no claim.
+	// 3. Default resolution — an empty schema falls back to the connection's
+	//    configured default_schema; an explicit name is kept verbatim. The
+	//    connection identity stays (target, database): schema existence and
+	//    USAGE are real database judgments the binding gate makes after
+	//    claim, so a valid-but-missing schema is a keyed terminal outcome,
+	//    never a pre-claim access denial.
 	schema := req.Schema
 	if schema == "" {
 		schema = cred.DefaultSchema
-	}
-	if schema != cred.DefaultSchema {
-		return s.rejectPGClaimedAccess(ctx, target, identity, req, "target is not enabled for execution", start)
 	}
 	maxRows := resolvePGClaimMaxRows(target.ConnectionContext.Environment, req.MaxRows)
 	timeout := defaultQueryTimeout
@@ -215,7 +253,7 @@ func (s *QueryExecutionService) ExecutePGClaimed(ctx context.Context, identity m
 
 	// 6. Governed attempt — the T9-B disclosure-decorated chain arms its own
 	//    statement budget inside the remaining request context.
-	res, ev, execErr := ExecutePGGovernedDisclosedOutcome(ctx, PGDisclosureInput{
+	res, ev, execErr := s.pgOutcomeFn(ctx, PGDisclosureInput{
 		Execute: PGExecuteInput{
 			ConnConfig:   access.pgConfig,
 			Database:     cred.DatabaseName,
@@ -227,6 +265,16 @@ func (s *QueryExecutionService) ExecutePGClaimed(ctx context.Context, identity m
 		TargetResourceID: targetID,
 		Policies:         s.pgPolicies,
 	})
+
+	// Consistency gate — before the one finalize, and only there. Success
+	// requires a delivered result, evidence, no error, and an evidence record
+	// classified success; a classified failure requires evidence. Any other
+	// (result, evidence, error) combination is an internal contract fault:
+	// the attempt finalizes as failed under a fixed internal code and never
+	// delivers rows — a non-empty result can never override an evidence
+	// failure, and a missing backend PID or remote_state is never invented.
+	contractFault := (execErr == nil && (res == nil || ev == nil || ev.Status != model.QueryExecutionSuccess)) ||
+		(execErr != nil && ev != nil && ev.Status == model.QueryExecutionSuccess)
 	if ev == nil {
 		// The executor contract guarantees evidence on every post-validation
 		// path; a nil record is a wiring fault — finalize as failed rather
@@ -239,18 +287,23 @@ func (s *QueryExecutionService) ExecutePGClaimed(ctx context.Context, identity m
 	//    the claim remains discoverable and non-retryable.
 	status := ev.Status
 	rowCount := 0
-	if res != nil && execErr == nil {
-		status = model.QueryExecutionSuccess
-		rowCount = len(res.Rows)
+	code, msg := "", ""
+	switch {
+	case contractFault:
+		status, code, msg = model.QueryExecutionFailed,
+			"query_internal_error", "internal execution contract violation"
+	case res != nil && execErr == nil:
+		status, rowCount = model.QueryExecutionSuccess, len(res.Rows)
+	default:
+		code, msg = pgClaimedTerminalEvidence(execErr, status)
 	}
-	code, msg := pgClaimedTerminalEvidence(execErr, status)
 	rec := model.QueryExecutionRecord{
 		TargetResourceID:  targetID,
 		Engine:            target.ConnectionContext.Engine,
 		DatabaseName:      cred.DatabaseName,
 		SchemaName:        schema,
 		StatementDigest:   digest,
-		StatementPreview:  truncateString(req.Statement, 512),
+		StatementPreview:  pgClaimedStatementPreview(req.Statement),
 		Status:            status,
 		RowCount:          rowCount,
 		DurationMs:        s.clock.Now().Sub(start).Milliseconds(),
@@ -280,6 +333,9 @@ func (s *QueryExecutionService) ExecutePGClaimed(ctx context.Context, identity m
 		return PGClaimedOutcome{}, errPersistAttempt
 	}
 
+	if contractFault {
+		return PGClaimedOutcome{ExecutionID: execID, Status: status, Evidence: ev}, ErrQueryBackendFailure
+	}
 	if execErr != nil {
 		return PGClaimedOutcome{ExecutionID: execID, Status: status, Evidence: ev}, execErr
 	}
@@ -392,7 +448,7 @@ func (s *QueryExecutionService) buildPGClaimEvidenceRecord(target model.QueryTar
 			Database: req.Database, Schema: req.Schema, Statement: req.Statement,
 			Page: req.Page, PageSize: req.PageSize, MaxRows: req.MaxRows,
 		}),
-		StatementPreview: truncateString(req.Statement, 512),
+		StatementPreview: pgClaimedWithheldPreview,
 		Status:           status,
 		DurationMs:       s.clock.Now().Sub(start).Milliseconds(),
 		ErrorCode:        code,

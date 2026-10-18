@@ -39,8 +39,8 @@ func TestClaimAttemptTimeoutMigrationUpDownEmpty(t *testing.T) {
 	if !found {
 		t.Fatal("attempt_timeout_ms missing after 00032 up")
 	}
-	// Nullable: pre-T10-C claims carry NULL and derive running only — no
-	// invented budget is backfilled for them.
+	// Nullable: pre-T10-C claims carry NULL — the budget evidence is missing
+	// (read-side derives unknown, an evidence gap) and no budget is backfilled.
 	if colType != "bigint unsigned" || nullable != "YES" {
 		t.Fatalf("attempt_timeout_ms = %q/%q, want bigint unsigned/YES", colType, nullable)
 	}

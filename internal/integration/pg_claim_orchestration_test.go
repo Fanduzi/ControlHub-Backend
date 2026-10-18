@@ -7,8 +7,10 @@
 // ExecutePGClaimed entry, and the real ListHistory read path
 // output: TestPGClaimed* — vertical flow, concurrent admission, digest
 // conflict, evidence-boundary rows, defaults/capabilities digest equivalence,
-// cancel finalize, finalize-failure rollback, derived running/unknown reads,
-// typed-actor scope, and the real HTTP list read
+// cancel finalize, finalize-failure rollback, derived running/unknown reads
+// incl. NULL-budget legacy rows, explicit-schema scope + keyed binding
+// rejections, masked-preview persistence/GET privacy, byte-exact database
+// scope filters, typed-actor scope, and the real HTTP list read
 // pos: T10-C production-orchestration proof — requests travel the real
 // service entry; no test hand-composes claim/finalize calls for the covered
 // paths. The HTTP POST gate stays closed; reads are the only HTTP surface.
@@ -484,7 +486,8 @@ func TestPGClaimed_FinalizeFailureRollback(t *testing.T) {
 
 // ---------------------------------------------------------------------------
 // F. Unlinked claims derive display states on read: fresh → running, past
-// claimed_at + recorded budget + grace → unknown. The read writes nothing.
+// claimed_at + recorded budget + grace → unknown, and a NULL budget
+// (pre-T10-C row) → unknown as an evidence gap. The read writes nothing.
 // ---------------------------------------------------------------------------
 
 func TestPGClaimed_DerivedStateRead(t *testing.T) {
@@ -507,6 +510,14 @@ func TestPGClaimed_DerivedStateRead(t *testing.T) {
 	if err := repo.TryClaimExecution(ctx, stale); err != nil {
 		t.Fatalf("stale claim: %v", err)
 	}
+	// A pre-T10-C occupancy row carries NULL attempt_timeout_ms — the budget
+	// evidence is missing. It derives unknown (an evidence gap), never a
+	// fabricated expiry and never "still running".
+	mustExec(t, db, `INSERT INTO query_execution_claims
+		(target_resource_id, client_execution_id, actor_user_id, actor_machine_principal_id,
+		 database_name, schema_name, request_digest, attempt_timeout_ms, execution_id, claimed_at)
+		VALUES (?, 't10c-legacy', ?, NULL, 'discdb', 'app', ?, NULL, NULL, ?)`,
+		targetID, claimUserActor, claimDigest("legacy"), time.Now().UTC().Add(-3*time.Minute))
 
 	execBefore := countWhere(t, db, `SELECT COUNT(*) FROM query_executions WHERE target_resource_id = ?`, targetID)
 	page, err := svc.ListHistory(ctx, userIdentity(claimUserActor), "admin", targetID, model.QueryExecutionListQuery{
@@ -532,6 +543,9 @@ func TestPGClaimed_DerivedStateRead(t *testing.T) {
 	}
 	if got["t10c-stale"] != model.QueryExecutionViewUnknown {
 		t.Fatalf("stale = %v, want unknown", got["t10c-stale"])
+	}
+	if got["t10c-legacy"] != model.QueryExecutionViewUnknown {
+		t.Fatalf("legacy NULL-budget claim = %v, want unknown (evidence gap)", got["t10c-legacy"])
 	}
 }
 
@@ -677,5 +691,262 @@ func TestPGClaimed_HTTPMixedRead(t *testing.T) {
 	}
 	if len(page.Items) != 1 || page.Items[0].ClientExecutionID == nil || *page.Items[0].ClientExecutionID != "t10c-http-open" {
 		t.Fatalf("filtered items = %+v", page.Items)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// R1-1: explicit schema is real request scope, not a connection-identity
+// whitelist. A valid analytics schema claims and executes under its own
+// five-part policy scope; a nonexistent schema dies at the real binding gate
+// after claim — a keyed terminal row, never a pre-claim NULL-key denial.
+// ---------------------------------------------------------------------------
+
+func TestPGClaimed_ExplicitSchemaScope(t *testing.T) {
+	db := setupTestDB(t)
+	fix := newPGDiscFixture(t)
+	setupPGClaimEnv(t, fix)
+	svc := newPGClaimedService(db)
+	disc := mysqlrepo.NewQueryDisclosureRepository(db)
+	ctx := context.Background()
+	targetID := setupPGClaimTarget(t, db, fix, "t10c-schema-"+strings.ReplaceAll(t.Name(), "/", "-"))
+
+	// analytics carries its own policy scope — the default app schema's
+	// policies (absent here) are not what gates this attempt.
+	insertPolicy(t, disc, targetID, "discdb", "analytics", "orders", "id", model.ResultDisclosureRawCopyAllowed)
+	insertPolicy(t, disc, targetID, "discdb", "analytics", "orders", "total", model.ResultDisclosureRawCopyAllowed)
+
+	req := claimedRequest("t10c-schema-ok", `SELECT id, total FROM analytics.orders ORDER BY id`)
+	req.Schema = "analytics"
+	out, err := svc.ExecutePGClaimed(ctx, userIdentity(claimUserActor), targetID, req)
+	if err != nil {
+		t.Fatalf("explicit analytics execute: %v", err)
+	}
+	if out.Status != model.QueryExecutionSuccess || out.Result == nil {
+		t.Fatalf("explicit schema outcome = %+v", out)
+	}
+	keyed := countWhere(t, db,
+		`SELECT COUNT(*) FROM query_executions WHERE target_resource_id = ? AND client_execution_id = 't10c-schema-ok' AND schema_name = 'analytics' AND status = 'success'`,
+		targetID)
+	if keyed != 1 {
+		t.Fatalf("keyed analytics rows = %d, want 1", keyed)
+	}
+
+	// Same key under the default schema is a different digest → conflict.
+	other := claimedRequest("t10c-schema-ok", `SELECT id, total FROM analytics.orders ORDER BY id`)
+	if _, err := svc.ExecutePGClaimed(ctx, userIdentity(claimUserActor), targetID, other); !errors.Is(err, service.ErrQueryExecutionConflict) {
+		t.Fatalf("default-schema same-key = %v, want conflict", err)
+	}
+
+	// A valid name whose schema does not exist claims, then dies at the real
+	// binding gate — the pinned-schema check runs when unqualified entity
+	// references would resolve there. One keyed rejected row, no NULL-key
+	// pair.
+	ghost := claimedRequest("t10c-schema-ghost", `SELECT id FROM ghost_t`)
+	ghost.Schema = "ghostschema"
+	_, err = svc.ExecutePGClaimed(ctx, userIdentity(claimUserActor), targetID, ghost)
+	if err == nil {
+		t.Fatal("nonexistent schema must fail at the binding gate")
+	}
+	if !claimOccupied(t, db, targetID, "t10c-schema-ghost") {
+		t.Fatal("binding rejection must keep the keyed claim")
+	}
+	ghostRows := countWhere(t, db,
+		`SELECT COUNT(*) FROM query_executions WHERE target_resource_id = ? AND client_execution_id = 't10c-schema-ghost' AND status = 'rejected' AND error_code = 'schema_not_found'`,
+		targetID)
+	if ghostRows != 1 {
+		t.Fatalf("keyed ghost-schema rows = %d, want 1", ghostRows)
+	}
+
+	// The no-USAGE variant lands the same keyed verdict.
+	denied := claimedRequest("t10c-schema-noaccess", `SELECT id FROM ghost_t`)
+	denied.Schema = "noaccess"
+	_, err = svc.ExecutePGClaimed(ctx, userIdentity(claimUserActor), targetID, denied)
+	if err == nil {
+		t.Fatal("no-USAGE schema must fail at the binding gate")
+	}
+	deniedRows := countWhere(t, db,
+		`SELECT COUNT(*) FROM query_executions WHERE target_resource_id = ? AND client_execution_id = 't10c-schema-noaccess' AND status = 'rejected' AND error_code = 'query_schema_not_usable'`,
+		targetID)
+	if deniedRows != 1 {
+		t.Fatalf("keyed no-USAGE rows = %d, want 1", deniedRows)
+	}
+
+	nullPairs := countWhere(t, db,
+		`SELECT COUNT(*) FROM query_executions WHERE target_resource_id = ? AND client_execution_id IS NULL AND error_code = 'query_not_allowed'`,
+		targetID)
+	if nullPairs != 0 {
+		t.Fatalf("pre-claim denial pairs = %d, want 0 — a real binding verdict is keyed", nullPairs)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// R1-2: the persisted preview never stores statement content. The masked
+// preview is what real MySQL holds and what GET history returns; the raw
+// literal/comment markers must not appear anywhere on the read surface.
+// ---------------------------------------------------------------------------
+
+func TestPGClaimed_PreviewPrivacyReal(t *testing.T) {
+	db := setupTestDB(t)
+	fix := newPGDiscFixture(t)
+	setupPGClaimEnv(t, fix)
+	svc := newPGClaimedService(db)
+	disc := mysqlrepo.NewQueryDisclosureRepository(db)
+	ctx := context.Background()
+	targetID := setupPGClaimTarget(t, db, fix, "t10c-prev-"+strings.ReplaceAll(t.Name(), "/", "-"))
+	insertPolicy(t, disc, targetID, "discdb", "app", "orders", "id", model.ResultDisclosureRawCopyAllowed)
+
+	stmt := `SELECT id FROM app.orders WHERE id = 424242 /* SECRET-PP1 */ AND 'SECRET-PP2' = 'SECRET-PP2' ORDER BY id`
+	out, err := svc.ExecutePGClaimed(ctx, userIdentity(claimUserActor), targetID,
+		claimedRequest("t10c-prev-key", stmt))
+	if err != nil {
+		t.Fatalf("execute: %v", err)
+	}
+	if out.Status != model.QueryExecutionSuccess {
+		t.Fatalf("status = %v", out.Status)
+	}
+
+	var preview, full sql.NullString
+	if err := db.QueryRow(
+		`SELECT statement_preview, full_statement FROM query_executions WHERE target_resource_id = ? AND client_execution_id = 't10c-prev-key'`,
+		targetID).Scan(&preview, &full); err != nil {
+		t.Fatalf("read persisted row: %v", err)
+	}
+	for _, marker := range []string{"SECRET-PP1", "SECRET-PP2", "424242"} {
+		if strings.Contains(preview.String, marker) {
+			t.Fatalf("persisted preview leaked %q: %q", marker, preview.String)
+		}
+	}
+	if !full.Valid || full.String != stmt {
+		t.Fatal("owner success lost its verbatim full_statement")
+	}
+
+	// The GET surface returns the same masked preview.
+	adminID := insertAuthzTestUser(t, db, "t10c-prev-admin@example.com", "admin")
+	t.Cleanup(func() { deleteAuthzTestUser(t, db, adminID) })
+	router := api.NewRouter(api.Dependencies{
+		AuthService:           service.NewAuthService(mysqlrepo.NewUserRepository(db), authzIntegrationSecret),
+		AuthAuditEmitter:      mysqlrepo.NewAuthAuditEmitter(db),
+		QueryExecutionAuth:    api.QueryExecutionAuthConfig{Clock: time.Now},
+		QueryExecutionService: svc,
+	})
+	token := mustLogin(t, router, "t10c-prev-admin@example.com", "secret123")
+	req := httptest.NewRequest(http.MethodGet,
+		fmt.Sprintf("/query-targets/%d/executions?clientExecutionId=t10c-prev-key", targetID), nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET = %d; body=%s", rec.Code, rec.Body.String())
+	}
+	if strings.Contains(rec.Body.String(), "SECRET-PP1") || strings.Contains(rec.Body.String(), "SECRET-PP2") || strings.Contains(rec.Body.String(), "424242") {
+		t.Fatalf("GET leaked statement content: %s", rec.Body.String())
+	}
+}
+
+// ---------------------------------------------------------------------------
+// R1-4: the database scope filter is byte-exact on real MySQL — execution
+// rows (default ai_ci collation) and claim rows (0900_bin) agree. Record the
+// actual column collations, then prove case, accent, and trailing-pad
+// variants never match a different database identity.
+// ---------------------------------------------------------------------------
+
+func TestPGClaimed_DatabaseFilterExact(t *testing.T) {
+	db := setupTestDB(t)
+	fix := newPGDiscFixture(t)
+	setupPGClaimEnv(t, fix)
+	svc := newPGClaimedService(db)
+	ctx := context.Background()
+	targetID := setupPGClaimTarget(t, db, fix, "t10c-exact-"+strings.ReplaceAll(t.Name(), "/", "-"))
+
+	// Record the real column collations the comparison runs against.
+	var execColl, claimColl string
+	if err := db.QueryRow(
+		`SELECT COLLATION_NAME FROM information_schema.COLUMNS
+		 WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'query_executions' AND COLUMN_NAME = 'database_name'`).Scan(&execColl); err != nil {
+		t.Fatalf("exec collation: %v", err)
+	}
+	if err := db.QueryRow(
+		`SELECT COLLATION_NAME FROM information_schema.COLUMNS
+		 WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'query_execution_claims' AND COLUMN_NAME = 'database_name'`).Scan(&claimColl); err != nil {
+		t.Fatalf("claim collation: %v", err)
+	}
+	t.Logf("collations: query_executions.database_name=%s query_execution_claims.database_name=%s", execColl, claimColl)
+	if claimColl != "utf8mb4_0900_bin" {
+		t.Fatalf("claim column collation = %s, want utf8mb4_0900_bin", claimColl)
+	}
+
+	// An execution row under database AppDB (case differs from appdb) and an
+	// unlinked claim under appdb — pre-fix, the ai_ci execution arm matched
+	// both to a 'appdb' filter while the claim arm stayed exact.
+	mustExec(t, db, `INSERT INTO query_executions
+		(target_resource_id, actor_user_id, engine, database_name, schema_name, statement_digest, statement_preview, status)
+		VALUES (?, ?, 'postgresql', 'AppDB', 'app', 'd', 'p', 'success')`,
+		targetID, claimUserActor)
+	mustExec(t, db, `INSERT INTO query_execution_claims
+		(target_resource_id, client_execution_id, actor_user_id, actor_machine_principal_id,
+		 database_name, schema_name, request_digest, attempt_timeout_ms, execution_id, claimed_at)
+		VALUES (?, 't10c-exact-claim', ?, NULL, 'appdb', 'app', ?, 60000, NULL, ?)`,
+		targetID, claimUserActor, claimDigest("exact"), time.Now().UTC())
+
+	list := func(database string) []model.QueryExecutionListItem {
+		page, err := svc.ListHistory(ctx, userIdentity(claimUserActor), "admin", targetID, model.QueryExecutionListQuery{
+			TargetResourceID: targetID, Database: database,
+		})
+		if err != nil {
+			t.Fatalf("ListHistory(%q): %v", database, err)
+		}
+		return page.Items
+	}
+	for _, it := range list("appdb") {
+		if it.Kind == model.QueryExecutionListItemExecution {
+			t.Fatalf("appdb filter matched the AppDB execution row: %+v", it)
+		}
+	}
+	found := false
+	for _, it := range list("appdb") {
+		if it.Kind == model.QueryExecutionListItemClaim && it.ClientExecutionID != nil && *it.ClientExecutionID == "t10c-exact-claim" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("appdb filter missed the appdb claim entry")
+	}
+	found = false
+	for _, it := range list("AppDB") {
+		if it.Kind == model.QueryExecutionListItemClaim {
+			t.Fatalf("AppDB filter matched the appdb claim: %+v", it)
+		}
+		if it.DatabaseName == "AppDB" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("AppDB filter missed the AppDB execution row")
+	}
+	// Trailing-pad and accent variants must not match either (0900_bin is
+	// NO PAD and exact — ai_ci would fold both).
+	for _, variant := range []string{"appdb ", "appdb\t", "appdB"} {
+		if items := list(variant); len(items) != 0 {
+			t.Fatalf("filter %q matched %d items, want 0", variant, len(items))
+		}
+	}
+
+	// The offset/count path shares the same exact comparison.
+	page, err := svc.ListHistory(ctx, userIdentity(claimUserActor), "admin", targetID, model.QueryExecutionListQuery{
+		TargetResourceID: targetID, Database: "appdb", Page: 1,
+	})
+	if err != nil || page.PageInfo == nil || page.PageInfo.TotalItems != 1 || len(page.Items) != 1 {
+		t.Fatalf("offset page = %+v err=%v, want exactly the appdb claim entry", page, err)
+	}
+	// The keyed point filter stays exact too: 'appdb' claim key + 'appdb'
+	// database scope returns the claim; the AppDB execution never leaks in.
+	page, err = svc.ListHistory(ctx, userIdentity(claimUserActor), "admin", targetID, model.QueryExecutionListQuery{
+		TargetResourceID: targetID, Database: "appdb", ClientExecutionID: "t10c-exact-claim",
+	})
+	if err != nil || len(page.Items) != 1 {
+		t.Fatalf("keyed point read = %d items err=%v, want 1", len(page.Items), err)
+	}
+	if items := list(""); len(items) != 2 {
+		t.Fatalf("unfiltered scope = %d items, want 2", len(items))
 	}
 }

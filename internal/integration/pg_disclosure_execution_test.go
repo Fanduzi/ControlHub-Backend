@@ -35,7 +35,8 @@ import (
 const pgDiscRole = "ro_disc"
 
 // pgDiscFixture starts a PG16 with a restricted role and two schemas holding
-// same-named tables — the five-part isolation stage for real stores.
+// same-named tables — the five-part isolation stage for real stores — plus a
+// noaccess schema that exists but grants no USAGE to the role.
 type pgDiscFixture struct {
 	host string
 	port int
@@ -85,6 +86,9 @@ func newPGDiscFixture(t *testing.T) pgDiscFixture {
 		`GRANT CONNECT ON DATABASE discdb TO ` + pgDiscRole,
 		`CREATE SCHEMA app`,
 		`CREATE SCHEMA analytics`,
+		// noaccess exists in pg_namespace but the restricted role has no
+		// USAGE — the keyed-entry binding-gate verdict stage.
+		`CREATE SCHEMA noaccess`,
 		`GRANT USAGE ON SCHEMA app TO ` + pgDiscRole,
 		`GRANT USAGE ON SCHEMA analytics TO ` + pgDiscRole,
 		`CREATE TABLE app.orders (id bigint PRIMARY KEY, qty integer, note text)`,
