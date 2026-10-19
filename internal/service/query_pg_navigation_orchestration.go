@@ -6,7 +6,10 @@
 // shared claimed-execution runner, never a separate claim/finalize path
 // pos: PG-MULTI-ENTRY stage 3 — the server-selected related_record_navigation
 // entry: request-shape validation before any access, governed access on the
-// source database, one bounded pre-claim metadata preparation, digest over
+// source database, one bounded pre-claim metadata preparation (R1-3: every
+// preparation error canonicalizes to a bare sentinel via navPrepFail before
+// outcome selection — factory sentinels return their safe identity with one
+// NULL-key failed pair, wrapped detail never surfaces), digest over
 // resolved identity + ordered locators, then the shared prepared runner.
 // Binding SQL and the locator plan come only from the trusted private
 // builder; raw locator text, generated SQL, and OID metadata never reach
@@ -169,7 +172,11 @@ func (s *QueryExecutionService) NavigatePGRelatedRecordsClaimed(ctx context.Cont
 	//    category; anything else is the fixed internal failure.
 	binding, err := s.pgNavPrepare(ctx, access.pgConfig, cred.DatabaseName, source, timeout)
 	if err != nil {
-		switch {
+		// Canonicalize before selecting the outcome: the preparation seam is
+		// not trusted to return a bare sentinel — a wrapped or joined error
+		// from any provider collapses to the fixed safe identity here, so
+		// detail can never reach the caller or the persisted row.
+		switch err = navPrepFail(err); {
 		case errors.Is(err, context.Canceled):
 			return s.terminalPGClaimedNavigation(ctx, target, identity, source.Database, schema,
 				nullKeyDigest, model.QueryExecutionCancelled, "query_cancelled", "query canceled", context.Canceled, start)
@@ -179,6 +186,13 @@ func (s *QueryExecutionService) NavigatePGRelatedRecordsClaimed(ctx context.Cont
 		case errors.Is(err, errPGNavNoSource):
 			return s.terminalPGClaimedNavigation(ctx, target, identity, source.Database, schema,
 				nullKeyDigest, model.QueryExecutionRejected, "navigation_source_not_found", "navigation source object or foreign key not found", ErrNavigationSourceNotFound, start)
+		case errors.Is(err, ErrPGVersionUnsupported), errors.Is(err, ErrPGConnectFailed), errors.Is(err, ErrPGVersionReadFailed):
+			// The pool factory's fixed sentinels are already caller-safe: one
+			// NULL-key failed pair with the same evidence the generic backend
+			// failure carries, and the canonical sentinel itself returns so
+			// PGPoolErrorCode still identifies the factory failure class.
+			return s.terminalPGClaimedNavigation(ctx, target, identity, source.Database, schema,
+				nullKeyDigest, model.QueryExecutionFailed, "query_backend_error", "target database query failed", err, start)
 		default:
 			out, ferr := s.failPGClaimedAccess(ctx, target, identity, pgClaimedEntryNavigation,
 				source.Database, schema, nullKeyDigest, start)

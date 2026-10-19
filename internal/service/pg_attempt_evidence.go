@@ -12,11 +12,11 @@
 // clause + G4 ownership) — pgx v5.11.0 turns context cancel into a real
 // CancelRequest via DeadlineContextWatcherHandler + asyncClose on a NEW
 // control connection; pgxpool destroys the unsynchronized conn. Remote
-// truth comes only from the bounded independent pg_stat_activity probe.
-// T10-B-R1/R2: pgStmtFateAfterRead folds remote facts independently of the
-// primary error; the probe marks connect/version/poll/verdict/release
-// phases, times the verdict window before conn release, and exposes
-// test-only dial/row/SQL seams
+// truth comes only from the bounded independent pg_stat_activity probe;
+// pgStmtFateAfterRead folds remote facts independently of the primary
+// error; the probe exposes test-only dial/row/SQL seams. R1-1:
+// parameterDescribeSent ORs the provenance describe dispatch into
+// UserSQLSent — the result fate stays on the result ExecParams alone
 // note: if this file changes, update this header and module README.md.
 package service
 
@@ -55,10 +55,14 @@ const (
 	PGStageBind      PGAttemptStage = "bind"
 	PGStageRewrite   PGAttemptStage = "rewrite"
 	PGStagePreflight PGAttemptStage = "preflight"
-	PGStageExecute   PGAttemptStage = "execute"
-	PGStageVerify    PGAttemptStage = "verify"
-	PGStageAudit     PGAttemptStage = "audit"
-	PGStageDeliver   PGAttemptStage = "deliver"
+	// PGStageParameters marks the R1-1 parameter-provenance preflight — the
+	// original statement's Parse/Describe plus the fixed parameter-only
+	// probe, before the result statement's single ExecParams.
+	PGStageParameters PGAttemptStage = "parameters"
+	PGStageExecute    PGAttemptStage = "execute"
+	PGStageVerify     PGAttemptStage = "verify"
+	PGStageAudit      PGAttemptStage = "audit"
+	PGStageDeliver    PGAttemptStage = "deliver"
 	// PGStageTransform marks the post-attempt disclosure transform — an
 	// attempt can return a verified result yet still fail delivery there.
 	PGStageTransform PGAttemptStage = "transform"
@@ -228,7 +232,10 @@ var pgProbeRowSQL string
 func (a *pgExecAttempt) observeRemoteState() {
 	a.evidence.BackendPID = a.backendPID
 	a.evidence.BackendStart = a.backendStart
-	a.evidence.UserSQLSent = a.stmtFate != pgStmtUnsent
+	// stmtFate tracks only the RESULT dispatch; parameterDescribeSent adds
+	// the provenance Parse/Describe — an earlier transmission a later
+	// pre-send mark on the result path must never erase.
+	a.evidence.UserSQLSent = a.stmtFate != pgStmtUnsent || a.parameterDescribeSent
 	switch a.stmtFate {
 	case pgStmtUnsent:
 		a.evidence.RemoteState = model.QueryExecutionRemoteNone

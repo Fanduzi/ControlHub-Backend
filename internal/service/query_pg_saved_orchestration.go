@@ -3,7 +3,10 @@
 // output: ExecutePGSavedStatementClaimed — the saved entry of the shared
 // keyed PG runner
 // pos: PG-MULTI-ENTRY stage 2 (issue #118 + saved-statement execution):
-// request shape → target lookup → ONE joined statement snapshot read →
+// request shape → target lookup → ONE joined statement snapshot read (R1-2:
+// its failure branch returns only bare canonical sentinels — canceled,
+// timeout, not-found, backend — each with one NULL-key fixed-evidence pair;
+// wrapped or joined read errors never surface) →
 // ownership/scope authorization → access resolution on the statement's own
 // connection scope → typed value validation → template compilation → saved
 // digest → the shared claimed runner. Saved executions never persist
@@ -116,13 +119,24 @@ func (s *QueryExecutionService) ExecutePGSavedStatementClaimed(
 	//    declarations must come from the same committed version.
 	statement, err := s.statements.GetByID(ctx, targetID, statementID)
 	if err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
+		// The read error is discarded in every branch — a wrapped or joined
+		// store/driver error can carry secrets, so only bare sentinels and
+		// fixed evidence codes leave this switch.
+		switch {
+		case errors.Is(err, context.Canceled):
+			return s.terminalPGClaimedSavedRead(ctx, target, identity, nullKeyDigest,
+				model.QueryExecutionCancelled, "query_cancelled", "query canceled", context.Canceled, start)
+		case errors.Is(err, context.DeadlineExceeded), errors.Is(err, ErrQueryTimeout):
+			return s.terminalPGClaimedSavedRead(ctx, target, identity, nullKeyDigest,
+				model.QueryExecutionTimeout, "query_timeout", "query exceeded the time limit", ErrQueryTimeout, start)
+		case errors.Is(err, sql.ErrNoRows):
 			return s.rejectPGClaimedSavedNotFound(ctx, target, identity, nullKeyDigest, start)
+		default:
+			// A backend read fault never unwraps store/driver detail: one
+			// NULL-key failed pair plus the fixed backend sentinel.
+			return s.failPGClaimedAccess(ctx, target, identity, pgClaimedEntrySaved,
+				"", "", nullKeyDigest, start)
 		}
-		// A backend read fault never unwraps store/driver detail: one
-		// NULL-key failed pair plus the fixed backend sentinel.
-		return s.failPGClaimedAccess(ctx, target, identity, pgClaimedEntrySaved,
-			"", "", nullKeyDigest, start)
 	}
 	// The returned snapshot must be exactly the requested statement, carry a
 	// valid scope, and — for personal statements — belong to this caller
@@ -245,6 +259,20 @@ func (s *QueryExecutionService) rejectPGClaimedSavedNotFound(ctx context.Context
 		return PGClaimedOutcome{}, errPersistAttempt
 	}
 	return PGClaimedOutcome{}, ErrQuerySavedStatementNotFound
+}
+
+// terminalPGClaimedSavedRead writes the single NULL-key evidence pair for a
+// cancelled or timed-out saved-statement snapshot read and returns the bare
+// canonical sentinel. The read runs before claim, so the record has no key,
+// no backend identity, and no statement scope — the fixed status/code/message
+// are all that persist.
+func (s *QueryExecutionService) terminalPGClaimedSavedRead(ctx context.Context, target model.QueryTarget, identity model.QueryExecutionIdentity, digest string, status model.QueryExecutionStatus, code, msg string, retErr error, start time.Time) (PGClaimedOutcome, error) {
+	rec := s.buildPGClaimEvidenceRecord(target, identity, pgClaimedEntrySaved,
+		"", "", digest, status, code, msg, start)
+	if _, perr := s.persistEvidencePair(ctx, rec, executionEvidenceQuery); perr != nil {
+		return PGClaimedOutcome{}, errPersistAttempt
+	}
+	return PGClaimedOutcome{}, retErr
 }
 
 // pgClaimedSavedDigestValues converts the validated typed values into

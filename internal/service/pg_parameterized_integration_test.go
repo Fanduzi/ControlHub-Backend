@@ -7,8 +7,10 @@
 // output: TestPGExecute_Parameterized* — typed value binding through the
 // full governed chain (text fidelity incl. t/f and int64 bounds, empty vs
 // NULL, occurrence-order numbering, static plan, CTE/JOIN/Q+D shapes),
-// LIMIT :n refused by the real pagination gate before the wire, and
-// server-side parameter type errors mapped to the fixed safe rejection
+// LIMIT :n refused by the real pagination gate before the wire,
+// server-side parameter type errors mapped to the fixed safe rejection, and
+// R1-1 error-origin proofs (statement/data failures under a bound plan keep
+// the backend taxonomy; only the parameter's own cast rejects)
 // pos: PG-MULTI-ENTRY stage 1 real-PostgreSQL acceptance — parameters bind
 // by $k number on the wire, values never enter statement text
 // note: if this file changes, update header and README.md
@@ -19,7 +21,9 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 
 	"github.com/fan/controlhub/internal/model"
@@ -340,5 +344,332 @@ func TestPGExecute_ParameterizedNativeParamUnbound(t *testing.T) {
 	if ev != nil && ev.UserSQLSent {
 		t.Fatal("evidence claims the statement was sent")
 	}
+	waitNoPGBackends(t, lab, "ch-t7s34-exec")
+}
+
+// R1-1 error origins: with a bound plan in flight, a failure that originates
+// in the STATEMENT or the STORED DATA — not in a parameter's own cast — must
+// keep the safe backend taxonomy. The parameter-type rejection is reserved
+// for values the server cannot cast in the $k slot. The native-$n oracle
+// (real ExecParams binding, never interpolation) captures the server SQLSTATE
+// first — code only, never messages/SQL/values — and is not part of the
+// production chain.
+func TestPGExecute_ParameterizedErrorOrigins(t *testing.T) {
+	lab := pgExecFixture(t)
+	ctx := context.Background()
+	compiler := NewTemplateStatementCompiler()
+
+	// Stored data that cannot take the cast the statement imposes — the
+	// 22P02 originates in the row, not in $1.
+	admin := lab.adminConn(t)
+	for _, stmt := range []string{
+		`CREATE TABLE IF NOT EXISTS app.raw_inputs (id bigint PRIMARY KEY, payload text)`,
+		`GRANT SELECT ON app.raw_inputs TO ro_bind`,
+		`DELETE FROM app.raw_inputs`,
+		`INSERT INTO app.raw_inputs VALUES (1, 'stored-invalid-int-R1')`,
+	} {
+		if _, err := admin.Exec(ctx, stmt); err != nil {
+			t.Fatalf("raw_inputs fixture: %v", err)
+		}
+	}
+	_ = admin.Close(ctx)
+
+	// oracleSQLSTATE runs the $1-equivalent natively and returns only the
+	// server SQLSTATE — the wire truth the governed chain must preserve.
+	oracleSQLSTATE := func(t *testing.T, nativeSQL string, values [][]byte) string {
+		t.Helper()
+		conn, err := pgx.ConnectConfig(ctx, pgExecLabConfig(t, lab))
+		if err != nil {
+			t.Fatalf("oracle connect: %v", err)
+		}
+		defer conn.Close(ctx)
+		res := conn.PgConn().ExecParams(ctx, nativeSQL, values, nil, nil, nil).Read()
+		var pgErr *pgconn.PgError
+		if res == nil || !errors.As(res.Err, &pgErr) {
+			t.Fatalf("oracle expected a PgError: %+v", res)
+		}
+		return pgErr.Code
+	}
+
+	// wantBackend asserts the safe backend taxonomy: a real server failure,
+	// never the controlled parameter rejection, never a leaked PgError.
+	wantBackend := func(t *testing.T, label string, err error, ev *PGAttemptEvidence) {
+		t.Helper()
+		var re *pgsql.RejectError
+		if errors.As(err, &re) {
+			t.Fatalf("%s: err = %v — a statement/data failure was misclassified as the parameter rejection", label, err)
+		}
+		if !errors.Is(err, ErrQueryBackendFailure) {
+			t.Fatalf("%s: err = %v, want ErrQueryBackendFailure", label, err)
+		}
+		var pgErr *pgconn.PgError
+		if errors.As(err, &pgErr) {
+			t.Fatalf("%s: raw server error surfaced: %v", label, err)
+		}
+		if ev != nil && ev.Status == model.QueryExecutionSuccess {
+			t.Fatalf("%s: failed attempt reported success: %+v", label, ev)
+		}
+	}
+
+	tagDefs := []TemplateParameterDefinition{{Name: "tag", Type: TemplateParameterString}}
+	okVal := map[string]any{"tag": "ok"}
+
+	// A — statement arithmetic overflow (server 22003) with a bound plan:
+	// the failure is in the expression, not in the parameter slot.
+	t.Run("A statement overflow is backend failure", func(t *testing.T) {
+		if code := oracleSQLSTATE(t,
+			`SELECT $1::text AS tag, (9223372036854775807::bigint + 1) AS n`,
+			[][]byte{[]byte("ok")}); code != "22003" {
+			t.Fatalf("oracle SQLSTATE = %s, want 22003", code)
+		}
+		plan, err := compiler.compilePGPlan(TemplateStatementInput{
+			Statement:   `SELECT :tag::text AS tag, (9223372036854775807::bigint + 1) AS n`,
+			Definitions: tagDefs,
+			Values:      okVal,
+		})
+		if err != nil {
+			t.Fatalf("compilePGPlan A: %v", err)
+		}
+		before := pgExecTransportCalls.Load()
+		_, ev, gerr := ExecutePGGovernedOutcome(ctx, pgParamInput(t, lab, plan, pageOpts(1, 25)))
+		wantBackend(t, "A", gerr, ev)
+		if got := pgExecTransportCalls.Load() - before; got != 1 {
+			t.Fatalf("A result ExecParams delta = %d, want exactly 1 — the failure happened on the result path", got)
+		}
+		if ev == nil || ev.Stage != PGStageExecute || !ev.UserSQLSent {
+			t.Fatalf("A evidence = %+v, want execute stage with the statement transmitted", ev)
+		}
+	})
+
+	// B — stored-data cast failure (server 22P02) with a bound plan: the
+	// invalid text lives in the table, the parameter itself is valid.
+	t.Run("B stored-data cast is backend failure", func(t *testing.T) {
+		if code := oracleSQLSTATE(t,
+			`SELECT $1::text AS tag, r.payload::int FROM app.raw_inputs AS r`,
+			[][]byte{[]byte("ok")}); code != "22P02" {
+			t.Fatalf("oracle SQLSTATE = %s, want 22P02", code)
+		}
+		plan, err := compiler.compilePGPlan(TemplateStatementInput{
+			Statement:   `SELECT :tag::text AS tag, r.payload::int FROM app.raw_inputs AS r`,
+			Definitions: tagDefs,
+			Values:      okVal,
+		})
+		if err != nil {
+			t.Fatalf("compilePGPlan B: %v", err)
+		}
+		before := pgExecTransportCalls.Load()
+		_, ev, gerr := ExecutePGGovernedOutcome(ctx, pgParamInput(t, lab, plan, pageOpts(1, 25)))
+		wantBackend(t, "B", gerr, ev)
+		if got := pgExecTransportCalls.Load() - before; got != 1 {
+			t.Fatalf("B result ExecParams delta = %d, want exactly 1 — the failure happened on the result path", got)
+		}
+		if ev == nil || ev.Stage != PGStageExecute || !ev.UserSQLSent {
+			t.Fatalf("B evidence = %+v, want execute stage with the statement transmitted", ev)
+		}
+	})
+
+	// C — a value the parameter's own cast cannot take stays the controlled
+	// G8 rejection: same SQLSTATE family as B but raised by the parameter.
+	t.Run("C parameter cast stays controlled rejection", func(t *testing.T) {
+		// Native protocol control (oracle — real driver calls, never the
+		// production chain): the unnamed describe of the original statement
+		// succeeds and infers int4 (OID 23); the fixed parameter-only probe
+		// then fails the caller's value with 22P02. The conversion is
+		// proven to originate in the value slot, not guessed from a code.
+		conn, err := pgx.ConnectConfig(ctx, pgExecLabConfig(t, lab))
+		if err != nil {
+			t.Fatalf("C oracle connect: %v", err)
+		}
+		defer conn.Close(ctx)
+		sd, err := conn.PgConn().Prepare(ctx, "", `SELECT $1::int`, nil)
+		if err != nil {
+			t.Fatalf("C oracle describe: %v", err)
+		}
+		if len(sd.ParamOIDs) != 1 || sd.ParamOIDs[0] != 23 {
+			t.Fatalf("C describe ParamOIDs = %v, want [23]", sd.ParamOIDs)
+		}
+		pres := conn.PgConn().ExecParams(ctx,
+			`SELECT NULL WHERE FALSE AND ($1 IS NULL)`,
+			[][]byte{[]byte("invalid-param-marker")}, sd.ParamOIDs, nil, []int16{0}).Read()
+		var ppErr *pgconn.PgError
+		if pres == nil || !errors.As(pres.Err, &ppErr) || ppErr.Code != "22P02" {
+			t.Fatalf("C probe oracle result = %+v, want 22P02", pres)
+		}
+
+		plan, err := compiler.compilePGPlan(TemplateStatementInput{
+			Statement:   `SELECT :x::int`,
+			Definitions: []TemplateParameterDefinition{{Name: "x", Type: TemplateParameterString}},
+			Values:      map[string]any{"x": "invalid-param-marker"},
+		})
+		if err != nil {
+			t.Fatalf("compilePGPlan C: %v", err)
+		}
+		before := pgExecTransportCalls.Load()
+		_, ev, gerr := ExecutePGGovernedOutcome(ctx, pgParamInput(t, lab, plan, pageOpts(1, 25)))
+		var re *pgsql.RejectError
+		if !errors.As(gerr, &re) || re.Code != "query_not_allowed" ||
+			re.Message != "pgsql: parameter type is not supported by statement context" {
+			t.Fatalf("C: err = %v, want fixed parameter-type rejection", gerr)
+		}
+		if got := pgExecTransportCalls.Load() - before; got != 0 {
+			t.Fatalf("C result ExecParams delta = %d, want 0 — the rejection precedes the result dispatch", got)
+		}
+		// The original statement's Parse/Describe DID cross the wire —
+		// sent is a transmission fact, not an execution claim; the result
+		// never ran, so no remote state exists for it.
+		if ev == nil || ev.Stage != PGStageParameters || !ev.UserSQLSent ||
+			ev.RemoteState != model.QueryExecutionRemoteNone {
+			t.Fatalf("C evidence = %+v, want parameters stage + SQL transmitted + no result remote state", ev)
+		}
+	})
+
+	// A caller cancel landing after the provenance describe but before the
+	// result dispatch: the driver's pre-send mark on the result path must
+	// not erase the transmission fact — UserSQLSent stays true while no
+	// remote completion is fabricated for a result that never ran.
+	t.Run("cancel after describe keeps the send fact", func(t *testing.T) {
+		plan, err := compiler.compilePGPlan(TemplateStatementInput{
+			Statement:   `SELECT :tag::text AS tag`,
+			Definitions: tagDefs,
+			Values:      okVal,
+		})
+		if err != nil {
+			t.Fatalf("compilePGPlan cancel: %v", err)
+		}
+		rctx, rcancel := context.WithCancel(ctx)
+		defer rcancel()
+		pgExecPreSendHook = func(context.Context) { rcancel() }
+		defer func() { pgExecPreSendHook = nil }()
+		_, ev, gerr := ExecutePGGovernedOutcome(rctx, pgParamInput(t, lab, plan, pageOpts(1, 25)))
+		if !errors.Is(gerr, context.Canceled) {
+			t.Fatalf("err = %v, want context.Canceled", gerr)
+		}
+		if ev == nil || !ev.UserSQLSent {
+			t.Fatalf("evidence = %+v — the describe already transmitted; the result's pre-send mark must not erase it", ev)
+		}
+		if ev.RemoteState == model.QueryExecutionRemoteCompleted {
+			t.Fatalf("remote_state = %v — the result never executed", ev.RemoteState)
+		}
+	})
+
+	// Fallback boundary: a value that BINDS fine but fails a downstream SQL
+	// cast, and a literal cast the statement itself cannot plan — neither
+	// has a proven parameter source, so both keep the safe backend verdict.
+	t.Run("D downstream casts stay backend failure", func(t *testing.T) {
+		// :x::text binds as text (OID 25) — the probe accepts the value —
+		// then the statement's own ::int cast fails the bound text at
+		// execute. A parameter-adjacent expression with an unprovable
+		// source is an ordinary backend failure, never the rejection.
+		plan, err := compiler.compilePGPlan(TemplateStatementInput{
+			Statement:   `SELECT :x::text::int`,
+			Definitions: []TemplateParameterDefinition{{Name: "x", Type: TemplateParameterString}},
+			Values:      map[string]any{"x": "invalid-param-marker"},
+		})
+		if err != nil {
+			t.Fatalf("compilePGPlan D: %v", err)
+		}
+		before := pgExecTransportCalls.Load()
+		_, ev, gerr := ExecutePGGovernedOutcome(ctx, pgParamInput(t, lab, plan, pageOpts(1, 25)))
+		wantBackend(t, "D downstream cast", gerr, ev)
+		if got := pgExecTransportCalls.Load() - before; got != 1 {
+			t.Fatalf("D result ExecParams delta = %d, want 1 — the cast failed on the result path", got)
+		}
+		if ev == nil || ev.Stage != PGStageExecute {
+			t.Fatalf("D evidence = %+v, want execute stage", ev)
+		}
+
+		// A literal cast the statement itself cannot take is unrelated to
+		// the bound parameter — it may fail inside the provenance describe
+		// or at the result dispatch; the actual stage decides the honest
+		// counter claim rather than asserting a phase that did not happen.
+		literal, err := compiler.compilePGPlan(TemplateStatementInput{
+			Statement:   `SELECT :tag::text, 'bad-literal-r1'::int`,
+			Definitions: tagDefs,
+			Values:      okVal,
+		})
+		if err != nil {
+			t.Fatalf("compilePGPlan literal: %v", err)
+		}
+		before = pgExecTransportCalls.Load()
+		_, ev, gerr = ExecutePGGovernedOutcome(ctx, pgParamInput(t, lab, literal, pageOpts(1, 25)))
+		wantBackend(t, "literal cast", gerr, ev)
+		if ev == nil {
+			t.Fatal("literal cast: no evidence")
+		}
+		switch ev.Stage {
+		case PGStageParameters:
+			if got := pgExecTransportCalls.Load() - before; got != 0 {
+				t.Fatalf("literal cast failed pre-result but result delta = %d, want 0", got)
+			}
+		case PGStageExecute:
+			if got := pgExecTransportCalls.Load() - before; got != 1 {
+				t.Fatalf("literal cast failed on result path but delta = %d, want 1", got)
+			}
+		default:
+			t.Fatalf("literal cast stage = %v, want parameters or execute", ev.Stage)
+		}
+	})
+
+	// Controls — the taxonomy change must not move any non-parameter verdict.
+	t.Run("controls keep their categories", func(t *testing.T) {
+		// Static error, zero-value plan: backend.
+		static, err := compiler.compilePGPlan(TemplateStatementInput{Statement: `SELECT 1/0`})
+		if err != nil {
+			t.Fatalf("static compilePGPlan: %v", err)
+		}
+		_, ev, gerr := ExecutePGGovernedOutcome(ctx, pgParamInput(t, lab, static, pageOpts(1, 25)))
+		wantBackend(t, "static 22012", gerr, ev)
+
+		// Bound plan, execution-time arithmetic: backend.
+		bound, err := compiler.compilePGPlan(TemplateStatementInput{
+			Statement:   `SELECT :n::int / 0`,
+			Definitions: []TemplateParameterDefinition{{Name: "n", Type: TemplateParameterInteger}},
+			Values:      map[string]any{"n": int64(7)},
+		})
+		if err != nil {
+			t.Fatalf("bound compilePGPlan: %v", err)
+		}
+		_, ev, gerr = ExecutePGGovernedOutcome(ctx, pgParamInput(t, lab, bound, pageOpts(1, 25)))
+		wantBackend(t, "bound 22012", gerr, ev)
+
+		// Bound plan, missing relation: the bind-stage controlled rejection,
+		// not the parameter rejection.
+		relPlan, err := compiler.compilePGPlan(TemplateStatementInput{
+			Statement:   `SELECT :tag::text AS tag, o.id FROM app.no_such_rel_r1 AS o`,
+			Definitions: tagDefs,
+			Values:      okVal,
+		})
+		if err != nil {
+			t.Fatalf("rel compilePGPlan: %v", err)
+		}
+		_, _, gerr = ExecutePGGovernedOutcome(ctx, pgParamInput(t, lab, relPlan, pageOpts(1, 25)))
+		if code := rejectCodeOf(t, gerr); code != "query_object_not_found" {
+			t.Fatalf("missing relation code = %s, want query_object_not_found (err %v)", code, gerr)
+		}
+
+		// Bound plan, attempt deadline: timeout taxonomy.
+		timeoutPlan, err := compiler.compilePGPlan(TemplateStatementInput{
+			Statement:   `SELECT :tag::text AS tag, count(*) FROM generate_series(1, 2000000000)`,
+			Definitions: tagDefs,
+			Values:      okVal,
+		})
+		if err != nil {
+			t.Fatalf("timeout compilePGPlan: %v", err)
+		}
+		timeoutIn := pgParamInput(t, lab, timeoutPlan, pageOpts(1, 25))
+		timeoutIn.Timeout = 1500 * time.Millisecond
+		_, _, gerr = ExecutePGGovernedOutcome(ctx, timeoutIn)
+		if !errors.Is(gerr, ErrQueryTimeout) {
+			t.Fatalf("timeout err = %v, want ErrQueryTimeout", gerr)
+		}
+
+		// Bound plan, pre-canceled request: canceled taxonomy.
+		cctx, ccancel := context.WithCancel(ctx)
+		ccancel()
+		_, _, gerr = ExecutePGGovernedOutcome(cctx, pgParamInput(t, lab, bound, pageOpts(1, 25)))
+		if !errors.Is(gerr, context.Canceled) {
+			t.Fatalf("canceled err = %v, want context.Canceled", gerr)
+		}
+	})
 	waitNoPGBackends(t, lab, "ch-t7s34-exec")
 }

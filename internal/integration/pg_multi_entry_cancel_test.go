@@ -46,12 +46,17 @@ func pollActiveResultStatement(t *testing.T, admin *pgx.Conn, marker string, min
 		var n int64
 		// The admin connection itself carries application_name ch-t6 — its
 		// own poll query contains the marker literal, so the poll must
-		// exclude the caller's backend or it matches itself.
+		// exclude the caller's backend or it matches itself. The R1-1
+		// provenance Parse/Describe carries the same rewritten text —
+		// including __chub_w — under the fixed probe prefix, so it must be
+		// excluded or the barrier could fire on a Describe instead of the
+		// actual result Execute.
 		if err := admin.QueryRow(pollCtx,
 			`SELECT count(*) FROM pg_catalog.pg_stat_activity
 			  WHERE application_name = 'ch-t6' AND state = 'active'
 			    AND pid <> pg_backend_pid()
 			    AND pg_catalog.strpos(query, $1) > 0
+			    AND pg_catalog.strpos(query, '__chub_parameter_probe__') = 0
 			    AND clock_timestamp() - query_start >= make_interval(secs => $2)`,
 			marker, minAgeSecs).Scan(&n); err != nil && !errors.Is(err, context.DeadlineExceeded) {
 			t.Fatalf("activity poll: %v", err)

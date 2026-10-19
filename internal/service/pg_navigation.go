@@ -3,8 +3,9 @@
 // input: resolved BoundTargetAccess (validated *pgx.ConnConfig + database),
 // the validated source identity and ordered locator strings
 // output: pgNavigationBinding, pgNavigationColumnPair, preparePGNavigation,
-// newPGNavigationPlan, snapshotPGNavigationBinding, errPGNavNoSource —
-// the immutable FK mapping the attempt's locked recheck must reproduce
+// newPGNavigationPlan, snapshotPGNavigationBinding, errPGNavNoSource,
+// navPrepFail — the immutable FK mapping the attempt's locked recheck must
+// reproduce, plus bare-sentinel canonicalization of every preparation fault
 // pos: PG-MULTI-ENTRY stage 3 — preparation reads the FK mapping once in its
 // own bounded READ ONLY metadata transaction before claim (fixed probe SQL
 // only, no Guard and no user result SQL); the claim attempt later re-runs the
@@ -269,19 +270,29 @@ func preparePGNavigation(ctx context.Context, cfg *pgx.ConnConfig, database stri
 }
 
 // navPrepFail classifies preparation failures: cancellation and deadlines
-// keep their real category, everything else is the fixed internal machinery
-// sentinel — raw driver text never escapes.
+// keep their real category, the safe fixed sentinels (pool factory, no-source,
+// internal machinery) canonicalize to their bare form — a wrapped or joined
+// error can carry secrets, so the returned value is always the sentinel
+// itself, never the caller's error — and everything else is the fixed
+// internal machinery sentinel.
 func navPrepFail(err error) error {
 	switch {
 	case err == nil:
 		return nil
 	case errors.Is(err, context.Canceled):
 		return context.Canceled
-	case errors.Is(err, context.DeadlineExceeded), isPGQueryCanceled(err):
+	case errors.Is(err, context.DeadlineExceeded), errors.Is(err, ErrQueryTimeout), isPGQueryCanceled(err):
 		return ErrQueryTimeout
-	case errors.Is(err, ErrQueryTimeout), errors.Is(err, errPGNavMetaInternal),
-		errors.Is(err, errPGNavNoSource):
-		return err
+	case errors.Is(err, ErrPGVersionUnsupported):
+		return ErrPGVersionUnsupported
+	case errors.Is(err, ErrPGConnectFailed):
+		return ErrPGConnectFailed
+	case errors.Is(err, ErrPGVersionReadFailed):
+		return ErrPGVersionReadFailed
+	case errors.Is(err, errPGNavNoSource):
+		return errPGNavNoSource
+	case errors.Is(err, errPGNavMetaInternal):
+		return errPGNavMetaInternal
 	default:
 		return errPGNavMetaInternal
 	}

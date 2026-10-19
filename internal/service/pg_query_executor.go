@@ -9,14 +9,13 @@
 // plus per-attempt PGAttemptEvidence (stage/status/backend identity/
 // remote_state/sql-sent facts) or the frozen classified error
 // pos: T7-S3/S4 internal execution closure (frozen G4 steps 1–10, G10
-// 5b/5c) — guard + plan snapshot → dense $k ParamRef contract (unbound path
-// admits none) → OpenPostgresPool → BEGIN READ ONLY + G4 session →
-// in-transaction virtualxid + backend identity → PGBind →
-// RewriteFromGuardPaginated → pre-wire expected-record validation →
-// ExecParams fresh parse + owned text values → bounded materialization →
-// per-position FD verification → lock audit → ROLLBACK + bounded remote
-// observation → teardown → witness strip → deliver. T10-B-R1: backend pid
-// captured at Acquire; remote fate folded from the read+close pair
+// 5b/5c) — guard + plan snapshot → dense $k ParamRef contract → pool →
+// BEGIN READ ONLY + G4 → virtualxid/identity → PGBind → rewrite →
+// pre-wire expected-record validation → T9-B disclosure preflight → R1-1
+// parameter-provenance preflight (Parse/Describe + fixed probe) → result
+// ExecParams fresh parse → bounded materialize → FD verify → lock audit →
+// ROLLBACK + remote observation → teardown → deliver. UserSQLSent ORs the
+// provenance describe's own transmission fact into the result's send bit
 // note: if this file changes, update this header and module README.md.
 package service
 
@@ -164,6 +163,12 @@ type pgExecAttempt struct {
 	stage    PGAttemptStage
 	stmtFate pgStmtFate
 	evidence PGAttemptEvidence
+
+	// parameterDescribeSent records that the provenance Parse/Describe of
+	// the original statement was dispatched to the driver — a
+	// transmission fact separate from the result statement's remote fate,
+	// cleared only when the driver positively proves pre-send.
+	parameterDescribeSent bool
 }
 
 // pgExecAfterBindHook is a test-only seam mirroring the gate's
@@ -225,9 +230,11 @@ var pgExecDisableDerived bool
 // stalled mid-flight while the production path keeps the original SQL.
 var pgExecObserverSQL func(orig string) string
 
-// pgExecTransportCalls counts ExecParams invocations — the seam sits
-// immediately before the statement is sent, so a test can prove malformed
-// expected records stopped the wire rather than merely erroring later.
+// pgExecTransportCalls counts RESULT ExecParams invocations — the seam sits
+// immediately before the user result statement is sent, so a test can prove
+// malformed expected records stopped the wire rather than merely erroring
+// later. The R1-1 parameter-provenance Describe/probe dispatches are not
+// result executions and never increment it.
 var pgExecTransportCalls atomic.Int64
 
 // ExecutePGGoverned runs one complete governed attempt and returns the
@@ -404,6 +411,20 @@ func runPGGovernedAttempt(ctx context.Context, in PGExecuteInput, disc *pgDisclo
 	if disc != nil {
 		a.stage = PGStagePreflight
 		if err := a.disclosurePreflight(disc, rw, bind); err != nil {
+			return nil, nil, a.fail(err)
+		}
+		if err := attemptCtx.Err(); err != nil {
+			return nil, nil, a.fail(err)
+		}
+	}
+
+	// R1-1: a bound plan's values are proven on their own parameter-only
+	// protocol surface before the result statement runs — a conversion
+	// failure there has the parameter as its only possible source, so the
+	// controlled rejection is attribution, never SQLSTATE coincidence.
+	if len(a.paramValues) > 0 {
+		a.stage = PGStageParameters
+		if err := a.validatePGParameterInputs(rw); err != nil {
 			return nil, nil, a.fail(err)
 		}
 		if err := attemptCtx.Err(); err != nil {
@@ -661,36 +682,12 @@ func classifyPGExecTransportError(err error) error {
 	return err
 }
 
-// pgParamTypeRejectCodes are the parameter-context SQLSTATEs that mean a
-// bound text value cannot take the type the statement context imposes: the
-// data-conversion family (invalid text representation 22P02, numeric out of
-// range 22003, bad datetime/interval/escape/character forms 22007/22008/
-// 22018/22021), a parameter type the server could not infer (42P18), the
-// context-imposed type the value cannot satisfy (42804), and an ambiguous
-// parameter (42P08). They are consulted only when a trusted plan carries
-// bound values — a zero-value plan maps nothing, and unrelated server
-// failures (division by zero, constraint violations) keep the ordinary
-// backend taxonomy.
-var pgParamTypeRejectCodes = map[string]struct{}{
-	"22P02": {}, "22003": {}, "22007": {}, "22008": {}, "22018": {}, "22021": {},
-	"42P18": {}, "42804": {}, "42P08": {},
-}
-
-// classifyTransportError is classifyPGExecTransportError plus the
-// bound-parameter verdict: a parameter-context failure against a statement
-// that actually carries values becomes one fixed safe rejection — the raw
-// PgError is never unwrapped or echoed. Timeout and cancel classification
-// keep their existing priority downstream in fail().
+// classifyTransportError is classifyPGExecTransportError — R1-1 removed the
+// plan-based SQLSTATE mapping entirely: a result-path conversion failure
+// keeps the ordinary taxonomy because the parameter provenance seam has
+// already isolated the caller's values on their own protocol surface.
+// Timeout and cancel classification keep their existing priority in fail().
 func (a *pgExecAttempt) classifyTransportError(err error) error {
-	if a.parameters != nil && len(a.parameters.values) > 0 {
-		var pgErr *pgconn.PgError
-		if errors.As(err, &pgErr) {
-			if _, typed := pgParamTypeRejectCodes[pgErr.Code]; typed {
-				return &pgsql.RejectError{Code: "query_not_allowed",
-					Message: "pgsql: parameter type is not supported by statement context"}
-			}
-		}
-	}
 	return classifyPGExecTransportError(err)
 }
 
