@@ -15,6 +15,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/go-chi/chi/v5"
 
@@ -38,6 +39,7 @@ type stubQueryExec struct {
 	gotMaxRows     int
 	gotPagination  *model.QueryExecutePaginationRequest
 	gotClientKey   string
+	gotStatement   string
 	gotNavRequest  model.RelatedRecordNavigationRequest
 	gotQuery       model.QueryExecutionListQuery
 	executeCalled  bool
@@ -72,6 +74,7 @@ func (s *stubQueryExec) Execute(_ context.Context, identity model.QueryExecution
 	s.gotMaxRows = req.MaxRows
 	s.gotPagination = req.Pagination
 	s.gotClientKey = req.ClientExecutionID
+	s.gotStatement = req.Statement
 	resp := s.executeResp
 	if req.Pagination != nil {
 		resp.Pagination = &model.QueryExecutePaginationResponse{
@@ -1599,6 +1602,109 @@ func TestQueryExecution_Execute_StrictJSONBody(t *testing.T) {
 	}
 }
 
+func TestQueryExecution_Execute_BodyLimitAcceptsLegalUnicodeEscapes(t *testing.T) {
+	// WHY: MaxStatementLength is a rune bound, but the body limit is measured
+	// on wire bytes. A supplementary-plane rune is legal both as raw UTF-8
+	// (4 bytes) and as a \uXXXX\uXXXX surrogate escape pair (12 ASCII bytes);
+	// the two encodings decode to the identical statement, so the bounded
+	// body limit must cover the worst legal encoding — 12 bytes per rune —
+	// or a conforming client is rejected purely for how it spelled the JSON.
+	emoji := strings.Repeat("😀", 40000)
+	statement := "select '" + emoji + "'" // 40009 runes
+	if got := utf8.RuneCountInString(statement); got != 40009 {
+		t.Fatalf("fixture statement runes = %d, want 40009", got)
+	}
+	rawBody := `{"statement":"` + statement + `"}`
+	// U+1F600 encodes as the UTF-16 surrogate pair D83D DE00 — 12 ASCII bytes
+	// of JSON escape per rune.
+	escapedBody := `{"statement":"select '` + strings.Repeat(`\ud83d\ude00`, 40000) + `'"}`
+	if len(escapedBody) <= 6*model.MaxStatementLength+8192 {
+		t.Fatalf("escaped fixture %d bytes must exceed the old 6x bound to prove the defect", len(escapedBody))
+	}
+	for _, tc := range []struct {
+		name string
+		body string
+	}{
+		{"raw utf-8", rawBody},
+		{"legal surrogate escapes", escapedBody},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			stub := &stubQueryExec{executeResp: model.QueryExecuteResponse{Status: model.QueryExecutionSuccess}}
+			router := newQueryExecRouter(stub)
+			token := mintToken(t, "qe-test-secret", 42, "admin", qeTestNow)
+
+			rec := httptest.NewRecorder()
+			router.ServeHTTP(rec, qeRequest(http.MethodPost, "/query-targets/22/execute", tc.body, token))
+
+			if rec.Code != http.StatusOK {
+				t.Fatalf("status = %d, want 200; body=%s", rec.Code, rec.Body.String())
+			}
+			if !stub.executeCalled {
+				t.Fatal("Execute must run for a legally encoded statement")
+			}
+			if stub.gotStatement != statement {
+				t.Fatalf("decoded statement differs between encodings (runes=%d)", utf8.RuneCountInString(stub.gotStatement))
+			}
+		})
+	}
+
+	// The 65536-rune legal boundary fully escaped: 786432 bytes of escapes
+	// must reach the service; 65537 runes is rejected by the model Validate
+	// (runes, not bytes) — it passes the body limit and fails the shape.
+	for _, tc := range []struct {
+		name  string
+		runes int
+		want  int
+	}{
+		{"65536 runes fully escaped", 65536, http.StatusOK},
+		{"65537 runes fully escaped", 65537, http.StatusBadRequest},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			body := `{"statement":"` + strings.Repeat(`\ud83d\ude00`, tc.runes) + `"}`
+			stub := &stubQueryExec{executeResp: model.QueryExecuteResponse{Status: model.QueryExecutionSuccess}}
+			router := newQueryExecRouter(stub)
+			token := mintToken(t, "qe-test-secret", 42, "admin", qeTestNow)
+
+			rec := httptest.NewRecorder()
+			router.ServeHTTP(rec, qeRequest(http.MethodPost, "/query-targets/22/execute", body, token))
+
+			if rec.Code != tc.want {
+				t.Fatalf("status = %d, want %d; body=%s", rec.Code, tc.want, rec.Body.String())
+			}
+			if stub.executeCalled != (tc.want == http.StatusOK) {
+				t.Fatalf("executeCalled = %v, want %v", stub.executeCalled, tc.want == http.StatusOK)
+			}
+		})
+	}
+
+	// A body truly over the new bound — including one padded past it with a
+	// trailing second JSON value the reader must not silently truncate — is
+	// still a malformed oversized payload.
+	for _, tc := range []struct {
+		name string
+		body string
+	}{
+		{"over new limit", `{"statement":"select 1"}` + strings.Repeat(" ", mysqlExecuteMaxBodyBytes-len(`{"statement":"select 1"}`)+1)},
+		{"over new limit with trailing JSON", `{"statement":"select 1"}` + strings.Repeat(" ", mysqlExecuteMaxBodyBytes-len(`{"statement":"select 1"}`)-len(` {"x":1}`)) + ` {"x":1}`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			stub := &stubQueryExec{}
+			router := newQueryExecRouter(stub)
+			token := mintToken(t, "qe-test-secret", 42, "admin", qeTestNow)
+
+			rec := httptest.NewRecorder()
+			router.ServeHTTP(rec, qeRequest(http.MethodPost, "/query-targets/22/execute", tc.body, token))
+
+			if rec.Code != http.StatusBadRequest {
+				t.Fatalf("status = %d, want 400; body=%s", rec.Code, rec.Body.String())
+			}
+			if stub.executeCalled {
+				t.Fatal("Execute must not run on an oversized payload")
+			}
+		})
+	}
+}
+
 func TestQueryExecution_Execute_ClientExecutionIDReachesService(t *testing.T) {
 	// WHY: clientExecutionId arms the claim protocol — the route must pass
 	// the key byte-verbatim to the service, which owns admission. An empty
@@ -1740,4 +1846,154 @@ func TestSavedAndNavigationRoutes_StrictJSONBody(t *testing.T) {
 			t.Fatalf("static saved statement body must reach the service: %d", rec.Code)
 		}
 	})
+}
+
+func TestExecutionRoutes_RejectUnpairedSurrogateEscapes(t *testing.T) {
+	// WHY: utf8.Valid sees only raw bytes; encoding/json then lossily maps an
+	// unpaired \uXXXX escape to U+FFFD before Validate can inspect it — two
+	// different malformed keys would both arrive as the same legal string.
+	// The shared pre-decode boundary must reject a lone high surrogate, a
+	// lone low surrogate, and a wrongly paired sequence inside any JSON
+	// string — before any target lookup, claim, or evidence write.
+	execute := "/query-targets/22/execute"
+	saved := "/query-targets/22/saved-statements/7/execute"
+	nav := "/query-targets/9001/related-records"
+	navValid := `{"source":{"database":"orders_db","object":"order_items","kind":"table","foreignKey":"fk"},"localValues":["42"]}`
+	navPrefix := navValid[:len(navValid)-1] + ","
+
+	rejects := []struct {
+		name string
+		url  string
+		body string
+	}{
+		{"execute lone high surrogate in key", execute, `{"statement":"select 1","clientExecutionId":"k\ud800"}`},
+		{"execute lone low surrogate in key", execute, `{"statement":"select 1","clientExecutionId":"k\udc00"}`},
+		{"execute two high surrogates", execute, `{"statement":"select 1","clientExecutionId":"k\ud800\ud801"}`},
+		{"execute high then non-surrogate", execute, `{"statement":"select 1","clientExecutionId":"k\ud800a"}`},
+		{"execute high then non-escape", execute, `{"statement":"select 1","clientExecutionId":"k\ud800x"}`},
+		{"execute high at string end", execute, `{"statement":"select 1","clientExecutionId":"k\ud800"}`},
+		{"execute lone surrogate in statement", execute, `{"statement":"select \ud800"}`},
+		{"execute lone surrogate in field name", execute, `{"statement":"select 1","clientExec\ud800utionId":"k"}`},
+		{"execute surrogate in capability member", execute, `{"statement":"select 1","capabilities":["cell\ud800"]}`},
+		{"saved lone surrogate in key", saved, `{"clientExecutionId":"k\ud800"}`},
+		{"saved lone low surrogate in key", saved, `{"clientExecutionId":"k\udc00"}`},
+		{"saved lone surrogate in values name", saved, `{"values":{"a\ud800":"1"}}`},
+		{"saved lone surrogate in values string", saved, `{"values":{"a":"x\udc00"}}`},
+		{"nav lone surrogate in key", nav, navPrefix + `"clientExecutionId":"k\ud800"}`},
+		{"nav lone surrogate in localValues", nav, `{"source":{"database":"orders_db","object":"o","kind":"table","foreignKey":"f"},"localValues":["x\ud800"]}`},
+		{"nav lone surrogate in source database", nav, `{"source":{"database":"orders\udc00_db","object":"o","kind":"table","foreignKey":"f"},"localValues":["1"]}`},
+	}
+	for _, tc := range rejects {
+		t.Run("reject/"+tc.name, func(t *testing.T) {
+			stub := &stubQueryExec{}
+			var router http.Handler
+			switch tc.url {
+			case execute:
+				router = newQueryExecRouter(stub)
+			case saved:
+				router = newTemplateExecRouter(stub)
+			default:
+				router = newNavRouter(stub)
+			}
+			token := mintToken(t, "qe-test-secret", 42, "admin", qeTestNow)
+			if tc.url == saved {
+				token = templateExecToken(t)
+			} else if tc.url == nav {
+				token = navBearer(t)
+			}
+
+			rec := httptest.NewRecorder()
+			router.ServeHTTP(rec, qeRequest(http.MethodPost, tc.url, tc.body, token))
+
+			if rec.Code != http.StatusBadRequest {
+				t.Fatalf("status = %d, want 400; body=%s", rec.Code, rec.Body.String())
+			}
+			if !strings.Contains(rec.Body.String(), "validation_failed") {
+				t.Fatalf("body = %s, want fixed validation_failed without echoed content", rec.Body.String())
+			}
+			if strings.Contains(rec.Body.String(), "ud800") || strings.Contains(rec.Body.String(), "udc00") || strings.Contains(rec.Body.String(), "ud801") {
+				t.Fatalf("response must not echo body bytes: %s", rec.Body.String())
+			}
+			if stub.executeCalled || stub.templateCalled || stub.navCalled {
+				t.Fatal("service must not run on a payload with unpaired surrogate escapes")
+			}
+		})
+	}
+
+	// Two distinct malformed keys must not collapse into one accepted value.
+	t.Run("distinct malformed keys stay distinct rejections", func(t *testing.T) {
+		for _, key := range []string{`k\ud800`, `k\ud801`} {
+			stub := &stubQueryExec{}
+			router := newQueryExecRouter(stub)
+			token := mintToken(t, "qe-test-secret", 42, "admin", qeTestNow)
+			rec := httptest.NewRecorder()
+			router.ServeHTTP(rec, qeRequest(http.MethodPost, execute,
+				`{"statement":"select 1","clientExecutionId":"`+key+`"}`, token))
+			if rec.Code != http.StatusBadRequest || stub.executeCalled {
+				t.Fatalf("malformed key %q must be rejected, not lossily decoded", key)
+			}
+		}
+	})
+
+	// Legal controls: paired surrogates, raw UTF-8, an explicit U+FFFD code
+	// point, the literal backslash-u text, CJK, quotes, backslashes, and an
+	// exact-case key with a trailing space all keep their existing semantics.
+	accepts := []struct {
+		name     string
+		url      string
+		body     string
+		wantKey  string // expected decoded clientExecutionId ("" when absent)
+		checkNav bool
+	}{
+		{"paired surrogate escapes", execute, `{"statement":"select 1","clientExecutionId":"k\ud83d\ude00"}`, "k😀", false},
+		{"raw utf-8 emoji", execute, `{"statement":"select 1","clientExecutionId":"k😀"}`, "k😀", false},
+		{"explicit U+FFFD", execute, `{"statement":"select 1","clientExecutionId":"k\ufffd"}`, "k\uFFFD", false},
+		{"literal backslash-u text", execute, `{"statement":"select 1","clientExecutionId":"k\\ud800"}`, `k\ud800`, false},
+		{"cjk statement", execute, `{"statement":"select '中文'","clientExecutionId":"k"}`, "k", false},
+		{"quotes and backslashes", execute, `{"statement":"select \"a\" \\ 'b'","clientExecutionId":"k"}`, "k", false},
+		{"exact key trailing space", execute, `{"statement":"select 1","clientExecutionId":"k "}`, "k ", false},
+		{"saved paired escape key", saved, `{"clientExecutionId":"k\ud83d\ude00"}`, "k😀", false},
+		{"nav paired escape key", nav, navPrefix + `"clientExecutionId":"k\ud83d\ude00"}`, "k😀", true},
+		{"nav utf8 locator", nav, `{"source":{"database":"orders_db","object":"o","kind":"table","foreignKey":"f"},"localValues":["值😀"]}`, "", true},
+		{"nav escaped locator pair", nav, `{"source":{"database":"orders_db","object":"o","kind":"table","foreignKey":"f"},"localValues":["\ud83d\ude00"]}`, "", true},
+	}
+	for _, tc := range accepts {
+		t.Run("accept/"+tc.name, func(t *testing.T) {
+			stub := &stubQueryExec{}
+			var router http.Handler
+			var token string
+			switch tc.url {
+			case execute:
+				router = newQueryExecRouter(stub)
+				token = mintToken(t, "qe-test-secret", 42, "admin", qeTestNow)
+			case saved:
+				router = newTemplateExecRouter(stub)
+				token = templateExecToken(t)
+			default:
+				router = newNavRouter(stub)
+				token = navBearer(t)
+			}
+
+			rec := httptest.NewRecorder()
+			router.ServeHTTP(rec, qeRequest(http.MethodPost, tc.url, tc.body, token))
+
+			if rec.Code != http.StatusOK {
+				t.Fatalf("status = %d, want 200; body=%s", rec.Code, rec.Body.String())
+			}
+			switch tc.url {
+			case execute:
+				if !stub.executeCalled || stub.gotClientKey != tc.wantKey {
+					t.Fatalf("key decoded as %q, want %q", stub.gotClientKey, tc.wantKey)
+				}
+			case saved:
+				if !stub.templateCalled || stub.templateReq.ClientExecutionID != tc.wantKey {
+					t.Fatalf("saved key decoded as %q, want %q", stub.templateReq.ClientExecutionID, tc.wantKey)
+				}
+			default:
+				if !stub.navCalled || stub.gotNavRequest.ClientExecutionID != tc.wantKey {
+					t.Fatalf("nav key decoded as %q, want %q", stub.gotNavRequest.ClientExecutionID, tc.wantKey)
+				}
+			}
+		})
+	}
 }

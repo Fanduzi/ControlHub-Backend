@@ -41,19 +41,26 @@ type queryExecutionStatementAPI interface {
 }
 
 // mysqlExecuteMaxBodyBytes bounds the ordinary execute body: a worst-case
-// escaped MaxStatementLength-rune statement plus the surrounding fields.
-const mysqlExecuteMaxBodyBytes = 6*model.MaxStatementLength + 8192
+// escaped MaxStatementLength-rune statement plus the surrounding fields. The
+// statement bound counts runes but the body cap counts wire bytes; a
+// supplementary-plane rune may legally arrive as a XXXXXXXX surrogate
+// pair — 12 ASCII bytes — so the cap derives from 12 bytes per rune, not
+// from any UTF-8 byte count. Clients are never required to send raw UTF-8.
+const mysqlExecuteMaxBodyBytes = 12*model.MaxStatementLength + 8192
 
 // mysqlNavigationMaxBodyBytes bounds the navigation body: the model caps
-// localValues at 16 entries of MaxLocalValueLength runes each, so a fully
-// escaped worst case stays far under this bound.
+// localValues at 16 entries of MaxLocalValueLength decoded UTF-8 bytes each,
+// and one decoded byte can arrive as at most 6 bytes of XXXX escape —
+// 16*6*MaxLocalValueLength plus the surrounding fields is the exact
+// worst-case legal encoding, so no supplementary-plane factor applies.
 const mysqlNavigationMaxBodyBytes = 16*6*model.MaxLocalValueLength + 8192
 
 // readStrictBody is the shared bounded-read step for the three governed
 // execution decoders: the body is capped at maxBytes (one byte past the
 // limit is an error, never a truncated suffix), must be valid UTF-8 before
-// encoding/json can replace invalid bytes, and carries no duplicate field
-// names.
+// encoding/json can replace invalid bytes, must not contain an unpaired
+// UTF-16 surrogate escape that encoding/json would lossily map to U+FFFD,
+// and carries no duplicate field names.
 func readStrictBody(r *http.Request, maxBytes int64) ([]byte, error) {
 	body, err := io.ReadAll(io.LimitReader(r.Body, maxBytes+1))
 	if err != nil {
@@ -65,10 +72,88 @@ func readStrictBody(r *http.Request, maxBytes int64) ([]byte, error) {
 	if !utf8.Valid(body) {
 		return nil, errors.New("request body must be valid UTF-8")
 	}
+	if err := rejectUnpairedSurrogateEscapes(body); err != nil {
+		return nil, err
+	}
 	if err := rejectDuplicateJSONFields(body); err != nil {
 		return nil, err
 	}
 	return body, nil
+}
+
+// rejectUnpairedSurrogateEscapes scans the raw body before encoding/json can
+// lossily rewrite it: inside a JSON string, a \uXXXX escape in the high
+// surrogate range D800–DBFF must be immediately followed by a \uXXXX escape
+// in the low range DC00–DFFF, and a low surrogate escape may never appear
+// without its high partner. encoding/json substitutes U+FFFD for each
+// unpaired escape, so without this boundary two different malformed inputs
+// would decode to one identical value and field names, keys, statements,
+// and locator values could not stay byte-faithful. Escaped backslashes and
+// quotes are skipped so a literal backslash-u text is not a surrogate
+// escape; malformed non-surrogate syntax is left for the decoder to reject.
+// The error is a fixed message that never echoes body bytes.
+func rejectUnpairedSurrogateEscapes(body []byte) error {
+	inString := false
+	for i := 0; i < len(body); i++ {
+		if !inString {
+			if body[i] == '"' {
+				inString = true
+			}
+			continue
+		}
+		switch body[i] {
+		case '"':
+			inString = false
+		case '\\':
+			if i+1 >= len(body) {
+				return nil
+			}
+			i++
+			if body[i] != 'u' {
+				continue
+			}
+			if i+4 >= len(body) {
+				return nil
+			}
+			code, ok := jsonHex4(body[i+1 : i+5])
+			if !ok {
+				continue
+			}
+			i += 4
+			if code >= 0xD800 && code <= 0xDBFF {
+				if i+6 < len(body) && body[i+1] == '\\' && body[i+2] == 'u' {
+					if low, ok := jsonHex4(body[i+3 : i+7]); ok && low >= 0xDC00 && low <= 0xDFFF {
+						i += 6
+						continue
+					}
+				}
+				return errors.New("request body contains an unpaired surrogate escape")
+			}
+			if code >= 0xDC00 && code <= 0xDFFF {
+				return errors.New("request body contains an unpaired surrogate escape")
+			}
+		}
+	}
+	return nil
+}
+
+// jsonHex4 parses exactly four ASCII hex digits into a UTF-16 code unit.
+func jsonHex4(b []byte) (uint16, bool) {
+	var code uint16
+	for _, c := range b {
+		code <<= 4
+		switch {
+		case c >= '0' && c <= '9':
+			code |= uint16(c - '0')
+		case c >= 'a' && c <= 'f':
+			code |= uint16(c - 'a' + 10)
+		case c >= 'A' && c <= 'F':
+			code |= uint16(c - 'A' + 10)
+		default:
+			return 0, false
+		}
+	}
+	return code, true
 }
 
 // strictJSONObjectFields returns the raw top-level members after enforcing

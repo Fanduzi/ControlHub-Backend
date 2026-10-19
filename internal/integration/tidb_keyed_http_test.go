@@ -1,9 +1,9 @@
 //go:build integration
 
 // Package integration — real-TiDB (standalone UniStore) HTTP proof for the keyed MySQL/TiDB three-entry claim protocol.
-// input: shared MySQL metadata fixture (unchanged), an owned cached-image pingcap/tidb:v8.5.0 UniStore container, the real router/auth/service/repository/disclosure/executor/schema-inspector chain, a SELECT-only governed TiDB account
+// input: shared MySQL metadata fixture (unchanged), an owned pingcap/tidb:v8.5.0 UniStore container via the standard testcontainers lifecycle (pinned tag pulled when the cache is cold, random name, per-run label, terminated by owned ID only), the real router/auth/service/repository/disclosure/executor/schema-inspector chain, a SELECT-only governed TiDB account
 // output: TestTiDBKeyedHTTP/{Facts,Execute,Saved,Navigation,FKNameDedup,CapabilityGate,ClientCancel,MachineActor} — keyed golden paths, claim readbacks, 409 replay/conflict, keyless compatibility, duplicate-FK-name regression, truncation gate, client-cancel taxonomy, typed machine-actor evidence
-// pos: Real-TiDB HTTP acceptance boundary — ControlHub metadata stays on the shared MySQL TestMain fixture; only the governed TARGET database is real TiDB labeled engine "tidb". The container runs standalone UniStore: this proves the wire/identity/evidence chain against real TiDB dialect, FK metadata, and cancellation; it is NOT a TiKV/PD/distributed-cluster proof. Engine fact recorded by Facts_StandaloneUniStore: TiDB v8.5.0 rejects START TRANSACTION READ ONLY with error 1235 unless the session enables tidb_enable_noop_functions — the governed DSN carries it (a real TiDB deployment DSN needs it); the flag is a no-op on TiDB, so the SELECT-only account grant is the actual write denial, proven by the 1142 assertion.
+// pos: Real-TiDB HTTP acceptance boundary — ControlHub metadata stays on the shared MySQL TestMain fixture; only the governed TARGET database is real TiDB labeled engine "tidb". The container runs standalone UniStore: this proves the wire/identity/evidence chain against real TiDB dialect, FK metadata, and cancellation; it is NOT a TiKV/PD/distributed-cluster proof. Engine fact recorded by Facts_StandaloneUniStore: TiDB v8.5.0 rejects START TRANSACTION READ ONLY with error 1235 unless the session enables tidb_enable_noop_functions — the governed DSN enables it in-session (a deployment could equally set the instance default — the requirement is the effective session value); the flag is a no-op on TiDB, so the SELECT-only account grant is the actual write denial, proven by the 1142 assertion.
 // note: if this file changes, update this header and module README.md.
 package integration
 
@@ -16,6 +16,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/netip"
 	"os/exec"
 	"strconv"
 	"strings"
@@ -24,6 +25,10 @@ import (
 	"unicode/utf8"
 
 	mysqldriver "github.com/go-sql-driver/mysql"
+	containertypes "github.com/moby/moby/api/types/container"
+	mobynet "github.com/moby/moby/api/types/network"
+	"github.com/testcontainers/testcontainers-go"
+	"github.com/testcontainers/testcontainers-go/wait"
 
 	"github.com/fan/controlhub/internal/api"
 	"github.com/fan/controlhub/internal/model"
@@ -31,27 +36,31 @@ import (
 	"github.com/fan/controlhub/internal/service"
 )
 
-// The matrix pins the exact cached image verified by the TiDB probe: pulling
-// or substituting another tag would silently change the engine under test.
+// The matrix pins the exact image verified by the TiDB probe. The tag is
+// fixed — never latest — and testcontainers' standard lifecycle pulls this
+// same pinned tag when the local cache is cold, so a clean CI host needs no
+// manual image preparation; substituting another tag is not permitted.
 const (
-	tidbKeyedImage     = "pingcap/tidb:v8.5.0"
-	tidbKeyedContainer = "controlhub-tidb-matrix"
-	tidbKeyedROUser    = "chub_ro"
-	tidbKeyedROPass    = "tidb-matrix-fixture-only"
-	tidbKeyedCredRef   = "TIDB_MATRIX_RO"
+	tidbKeyedImage   = "pingcap/tidb:v8.5.0"
+	tidbKeyedROUser  = "chub_ro"
+	tidbKeyedROPass  = "tidb-matrix-fixture-only"
+	tidbKeyedCredRef = "TIDB_MATRIX_RO"
 )
 
 // tidbKeyedRuntime owns the TiDB UniStore container for the matrix: its
 // localhost endpoint, the admin (root) connection used for fixture DDL and
-// processlist observation, and the recorded engine facts.
+// processlist observation, and the recorded engine facts. containerID is the
+// only handle cleanup uses — teardown terminates exactly this run's
+// container, never a name another run or a foreign fixture might hold.
 type tidbKeyedRuntime struct {
-	host       string
-	port       int
-	version    string
-	tidbVer    string
-	imageID    string
-	admin      *sql.DB
-	roUserOpen func(schema string) (*sql.DB, error)
+	host        string
+	port        int
+	version     string
+	tidbVer     string
+	imageID     string
+	containerID string
+	admin       *sql.DB
+	roUserOpen  func(schema string) (*sql.DB, error)
 }
 
 // dockerTiDB runs one docker CLI call and fails the test on error.
@@ -64,46 +73,64 @@ func dockerTiDB(t *testing.T, args ...string) string {
 	return strings.TrimSpace(string(out))
 }
 
-// startTiDBKeyedRuntime verifies the cached image (no pull), removes any stale
-// matrix container, starts a fresh owned UniStore TiDB on a dynamic
-// 127.0.0.1 host port, waits for readiness, records engine facts, and creates
-// the shared SELECT-only account the governed DSN will use.
+// startTiDBKeyedRuntime starts a fresh owned UniStore TiDB through the
+// standard testcontainers lifecycle: the pinned image is pulled when absent
+// (cold-environment path, same tag — never substituted), the container gets
+// a random name and a per-run ownership label, binds a dynamic 127.0.0.1
+// port, and is terminated by container ID on cleanup (Ryuk reaps it as a
+// backstop). Nothing touches pre-existing containers or images: no
+// fixed-name removal and no cache wiping. A missing or unpullable image is
+// a real test failure, never a silent skip or a MySQL stand-in.
 func startTiDBKeyedRuntime(t *testing.T) *tidbKeyedRuntime {
 	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
+	defer cancel()
+	req := testcontainers.ContainerRequest{
+		Image:        tidbKeyedImage,
+		Cmd:          []string{"--store=unistore", "--path=/tmp/controlhub-mysql-keyed", "--host=0.0.0.0", "-P=4000"},
+		ExposedPorts: []string{"4000/tcp"},
+		Labels:       map[string]string{"controlhub.test-scope": "tidb-keyed-matrix"},
+		HostConfigModifier: func(hc *containertypes.HostConfig) {
+			hc.PortBindings = mobynet.PortMap{
+				mobynet.MustParsePort("4000/tcp"): {{HostIP: netip.MustParseAddr("127.0.0.1")}},
+			}
+		},
+		WaitingFor: wait.ForListeningPort("4000/tcp").WithStartupTimeout(3 * time.Minute),
+	}
+	container, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
+		ContainerRequest: req,
+		Started:          true,
+	})
+	if err != nil {
+		t.Fatalf("start TiDB %s via testcontainers (pulls the pinned tag when the cache is cold): %v", tidbKeyedImage, err)
+	}
+	cid := container.GetContainerID()
+	t.Cleanup(func() {
+		termCtx, termCancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer termCancel()
+		if err := container.Terminate(termCtx); err != nil {
+			t.Logf("matrix container lifecycle: terminate owned id %s -> %v", cid, err)
+		}
+	})
+
+	port, err := container.MappedPort(ctx, "4000/tcp")
+	if err != nil {
+		t.Fatalf("map TiDB 4000/tcp: %v", err)
+	}
+	portNum := int(port.Num())
+	if portNum <= 0 {
+		t.Fatalf("unexpected TiDB host port %q", port.String())
+	}
+	host := "127.0.0.1"
+	portStr := strconv.Itoa(portNum)
+	t.Logf("tidb matrix container id=%s started, endpoint 127.0.0.1:%d", cid, portNum)
+
+	// Record the image facts actually running — tag, resolved image id and
+	// architecture are logged separately from VERSION()/TIDB_VERSION() so the
+	// engine under test stays auditable on both ARM64 and CI amd64 hosts.
 	imageID := dockerTiDB(t, "image", "inspect", tidbKeyedImage, "--format", "{{.Id}}")
 	arch := dockerTiDB(t, "image", "inspect", tidbKeyedImage, "--format", "{{.Architecture}}")
-	if imageID == "" {
-		t.Fatalf("cached %s image is required; pulling is not permitted", tidbKeyedImage)
-	}
 	t.Logf("tidb image id=%s arch=%s tag=%s", imageID, arch, tidbKeyedImage)
-
-	// A previous aborted run may have left the fixed-name container; removing
-	// it here keeps the owned name without touching any other fixture.
-	if out, err := exec.Command("docker", "rm", "-f", tidbKeyedContainer).CombinedOutput(); err != nil {
-		t.Logf("stale container cleanup (best effort): %v %s", err, strings.TrimSpace(string(out)))
-	}
-	cid := dockerTiDB(t, "run", "-d", "--name", tidbKeyedContainer,
-		"-p", "127.0.0.1::4000",
-		tidbKeyedImage,
-		"--store=unistore", "--path=/tmp/controlhub-mysql-keyed", "--host=0.0.0.0", "-P=4000")
-	t.Cleanup(func() {
-		out, err := exec.Command("docker", "rm", "-f", tidbKeyedContainer).CombinedOutput()
-		t.Logf("matrix container lifecycle: docker rm -f %s -> err=%v out=%s", tidbKeyedContainer, err, strings.TrimSpace(string(out)))
-	})
-	t.Logf("tidb matrix container %s started (id %s)", tidbKeyedContainer, cid)
-
-	bind := dockerTiDB(t, "port", tidbKeyedContainer, "4000/tcp")
-	// Output may contain one "host:port" mapping per line; take the last.
-	bind = bind[strings.LastIndex(bind, "\n")+1:]
-	host, portStr, err := net.SplitHostPort(bind)
-	if err != nil || host != "127.0.0.1" {
-		t.Fatalf("unexpected TiDB host binding %q — must be a dynamic 127.0.0.1 port", bind)
-	}
-	port, err := strconv.Atoi(portStr)
-	if err != nil || port <= 0 {
-		t.Fatalf("unexpected TiDB host port %q", bind)
-	}
-	t.Logf("tidb endpoint 127.0.0.1:%d", port)
 
 	adminCfg := mysqldriver.NewConfig()
 	adminCfg.User = "root"
@@ -132,7 +159,7 @@ func startTiDBKeyedRuntime(t *testing.T) *tidbKeyedRuntime {
 		time.Sleep(500 * time.Millisecond)
 	}
 
-	rt := &tidbKeyedRuntime{host: host, port: port, imageID: imageID, admin: admin}
+	rt := &tidbKeyedRuntime{host: host, port: portNum, imageID: imageID, containerID: cid, admin: admin}
 	if err := admin.QueryRow("SELECT VERSION(), TIDB_VERSION()").Scan(&rt.version, &rt.tidbVer); err != nil {
 		t.Fatalf("read TiDB versions: %v", err)
 	}
@@ -157,12 +184,17 @@ func startTiDBKeyedRuntime(t *testing.T) *tidbKeyedRuntime {
 
 // roDSN is the governed credential string stored under the credential ref:
 // a genuinely SELECT-only account, not the admin root and not a relabeled
-// MySQL fixture. The tidb_enable_noop_functions=ON session var is required on
-// real TiDB: without it the driver's read-only BeginTx ("START TRANSACTION
-// READ ONLY") is rejected with error 1235. On TiDB the flag is a documented
-// no-op — write denial is enforced by the SELECT-only grant (proven by the
-// Facts subtest's 1142 assertion), exactly matching the design note that the
-// read-only transaction is only defense in depth.
+// MySQL fixture. What real TiDB requires is a SESSION in which
+// tidb_enable_noop_functions is enabled: without it the driver's read-only
+// BeginTx ("START TRANSACTION READ ONLY") is rejected with error 1235. This
+// fixture satisfies that requirement through the governed DSN — the verified
+// configuration under test — while a deployment could equally satisfy it via
+// the instance/global default; the requirement is the effective session
+// value, not the DSN string itself. On TiDB the flag is a documented no-op —
+// READ ONLY being *accepted* does not itself block writes — so the
+// SELECT-only grant is the actual write denial (proven by the Facts
+// subtest's 1142 assertion), matching the design note that the read-only
+// transaction is only defense in depth.
 func (rt *tidbKeyedRuntime) roDSN(schema string) string {
 	cfg := mysqldriver.NewConfig()
 	cfg.User = tidbKeyedROUser
@@ -1048,4 +1080,58 @@ func TestTiDBKeyedHTTP(t *testing.T) {
 // createURLFor is the saved-statements collection path for the fixture.
 func createURLFor(fix tidbKeyedFixture) string {
 	return fmt.Sprintf("/query-targets/%d/saved-statements", fix.targetID)
+}
+
+// TestTiDBKeyedFixture_ContainerOwnership proves the fixture releases exactly
+// the container this run created and never touches anything else: a foreign
+// container squatting on the retired fixed name survives the full matrix
+// lifecycle, two fixture instances coexist, and each owned container is gone
+// once its subtest scope's cleanup ran. Cleanup here removes the foreign
+// container only because this test created it — the fixture itself never
+// deletes by name.
+func TestTiDBKeyedFixture_ContainerOwnership(t *testing.T) {
+	legacy := "controlhub-tidb-matrix"
+	if _, err := exec.Command("docker", "inspect", legacy).CombinedOutput(); err == nil {
+		t.Fatalf("a container named %s already exists and does not belong to this run — refusing to touch it", legacy)
+	}
+	foreign := dockerTiDB(t, "run", "-d", "--name", legacy,
+		tidbKeyedImage, "--store=unistore", "--path=/tmp/foreign-fixture", "--host=0.0.0.0", "-P=4000")
+	t.Cleanup(func() {
+		out, err := exec.Command("docker", "rm", "-f", legacy).CombinedOutput()
+		t.Logf("foreign container cleanup (created and owned by this test): err=%v out=%s", err, strings.TrimSpace(string(out)))
+	})
+
+	var idA, idB string
+	t.Run("fixture A", func(t *testing.T) {
+		rt := startTiDBKeyedRuntime(t)
+		idA = rt.containerID
+		if idA == "" || strings.HasPrefix(foreign, idA) || strings.HasPrefix(idA, foreign) {
+			t.Fatalf("fixture must own a distinct container id, got %q (foreign %q)", idA, foreign)
+		}
+		if dockerTiDB(t, "inspect", "-f", "{{.State.Running}}", legacy) != "true" {
+			t.Fatal("foreign container must not be touched by fixture start")
+		}
+	})
+	// Fixture A's cleanup ran at its subtest boundary: the owned container
+	// must be released while the foreign one stays.
+	if out, err := exec.Command("docker", "inspect", idA).CombinedOutput(); err == nil {
+		t.Fatalf("fixture A container %s still present after its scope ended: %s", idA, strings.TrimSpace(string(out)))
+	}
+	t.Run("fixture B", func(t *testing.T) {
+		rt := startTiDBKeyedRuntime(t)
+		idB = rt.containerID
+		if idB == "" || idB == idA {
+			t.Fatalf("fixture B must own a distinct container id, got %q", idB)
+		}
+		// Two fixtures coexist: A was terminated, B runs alongside foreign.
+		if dockerTiDB(t, "inspect", "-f", "{{.State.Running}}", legacy) != "true" {
+			t.Fatal("foreign container must coexist with fixture B")
+		}
+	})
+	if out, err := exec.Command("docker", "inspect", idB).CombinedOutput(); err == nil {
+		t.Fatalf("fixture B container %s still present after its scope ended: %s", idB, strings.TrimSpace(string(out)))
+	}
+	if dockerTiDB(t, "inspect", "-f", "{{.State.Running}}", legacy) != "true" {
+		t.Fatal("foreign container must survive both fixture lifecycles untouched")
+	}
 }

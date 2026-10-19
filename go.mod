@@ -9,6 +9,7 @@ require (
 	github.com/go-sql-driver/mysql v1.9.3
 	github.com/jackc/pgx/v5 v5.11.0
 	github.com/joho/godotenv v1.5.1
+	github.com/moby/moby/api v1.54.1
 	github.com/pganalyze/pg_query_go/v6 v6.2.2
 	github.com/pressly/goose/v3 v3.27.0
 	github.com/testcontainers/testcontainers-go v0.42.0
@@ -59,7 +60,6 @@ require (
 	github.com/mfridman/interpolate v0.0.2 // indirect
 	github.com/moby/docker-image-spec v1.3.1 // indirect
 	github.com/moby/go-archive v0.2.0 // indirect
-	github.com/moby/moby/api v1.54.1 // indirect
 	github.com/moby/moby/client v0.4.0 // indirect
 	github.com/moby/patternmatcher v0.6.1 // indirect
 	github.com/moby/sys/sequential v0.6.0 // indirect
