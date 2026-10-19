@@ -1,8 +1,8 @@
 //go:build integration
 
 // Package integration — real-TiDB (standalone UniStore) HTTP proof for the keyed MySQL/TiDB three-entry claim protocol.
-// input: shared MySQL metadata fixture (unchanged), an owned pingcap/tidb:v8.5.0 UniStore container via the standard testcontainers lifecycle (pinned tag pulled when the cache is cold, random name, per-run label, terminated by owned ID only), the real router/auth/service/repository/disclosure/executor/schema-inspector chain, a SELECT-only governed TiDB account
-// output: TestTiDBKeyedHTTP/{Facts,Execute,Saved,Navigation,FKNameDedup,CapabilityGate,ClientCancel,MachineActor} — keyed golden paths, claim readbacks, 409 replay/conflict, keyless compatibility, duplicate-FK-name regression, truncation gate, client-cancel taxonomy, typed machine-actor evidence
+// input: shared MySQL metadata fixture (unchanged), an owned pingcap/tidb:v8.5.0 UniStore container via the standard testcontainers lifecycle (pinned tag pulled when the cache is cold, random name, per-run label; scope cleanup is registered the moment a non-nil container returns — including the create/start/readiness error path v0.42 permits — and terminates by owned object/ID only), the real router/auth/service/repository/disclosure/executor/schema-inspector chain, a SELECT-only governed TiDB account
+// output: TestTiDBKeyedHTTP/{Facts,Execute,Saved,Navigation,FKNameDedup,CapabilityGate,ClientCancel,MachineActor} — keyed golden paths, claim readbacks, 409 replay/conflict, keyless compatibility, duplicate-FK-name regression, truncation gate, client-cancel taxonomy, typed machine-actor evidence; plus fixture self-tests: StartCleanupInjection (control-flow injection over the factory seam covering container/nil+err/container+err), StartFailureCleansOwnedContainer (real doomed-readiness container provably released when its scope ends), ContainerOwnership (foreign + fixture A + fixture B alive simultaneously, each destroyed by its own ID one at a time; retired fixed name never a destroy handle)
 // pos: Real-TiDB HTTP acceptance boundary — ControlHub metadata stays on the shared MySQL TestMain fixture; only the governed TARGET database is real TiDB labeled engine "tidb". The container runs standalone UniStore: this proves the wire/identity/evidence chain against real TiDB dialect, FK metadata, and cancellation; it is NOT a TiKV/PD/distributed-cluster proof. Engine fact recorded by Facts_StandaloneUniStore: TiDB v8.5.0 rejects START TRANSACTION READ ONLY with error 1235 unless the session enables tidb_enable_noop_functions — the governed DSN enables it in-session (a deployment could equally set the instance default — the requirement is the effective session value); the flag is a no-op on TiDB, so the SELECT-only account grant is the actual write denial, proven by the 1142 assertion.
 // note: if this file changes, update this header and module README.md.
 package integration
@@ -20,6 +20,7 @@ import (
 	"os/exec"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 	"unicode/utf8"
@@ -49,9 +50,10 @@ const (
 
 // tidbKeyedRuntime owns the TiDB UniStore container for the matrix: its
 // localhost endpoint, the admin (root) connection used for fixture DDL and
-// processlist observation, and the recorded engine facts. containerID is the
-// only handle cleanup uses — teardown terminates exactly this run's
-// container, never a name another run or a foreign fixture might hold.
+// processlist observation, and the recorded engine facts. containerID plus
+// the retained container object are the only handles cleanup uses — teardown
+// terminates exactly this run's container, never a name another run or a
+// foreign fixture might hold.
 type tidbKeyedRuntime struct {
 	host        string
 	port        int
@@ -59,8 +61,18 @@ type tidbKeyedRuntime struct {
 	tidbVer     string
 	imageID     string
 	containerID string
+	container   testcontainers.Container
 	admin       *sql.DB
 	roUserOpen  func(schema string) (*sql.DB, error)
+}
+
+// terminate tears down exactly this runtime's owned container mid-test — used
+// by ownership checks that must destroy one fixture while a sibling stays
+// alive. The registered scope cleanup still runs at test end; its second
+// Terminate on the same owned ID is an expected, only-logged error.
+func (rt *tidbKeyedRuntime) terminate(t *testing.T, why string) {
+	t.Helper()
+	terminateOwnedTiDBContainer(t, rt.container, rt.containerID, why)
 }
 
 // dockerTiDB runs one docker CLI call and fails the test on error.
@@ -73,12 +85,71 @@ func dockerTiDB(t *testing.T, args ...string) string {
 	return strings.TrimSpace(string(out))
 }
 
+// dockerTiDBContainerState reports whether nameOrID exists and is running.
+// Only the daemon's explicit "No such object" answer counts as absent — a
+// nonzero inspect exit for any other reason (daemon down, permissions) is a
+// test failure, never proof the object is gone.
+func dockerTiDBContainerState(t *testing.T, nameOrID string) (exists, running bool) {
+	t.Helper()
+	out, err := exec.Command("docker", "inspect", "-f", "{{.State.Running}}", nameOrID).CombinedOutput()
+	if err != nil {
+		if low := strings.ToLower(string(out)); strings.Contains(low, "no such object") || strings.Contains(low, "no such container") {
+			return false, false
+		}
+		t.Fatalf("docker inspect %s: %v — %s", nameOrID, err, strings.TrimSpace(string(out)))
+	}
+	return true, strings.TrimSpace(string(out)) == "true"
+}
+
+// tidbGenericContainer is the fixture's container factory seam so
+// control-flow injection tests can exercise the cleanup ordering on every
+// return shape testcontainers-go v0.42 permits — including (non-nil
+// container, error) from create/start/readiness failures.
+var tidbGenericContainer = testcontainers.GenericContainer
+
+// terminateOwnedTiDBContainer stops exactly the container object this run
+// holds — bounded, never a name lookup. Terminate errors are logged, never
+// fatal, and never replace the original start error.
+func terminateOwnedTiDBContainer(t *testing.T, container testcontainers.Container, id, why string) {
+	t.Helper()
+	termCtx, termCancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer termCancel()
+	if err := container.Terminate(termCtx); err != nil {
+		t.Logf("terminate owned TiDB container id %s (%s) -> %v", id, why, err)
+	}
+}
+
+// startOwnedTiDBContainer creates and starts the fixture container and — the
+// moment a non-nil container comes back — registers this scope's bounded
+// cleanup BEFORE the error is examined. v0.42 explicitly permits returning a
+// created container alongside a create/start/readiness error; without this
+// ordering that partially-created container would leak until Ryuk. The
+// original error is returned unmasked. nil container + error simply returns
+// (nil, err) with nothing registered.
+func startOwnedTiDBContainer(t *testing.T, ctx context.Context, req testcontainers.ContainerRequest) (testcontainers.Container, error) {
+	t.Helper()
+	container, err := tidbGenericContainer(ctx, testcontainers.GenericContainerRequest{
+		ContainerRequest: req,
+		Started:          true,
+	})
+	if container == nil {
+		return nil, err
+	}
+	cid := container.GetContainerID()
+	t.Cleanup(func() { terminateOwnedTiDBContainer(t, container, cid, "scope cleanup") })
+	return container, err
+}
+
 // startTiDBKeyedRuntime starts a fresh owned UniStore TiDB through the
 // standard testcontainers lifecycle: the pinned image is pulled when absent
 // (cold-environment path, same tag — never substituted), the container gets
 // a random name and a per-run ownership label, binds a dynamic 127.0.0.1
-// port, and is terminated by container ID on cleanup (Ryuk reaps it as a
-// backstop). Nothing touches pre-existing containers or images: no
+// port, and is terminated by container ID on cleanup (Ryuk reaps it only as
+// a backstop). Cleanup is registered by startOwnedTiDBContainer the moment a
+// non-nil container returns — even when it returns alongside a start or
+// readiness error — so MappedPort, version-read, SQL-prep, or assertion
+// failures later in this function are all covered by the same owned-ID
+// teardown. Nothing touches pre-existing containers or images: no
 // fixed-name removal and no cache wiping. A missing or unpullable image is
 // a real test failure, never a silent skip or a MySQL stand-in.
 func startTiDBKeyedRuntime(t *testing.T) *tidbKeyedRuntime {
@@ -97,21 +168,11 @@ func startTiDBKeyedRuntime(t *testing.T) *tidbKeyedRuntime {
 		},
 		WaitingFor: wait.ForListeningPort("4000/tcp").WithStartupTimeout(3 * time.Minute),
 	}
-	container, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
-		ContainerRequest: req,
-		Started:          true,
-	})
+	container, err := startOwnedTiDBContainer(t, ctx, req)
 	if err != nil {
 		t.Fatalf("start TiDB %s via testcontainers (pulls the pinned tag when the cache is cold): %v", tidbKeyedImage, err)
 	}
 	cid := container.GetContainerID()
-	t.Cleanup(func() {
-		termCtx, termCancel := context.WithTimeout(context.Background(), 30*time.Second)
-		defer termCancel()
-		if err := container.Terminate(termCtx); err != nil {
-			t.Logf("matrix container lifecycle: terminate owned id %s -> %v", cid, err)
-		}
-	})
 
 	port, err := container.MappedPort(ctx, "4000/tcp")
 	if err != nil {
@@ -159,7 +220,7 @@ func startTiDBKeyedRuntime(t *testing.T) *tidbKeyedRuntime {
 		time.Sleep(500 * time.Millisecond)
 	}
 
-	rt := &tidbKeyedRuntime{host: host, port: portNum, imageID: imageID, containerID: cid, admin: admin}
+	rt := &tidbKeyedRuntime{host: host, port: portNum, imageID: imageID, containerID: cid, container: container, admin: admin}
 	if err := admin.QueryRow("SELECT VERSION(), TIDB_VERSION()").Scan(&rt.version, &rt.tidbVer); err != nil {
 		t.Fatalf("read TiDB versions: %v", err)
 	}
@@ -1082,56 +1143,238 @@ func createURLFor(fix tidbKeyedFixture) string {
 	return fmt.Sprintf("/query-targets/%d/saved-statements", fix.targetID)
 }
 
-// TestTiDBKeyedFixture_ContainerOwnership proves the fixture releases exactly
-// the container this run created and never touches anything else: a foreign
-// container squatting on the retired fixed name survives the full matrix
-// lifecycle, two fixture instances coexist, and each owned container is gone
-// once its subtest scope's cleanup ran. Cleanup here removes the foreign
-// container only because this test created it — the fixture itself never
-// deletes by name.
-func TestTiDBKeyedFixture_ContainerOwnership(t *testing.T) {
-	legacy := "controlhub-tidb-matrix"
-	if _, err := exec.Command("docker", "inspect", legacy).CombinedOutput(); err == nil {
-		t.Fatalf("a container named %s already exists and does not belong to this run — refusing to touch it", legacy)
-	}
-	foreign := dockerTiDB(t, "run", "-d", "--name", legacy,
-		tidbKeyedImage, "--store=unistore", "--path=/tmp/foreign-fixture", "--host=0.0.0.0", "-P=4000")
-	t.Cleanup(func() {
-		out, err := exec.Command("docker", "rm", "-f", legacy).CombinedOutput()
-		t.Logf("foreign container cleanup (created and owned by this test): err=%v out=%s", err, strings.TrimSpace(string(out)))
+// stubTiDBContainer is the minimal testcontainers.Container stand-in for the
+// control-flow injection tests below — only GetContainerID and Terminate are
+// exercised; any other call would panic on the embedded nil interface.
+type stubTiDBContainer struct {
+	testcontainers.Container
+	id         string
+	termErr    error
+	terminates atomic.Int32
+}
+
+func (s *stubTiDBContainer) GetContainerID() string { return s.id }
+
+func (s *stubTiDBContainer) Terminate(context.Context, ...testcontainers.TerminateOption) error {
+	s.terminates.Add(1)
+	return s.termErr
+}
+
+// TestTiDBKeyedRuntime_StartCleanupInjection is a CONTROL-FLOW INJECTION
+// test: the tidbGenericContainer factory seam is stubbed so each return shape
+// testcontainers-go v0.42 permits — (container, nil), (nil, error), and
+// (container, error) — can be checked for the ownership contract without
+// Docker. Each case runs the call inside a child scope so the registered
+// cleanup has provably executed when the parent asserts.
+func TestTiDBKeyedRuntime_StartCleanupInjection(t *testing.T) {
+	orig := tidbGenericContainer
+	t.Cleanup(func() { tidbGenericContainer = orig })
+
+	t.Run("container returned without error", func(t *testing.T) {
+		stub := &stubTiDBContainer{id: "stub-normal"}
+		tidbGenericContainer = func(context.Context, testcontainers.GenericContainerRequest) (testcontainers.Container, error) {
+			return stub, nil
+		}
+		var got testcontainers.Container
+		var gotErr error
+		t.Run("owning scope", func(t *testing.T) {
+			got, gotErr = startOwnedTiDBContainer(t, context.Background(), testcontainers.ContainerRequest{})
+		})
+		if gotErr != nil || got != stub {
+			t.Fatalf("startOwnedTiDBContainer = (%v, %v), want (stub, nil)", got, gotErr)
+		}
+		if n := stub.terminates.Load(); n != 1 {
+			t.Fatalf("scope cleanup must terminate the owned object exactly once, got %d", n)
+		}
 	})
 
-	var idA, idB string
-	t.Run("fixture A", func(t *testing.T) {
-		rt := startTiDBKeyedRuntime(t)
-		idA = rt.containerID
-		if idA == "" || strings.HasPrefix(foreign, idA) || strings.HasPrefix(idA, foreign) {
-			t.Fatalf("fixture must own a distinct container id, got %q (foreign %q)", idA, foreign)
+	t.Run("nil container with error", func(t *testing.T) {
+		injected := errors.New("provider refused create")
+		tidbGenericContainer = func(context.Context, testcontainers.GenericContainerRequest) (testcontainers.Container, error) {
+			return nil, injected
 		}
-		if dockerTiDB(t, "inspect", "-f", "{{.State.Running}}", legacy) != "true" {
-			t.Fatal("foreign container must not be touched by fixture start")
-		}
-	})
-	// Fixture A's cleanup ran at its subtest boundary: the owned container
-	// must be released while the foreign one stays.
-	if out, err := exec.Command("docker", "inspect", idA).CombinedOutput(); err == nil {
-		t.Fatalf("fixture A container %s still present after its scope ended: %s", idA, strings.TrimSpace(string(out)))
-	}
-	t.Run("fixture B", func(t *testing.T) {
-		rt := startTiDBKeyedRuntime(t)
-		idB = rt.containerID
-		if idB == "" || idB == idA {
-			t.Fatalf("fixture B must own a distinct container id, got %q", idB)
-		}
-		// Two fixtures coexist: A was terminated, B runs alongside foreign.
-		if dockerTiDB(t, "inspect", "-f", "{{.State.Running}}", legacy) != "true" {
-			t.Fatal("foreign container must coexist with fixture B")
+		var gotErr error
+		t.Run("owning scope", func(t *testing.T) {
+			got, err := startOwnedTiDBContainer(t, context.Background(), testcontainers.ContainerRequest{})
+			if got != nil {
+				t.Fatalf("nil-container path must return nil, got %v", got)
+			}
+			gotErr = err
+		})
+		if !errors.Is(gotErr, injected) {
+			t.Fatalf("error = %v, want the injected %v", gotErr, injected)
 		}
 	})
-	if out, err := exec.Command("docker", "inspect", idB).CombinedOutput(); err == nil {
-		t.Fatalf("fixture B container %s still present after its scope ended: %s", idB, strings.TrimSpace(string(out)))
+
+	t.Run("container returned alongside a start error", func(t *testing.T) {
+		injected := errors.New("readiness wait timed out")
+		stub := &stubTiDBContainer{id: "stub-partial", termErr: errors.New("terminate refused")}
+		tidbGenericContainer = func(context.Context, testcontainers.GenericContainerRequest) (testcontainers.Container, error) {
+			return stub, injected
+		}
+		var gotErr error
+		t.Run("owning scope", func(t *testing.T) {
+			got, err := startOwnedTiDBContainer(t, context.Background(), testcontainers.ContainerRequest{})
+			if got != stub {
+				t.Fatalf("partial-failure path must still return the created container, got %v", got)
+			}
+			gotErr = err
+		})
+		// The cleanup's Terminate error is only logged — the original start
+		// error reaches the caller unmasked.
+		if !errors.Is(gotErr, injected) {
+			t.Fatalf("error = %v, want the original start error %v unmasked", gotErr, injected)
+		}
+		if n := stub.terminates.Load(); n != 1 {
+			t.Fatalf("scope cleanup must still terminate the partially-created container once, got %d", n)
+		}
+	})
+}
+
+// TestTiDBKeyedRuntime_StartFailureCleansOwnedContainer is the real-Docker
+// proof of the partial-start contract: a request whose readiness wait can
+// never succeed still yields a created container, and once its owning scope
+// ends that exact container ID is gone — released by the registered scope
+// cleanup, not deferred to Ryuk reaping after process exit.
+func TestTiDBKeyedRuntime_StartFailureCleansOwnedContainer(t *testing.T) {
+	var cid string
+	t.Run("doomed readiness scope", func(t *testing.T) {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+		defer cancel()
+		req := testcontainers.ContainerRequest{
+			Image:        tidbKeyedImage,
+			Cmd:          []string{"--store=unistore", "--path=/tmp/owned-start-failure", "--host=0.0.0.0", "-P=4000"},
+			ExposedPorts: []string{"4000/tcp"},
+			Labels:       map[string]string{"controlhub.test-scope": "tidb-keyed-matrix"},
+			// 4999/tcp is never exposed or listened on: the container is
+			// created and started, then readiness fails — the exact shape in
+			// which v0.42 returns a non-nil container alongside the error.
+			WaitingFor: wait.ForListeningPort("4999/tcp").WithStartupTimeout(20 * time.Second),
+		}
+		container, err := startOwnedTiDBContainer(t, ctx, req)
+		if err == nil {
+			t.Fatal("expected the doomed readiness wait to fail")
+		}
+		if container == nil {
+			t.Fatalf("testcontainers v0.42 must return the created container alongside the readiness error, got nil (err=%v)", err)
+		}
+		cid = container.GetContainerID()
+		t.Logf("created container id=%s then failed readiness as injected: %v", cid, err)
+	})
+	if cid == "" {
+		t.Fatal("the doomed scope never exposed the created container id")
 	}
-	if dockerTiDB(t, "inspect", "-f", "{{.State.Running}}", legacy) != "true" {
-		t.Fatal("foreign container must survive both fixture lifecycles untouched")
+	if exists, _ := dockerTiDBContainerState(t, cid); exists {
+		t.Fatalf("owned container %s survived its failed scope — registered cleanup did not release it", cid)
 	}
+	t.Logf("confirmed: owned container id=%s absent immediately after its failed scope ended", cid)
+}
+
+// TestTiDBKeyedFixture_ContainerOwnership proves real overlapping ownership:
+// a foreign container (created and owned by THIS run under a unique per-run
+// name) plus fixture runtimes A and B are all alive at the SAME time, then
+// each is destroyed one at a time and only its own ID disappears while the
+// others stay running and reachable. A second phase proves the retired fixed
+// name "controlhub-tidb-matrix" is never a destroy handle: an external holder
+// is observed read-only, a self-created placeholder is removed by owned ID
+// only. (This replaces the R1 version, where A and B merely coexisted with
+// the foreign container in sequence — A was already destroyed before B
+// started.)
+func TestTiDBKeyedFixture_ContainerOwnership(t *testing.T) {
+	foreignName := fmt.Sprintf("controlhub-tidb-foreign-%d", time.Now().UnixNano())
+	foreignID := dockerTiDB(t, "run", "-d", "--name", foreignName,
+		tidbKeyedImage, "--store=unistore", "--path=/tmp/foreign-fixture", "--host=0.0.0.0", "-P=4000")
+	// This run owns foreignID, so cleanup removes it — but strictly by the
+	// returned ID; the name is display-only and never a destroy handle.
+	t.Cleanup(func() {
+		out, err := exec.Command("docker", "rm", "-f", foreignID).CombinedOutput()
+		t.Logf("foreign %s cleanup by owned id %s: err=%v out=%s", foreignName, foreignID, err, strings.TrimSpace(string(out)))
+	})
+	if exists, running := dockerTiDBContainerState(t, foreignID); !exists || !running {
+		t.Fatalf("foreign container %s (id %s) must be running before fixtures start", foreignName, foreignID)
+	}
+
+	// A and B both stay alive — real lifetime overlap with foreign.
+	rtA := startTiDBKeyedRuntime(t)
+	rtB := startTiDBKeyedRuntime(t)
+	idA, idB := rtA.containerID, rtB.containerID
+	if idA == "" || idB == "" || idA == idB || idA == foreignID || idB == foreignID {
+		t.Fatalf("need three distinct live IDs, got A=%q B=%q foreign=%q", idA, idB, foreignID)
+	}
+	for name, id := range map[string]string{"fixture A": idA, "fixture B": idB, "foreign": foreignID} {
+		if exists, running := dockerTiDBContainerState(t, id); !exists || !running {
+			t.Fatalf("%s container %s must exist and be running while all three coexist", name, id)
+		}
+	}
+
+	// Destroy ONLY A by its owned object: B and foreign stay up, and B's real
+	// TiDB endpoint still answers.
+	rtA.terminate(t, "ownership check: A torn down first")
+	if exists, _ := dockerTiDBContainerState(t, idA); exists {
+		t.Fatalf("fixture A container %s still present after its owned terminate", idA)
+	}
+	if _, running := dockerTiDBContainerState(t, idB); !running {
+		t.Fatal("fixture B must survive fixture A's teardown")
+	}
+	if _, running := dockerTiDBContainerState(t, foreignID); !running {
+		t.Fatal("foreign container must survive fixture A's teardown")
+	}
+	pingCtx, pingCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	pingErr := rtB.admin.PingContext(pingCtx)
+	pingCancel()
+	if pingErr != nil {
+		t.Fatalf("fixture B must stay reachable after A's teardown: %v", pingErr)
+	}
+
+	// Destroy ONLY B: the foreign container remains untouched.
+	rtB.terminate(t, "ownership check: B torn down second")
+	if exists, _ := dockerTiDBContainerState(t, idB); exists {
+		t.Fatalf("fixture B container %s still present after its owned terminate", idB)
+	}
+	if _, running := dockerTiDBContainerState(t, foreignID); !running {
+		t.Fatal("foreign container must survive both fixture teardowns")
+	}
+	// A's and B's registered scope cleanups still fire at test end — a second
+	// Terminate on the same owned IDs, expected to log a harmless error.
+
+	t.Run("legacy fixed-name holder is never a destroy target", func(t *testing.T) {
+		legacy := "controlhub-tidb-matrix"
+		if exists, _ := dockerTiDBContainerState(t, legacy); exists {
+			// An EXTERNAL object holds the retired fixed name: record its
+			// identity, never adopt it, never delete it.
+			holder := dockerTiDB(t, "inspect", "-f", "{{.Id}} {{.State.Status}}", legacy)
+			t.Logf("external object occupies %s (%s) — read-only observation, not owned by this run", legacy, holder)
+			t.Run("fixture lifecycle beside external holder", func(t *testing.T) {
+				startTiDBKeyedRuntime(t)
+			})
+			if after := dockerTiDB(t, "inspect", "-f", "{{.Id}}", legacy); after != strings.Fields(holder)[0] {
+				t.Fatalf("external %s holder changed during the fixture lifecycle: was %q now %q", legacy, holder, after)
+			}
+			return
+		}
+		// Name free: occupy it with a placeholder this run owns (created, not
+		// started — name occupation is all that is needed). If a race takes
+		// the name between check and create, do NOT escalate to a force
+		// delete or adopt the newcomer — observe read-only instead.
+		out, err := exec.Command("docker", "create", "--name", legacy, tidbKeyedImage,
+			"--store=unistore", "--path=/tmp/legacy-holder", "--host=0.0.0.0", "-P=4000").CombinedOutput()
+		if err != nil {
+			if strings.Contains(string(out), "Conflict") || strings.Contains(string(out), "already in use") {
+				t.Logf("%s was taken between check and create — leaving the external object untouched", legacy)
+				return
+			}
+			t.Fatalf("docker create %s: %v — %s", legacy, err, strings.TrimSpace(string(out)))
+		}
+		legacyID := strings.TrimSpace(string(out))
+		t.Cleanup(func() {
+			rmOut, rmErr := exec.Command("docker", "rm", legacyID).CombinedOutput()
+			t.Logf("legacy placeholder cleanup by owned id %s: err=%v out=%s", legacyID, rmErr, strings.TrimSpace(string(rmOut)))
+		})
+		t.Run("fixture lifecycle beside owned placeholder", func(t *testing.T) {
+			startTiDBKeyedRuntime(t)
+		})
+		if exists, _ := dockerTiDBContainerState(t, legacyID); !exists {
+			t.Fatalf("owned %s placeholder %s vanished during a fixture lifecycle", legacy, legacyID)
+		}
+	})
 }
