@@ -1,6 +1,6 @@
 // Package model provides domain entities for the resource management system.
 // input: errors, fmt, math, time, unicode/utf8 packages
-// output: QueryExecution* and QueryResult* types, internal full-statement availability and public restore eligibility/statement response, validated user-or-machine execution identity, pagination/status/remote-state/error contracts, connection-scope request fields, query credential policy/ref validators
+// output: QueryExecution* and QueryResult* types, internal full-statement availability and public restore eligibility/statement response, validated user-or-machine execution identity, ordinary execute-request Validate with optional verbatim clientExecutionId key rules, pagination/status/remote-state/error contracts, connection-scope request fields, query credential policy/ref validators
 // pos: Query sandbox execution requests, responses, history records with server-computed restore eligibility, and owner-reusable statement response
 // note: if this file changes, update header and README.md
 package model
@@ -92,12 +92,70 @@ type QueryExecuteRequest struct {
 	// PostgreSQL execution path is wired (T7/T12).
 	Database string `json:"database,omitempty"`
 	Schema   string `json:"schema,omitempty"`
-	// ClientExecutionID is the idempotency key for the claim protocol (G9).
-	// Rejected while non-empty until claims are wired (T10).
+	// ClientExecutionID is the idempotency key for the MySQL/TiDB execution
+	// claim (G9/T10): a non-empty key occupies one (target, key) slot —
+	// a same-digest replay returns execution_already_exists and a
+	// different digest conflicts — while an empty key stays the legacy
+	// keyless attempt. The key is never a digest input.
 	ClientExecutionID string `json:"clientExecutionId,omitempty"`
 	// Capabilities declares client result-contract capabilities (e.g.
 	// "cellTruncated"); checked by the post-finalize delivery gate (T8-B).
+	// Capabilities never participate in claim replay identity.
 	Capabilities []string `json:"capabilities,omitempty"`
+}
+
+// Validate enforces the ordinary execute-request shape before any lookup:
+// statement non-blank, bounded, valid UTF-8, and NUL-free; maxRows
+// non-negative; pagination shape when supplied; database/schema empty (the
+// composite connection identity is not enabled for this engine);
+// clientExecutionId optional — empty selects the legacy keyless path, a
+// non-empty key is byte-verbatim: bounded, valid UTF-8, NUL-free, never
+// normalized, and never required to be a UUID.
+func (r QueryExecuteRequest) Validate() error {
+	if strings.TrimSpace(r.Statement) == "" {
+		return errors.New("statement is required")
+	}
+	if utf8.RuneCountInString(r.Statement) > MaxStatementLength {
+		return fmt.Errorf("statement exceeds %d characters", MaxStatementLength)
+	}
+	if !utf8.ValidString(r.Statement) {
+		return errors.New("statement must be valid UTF-8")
+	}
+	if strings.IndexByte(r.Statement, 0) >= 0 {
+		return errors.New("statement must not contain NUL bytes")
+	}
+	if r.MaxRows < 0 {
+		return errors.New("maxRows must not be negative")
+	}
+	if r.Pagination != nil {
+		if err := ValidatePagination(r.Pagination.Page, r.Pagination.PageSize); err != nil {
+			return err
+		}
+	}
+	if r.Database != "" || r.Schema != "" {
+		return errors.New("database and schema are not accepted until the postgresql execution path is enabled")
+	}
+	return validateExecutionRequestKey(r.ClientExecutionID)
+}
+
+// validateExecutionRequestKey validates an optional client execution key:
+// the empty string is always legal (keyless), a non-empty key must be exact
+// bytes — bounded by the shared 64-character rule, valid UTF-8, and free of
+// NUL bytes. No trimming, case-folding, or UUID shape is imposed.
+func validateExecutionRequestKey(key string) error {
+	if key == "" {
+		return nil
+	}
+	if err := ValidateClientExecutionID(key); err != nil {
+		return err
+	}
+	if !utf8.ValidString(key) {
+		return errors.New("clientExecutionId must be valid UTF-8")
+	}
+	if strings.IndexByte(key, 0) >= 0 {
+		return errors.New("clientExecutionId must not contain NUL bytes")
+	}
+	return nil
 }
 
 // QueryResultColumn describes one result column by its name and database type.

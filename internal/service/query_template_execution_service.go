@@ -1,7 +1,7 @@
 // Package service provides the governed template-execution adapter.
 // input: bytes, context, database/sql, encoding/json, errors, fmt, internal/model
 // output: TemplateValueValidationError, QueryExecutionService.WithTemplateExecution, QueryExecutionService.ExecuteSavedStatement
-// pos: User-only fresh-query-actor saved-statement execution that passes a validated user identity into the shared evidence chain without template identity/values
+// pos: User-only fresh-query-actor saved-statement execution that passes a validated user identity into the shared evidence chain without template identity/values; the saved entry kind withholds all statement-derived history (digest, preview, full statement); the read error classifies cancellation/deadline before sql.ErrNoRows and the returned snapshot is re-verified for exact id/target/known scope as the same invisible not-found (a reader-contract defense — the production WHERE already scopes by target/id); a non-empty clientExecutionId admits the shared MySQL/TiDB claim before compile/guard and finalizes exactly once (keyless pair or keyed finalize)
 // note: if this file changes, update this header and module README.md.
 package service
 
@@ -45,12 +45,35 @@ func (s *QueryExecutionService) WithTemplateExecution(statements QuerySavedState
 // only to their owner — never to other users or admins. Parameter values
 // never reach history, audit, errors, or logs.
 func (s *QueryExecutionService) ExecuteSavedStatement(ctx context.Context, actorUserID, targetID, statementID uint64, req model.QuerySavedStatementExecuteRequest) (model.QueryExecuteResponse, error) {
-	start := s.clock.Now()
 	identity := model.QueryExecutionIdentity{Kind: model.QueryExecutionActorUser, ID: actorUserID}
-
-	if s.statements == nil || s.compiler == nil {
-		return model.QueryExecuteResponse{}, fmt.Errorf("template execution is not configured")
+	if actorUserID == 0 || targetID == 0 || statementID == 0 || identity.Validate() != nil {
+		return model.QueryExecuteResponse{}, fmt.Errorf("%w: invalid execution identity", ErrQueryValidationFailed)
 	}
+	if err := req.Validate(); err != nil {
+		return model.QueryExecuteResponse{}, fmt.Errorf("%w: %v", ErrQueryValidationFailed, err)
+	}
+	if s.statements == nil || s.compiler == nil {
+		return model.QueryExecuteResponse{}, ErrQueryBackendFailure
+	}
+
+	// The request belongs to this attempt: clone every caller-owned mutable
+	// field — the raw values map and each RawMessage byte slice, the
+	// pagination struct, and the capability list — before any external call
+	// so nothing the caller mutates can reach the claim digest, the typed
+	// values, the guard, or the delivery gate.
+	ownedValues := make(map[string]json.RawMessage, len(req.Values))
+	for name, raw := range req.Values {
+		ownedValues[name] = append(json.RawMessage(nil), raw...)
+	}
+	req.Values = ownedValues
+	req.Capabilities = append([]string(nil), req.Capabilities...)
+	var page, pageSize int
+	if req.Pagination != nil {
+		pagination := *req.Pagination
+		req.Pagination = &pagination
+		page, pageSize = pagination.Page, pagination.PageSize
+	}
+	start := s.clock.Now()
 
 	access, err := s.access.Resolve(ctx, actorUserID, targetID)
 	if err != nil {
@@ -66,26 +89,52 @@ func (s *QueryExecutionService) ExecuteSavedStatement(ctx context.Context, actor
 	}
 	target := access.Target
 
+	attempt := newMySQLExecutionAttempt(s, target, identity, mysqlEntrySaved, start)
+
+	// One joined snapshot read per request/page: the latest statement row and
+	// its parameter declarations are used once for digest, compile, and
+	// execution. A missing row and a non-owner personal statement are the
+	// same invisible not-found; a canceled or deadline read classifies
+	// through the shared taxonomy; any other read fault is a backend
+	// failure. Raw repository errors never reach the response.
 	statement, err := s.statements.GetByID(ctx, targetID, statementID)
 	if err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			return s.reject(ctx, target, identity, nil, "saved_statement_not_found", "saved statement not found",
-				ErrQuerySavedStatementNotFound, start)
+		switch {
+		case errors.Is(err, context.Canceled), errors.Is(err, context.DeadlineExceeded):
+			// Cancellation/deadline classify first so a canceled or timed-out
+			// read joined with sql.ErrNoRows can never masquerade as a missing
+			// statement.
+			status, sentinel, code, safeMsg := classifyExecutorError(err)
+			rec := attempt.buildAttemptRecord(nil, status, 0, code, safeMsg)
+			if _, perr := attempt.persistRecord(ctx, rec); perr != nil {
+				return model.QueryExecuteResponse{}, errPersistAttempt
+			}
+			return model.QueryExecuteResponse{}, sentinel
+		case errors.Is(err, sql.ErrNoRows):
+			return attempt.reject(ctx, nil, "saved_statement_not_found", "saved statement not found",
+				ErrQuerySavedStatementNotFound)
+		default:
+			rec := attempt.buildAttemptRecord(nil, model.QueryExecutionFailed, 0, "query_backend_error", "saved statement read failed")
+			if _, perr := attempt.persistRecord(ctx, rec); perr != nil {
+				return model.QueryExecuteResponse{}, errPersistAttempt
+			}
+			return model.QueryExecuteResponse{}, ErrQueryBackendFailure
 		}
-		if _, perr := s.persistAttempt(ctx, target, identity, nil, model.QueryExecutionFailed, 0,
-			"query_backend_error", "saved statement read failed", start); perr != nil {
-			return model.QueryExecuteResponse{}, errPersistAttempt
-		}
-		return model.QueryExecuteResponse{}, fmt.Errorf("get saved statement: %w", err)
 	}
-	if statement.Scope == model.QuerySavedStatementPersonal && statement.OwnerUserID != actorUserID {
-		return s.reject(ctx, target, identity, nil, "saved_statement_not_found", "saved statement not found",
-			ErrQuerySavedStatementNotFound, start)
-	}
-
-	if err := req.Validate(); err != nil {
-		return s.reject(ctx, target, identity, nil, "validation_failed", err.Error(),
-			fmt.Errorf("%w: %v", ErrQueryValidationFailed, err), start)
+	// The returned snapshot must be exactly the requested statement on this
+	// target carrying a known scope — defense against a reader violating its
+	// contract, nothing more. The production repository's WHERE already
+	// scopes by (target, id), so a mismatch can only come from a broken
+	// reader, never from stored rows; the unit proofs pin that controlled
+	// boundary and do not claim a production cross-target leak. Every
+	// violation — foreign id, foreign target, unknown scope, or a non-owner
+	// personal statement — is the same invisible not-found so existence and
+	// ownership never leak.
+	if statement.ID != statementID || statement.TargetResourceID != targetID ||
+		statement.Scope.Validate() != nil ||
+		(statement.Scope == model.QuerySavedStatementPersonal && statement.OwnerUserID != actorUserID) {
+		return attempt.reject(ctx, nil, "saved_statement_not_found", "saved statement not found",
+			ErrQuerySavedStatementNotFound)
 	}
 
 	definitions := make([]TemplateParameterDefinition, len(statement.Parameters))
@@ -98,13 +147,26 @@ func (s *QueryExecutionService) ExecuteSavedStatement(ctx context.Context, actor
 		// Record the rejected attempt with fixed metadata (no values) so the
 		// template route honors the every-attempt-recorded guarantee and stays
 		// consistent with access, guard, and disclosure rejections.
-		if _, perr := s.persistAttempt(ctx, target, identity, nil, model.QueryExecutionRejected, 0, "validation_failed", valueErr.Error(), start); perr != nil {
+		rec := attempt.buildAttemptRecord(nil, model.QueryExecutionRejected, 0, "validation_failed", valueErr.Error())
+		if _, perr := attempt.persistRecord(ctx, rec); perr != nil {
 			return model.QueryExecuteResponse{}, errPersistAttempt
 		}
 		return model.QueryExecuteResponse{}, valueErr
 	}
 
-	maxRows := clampProductionMaxRows(target.ConnectionContext.Environment, req.MaxRows)
+	maxRows := s.guard.effectiveMaxRows(clampProductionMaxRows(target.ConnectionContext.Environment, req.MaxRows))
+
+	// Claim admission runs before compile and guard: a non-empty client key
+	// occupies the (target, key) slot once with empty MySQL/TiDB connection
+	// scope. Static statements admit exactly like parameterized ones.
+	timeout := defaultQueryTimeout
+	if isProductionEnvironment(target.ConnectionContext.Environment) {
+		timeout = productionQueryTimeout
+	}
+	digest := s.mysqlSavedDigest(statementID, definitions, values, page, pageSize, maxRows)
+	if err := attempt.admit(ctx, req.ClientExecutionID, digest, timeout); err != nil {
+		return model.QueryExecuteResponse{}, err
+	}
 
 	input := TemplateStatementInput{Statement: statement.Statement, Definitions: definitions, Values: values}
 	var guardedTemplate GuardedTemplateStatement
@@ -114,24 +176,19 @@ func (s *QueryExecutionService) ExecuteSavedStatement(ctx context.Context, actor
 		guardedTemplate, err = s.compiler.CompileAndGuard(s.guard, input, maxRows)
 	}
 	if err != nil {
-		return s.reject(ctx, target, identity, nil, "validation_failed", "saved statement validation failed",
-			fmt.Errorf("%w: %v", ErrQueryValidationFailed, err), start)
+		return attempt.reject(ctx, nil, "validation_failed", "saved statement validation failed",
+			fmt.Errorf("%w: %v", ErrQueryValidationFailed, err))
 	}
 
 	// The existing governed chain (disclosure preflight, executor, history,
 	// audit) runs unchanged through the shared executeGuardedChain, so every
-	// template page is governed exactly like an ordinary execution.
-	var page, pageSize int
-	if req.Pagination != nil {
-		page, pageSize = req.Pagination.Page, req.Pagination.PageSize
-	}
-	evidenceSafeQuery := guardedTemplate.query
-	evidenceSafeQuery.StatementDigest = ""
-	evidenceSafeQuery.StatementPreview = ""
-	return s.executeGuardedChain(ctx, target, identity, access.dsn, &evidenceSafeQuery,
+	// template page is governed exactly like an ordinary execution. The saved
+	// entry kind forces digest, preview, and full statement empty — compiled
+	// SQL never reaches history regardless of guard metadata.
+	return s.executeGuardedChain(ctx, attempt, access.dsn, &guardedTemplate.query,
 		func(execCtx context.Context, dsn string) (QueryDatabaseResult, error) {
 			return s.executor.QueryTemplate(execCtx, dsn, guardedTemplate)
-		}, req.Capabilities, page, pageSize, start)
+		}, req.Capabilities, page, pageSize)
 }
 
 // validateTemplateValues decodes the raw JSON values into typed values and

@@ -1,7 +1,7 @@
 // Package service provides business logic for the Phase 37/38S read-only query sandbox.
 // input: context, database/sql, errors, fmt, math, net, strconv, strings, time, go-sql-driver/mysql, internal/model
 // output: QueryExecutionService, validated user/machine Execute identity, owner-only successful statement retrieval and history restore eligibility, repository/resolver/executor/clock interfaces, sentinel errors, ListHistory, validateDSNBinding
-// pos: Orchestrates ordinary user/machine governed execution plus user-only template/navigation and private statement retrieval/restore projection through one atomic identity-aware evidence implementation while preserving cancellation and disclosure behavior; validates producer result evidence before disclosure (T8-B-R1) and evaluates the shared post-finalize result-delivery gate after each committed success pair (T8-B)
+// pos: Orchestrates ordinary user/machine governed execution plus user-only template/navigation and private statement retrieval/restore projection through one atomic identity-aware evidence implementation while preserving cancellation and disclosure behavior; an explicit mysqlExecutionAttempt carries the claim policy through the shared chain so a keyed request admits before the guard and finalizes exactly once (keyless pair or keyed finalize), never both; validates producer result evidence before disclosure (T8-B-R1) and evaluates the shared post-finalize result-delivery gate after each committed success pair (T8-B) on a coordinator-owned pre-finalize snapshot; the navigation entry fails closed on a nil inspector snapshot and returns bare canonical sentinels for pre-claim read failures
 // note: if this file changes, update this header and module README.md.
 package service
 
@@ -240,8 +240,26 @@ func NewQueryExecutionService(
 // an unaudited attempt as complete. The actor is taken from the verified token
 // by the caller, never from the request body.
 func (s *QueryExecutionService) Execute(ctx context.Context, identity model.QueryExecutionIdentity, targetID uint64, req model.QueryExecuteRequest) (model.QueryExecuteResponse, error) {
+	// Shape and typed-identity validation run before any lookup: a malformed
+	// request consumes no claim key, reads no credentials, and writes no
+	// evidence pair.
 	if err := identity.Validate(); err != nil {
 		return model.QueryExecuteResponse{}, fmt.Errorf("%w: invalid execution identity", ErrQueryValidationFailed)
+	}
+	if targetID == 0 {
+		return model.QueryExecuteResponse{}, fmt.Errorf("%w: target id is required", ErrQueryValidationFailed)
+	}
+	if err := req.Validate(); err != nil {
+		return model.QueryExecuteResponse{}, fmt.Errorf("%w: %v", ErrQueryValidationFailed, err)
+	}
+	// The request belongs to this attempt: take value snapshots of the
+	// caller-owned mutable fields before any external call so nothing the
+	// caller does to its slice or pagination struct can reach the claim
+	// digest, the guard, or the post-finalize delivery gate.
+	req.Capabilities = append([]string(nil), req.Capabilities...)
+	if req.Pagination != nil {
+		pagination := *req.Pagination
+		req.Pagination = &pagination
 	}
 	start := s.clock.Now()
 
@@ -268,16 +286,32 @@ func (s *QueryExecutionService) Execute(ctx context.Context, identity model.Quer
 	target := access.Target
 
 	// maxRows is always the overall release cap; the guard owns the 0-default
-	// and hard-cap clamping for both paged and non-paged execution.
-	maxRows := clampProductionMaxRows(target.ConnectionContext.Environment, req.MaxRows)
+	// and hard-cap clamping for both paged and non-paged execution. Resolve it
+	// fully here so the claim digest and the guard agree on one number.
+	maxRows := s.guard.effectiveMaxRows(clampProductionMaxRows(target.ConnectionContext.Environment, req.MaxRows))
+
+	var page, pageSize int
+	if req.Pagination != nil {
+		page, pageSize = req.Pagination.Page, req.Pagination.PageSize
+	}
+
+	// Claim admission runs BEFORE the full guard: a non-empty client key
+	// occupies the (target, key) slot once, with empty MySQL/TiDB connection
+	// scope and the resolved attempt budget. Keyless requests admit without
+	// touching the claim store; every post-claim outcome — rejection,
+	// failure, timeout, success — is the sole claimant's keyed finalize.
+	attempt := newMySQLExecutionAttempt(s, target, identity, mysqlEntryOrdinary, start)
+	timeout := defaultQueryTimeout
+	if isProductionEnvironment(target.ConnectionContext.Environment) {
+		timeout = productionQueryTimeout
+	}
+	if err := attempt.admit(ctx, req.ClientExecutionID, s.mysqlOrdinaryDigest(req, maxRows), timeout); err != nil {
+		return model.QueryExecuteResponse{}, err
+	}
 
 	var guarded GuardedQuery
 	if req.Pagination != nil {
-		if err := model.ValidatePagination(req.Pagination.Page, req.Pagination.PageSize); err != nil {
-			return s.reject(ctx, target, identity, &guarded, "validation_failed", err.Error(),
-				fmt.Errorf("%w: %v", ErrQueryValidationFailed, err), start)
-		}
-		guarded, err = s.guard.GuardPaginatedSelect(req.Statement, req.Pagination.Page, req.Pagination.PageSize, maxRows)
+		guarded, err = s.guard.GuardPaginatedSelect(req.Statement, page, pageSize, maxRows)
 		if errors.Is(err, ErrQueryPaginationNotApplicable) {
 			guarded, err = s.guard.Guard(req.Statement, maxRows)
 		}
@@ -287,22 +321,18 @@ func (s *QueryExecutionService) Execute(ctx context.Context, identity model.Quer
 	if err != nil {
 		// The guard error is structural (SQL shape) and carries no DSN, so it is
 		// safe to surface as the validation message.
-		return s.reject(ctx, target, identity, &guarded, "validation_failed", err.Error(),
-			fmt.Errorf("%w: %v", ErrQueryValidationFailed, err), start)
+		return attempt.reject(ctx, &guarded, "validation_failed", err.Error(),
+			fmt.Errorf("%w: %v", ErrQueryValidationFailed, err))
 	}
 
 	// The remaining governed chain — disclosure preflight, timed execution,
 	// disclosure apply, history/audit persist, post-finalize delivery gate,
 	// and response build — is shared with template execution so the two
 	// paths cannot drift.
-	var page, pageSize int
-	if req.Pagination != nil {
-		page, pageSize = req.Pagination.Page, req.Pagination.PageSize
-	}
-	return s.executeGuardedChain(ctx, target, identity, access.dsn, &guarded,
+	return s.executeGuardedChain(ctx, attempt, access.dsn, &guarded,
 		func(execCtx context.Context, dsn string) (QueryDatabaseResult, error) {
 			return s.executor.Query(execCtx, dsn, guarded)
-		}, req.Capabilities, page, pageSize, start)
+		}, req.Capabilities, page, pageSize)
 }
 
 // clampProductionMaxRows applies the tighter production release cap before the
@@ -324,15 +354,14 @@ func clampProductionMaxRows(environment string, requested int) int {
 // evidence pair is durably written.
 func (s *QueryExecutionService) executeGuardedChain(
 	ctx context.Context,
-	target model.QueryTarget,
-	identity model.QueryExecutionIdentity,
+	attempt *mysqlExecutionAttempt,
 	dsn string,
 	guarded *GuardedQuery,
 	run func(execCtx context.Context, dsn string) (QueryDatabaseResult, error),
 	capabilities []string,
 	page, pageSize int,
-	start time.Time,
 ) (model.QueryExecuteResponse, error) {
+	target := attempt.target
 	// Disclosure preflight: resolve column provenance and check policies.
 	// Blocks if any projected column lacks an exact disclosure policy.
 	plan, err := s.disclosure.Preflight(ctx, dsn, target.ResourceID, *guarded)
@@ -343,12 +372,12 @@ func (s *QueryExecutionService) executeGuardedChain(
 		// it is a terminal failed/timeout client-cancellation or deadline
 		// outcome and must reach the shared atomic evidence path (Issue #35).
 		if errors.Is(err, ErrQueryDisclosureBlocked) && !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded) {
-			return s.reject(ctx, target, identity, guarded, "query_result_disclosure_blocked", "query blocked by result disclosure policy",
-				fmt.Errorf("%w: %w", ErrQueryNotAllowed, err), start)
+			return attempt.reject(ctx, guarded, "query_result_disclosure_blocked", "query blocked by result disclosure policy",
+				fmt.Errorf("%w: %w", ErrQueryNotAllowed, ErrQueryDisclosureBlocked))
 		}
 		// All other post-target disclosure terminal failures record fixed safe
 		// failed or timeout evidence and surface the existing controlled error.
-		return s.recordTerminalOutcome(ctx, target, identity, guarded, err, start)
+		return attempt.recordTerminalOutcome(ctx, guarded, err)
 	}
 
 	timeout := defaultQueryTimeout
@@ -360,7 +389,7 @@ func (s *QueryExecutionService) executeGuardedChain(
 
 	result, err := run(execCtx, dsn)
 	if err != nil {
-		return s.recordTerminalOutcome(ctx, target, identity, guarded, err, start)
+		return attempt.recordTerminalOutcome(ctx, guarded, err)
 	}
 
 	// Producer evidence check before disclosure: the executor's own
@@ -369,42 +398,25 @@ func (s *QueryExecutionService) executeGuardedChain(
 	// letting it see malformed producer evidence would record rejected instead
 	// of the failed internal fault this is (T8-B-R1).
 	if err := validateCellTruncatedMatrix(len(result.Columns), result.Rows, result.CellTruncated); err != nil {
-		return s.recordTerminalOutcome(ctx, target, identity, guarded, err, start)
+		return attempt.recordTerminalOutcome(ctx, guarded, err)
 	}
 
 	columns, rows, applyErr := s.disclosure.Apply(plan, result.Columns, result.Rows)
 	if applyErr != nil {
-		return s.recordTerminalOutcome(ctx, target, identity, guarded, applyErr, start)
+		return attempt.recordTerminalOutcome(ctx, guarded, applyErr)
 	}
 	result.Columns = columns
 	result.Rows = rows
 
-	// Producer evidence check before finalize: a missing or misaligned
-	// cellTruncated matrix is an internal producer failure — recorded as a
-	// failed attempt, never filled in with fabricated all-false evidence and
-	// never surfaced as a client-capability issue (T8-B).
-	if err := validateCellTruncatedMatrix(len(result.Columns), result.Rows, result.CellTruncated); err != nil {
-		return s.recordTerminalOutcome(ctx, target, identity, guarded, err, start)
-	}
-
-	// Success: record (history + audit) then return. A recording failure must
-	// not yield a success response, so execID is guaranteed non-zero here.
-	execID, perr := s.persistAttempt(ctx, target, identity, guarded, model.QueryExecutionSuccess, result.RowCount, "", "", start)
-	if perr != nil {
-		return model.QueryExecuteResponse{}, errPersistAttempt
-	}
-
-	// Post-finalize delivery gate (spec G2): the success pair is already
-	// committed, so a capability refusal is a delivery refusal only — the
-	// recorded outcome stays success and no second evidence write happens.
-	decision, derr := DecideResultDelivery(ResultDeliveryInput{
-		Columns:       result.Columns,
-		Rows:          result.Rows,
-		CellTruncated: result.CellTruncated,
-		Capabilities:  capabilities,
-	})
-	if derr != nil {
-		return model.QueryExecuteResponse{}, derr
+	// Success: the shared finalize validates the post-Apply producer matrix,
+	// takes the coordinator-owned delivery snapshot, writes the success
+	// record exactly once, and runs the post-finalize capability gate against
+	// the owned copy. Persistence failure wins over capability refusal and
+	// never yields a success response, so execID is non-zero from here on.
+	rec := attempt.buildAttemptRecord(guarded, model.QueryExecutionSuccess, 0, "", "")
+	owned, execID, ferr := attempt.finalizeSuccess(ctx, rec, result, capabilities)
+	if ferr != nil {
+		return model.QueryExecuteResponse{}, ferr
 	}
 
 	var pagination *model.QueryExecutePaginationResponse
@@ -417,7 +429,7 @@ func (s *QueryExecutionService) executeGuardedChain(
 			Page:            page,
 			PageSize:        guarded.ResultLimit,
 			HasPreviousPage: page > 1,
-			HasNextPage:     result.Truncated && offset+guarded.ResultLimit < guarded.LimitApplied,
+			HasNextPage:     owned.Truncated && offset+guarded.ResultLimit < guarded.LimitApplied,
 		}
 	}
 
@@ -426,12 +438,12 @@ func (s *QueryExecutionService) executeGuardedChain(
 		Status:           model.QueryExecutionSuccess,
 		TargetResourceID: target.ResourceID,
 		Engine:           target.ConnectionContext.Engine,
-		Columns:          result.Columns,
-		Rows:             decision.Rows,
-		RowCount:         result.RowCount,
-		CellTruncated:    decision.CellTruncated,
-		Truncated:        result.Truncated,
-		DurationMs:       s.clock.Now().Sub(start).Milliseconds(),
+		Columns:          owned.Columns,
+		Rows:             owned.Rows,
+		RowCount:         owned.RowCount,
+		CellTruncated:    owned.CellTruncated,
+		Truncated:        owned.Truncated,
+		DurationMs:       s.clock.Now().Sub(attempt.start).Milliseconds(),
 		LimitApplied:     guarded.LimitApplied,
 		ExecutedAt:       s.clock.Now(),
 		Pagination:       pagination,
@@ -679,8 +691,25 @@ func (s *QueryExecutionService) findTarget(ctx context.Context, targetID uint64)
 // or actor identity. Every attempt is recorded; localValues, result rows, SQL
 // text, DSN, and credentials are never persisted.
 func (s *QueryExecutionService) NavigateRelatedRecords(ctx context.Context, actorUserID uint64, targetID uint64, req model.RelatedRecordNavigationRequest) (model.RelatedRecordNavigationResponse, error) {
-	start := s.clock.Now()
 	identity := model.QueryExecutionIdentity{Kind: model.QueryExecutionActorUser, ID: actorUserID}
+	if actorUserID == 0 || targetID == 0 || identity.Validate() != nil {
+		return model.RelatedRecordNavigationResponse{}, fmt.Errorf("%w: invalid execution identity", ErrQueryValidationFailed)
+	}
+	if err := req.Validate(); err != nil {
+		return model.RelatedRecordNavigationResponse{}, fmt.Errorf("%w: %v", ErrQueryValidationFailed, err)
+	}
+	// The pinned-schema selector stays fail-closed for the MySQL/TiDB
+	// navigation path; source.database keeps its browse-scope meaning.
+	if req.Source.Schema != "" {
+		return model.RelatedRecordNavigationResponse{}, fmt.Errorf("%w: source.schema is not supported", ErrQueryValidationFailed)
+	}
+
+	// The request belongs to this attempt: clone the locator values and the
+	// capability list before any external call so caller mutation can never
+	// reach the claim digest, the bound SQL values, or the delivery gate.
+	localValues := append([]string(nil), req.LocalValues...)
+	req.Capabilities = append([]string(nil), req.Capabilities...)
+	start := s.clock.Now()
 
 	// 1. Resolve governed target access (same path as Execute).
 	access, err := s.access.Resolve(ctx, actorUserID, targetID)
@@ -691,18 +720,21 @@ func (s *QueryExecutionService) NavigateRelatedRecords(ctx context.Context, acto
 		var accessErr *TargetAccessError
 		if errors.As(err, &accessErr) {
 			// access.Target is populated even on denial so we can record the
-			// rejected attempt. Before FK resolution, use fixed generic metadata.
-			return s.rejectNavigation(ctx, access.Target, identity, nil,
-				"navigation_not_allowed", accessErr.Error(),
-				fmt.Errorf("%w: %s", ErrQueryNotAllowed, accessErr.Error()), start)
+			// rejected attempt. Before FK resolution, the attempt carries no
+			// relation identity — fixed generic metadata only.
+			denied := newMySQLExecutionAttempt(s, access.Target, identity, mysqlEntryNavigation, start)
+			return denied.navReject(ctx, "navigation_not_allowed", accessErr.Error(),
+				fmt.Errorf("%w: %s", ErrQueryNotAllowed, accessErr.Error()))
 		}
 		return model.RelatedRecordNavigationResponse{}, err
 	}
 
 	target := access.Target
+	attempt := newMySQLExecutionAttempt(s, target, identity, mysqlEntryNavigation, start)
 
-	// 2. Retrieve source table FK metadata via the schema inspector. The raw
-	// inspector error must never be exposed, persisted, or audited.
+	// 2. Retrieve source table FK metadata via the schema inspector exactly
+	// once. The raw inspector error must never be exposed, persisted, or
+	// audited.
 	detail, err := s.inspector.GetObjectDetails(ctx, access.dsn, req.Source.Database, req.Source.Object, req.Source.Kind)
 	if err != nil {
 		// A canceled or deadline-expired inspector read is NOT a governance
@@ -713,39 +745,66 @@ func (s *QueryExecutionService) NavigateRelatedRecords(ctx context.Context, acto
 		// navigation_source_error attempt with the public
 		// ErrNavigationSourceNotFound contract unchanged (Issue #40).
 		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
-			return s.recordNavigationTerminalOutcome(ctx, target, identity, nil, err, start)
+			// Pre-claim preparation failure: the returned error is the bare
+			// canonical sentinel — no wrapped safe message on the chain.
+			return attempt.navPreparationOutcome(ctx, err)
 		}
-		return s.rejectNavigation(ctx, target, identity, nil,
-			"navigation_source_error", "could not retrieve source table metadata",
-			ErrNavigationSourceNotFound, start)
+		return attempt.navReject(ctx, "navigation_source_error", "could not retrieve source table metadata",
+			ErrNavigationSourceNotFound)
+	}
+	if detail == nil {
+		// A nil detail with a nil error is a provider contract violation —
+		// fail closed with the controlled source error and never fabricate
+		// relation metadata or dereference the nil snapshot.
+		return attempt.navReject(ctx, "navigation_source_error", "could not retrieve source table metadata",
+			ErrNavigationSourceNotFound)
 	}
 
-	// 3. Match the FK constraint by name.
+	// 3. Match the FK constraint by name, then take an owned copy of the
+	// summary and its ordered column list — the provider's slices must never
+	// alias the digest, the bound values, or the recorded relation identity.
 	var matchedFK *FKSummary
 	for i := range detail.ForeignKeys {
 		if detail.ForeignKeys[i].Name == req.Source.ForeignKey {
-			matchedFK = &detail.ForeignKeys[i]
+			fk := detail.ForeignKeys[i]
+			fk.Columns = append([]FKColumn(nil), fk.Columns...)
+			matchedFK = &fk
 			break
 		}
 	}
 	if matchedFK == nil {
-		return s.rejectNavigation(ctx, target, identity, nil,
-			"navigation_fk_not_found", "foreign key not found on source table",
-			ErrNavigationSourceNotFound, start)
+		return attempt.navReject(ctx, "navigation_fk_not_found", "foreign key not found on source table",
+			ErrNavigationSourceNotFound)
 	}
 
 	// 4. Validate the live FK metadata is structurally sound and consistent.
 	if err := validateRelatedRecordsFKMetadata(matchedFK); err != nil {
-		return s.rejectNavigation(ctx, target, identity, nil,
-			"navigation_metadata_invalid", "foreign key metadata is invalid",
-			ErrNavigationSourceNotFound, start)
+		return attempt.navReject(ctx, "navigation_metadata_invalid", "foreign key metadata is invalid",
+			ErrNavigationSourceNotFound)
 	}
+	attempt.setNavigationRelation(matchedFK)
 
 	// 5. Validate localValues count matches FK column count.
-	if len(req.LocalValues) != len(matchedFK.Columns) {
-		return s.rejectNavigation(ctx, target, identity, nil,
-			"navigation_value_mismatch", "localValues count does not match foreign key column count",
-			ErrNavigationValueMismatch, start)
+	if len(localValues) != len(matchedFK.Columns) {
+		return attempt.navReject(ctx, "navigation_value_mismatch", "localValues count does not match foreign key column count",
+			ErrNavigationValueMismatch)
+	}
+
+	limit := req.ClampMaxRows()
+	if isProductionEnvironment(target.ConnectionContext.Environment) && limit > productionHardMaxRows {
+		limit = productionHardMaxRows
+	}
+
+	// Claim admission runs after trusted preparation and the resolved limit
+	// but before disclosure preflight and result execution: a non-empty key
+	// occupies the (target, key) slot once with empty connection scope.
+	timeout := defaultQueryTimeout
+	if isProductionEnvironment(target.ConnectionContext.Environment) {
+		timeout = productionQueryTimeout
+	}
+	digest := s.mysqlNavigationDigest(req.Source.Database, req.Source.Object, matchedFK, localValues, limit)
+	if err := attempt.admit(ctx, req.ClientExecutionID, digest, timeout); err != nil {
+		return model.RelatedRecordNavigationResponse{}, err
 	}
 
 	// 6. Disclosure preflight for related records.
@@ -760,44 +819,34 @@ func (s *QueryExecutionService) NavigateRelatedRecords(ctx context.Context, acto
 		// deadline outcome and must reach the shared atomic evidence path
 		// (Issue #35), exactly as core query execution does.
 		if errors.Is(err, ErrQueryDisclosureBlocked) && !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded) {
-			return s.rejectNavigation(ctx, target, identity, matchedFK, "query_result_disclosure_blocked", "query blocked by result disclosure policy",
-				fmt.Errorf("%w: %w", ErrQueryNotAllowed, err), start)
+			return attempt.navReject(ctx, "query_result_disclosure_blocked", "query blocked by result disclosure policy",
+				fmt.Errorf("%w: %w", ErrQueryNotAllowed, ErrQueryDisclosureBlocked))
 		}
 		// All other post-target disclosure terminal failures record fixed
 		// safe failed or timeout evidence and surface the existing controlled
 		// error (Issue #36).
-		return s.recordNavigationTerminalOutcome(ctx, target, identity, matchedFK, err, start)
+		return attempt.navTerminalOutcome(ctx, err)
 	}
 
-	// 7. Build the parameterized SELECT from trusted FK metadata.
+	// 7. Build the parameterized SELECT from the owned FK snapshot.
 	//    SELECT * FROM `<ref_schema>`.`<ref_table>` WHERE `<ref_col1>` = ? AND ... LIMIT <decimal>
 	//    Identifiers are backtick-quoted with embedded backticks doubled; values
 	//    are bound via database/sql placeholders; the limit is a server-clamped
 	//    decimal literal so the placeholder count matches the argument count.
-
 	var whereClauses []string
 	for _, col := range matchedFK.Columns {
 		whereClauses = append(whereClauses, fmt.Sprintf("%s = ?", quoteMySQLIdentifier(col.ReferencedColumn)))
 	}
 
-	limit := req.ClampMaxRows()
-	if isProductionEnvironment(target.ConnectionContext.Environment) && limit > productionHardMaxRows {
-		limit = productionHardMaxRows
-	}
-
 	query := fmt.Sprintf("SELECT * FROM %s.%s WHERE %s LIMIT %d",
 		quoteMySQLIdentifier(refSchema), quoteMySQLIdentifier(refTable), strings.Join(whereClauses, " AND "), limit)
 
-	values := make([]any, len(req.LocalValues))
-	for i, v := range req.LocalValues {
+	values := make([]any, len(localValues))
+	for i, v := range localValues {
 		values[i] = v
 	}
 
 	// 8. Execute with timeout (same policy as Execute).
-	timeout := defaultQueryTimeout
-	if isProductionEnvironment(target.ConnectionContext.Environment) {
-		timeout = productionQueryTimeout
-	}
 	execCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
@@ -808,54 +857,36 @@ func (s *QueryExecutionService) NavigateRelatedRecords(ctx context.Context, acto
 		Limit:     limit,
 	})
 	if err != nil {
-		return s.recordNavigationTerminalOutcome(ctx, target, identity, matchedFK, err, start)
+		return attempt.navTerminalOutcome(ctx, err)
 	}
 
 	// Producer evidence check before disclosure: malformed executor evidence
 	// is an internal failure — never let Apply reclassify it as a policy
 	// refusal (T8-B-R1).
 	if err := validateCellTruncatedMatrix(len(result.Columns), result.Rows, result.CellTruncated); err != nil {
-		return s.recordNavigationTerminalOutcome(ctx, target, identity, matchedFK, err, start)
+		return attempt.navTerminalOutcome(ctx, err)
 	}
 
 	columns, rows, applyErr := s.disclosure.Apply(plan, result.Columns, result.Rows)
 	if applyErr != nil {
-		return s.recordNavigationTerminalOutcome(ctx, target, identity, matchedFK, applyErr, start)
+		return attempt.navTerminalOutcome(ctx, applyErr)
 	}
 	result.Columns = columns
 	result.Rows = rows
 
-	// Producer evidence check before finalize: a missing or misaligned
-	// cellTruncated matrix is an internal producer failure — recorded as a
-	// failed attempt, never filled in with fabricated all-false evidence and
-	// never surfaced as a client-capability issue (T8-B).
-	if err := validateCellTruncatedMatrix(len(result.Columns), result.Rows, result.CellTruncated); err != nil {
-		return s.recordNavigationTerminalOutcome(ctx, target, identity, matchedFK, err, start)
-	}
-
-	// 10. Build relation metadata from trusted FK columns.
+	// 10. Build relation metadata from the owned FK snapshot before finalize.
 	refColumns := make([]string, len(matchedFK.Columns))
 	for i, col := range matchedFK.Columns {
 		refColumns[i] = col.ReferencedColumn
 	}
 
-	// 11. Record success using canonical inspected relation identity.
-	execID, perr := s.persistNavigationAttempt(ctx, target, identity, matchedFK, model.QueryExecutionSuccess, result.RowCount, "", "", start)
-	if perr != nil {
-		return model.RelatedRecordNavigationResponse{}, errPersistAttempt
-	}
-
-	// 12. Post-finalize delivery gate (spec G2): the success evidence pair is
-	// already committed, so a capability refusal is a delivery refusal only —
-	// the recorded outcome stays success and no second evidence write happens.
-	decision, derr := DecideResultDelivery(ResultDeliveryInput{
-		Columns:       result.Columns,
-		Rows:          result.Rows,
-		CellTruncated: result.CellTruncated,
-		Capabilities:  req.Capabilities,
-	})
-	if derr != nil {
-		return model.RelatedRecordNavigationResponse{}, derr
+	// 11. Success: the shared finalize validates the post-Apply matrix,
+	// snapshots the result, writes the success record exactly once, and runs
+	// the post-finalize capability gate against the owned copy.
+	rec := attempt.buildAttemptRecord(nil, model.QueryExecutionSuccess, 0, "", "")
+	owned, execID, ferr := attempt.finalizeSuccess(ctx, rec, result, req.Capabilities)
+	if ferr != nil {
+		return model.RelatedRecordNavigationResponse{}, ferr
 	}
 
 	return model.RelatedRecordNavigationResponse{
@@ -863,11 +894,11 @@ func (s *QueryExecutionService) NavigateRelatedRecords(ctx context.Context, acto
 		Status:             model.QueryExecutionSuccess,
 		TargetResourceID:   target.ResourceID,
 		Engine:             target.ConnectionContext.Engine,
-		Columns:            result.Columns,
-		Rows:               decision.Rows,
-		RowCount:           result.RowCount,
-		CellTruncated:      decision.CellTruncated,
-		Truncated:          result.Truncated,
+		Columns:            owned.Columns,
+		Rows:               owned.Rows,
+		RowCount:           owned.RowCount,
+		CellTruncated:      owned.CellTruncated,
+		Truncated:          owned.Truncated,
 		DurationMs:         s.clock.Now().Sub(start).Milliseconds(),
 		LimitApplied:       limit,
 		ExecutedAt:         s.clock.Now(),
@@ -878,61 +909,6 @@ func (s *QueryExecutionService) NavigateRelatedRecords(ctx context.Context, acto
 		ReferencedObject:   refTable,
 		ReferencedColumns:  refColumns,
 	}, nil
-}
-
-// recordNavigationTerminalOutcome classifies one post-target navigation
-// terminal failure (disclosure preflight, executor, or disclosure apply) and
-// records its fixed-safe evidence through the shared atomic pair path,
-// returning the controlled response error. The raw error — which may echo DSN
-// fragments from the driver — is classified to a fixed status/code/message and
-// never returned or persisted; every Evidence-Bearing Query Attempt's terminal
-// outcome reaches the shared atomic evidence path (Issue #35 / #36).
-func (s *QueryExecutionService) recordNavigationTerminalOutcome(ctx context.Context, target model.QueryTarget, identity model.QueryExecutionIdentity, fk *FKSummary, err error, start time.Time) (model.RelatedRecordNavigationResponse, error) {
-	status, sentinel, code, safeMsg := classifyExecutorError(err)
-	if _, perr := s.persistNavigationAttempt(ctx, target, identity, fk, status, 0, code, safeMsg, start); perr != nil {
-		return model.RelatedRecordNavigationResponse{}, errPersistAttempt
-	}
-	return model.RelatedRecordNavigationResponse{}, fmt.Errorf("%w: %s", sentinel, safeMsg)
-}
-
-// rejectNavigation records a rejected navigation attempt and returns the error.
-func (s *QueryExecutionService) rejectNavigation(ctx context.Context, target model.QueryTarget, identity model.QueryExecutionIdentity, fk *FKSummary, code, msg string, retErr error, start time.Time) (model.RelatedRecordNavigationResponse, error) {
-	if _, perr := s.persistNavigationAttempt(ctx, target, identity, fk, model.QueryExecutionRejected, 0, code, msg, start); perr != nil {
-		return model.RelatedRecordNavigationResponse{}, errPersistAttempt
-	}
-	return model.RelatedRecordNavigationResponse{}, retErr
-}
-
-// persistNavigationAttempt records a navigation attempt as one atomic
-// Execution Evidence Pair (history row + the fixed related_record_navigation
-// audit event) through the repository-owned primitive (Issue #36). It never
-// stores localValues, result rows, SQL, credentials, or raw errors. When fk is
-// nil (trusted resolution has not succeeded), only fixed generic metadata is
-// recorded. When fk is non-nil, canonical inspected relation identity is used.
-//
-// Issue #35: the pair write runs in the fixed two-second Evidence Persistence
-// Window detached from request cancellation/deadline, so a client disconnect
-// can never drop navigation evidence; the write is one synchronous bounded
-// attempt with no retry, queue, worker, or disk buffer.
-func (s *QueryExecutionService) persistNavigationAttempt(ctx context.Context, target model.QueryTarget, identity model.QueryExecutionIdentity, fk *FKSummary, status model.QueryExecutionStatus, rowCount int, code, msg string, start time.Time) (uint64, error) {
-	var preview, digest string
-	if fk == nil {
-		// Pre-resolution: fixed generic metadata only. Request-controlled source
-		// identity is never persisted until trusted resolution succeeds.
-		preview = "related:unresolved"
-		digest = "nav:unresolved"
-	} else {
-		// Post-resolution: canonical inspected relation identity and FK name.
-		refSchema := fk.Columns[0].ReferencedSchema
-		refTable := fk.Columns[0].ReferencedTable
-		preview = fmt.Sprintf("related:%s.%s/%s", refSchema, refTable, fk.Name)
-		digest = fmt.Sprintf("nav:%s.%s/%s", refSchema, refTable, fk.Name)
-	}
-
-	rec := s.buildRecord(target, identity, nil, status, rowCount, code, msg, start)
-	rec.StatementDigest = truncateString(digest, 128)
-	rec.StatementPreview = truncateString(preview, 256)
-	return s.persistEvidencePair(ctx, rec, executionEvidenceNavigation)
 }
 
 // quoteMySQLIdentifier quotes a MySQL identifier with backticks and doubles
@@ -1073,11 +1049,7 @@ func (s *QueryExecutionService) persistEvidencePair(ctx context.Context, rec mod
 	windowCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), evidencePersistenceWindow)
 	defer cancel()
 
-	eventType := "query.executed"
-	if kind == executionEvidenceNavigation {
-		eventType = "related_record_navigation"
-	}
-	id, err := s.executions.InsertExecutionWithAudit(windowCtx, rec, eventType, auditResultFor(rec.Status))
+	id, err := s.executions.InsertExecutionWithAudit(windowCtx, rec, evidenceEventType(kind), auditResultFor(rec.Status))
 	if err != nil {
 		return 0, err
 	}

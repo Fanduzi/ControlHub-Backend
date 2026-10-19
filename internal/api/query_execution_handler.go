@@ -1,13 +1,14 @@
 // Package api provides HTTP handlers and routing for the ControlHub REST API.
-// input: bytes, context, errors, fmt, io, net/http, strconv, strings, time, chi, internal/model, internal/service
-// output: user-or-machine ordinary execute identity, user-only sibling query and owner-only statement handlers, controlled error mapping, queryExecutionAPI/queryExecutionStatementAPI interfaces
-// pos: HTTP handlers for governed execute/history/owner-only statement retrieval, saved-statement execution, and related-record navigation. The history list mixes terminal rows with claim-derived entries and accepts database/clientExecutionId filters plus the v2 mixed-ordering cursor (T10-C). Execute/related disclosure blocks publish query_result_disclosure_blocked (Issue #48); target-not-enabled remains query_not_allowed; post-finalize result-contract refusals publish 409 result_contract_upgrade_required on all three result routes (T8-B).
+// input: bytes, context, encoding/json, errors, fmt, io, net/http, strconv, strings, time, chi, internal/model, internal/service
+// output: user-or-machine ordinary execute identity, route-local strict execute decoder, user-only sibling query and owner-only statement handlers, controlled error mapping with claim 409 sentinels, queryExecutionAPI/queryExecutionStatementAPI interfaces
+// pos: HTTP handlers for governed execute/history/owner-only statement retrieval, saved-statement execution, and related-record navigation. All three execution entries accept an optional verbatim clientExecutionId claim key through route-local strict decoders with exact case-sensitive field allowlists and explicit-null rejection on every typed scalar/member (nested source members included); ordinary database/schema and navigation source.schema stay fail-closed for MySQL/TiDB. The history list mixes terminal rows with claim-derived entries and accepts database/clientExecutionId filters plus the v2 mixed-ordering cursor (T10-C). Execute/related disclosure blocks publish query_result_disclosure_blocked (Issue #48); target-not-enabled remains query_not_allowed; claim replay/conflict publishes execution_already_exists/client_execution_id_conflict and post-finalize result-contract refusals publish result_contract_upgrade_required as 409 on all three result routes (T8-B).
 // note: if this file changes, update header and README.md
 package api
 
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -39,6 +40,182 @@ type queryExecutionStatementAPI interface {
 	GetExecutionStatement(ctx context.Context, actorUserID, targetID, executionID uint64) (model.QueryExecutionStatementResponse, error)
 }
 
+// mysqlExecuteMaxBodyBytes bounds the ordinary execute body: a worst-case
+// escaped MaxStatementLength-rune statement plus the surrounding fields.
+const mysqlExecuteMaxBodyBytes = 6*model.MaxStatementLength + 8192
+
+// mysqlNavigationMaxBodyBytes bounds the navigation body: the model caps
+// localValues at 16 entries of MaxLocalValueLength runes each, so a fully
+// escaped worst case stays far under this bound.
+const mysqlNavigationMaxBodyBytes = 16*6*model.MaxLocalValueLength + 8192
+
+// readStrictBody is the shared bounded-read step for the three governed
+// execution decoders: the body is capped at maxBytes (one byte past the
+// limit is an error, never a truncated suffix), must be valid UTF-8 before
+// encoding/json can replace invalid bytes, and carries no duplicate field
+// names.
+func readStrictBody(r *http.Request, maxBytes int64) ([]byte, error) {
+	body, err := io.ReadAll(io.LimitReader(r.Body, maxBytes+1))
+	if err != nil {
+		return nil, err
+	}
+	if int64(len(body)) > maxBytes {
+		return nil, errors.New("request body too large")
+	}
+	if !utf8.Valid(body) {
+		return nil, errors.New("request body must be valid UTF-8")
+	}
+	if err := rejectDuplicateJSONFields(body); err != nil {
+		return nil, err
+	}
+	return body, nil
+}
+
+// strictJSONObjectFields returns the raw top-level members after enforcing
+// the route's exact field allowlist: every top-level name must be spelled
+// exactly as allowed (encoding/json matches struct fields case-insensitively
+// even under DisallowUnknownFields, so a case-variant alias would otherwise
+// land in the typed field) and a member with a nested allowlist must be an
+// object whose names are exact members of that nested set. Messages are
+// fixed and never echo body bytes.
+func strictJSONObjectFields(body []byte, allowed map[string][]string) (map[string]json.RawMessage, error) {
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(body, &fields); err != nil || fields == nil {
+		return nil, errors.New("request body must be a JSON object")
+	}
+	for name, raw := range fields {
+		nested, ok := allowed[name]
+		if !ok {
+			return nil, fmt.Errorf("unknown field %s", name)
+		}
+		if nested == nil {
+			continue
+		}
+		var sub map[string]json.RawMessage
+		if err := json.Unmarshal(raw, &sub); err != nil || sub == nil {
+			return nil, fmt.Errorf("%s must be an object", name)
+		}
+		for subName := range sub {
+			found := false
+			for _, allowedName := range nested {
+				if subName == allowedName {
+					found = true
+					break
+				}
+			}
+			if !found {
+				return nil, fmt.Errorf("unknown field %s.%s", name, subName)
+			}
+		}
+	}
+	return fields, nil
+}
+
+// requireStringMembers validates that raw is a non-null JSON array whose
+// members are all non-null JSON strings.
+func requireStringMembers(raw json.RawMessage, field string) error {
+	if string(bytes.TrimSpace(raw)) == "null" {
+		return fmt.Errorf("%s must be an array of strings", field)
+	}
+	var members []json.RawMessage
+	if err := json.Unmarshal(raw, &members); err != nil || members == nil {
+		return fmt.Errorf("%s must be an array of strings", field)
+	}
+	for _, member := range members {
+		if string(bytes.TrimSpace(member)) == "null" {
+			return fmt.Errorf("%s members must be strings", field)
+		}
+		var s string
+		if err := json.Unmarshal(member, &s); err != nil {
+			return fmt.Errorf("%s members must be strings", field)
+		}
+	}
+	return nil
+}
+
+// nullScalarField names one typed field whose present literal-null value is a
+// malformed type; kind is the expected JSON type for the fixed message.
+type nullScalarField struct {
+	name string
+	kind string
+}
+
+// rejectNullScalars rejects a present JSON null on each named member of one
+// raw field map — an explicit null where the contract types a scalar is a
+// malformed type, never a silent zero or empty value. Absent optional fields
+// and empty strings keep their existing semantics. prefix qualifies member
+// names in the fixed message ("" for top-level fields, "source." for nested
+// source members).
+func rejectNullScalars(members map[string]json.RawMessage, prefix string, scalars ...nullScalarField) error {
+	for _, scalar := range scalars {
+		if raw, ok := members[scalar.name]; ok && string(bytes.TrimSpace(raw)) == "null" {
+			return fmt.Errorf("%s%s must be a %s", prefix, scalar.name, scalar.kind)
+		}
+	}
+	return nil
+}
+
+// rejectNestedNullScalars applies rejectNullScalars to one nested object
+// member of the raw field map. strictJSONObjectFields has already proved a
+// present member is a non-null object matching the nested allowlist, so the
+// unmarshal cannot fail.
+func rejectNestedNullScalars(members map[string]json.RawMessage, field string, scalars ...nullScalarField) error {
+	raw, ok := members[field]
+	if !ok {
+		return nil
+	}
+	var nested map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &nested); err != nil || nested == nil {
+		return fmt.Errorf("%s must be an object", field)
+	}
+	return rejectNullScalars(nested, field+".", scalars...)
+}
+
+// executeAllowedFields is the exact case-sensitive field set for the ordinary
+// execute route; pagination carries the nested exact set.
+var executeAllowedFields = map[string][]string{
+	"statement":         nil,
+	"database":          nil,
+	"schema":            nil,
+	"maxRows":           nil,
+	"pagination":        {"page", "pageSize"},
+	"capabilities":      nil,
+	"clientExecutionId": nil,
+}
+
+// decodeExecuteJSONBody is the route-local strict decoder for ordinary
+// execution: bounded body, valid UTF-8, no duplicate fields, exact
+// case-sensitive field allowlist (nested pagination included), exactly one
+// JSON value, and the top-level value must be an object. An explicit JSON
+// null where the contract types a field — statement, database, schema,
+// clientExecutionId, maxRows, pagination, capabilities, or a member of
+// capabilities — is a malformed type, never a silent zero or empty value.
+// Error messages are fixed and never echo body bytes.
+func decodeExecuteJSONBody(r *http.Request, target *model.QueryExecuteRequest) error {
+	body, err := readStrictBody(r, mysqlExecuteMaxBodyBytes)
+	if err != nil {
+		return err
+	}
+	fields, err := strictJSONObjectFields(body, executeAllowedFields)
+	if err != nil {
+		return err
+	}
+	if err := rejectNullScalars(fields, "",
+		nullScalarField{"statement", "string"},
+		nullScalarField{"database", "string"},
+		nullScalarField{"schema", "string"},
+		nullScalarField{"maxRows", "number"},
+		nullScalarField{"clientExecutionId", "string"}); err != nil {
+		return err
+	}
+	if raw, ok := fields["capabilities"]; ok {
+		if err := requireStringMembers(raw, "capabilities"); err != nil {
+			return err
+		}
+	}
+	return decodeJSON(bytes.NewReader(body), target)
+}
+
 func handleExecuteQuery(svc queryExecutionAPI) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		targetID, err := parseUint64IDParam(chi.URLParam(r, "id"), "target id")
@@ -47,28 +224,12 @@ func handleExecuteQuery(svc queryExecutionAPI) http.HandlerFunc {
 			return
 		}
 		var req model.QueryExecuteRequest
-		if err := decodeJSONBody(r, &req); err != nil {
+		if err := decodeExecuteJSONBody(r, &req); err != nil {
 			writeJSONError(w, http.StatusBadRequest, "validation_failed", "invalid request payload")
 			return
 		}
-		if strings.TrimSpace(req.Statement) == "" {
-			writeJSONError(w, http.StatusBadRequest, "validation_failed", "statement is required")
-			return
-		}
-		if req.Pagination != nil {
-			if err := model.ValidatePagination(req.Pagination.Page, req.Pagination.PageSize); err != nil {
-				writeJSONError(w, http.StatusBadRequest, "validation_failed", err.Error())
-				return
-			}
-		}
-		// Composite-identity and claim fields land in the contract with
-		// migration 00029 but stay fail-closed until the owning tickets wire
-		// them: PostgreSQL execution (T7/T12) for database/schema and the
-		// claim protocol (T10) for clientExecutionId. Accepting them silently
-		// would misroute identity or imply dedup that does not exist.
-		if req.Database != "" || req.Schema != "" || req.ClientExecutionID != "" {
-			writeJSONError(w, http.StatusBadRequest, "validation_failed",
-				"database, schema, and clientExecutionId are not accepted until the postgresql execution path is enabled")
+		if err := req.Validate(); err != nil {
+			writeJSONError(w, http.StatusBadRequest, "validation_failed", err.Error())
 			return
 		}
 		identity, ok := queryExecutionIdentityFromContext(r.Context())
@@ -98,18 +259,50 @@ func queryExecutionIdentityFromContext(ctx context.Context) (model.QueryExecutio
 	return identity, identity.Validate() == nil
 }
 
+// savedExecuteAllowedFields is the exact case-sensitive field set for the
+// saved-statement execute route; pagination carries the nested exact set and
+// values keys are author-declared parameter names validated by the model.
+var savedExecuteAllowedFields = map[string][]string{
+	"values":            nil,
+	"maxRows":           nil,
+	"pagination":        {"page", "pageSize"},
+	"capabilities":      nil,
+	"clientExecutionId": nil,
+}
+
 // decodeTemplateExecuteJSONBody strictly decodes a template-execution request:
-// only values, maxRows, and pagination survive; duplicate keys and unknown
-// fields (SQL text, declarations, identities, roles, credentials, DSNs, policy
-// and audit payloads) are rejected. The body is bounded so the 16 KiB values
-// limit is enforced by the model Validate.
+// only values, maxRows, pagination, capabilities, and clientExecutionId
+// survive; duplicate keys, case-variant aliases, and unknown fields (SQL
+// text, declarations, identities, roles, credentials, DSNs, policy and audit
+// payloads) are rejected. The body is bounded so the 16 KiB values limit is
+// enforced by the model Validate. An explicit JSON null on a typed field —
+// values, maxRows, pagination, capabilities, clientExecutionId, or a member
+// of capabilities — is a malformed type; a missing values object or {} is
+// valid for static statements.
 func decodeTemplateExecuteJSONBody(r *http.Request, target any) error {
-	body, err := io.ReadAll(io.LimitReader(r.Body, int64(model.MaxQuerySavedStatementExecuteValuesSize+2*1024)))
+	body, err := readStrictBody(r, int64(model.MaxQuerySavedStatementExecuteValuesSize+2*1024))
 	if err != nil {
 		return err
 	}
-	if err := rejectDuplicateJSONFields(body); err != nil {
+	fields, err := strictJSONObjectFields(body, savedExecuteAllowedFields)
+	if err != nil {
 		return err
+	}
+	if raw, ok := fields["values"]; ok {
+		var values map[string]json.RawMessage
+		if err := json.Unmarshal(raw, &values); err != nil || values == nil {
+			return errors.New("values must be an object")
+		}
+	}
+	if err := rejectNullScalars(fields, "",
+		nullScalarField{"maxRows", "number"},
+		nullScalarField{"clientExecutionId", "string"}); err != nil {
+		return err
+	}
+	if raw, ok := fields["capabilities"]; ok {
+		if err := requireStringMembers(raw, "capabilities"); err != nil {
+			return err
+		}
 	}
 	return decodeJSON(bytes.NewReader(body), target)
 }
@@ -137,14 +330,6 @@ func handleExecuteSavedStatement(svc queryExecutionAPI) http.HandlerFunc {
 		}
 		if err := req.Validate(); err != nil {
 			writeJSONError(w, http.StatusBadRequest, "validation_failed", err.Error())
-			return
-		}
-		// clientExecutionId is accepted in the contract but fails closed until
-		// the claim protocol is wired (T10); accepting it silently would imply
-		// idempotent execution that does not exist yet.
-		if req.ClientExecutionID != "" {
-			writeJSONError(w, http.StatusBadRequest, "validation_failed",
-				"clientExecutionId is not accepted until the execution claim protocol is enabled")
 			return
 		}
 		actorUserID, ok := actorUserIDFromContext(r.Context())
@@ -356,6 +541,12 @@ func writeQueryExecutionError(w http.ResponseWriter, err error) {
 		writeJSONError(w, http.StatusRequestTimeout, "query_timeout", err.Error())
 	case errors.Is(err, service.ErrQueryBackendFailure):
 		writeJSONError(w, http.StatusBadGateway, "query_backend_error", err.Error())
+	case errors.Is(err, service.ErrQueryExecutionAlreadyExists):
+		// Claim occupancy sentinels: safe fixed codes with no row, occupant,
+		// or claim detail — the client learns only the dedup verdict.
+		writeJSONError(w, http.StatusConflict, "execution_already_exists", err.Error())
+	case errors.Is(err, service.ErrQueryExecutionConflict):
+		writeJSONError(w, http.StatusConflict, "client_execution_id_conflict", err.Error())
 	case errors.Is(err, service.ErrResultContractUpgradeRequired):
 		// T8-B wiring convention: the capability refusal is a post-finalize
 		// delivery refusal — the attempt already recorded success — so the
@@ -427,6 +618,60 @@ func parseExecutionPagination(r *http.Request) (executionPagination, error) {
 	return pg, nil
 }
 
+// navigationAllowedFields is the exact case-sensitive field set for the
+// related-records route; source carries the nested exact set.
+var navigationAllowedFields = map[string][]string{
+	"source":            {"database", "schema", "object", "kind", "foreignKey"},
+	"localValues":       nil,
+	"maxRows":           nil,
+	"capabilities":      nil,
+	"clientExecutionId": nil,
+}
+
+// decodeNavigationJSONBody is the route-local strict decoder for related
+// navigation: bounded body, valid UTF-8, no duplicate fields, exact
+// case-sensitive field allowlist (nested source included), one JSON value, a
+// non-null top-level object. Explicit JSON null on a typed field — source,
+// any nested source member, localValues, maxRows, capabilities,
+// clientExecutionId, or a member of localValues/capabilities — is a
+// malformed type; an empty-string localValues member stays valid
+// (byte-equality binding), and the closed source.schema selector keeps its
+// absent-or-empty-string shape. Messages are fixed.
+func decodeNavigationJSONBody(r *http.Request, target *model.RelatedRecordNavigationRequest) error {
+	body, err := readStrictBody(r, mysqlNavigationMaxBodyBytes)
+	if err != nil {
+		return err
+	}
+	fields, err := strictJSONObjectFields(body, navigationAllowedFields)
+	if err != nil {
+		return err
+	}
+	if err := rejectNullScalars(fields, "",
+		nullScalarField{"maxRows", "number"},
+		nullScalarField{"clientExecutionId", "string"}); err != nil {
+		return err
+	}
+	if err := rejectNestedNullScalars(fields, "source",
+		nullScalarField{"database", "string"},
+		nullScalarField{"schema", "string"},
+		nullScalarField{"object", "string"},
+		nullScalarField{"kind", "string"},
+		nullScalarField{"foreignKey", "string"}); err != nil {
+		return err
+	}
+	if raw, ok := fields["localValues"]; ok {
+		if err := requireStringMembers(raw, "localValues"); err != nil {
+			return err
+		}
+	}
+	if raw, ok := fields["capabilities"]; ok {
+		if err := requireStringMembers(raw, "capabilities"); err != nil {
+			return err
+		}
+	}
+	return decodeJSON(bytes.NewReader(body), target)
+}
+
 // handleNavigateRelatedRecords handles POST /query-targets/{id}/related-records.
 // It validates the request body, extracts the actor from the auth context, and
 // delegates to the service. The browser never supplies referenced identifiers,
@@ -439,7 +684,7 @@ func handleNavigateRelatedRecords(svc queryExecutionAPI) http.HandlerFunc {
 			return
 		}
 		var req model.RelatedRecordNavigationRequest
-		if err := decodeJSONBody(r, &req); err != nil {
+		if err := decodeNavigationJSONBody(r, &req); err != nil {
 			writeJSONError(w, http.StatusBadRequest, "validation_failed", "invalid request payload")
 			return
 		}
@@ -447,13 +692,12 @@ func handleNavigateRelatedRecords(svc queryExecutionAPI) http.HandlerFunc {
 			writeJSONError(w, http.StatusBadRequest, "validation_failed", err.Error())
 			return
 		}
-		// source.schema (pinned-schema selector) and clientExecutionId (claim
-		// protocol) are contract fields that fail closed until the owning
-		// tickets wire them; source.database keeps its existing browse-scope
-		// meaning for MySQL/TiDB.
-		if req.Source.Schema != "" || req.ClientExecutionID != "" {
+		// source.schema (pinned-schema selector) stays fail-closed for the
+		// MySQL/TiDB navigation path; source.database keeps its existing
+		// browse-scope meaning.
+		if req.Source.Schema != "" {
 			writeJSONError(w, http.StatusBadRequest, "validation_failed",
-				"source.schema and clientExecutionId are not accepted until the postgresql execution path is enabled")
+				"source.schema is not accepted until the postgresql execution path is enabled")
 			return
 		}
 		actorUserID, ok := actorUserIDFromContext(r.Context())
@@ -490,6 +734,10 @@ func writeNavigationError(w http.ResponseWriter, err error) {
 		writeJSONError(w, http.StatusRequestTimeout, "query_timeout", err.Error())
 	case errors.Is(err, service.ErrQueryBackendFailure):
 		writeJSONError(w, http.StatusBadGateway, "query_backend_error", err.Error())
+	case errors.Is(err, service.ErrQueryExecutionAlreadyExists):
+		writeJSONError(w, http.StatusConflict, "execution_already_exists", err.Error())
+	case errors.Is(err, service.ErrQueryExecutionConflict):
+		writeJSONError(w, http.StatusConflict, "client_execution_id_conflict", err.Error())
 	case errors.Is(err, service.ErrResultContractUpgradeRequired):
 		writeJSONError(w, http.StatusConflict, "result_contract_upgrade_required", err.Error())
 	default:

@@ -1,7 +1,7 @@
 // Package service provides tests for the Phase 37/38S query execution service.
 // input: context, errors, fmt, strings, testing, time, internal/model
 // output: TestExecute_* including successful-User full SQL, owner-only statement retrieval/history restore eligibility, machine identity terminal outcomes, readiness/credential tests, and repository/resolver/executor/clock fakes
-// pos: Unit boundary for identity-aware governed execution, private statement access and restore projection, atomic terminal evidence, paging, cancellation durability, credential fail-closed behavior, disclosure error mapping, and executor-fake cellTruncated contract fill (T8-B); fakeExecRepo's finalizeHook is the only seam for producer-side mutation at the keyed persistence boundary (T8-C-R1), and its finalizeEvents capture records the (eventType:result) pair the keyed finalize received so entry-kind event selection is assertable (PG-MULTI-ENTRY)
+// pos: Unit boundary for identity-aware governed execution, private statement access and restore projection, atomic terminal evidence, paging, cancellation durability, credential fail-closed behavior, disclosure error mapping, and executor-fake cellTruncated contract fill (T8-B); fakeExecRepo's finalizeHook/pairHook are the seams for producer/caller-side mutation at the keyed and keyless persistence boundaries (T8-C-R1), its finalizeEvents capture records the (eventType:result) pair the keyed finalize received so entry-kind event selection is assertable (PG-MULTI-ENTRY), fakeNavSchemaInspector.nilDetail injects the (nil,nil) provider-contract violation, and fakeDisclosureService.applyColumns/applyRows inject post-Apply malformed evidence
 // note: if this file changes, update header and README.md
 package service
 
@@ -24,6 +24,28 @@ import (
 // testResolverDSN is a valid MySQL DSN that binds to the scaffold target
 // (db.internal:3306). Its password doubles as the leak-detection marker.
 const testResolverDSN = "rouser:secret-dsn-do-not-leak@tcp(db.internal:3306)/sandbox"
+
+// errorTree flattens an error's unwrap chain through both Unwrap() error
+// and Unwrap() []error so joined trees are walked completely — raw-detail
+// and bare-sentinel proofs assert the exact node set, never just errors.Is.
+func errorTree(err error) []error {
+	var out []error
+	queue := []error{err}
+	for len(queue) > 0 {
+		cur := queue[0]
+		queue = queue[1:]
+		if cur == nil {
+			continue
+		}
+		out = append(out, cur)
+		if multi, ok := cur.(interface{ Unwrap() []error }); ok {
+			queue = append(queue, multi.Unwrap()...)
+			continue
+		}
+		queue = append(queue, errors.Unwrap(cur))
+	}
+	return out
+}
 
 // --- fakes ---
 
@@ -106,6 +128,13 @@ type fakeExecRepo struct {
 	// mutations at the persistence boundary (the real keyed finalize takes
 	// no result pointer; this exists for ownership fault injection only).
 	finalizeHook func()
+	// pairHook is the same ownership fault-injection seam on the keyless
+	// pair write — it runs after the pair call is recorded.
+	pairHook func()
+	// claimHook, when set, runs inside the fake's claim admission after the
+	// call is recorded — the ownership fault-injection seam for caller and
+	// provider inputs at the digest boundary.
+	claimHook func()
 }
 
 func (f *fakeExecRepo) GetCredential(_ context.Context, resourceID uint64, _ string) (model.QueryCredentialMetadata, error) {
@@ -309,6 +338,9 @@ func (f *fakeExecRepo) TryClaimExecution(_ context.Context, in model.QueryExecut
 	}
 	f.claims[k] = in.RequestDigest
 	f.claimInputs = append(f.claimInputs, in)
+	if f.claimHook != nil {
+		f.claimHook()
+	}
 	return nil
 }
 
@@ -361,6 +393,12 @@ func (f *fakeExecRepo) InsertExecutionWithAudit(ctx context.Context, rec model.Q
 		event  string
 		result string
 	}{rec, eventType, result})
+	// pairHook mirrors finalizeHook on the keyless evidence boundary: it runs
+	// after the pair call is recorded so tests can mutate producer or caller
+	// state at the persistence boundary.
+	if f.pairHook != nil {
+		f.pairHook()
+	}
 	if f.pairErr != nil {
 		return 0, f.pairErr
 	}
@@ -416,6 +454,7 @@ type fakeExecutor struct {
 	gotDSN        string
 	gotNavInput   *RelatedRecordsQueryInput
 	templateCalls int
+	gotTemplate   *GuardedTemplateStatement
 	// rawResult returns f.result verbatim — tests inject corrupt truncation
 	// evidence (missing/misaligned matrix) through it. When unset, the fake
 	// reproduces the real executor's contract: a non-empty result always
@@ -470,6 +509,7 @@ func (f *fakeExecutor) Query(ctx context.Context, dsn string, guarded GuardedQue
 func (f *fakeExecutor) QueryTemplate(ctx context.Context, dsn string, statement GuardedTemplateStatement) (QueryDatabaseResult, error) {
 	f.called = true
 	f.templateCalls++
+	f.gotTemplate = &statement
 	f.gotDSN = dsn
 	if f.delay > 0 {
 		select {
@@ -506,9 +546,14 @@ type fakeClock struct{ t time.Time }
 func (c *fakeClock) Now() time.Time { return c.t }
 
 type fakeDisclosureService struct {
-	blockErr         error
-	preflightErr     error
-	applyErr         error
+	blockErr     error
+	preflightErr error
+	applyErr     error
+	// applyColumns/applyRows, when non-nil, replace Apply's outputs — the
+	// seam for post-Apply malformed-evidence fault injection (a real Apply
+	// never emits them, but a corrupt planner implementation could).
+	applyColumns     []model.QueryResultColumn
+	applyRows        [][]any
 	preflightCalls   int
 	preflightQueries []GuardedQuery
 }
@@ -539,6 +584,12 @@ func (f *fakeDisclosureService) Apply(_ DisclosurePlan, columns []model.QueryRes
 	if f.applyErr != nil {
 		return nil, nil, f.applyErr
 	}
+	if f.applyColumns != nil {
+		columns = f.applyColumns
+	}
+	if f.applyRows != nil {
+		rows = f.applyRows
+	}
 	return columns, rows, nil
 }
 
@@ -546,6 +597,9 @@ func (f *fakeDisclosureService) Apply(_ DisclosurePlan, columns []model.QueryRes
 type fakeNavSchemaInspector struct {
 	detail *ObjectDetail
 	err    error
+	// nilDetail, when set, makes GetObjectDetails return (nil, nil) — the
+	// provider-contract-violation seam the nil-metadata proof needs.
+	nilDetail bool
 }
 
 func (f *fakeNavSchemaInspector) ListDatabases(_ context.Context, _ string, _ string, _ bool, _, _ int) ([]DatabaseSummary, model.PageInfo, error) {
@@ -559,6 +613,9 @@ func (f *fakeNavSchemaInspector) ListObjects(_ context.Context, _ string, _, _, 
 func (f *fakeNavSchemaInspector) GetObjectDetails(_ context.Context, _ string, _, _, _ string) (*ObjectDetail, error) {
 	if f.err != nil {
 		return nil, f.err
+	}
+	if f.nilDetail {
+		return nil, nil
 	}
 	if f.detail != nil {
 		return f.detail, nil
@@ -2173,16 +2230,13 @@ func TestExecute_PagedNegativeMaxRowsIsLimitValidationError(t *testing.T) {
 	// When the page executes.
 	_, err := svc.Execute(context.Background(), userExecutionIdentity(7), 9001, req)
 
-	// Then the rejection reuses the existing limit validation, not the
-	// pagination-window validation.
+	// Then the rejection is a request-shape failure — it fires before any
+	// target access, consumes no key, and writes no evidence.
 	if !errors.Is(err, ErrQueryValidationFailed) {
 		t.Fatalf("error = %v, want ErrQueryValidationFailed", err)
 	}
-	if !strings.Contains(err.Error(), ErrQueryLimitInvalid.Error()) {
-		t.Fatalf("error = %q, want the guard limit-validation message %q", err, ErrQueryLimitInvalid.Error())
-	}
-	if strings.Contains(err.Error(), ErrQueryPaginationInvalid.Error()) {
-		t.Fatalf("error = %q, must not be misreported as invalid pagination", err)
+	if !strings.Contains(err.Error(), "maxRows must not be negative") {
+		t.Fatalf("error = %q, want the request-shape maxRows message", err)
 	}
 
 	// And the executor is never dispatched for an invalid cap.
@@ -2190,23 +2244,15 @@ func TestExecute_PagedNegativeMaxRowsIsLimitValidationError(t *testing.T) {
 		t.Fatal("executor must not be called for a negative maxRows")
 	}
 
-	// And exactly one rejected attempt is recorded to history + audit.
-	if len(repo.insertedAttempts) != 1 || repo.insertedAttempts[0].Status != model.QueryExecutionRejected {
-		t.Fatalf("history = %+v, want one rejected attempt", repo.insertedAttempts)
-	}
-	if repo.insertedAttempts[0].ErrorCode != "validation_failed" {
-		t.Fatalf("history error code = %q, want validation_failed", repo.insertedAttempts[0].ErrorCode)
-	}
-	if len(repo.auditEvents) != 1 || repo.auditEvents[0].result != "validation_failed" {
-		t.Fatalf("audit events = %+v, want one validation_failed event", repo.auditEvents)
+	// And no evidence lands: a malformed request is not an attempt.
+	if len(repo.insertedAttempts) != 0 || len(repo.auditEvents) != 0 {
+		t.Fatalf("history/audit = %d/%d, want zero for a shape failure", len(repo.insertedAttempts), len(repo.auditEvents))
 	}
 
-	// And neither the response error nor the recorded attempt leaks the raw
-	// statement or the resolved DSN.
-	recorded := repo.insertedAttempts[0].ErrorMessage
+	// And the response error leaks neither the raw statement nor the DSN.
 	for _, leak := range []string{"secret-dsn-do-not-leak", "select value from metrics"} {
-		if strings.Contains(err.Error(), leak) || strings.Contains(recorded, leak) {
-			t.Fatalf("rejection leaks %q: err=%q history=%q", leak, err, recorded)
+		if strings.Contains(err.Error(), leak) {
+			t.Fatalf("rejection leaks %q: err=%q", leak, err)
 		}
 	}
 }

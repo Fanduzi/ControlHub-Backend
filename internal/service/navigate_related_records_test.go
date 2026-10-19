@@ -1,7 +1,7 @@
 // Package service provides tests for the Phase 38J related-record navigation.
 // input: context, errors, strings, testing, time, internal/model
 // output: TestNavigateRelatedRecords_* (fakes for inspector, executor bound queries; navScaffoldWithDisclosure for injectable disclosure planners)
-// pos: Unit tests for FK navigation governance, parameter binding, history/audit, error mapping including Preflight dual-wrap vs Apply exclusive ErrQueryDisclosureBlocked for HTTP (Issue #48), and inspector-phase cancellation/deadline terminal evidence (Issue #40)
+// pos: Unit tests for FK navigation governance, parameter binding, history/audit, error mapping including Preflight dual-wrap vs Apply exclusive ErrQueryDisclosureBlocked for HTTP (Issue #48), and inspector-phase cancellation/deadline terminal evidence (Issue #40) whose pre-claim outcome returns the bare canonical sentinel
 // note: if this file changes, update header and README.md
 package service
 
@@ -647,8 +647,11 @@ func TestNavigateRelatedRecords_InspectorCanceled_RecordsFailedCanceled(t *testi
 	if !errors.Is(err, ErrQueryBackendFailure) {
 		t.Fatalf("error = %v, want ErrQueryBackendFailure", err)
 	}
-	if !strings.Contains(err.Error(), "query canceled") {
-		t.Fatalf("error = %q, want fixed safe 'query canceled' message", err)
+	// The pre-claim inspector read is preparation: the returned error is
+	// the bare canonical sentinel — the fixed safe "query canceled" message
+	// lives on the evidence record below, never on the returned chain.
+	if tree := errorTree(err); len(tree) != 1 {
+		t.Fatalf("error chain = %d nodes, want the bare sentinel: %v", len(tree), err)
 	}
 	// Exactly one atomic Evidence Pair call, never a governance rejection.
 	if len(repo.pairCalls) != 1 {

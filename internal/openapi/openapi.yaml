@@ -542,15 +542,32 @@ paths:
                 $ref: "#/components/schemas/ErrorResponse"
         "409":
           description: >
-            Result delivery refused: the page contains at least one truncated
-            cell but the request did not declare the cellTruncated capability.
-            The attempt was still recorded as success; the response carries no
-            result rows. Re-submit with capabilities: [cellTruncated].
+            Execution-claim occupancy or result-contract refusal. A non-empty
+            clientExecutionId occupies one claim slot per target: replaying the
+            identical request returns execution_already_exists, and reusing the
+            key with a different request digest returns
+            client_execution_id_conflict — neither writes new evidence.
+            Capabilities never participate in replay identity, so a same-key
+            retry changing only capabilities is still the identical request;
+            a re-execution needs a new key, and an absent or empty key is
+            always a fresh attempt. Independently,
+            result_contract_upgrade_required means the page contains a
+            truncated cell but the request did not declare the
+            cellTruncated capability; the attempt was still recorded as
+            success and the response carries no rows.
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/ErrorResponse"
               examples:
+                alreadyExists:
+                  value:
+                    error: execution_already_exists
+                    message: execution_already_exists
+                keyConflict:
+                  value:
+                    error: client_execution_id_conflict
+                    message: client_execution_id_conflict
                 capabilityRequired:
                   value:
                     error: result_contract_upgrade_required
@@ -806,15 +823,32 @@ paths:
                 $ref: "#/components/schemas/ErrorResponse"
         "409":
           description: >
-            Result delivery refused: the page contains at least one truncated
-            cell but the request did not declare the cellTruncated capability.
-            The attempt was still recorded as success; the response carries no
-            result rows. Re-submit with capabilities: [cellTruncated].
+            Execution-claim occupancy or result-contract refusal. A non-empty
+            clientExecutionId occupies one claim slot per target: replaying the
+            identical request returns execution_already_exists, and reusing the
+            key with a different request digest returns
+            client_execution_id_conflict — neither writes new evidence.
+            Capabilities never participate in replay identity, so a same-key
+            retry changing only capabilities is still the identical request;
+            a re-execution needs a new key, and an absent or empty key is
+            always a fresh attempt. Independently,
+            result_contract_upgrade_required means the page contains a
+            truncated cell but the request did not declare the
+            cellTruncated capability; the attempt was still recorded as
+            success and the response carries no rows.
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/ErrorResponse"
               examples:
+                alreadyExists:
+                  value:
+                    error: execution_already_exists
+                    message: execution_already_exists
+                keyConflict:
+                  value:
+                    error: client_execution_id_conflict
+                    message: client_execution_id_conflict
                 capabilityRequired:
                   value:
                     error: result_contract_upgrade_required
@@ -3000,15 +3034,32 @@ paths:
                 $ref: "#/components/schemas/ErrorResponse"
         "409":
           description: >
-            Result delivery refused: the page contains at least one truncated
-            cell but the request did not declare the cellTruncated capability.
-            The attempt was still recorded as success; the response carries no
-            result rows. Re-submit with capabilities: [cellTruncated].
+            Execution-claim occupancy or result-contract refusal. A non-empty
+            clientExecutionId occupies one claim slot per target: replaying the
+            identical request returns execution_already_exists, and reusing the
+            key with a different request digest returns
+            client_execution_id_conflict — neither writes new evidence.
+            Capabilities never participate in replay identity, so a same-key
+            retry changing only capabilities is still the identical request;
+            a re-execution needs a new key, and an absent or empty key is
+            always a fresh attempt. Independently,
+            result_contract_upgrade_required means the page contains a
+            truncated cell but the request did not declare the
+            cellTruncated capability; the attempt was still recorded as
+            success and the response carries no rows.
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/ErrorResponse"
               examples:
+                alreadyExists:
+                  value:
+                    error: execution_already_exists
+                    message: execution_already_exists
+                keyConflict:
+                  value:
+                    error: client_execution_id_conflict
+                    message: client_execution_id_conflict
                 capabilityRequired:
                   value:
                     error: result_contract_upgrade_required
@@ -6002,9 +6053,15 @@ components:
           type: string
           maxLength: 64
           description: >
-            Client-supplied idempotency key for the execution-claim protocol.
-            Required non-empty for PostgreSQL executions; rejected while the
-            claim protocol is not yet enabled.
+            Optional verbatim idempotency key for the MySQL/TiDB
+            execution-claim protocol: at most 64 Unicode characters, valid
+            UTF-8, no NUL. A non-empty key occupies one claim slot per
+            target — replaying the identical request returns
+            execution_already_exists (409) and reusing the key with a
+            different request digest returns client_execution_id_conflict
+            (409). Omitted or empty means no idempotence guarantee: every
+            request runs as a fresh attempt. Capabilities never participate
+            in replay identity. PostgreSQL execution stays closed.
         capabilities:
           type: array
           items:
@@ -7253,9 +7310,15 @@ components:
           type: string
           maxLength: 64
           description: >
-            Client-supplied idempotency key for the execution-claim protocol.
-            Required non-empty for PostgreSQL execute entry points; rejected
-            while the claim protocol is not yet enabled.
+            Optional verbatim idempotency key for the MySQL/TiDB
+            execution-claim protocol: at most 64 Unicode characters, valid
+            UTF-8, no NUL. A non-empty key occupies one claim slot per
+            target — replaying the identical request returns
+            execution_already_exists (409) and reusing the key with a
+            different request digest returns client_execution_id_conflict
+            (409). Omitted or empty means no idempotence guarantee: every
+            request runs as a fresh attempt. Capabilities never participate
+            in replay identity. PostgreSQL execution stays closed.
         capabilities:
           type: array
           items:
@@ -7573,9 +7636,15 @@ components:
           type: string
           maxLength: 64
           description: >
-            Client-supplied idempotency key for the execution-claim protocol.
-            Required non-empty for PostgreSQL navigation; rejected while the
-            claim protocol is not yet enabled.
+            Optional verbatim idempotency key for the MySQL/TiDB
+            execution-claim protocol: at most 64 Unicode characters, valid
+            UTF-8, no NUL. A non-empty key occupies one claim slot per
+            target — replaying the identical request returns
+            execution_already_exists (409) and reusing the key with a
+            different request digest returns client_execution_id_conflict
+            (409). Omitted or empty means no idempotence guarantee: every
+            request runs as a fresh attempt. Capabilities never participate
+            in replay identity. PostgreSQL execution stays closed.
         capabilities:
           type: array
           items:

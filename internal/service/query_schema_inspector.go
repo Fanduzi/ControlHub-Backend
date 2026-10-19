@@ -913,6 +913,7 @@ func (s *MySQLSchemaInspector) loadForeignKeys(ctx context.Context, tx *sql.Tx, 
 		 JOIN information_schema.REFERENTIAL_CONSTRAINTS rc
 		   ON kcu.CONSTRAINT_NAME = rc.CONSTRAINT_NAME
 		  AND kcu.TABLE_SCHEMA = rc.CONSTRAINT_SCHEMA
+		  AND kcu.TABLE_NAME = rc.TABLE_NAME
 		 WHERE kcu.TABLE_SCHEMA = ? AND kcu.TABLE_NAME = ?
 		   AND kcu.REFERENCED_TABLE_NAME IS NOT NULL
 		 ORDER BY kcu.CONSTRAINT_NAME, kcu.ORDINAL_POSITION

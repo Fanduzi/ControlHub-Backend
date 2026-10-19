@@ -237,10 +237,10 @@ func TestTemplateExecute_DisclosureBlocked(t *testing.T) {
 	}
 }
 
-func TestTemplateExecute_FailClosedClientExecutionID(t *testing.T) {
-	// WHY: clientExecutionId arms the execution-claim protocol (T10). Until
-	// then a non-empty key must fail closed — never reach the service and
-	// imply dedup that does not exist.
+func TestTemplateExecute_ClientExecutionIDAccepted(t *testing.T) {
+	// WHY: clientExecutionId arms the execution-claim protocol for saved
+	// statements too — a valid key now reaches the service, while a
+	// contract-violating key still fails closed before any service call.
 	stub := &stubQueryExec{}
 	router := newTemplateExecRouter(stub)
 
@@ -248,13 +248,23 @@ func TestTemplateExecute_FailClosedClientExecutionID(t *testing.T) {
 	router.ServeHTTP(rec, qeRequest(http.MethodPost, "/query-targets/22/saved-statements/7/execute",
 		`{"clientExecutionId":"exec-1"}`, templateExecToken(t)))
 
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", rec.Code, rec.Body.String())
+	}
+	if !stub.templateCalled {
+		t.Fatal("ExecuteSavedStatement must run when a valid clientExecutionId is set")
+	}
+
+	stub = &stubQueryExec{}
+	router = newTemplateExecRouter(stub)
+	rec = httptest.NewRecorder()
+	router.ServeHTTP(rec, qeRequest(http.MethodPost, "/query-targets/22/saved-statements/7/execute",
+		`{"clientExecutionId":null}`, templateExecToken(t)))
+
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d, want 400; body=%s", rec.Code, rec.Body.String())
 	}
-	if !strings.Contains(rec.Body.String(), "validation_failed") {
-		t.Fatalf("body = %s, want validation_failed", rec.Body.String())
-	}
 	if stub.templateCalled {
-		t.Fatal("ExecuteSavedStatement must not run when clientExecutionId is set")
+		t.Fatal("ExecuteSavedStatement must not run on a malformed payload")
 	}
 }

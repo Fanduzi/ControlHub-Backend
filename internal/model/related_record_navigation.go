@@ -46,11 +46,15 @@ type RelatedRecordNavigationRequest struct {
 	Source      RelatedRecordNavigationSource `json:"source"`
 	LocalValues []string                      `json:"localValues"`
 	MaxRows     int                           `json:"maxRows,omitempty"`
-	// ClientExecutionID is the idempotency key for the claim protocol (G9).
-	// Rejected while non-empty until claims are wired (T10).
+	// ClientExecutionID is the idempotency key for the MySQL/TiDB execution
+	// claim (G9/T10): a non-empty key occupies one (target, key) slot —
+	// a same-digest replay returns execution_already_exists and a
+	// different digest conflicts — while an empty key stays the legacy
+	// keyless attempt. The key is never a digest input.
 	ClientExecutionID string `json:"clientExecutionId,omitempty"`
 	// Capabilities declares client result-contract capabilities (e.g.
 	// "cellTruncated"); checked by the post-finalize delivery gate (T8-B).
+	// Capabilities never participate in claim replay identity.
 	Capabilities []string `json:"capabilities,omitempty"`
 }
 
@@ -67,7 +71,7 @@ func (r *RelatedRecordNavigationRequest) Validate() error {
 	if len(r.Source.Schema) > MaxSourceObjectLength {
 		return fmt.Errorf("source schema exceeds %d characters", MaxSourceObjectLength)
 	}
-	if err := ValidateClientExecutionID(r.ClientExecutionID); err != nil {
+	if err := validateExecutionRequestKey(r.ClientExecutionID); err != nil {
 		return err
 	}
 	if strings.TrimSpace(r.Source.Object) == "" {

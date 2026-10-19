@@ -1,7 +1,7 @@
 // Package api provides tests for the query execution handlers.
 // input: bytes, context, encoding/json, fmt, net/http, net/http/httptest, strings, testing, time, chi, internal/model, internal/service
 // output: TestQueryExecution_* (execute identity, controlled errors, fresh auth, history restore eligibility, and owner-only full-statement detail)
-// pos: HTTP identity, auth, history projection, and error-mapping regression coverage for governed execution and User-only query siblings
+// pos: HTTP identity, auth, history projection, error-mapping, route-local strict execute-body decoding (duplicates, unknown fields, explicit-null typed scalars incl. nested source members), and clientExecutionId pass-through regression coverage for governed execution and User-only query siblings
 // note: if this file changes, update header and README.md
 package api
 
@@ -37,6 +37,7 @@ type stubQueryExec struct {
 	gotTargetID    uint64
 	gotMaxRows     int
 	gotPagination  *model.QueryExecutePaginationRequest
+	gotClientKey   string
 	gotNavRequest  model.RelatedRecordNavigationRequest
 	gotQuery       model.QueryExecutionListQuery
 	executeCalled  bool
@@ -70,6 +71,7 @@ func (s *stubQueryExec) Execute(_ context.Context, identity model.QueryExecution
 	s.gotTargetID = targetID
 	s.gotMaxRows = req.MaxRows
 	s.gotPagination = req.Pagination
+	s.gotClientKey = req.ClientExecutionID
 	resp := s.executeResp
 	if req.Pagination != nil {
 		resp.Pagination = &model.QueryExecutePaginationResponse{
@@ -1467,19 +1469,18 @@ func newApplyPathBlockedService() *service.QueryExecutionService {
 }
 
 func TestQueryExecution_Execute_FailClosedPGContractFields(t *testing.T) {
-	// WHY: database/schema select a composite connection identity and
-	// clientExecutionId arms the claim protocol — none are wired until their
-	// owning tickets (T7/T10/T12). Accepting them silently would misroute
-	// identity or imply dedup that does not exist, so the contract fields
-	// fail closed with a controlled validation error instead.
+	// WHY: database/schema select a composite connection identity that stays
+	// fail-closed until the PostgreSQL execution path (T7/T12) wires it.
+	// Accepting them silently would misroute identity, so they fail closed
+	// with a controlled validation error. clientExecutionId is now wired:
+	// it is exercised separately as a positive keyed expectation.
 	cases := []struct {
 		name string
 		body string
 	}{
 		{"database", `{"statement":"select 1","database":"pgdb"}`},
 		{"schema", `{"statement":"select 1","schema":"app"}`},
-		{"clientExecutionId", `{"statement":"select 1","clientExecutionId":"exec-1"}`},
-		{"all three", `{"statement":"select 1","database":"pgdb","schema":"app","clientExecutionId":"exec-1"}`},
+		{"both", `{"statement":"select 1","database":"pgdb","schema":"app","clientExecutionId":"exec-1"}`},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -1501,4 +1502,242 @@ func TestQueryExecution_Execute_FailClosedPGContractFields(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestQueryExecution_Execute_StrictJSONBody(t *testing.T) {
+	// WHY: the ordinary execute route decodes strictly — duplicate fields,
+	// unknown fields, multiple JSON values, malformed types, and explicit
+	// nulls where the contract types a scalar are all malformed payloads,
+	// never silently coerced. A null clientExecutionId is not an empty key.
+	cases := []struct {
+		name string
+		body string
+	}{
+		{"duplicate field", `{"statement":"select 1","statement":"select 2"}`},
+		{"unknown field", `{"statement":"select 1","actor":"admin"}`},
+		{"unknown DSN field", `{"statement":"select 1","dsn":"mysql://x"}`},
+		{"multiple JSON values", `{"statement":"select 1"} {"statement":"select 2"}`},
+		{"malformed JSON", `{"statement":`},
+		{"statement null", `{"statement":null}`},
+		{"statement wrong type", `{"statement":123}`},
+		{"database null", `{"statement":"select 1","database":null}`},
+		{"database wrong type", `{"statement":"select 1","database":42}`},
+		{"schema null", `{"statement":"select 1","schema":null}`},
+		{"schema wrong type", `{"statement":"select 1","schema":[1]}`},
+		{"clientExecutionId null", `{"statement":"select 1","clientExecutionId":null}`},
+		{"clientExecutionId wrong type", `{"statement":"select 1","clientExecutionId":42}`},
+		{"maxRows null", `{"statement":"select 1","maxRows":null}`},
+		{"maxRows wrong type", `{"statement":"select 1","maxRows":"10"}`},
+		{"capabilities null", `{"statement":"select 1","capabilities":null}`},
+		{"capabilities null member", `{"statement":"select 1","capabilities":["cellTruncated",null]}`},
+		{"capabilities non-string member", `{"statement":"select 1","capabilities":[1]}`},
+		{"pagination null", `{"statement":"select 1","pagination":null}`},
+		{"whole body null", `null`},
+		{"non-object body", `[{"statement":"select 1"}]`},
+		{"invalid UTF-8 statement", "{\"statement\":\"select 1\xff\"}"},
+		{"invalid UTF-8 clientExecutionId", "{\"statement\":\"select 1\",\"clientExecutionId\":\"k\xff\"}"},
+		// encoding/json matches struct fields case-insensitively even under
+		// DisallowUnknownFields — a case-variant alias is a second unknown
+		// field name, not a misspelling the decoder catches.
+		{"uppercase key alias over valid key", `{"statement":"select 1","clientExecutionId":"valid","CLIENTEXECUTIONID":""}`},
+		{"uppercase-only null key alias", `{"statement":"select 1","CLIENTEXECUTIONID":null}`},
+		{"mixed-case duplicate statement", `{"statement":"select 1","Statement":"select 2"}`},
+		{"nested pagination alias", `{"statement":"select 1","pagination":{"Page":1,"pageSize":10}}`},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			stub := &stubQueryExec{}
+			router := newQueryExecRouter(stub)
+			token := mintToken(t, "qe-test-secret", 42, "admin", qeTestNow)
+
+			rec := httptest.NewRecorder()
+			router.ServeHTTP(rec, qeRequest(http.MethodPost, "/query-targets/22/execute", tc.body, token))
+
+			if rec.Code != http.StatusBadRequest {
+				t.Fatalf("status = %d, want 400; body=%s", rec.Code, rec.Body.String())
+			}
+			if stub.executeCalled {
+				t.Fatal("Execute must not run on a malformed payload")
+			}
+		})
+	}
+
+	// Body-size boundary: a valid object padded to exactly the limit is
+	// accepted (whitespace is legal JSON), but one byte over — including a
+	// padded object followed by a second JSON value the old limiter would
+	// have silently truncated — is a malformed oversized payload.
+	for _, tc := range []struct {
+		name string
+		body string
+		want int
+	}{
+		{"padded exactly to limit",
+			`{"statement":"select 1"}` + strings.Repeat(" ", mysqlExecuteMaxBodyBytes-len(`{"statement":"select 1"}`)),
+			http.StatusOK},
+		{"one byte over limit",
+			`{"statement":"select 1"}` + strings.Repeat(" ", mysqlExecuteMaxBodyBytes-len(`{"statement":"select 1"}`)+1),
+			http.StatusBadRequest},
+		{"padded to limit plus trailing second JSON",
+			`{"statement":"select 1"}` + strings.Repeat(" ", mysqlExecuteMaxBodyBytes-len(`{"statement":"select 1"}`)-len(` {"statement":"select 2"}`)) + ` {"statement":"select 2"}`,
+			http.StatusBadRequest},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			stub := &stubQueryExec{executeResp: model.QueryExecuteResponse{Status: model.QueryExecutionSuccess}}
+			router := newQueryExecRouter(stub)
+			token := mintToken(t, "qe-test-secret", 42, "admin", qeTestNow)
+
+			rec := httptest.NewRecorder()
+			router.ServeHTTP(rec, qeRequest(http.MethodPost, "/query-targets/22/execute", tc.body, token))
+
+			if rec.Code != tc.want {
+				t.Fatalf("status = %d, want %d; body=%s", rec.Code, tc.want, rec.Body.String())
+			}
+			if tc.want != http.StatusOK && stub.executeCalled {
+				t.Fatal("Execute must not run on a malformed payload")
+			}
+		})
+	}
+}
+
+func TestQueryExecution_Execute_ClientExecutionIDReachesService(t *testing.T) {
+	// WHY: clientExecutionId arms the claim protocol — the route must pass
+	// the key byte-verbatim to the service, which owns admission. An empty
+	// or absent key stays the legacy keyless path.
+	for _, tc := range []struct {
+		name string
+		body string
+		key  string
+	}{
+		{"keyed", `{"statement":"select 1","clientExecutionId":"exec-1"}`, "exec-1"},
+		{"empty key is keyless", `{"statement":"select 1","clientExecutionId":""}`, ""},
+		{"absent key is keyless", `{"statement":"select 1"}`, ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			stub := &stubQueryExec{executeResp: model.QueryExecuteResponse{Status: model.QueryExecutionSuccess}}
+			router := newQueryExecRouter(stub)
+			token := mintToken(t, "qe-test-secret", 42, "admin", qeTestNow)
+
+			rec := httptest.NewRecorder()
+			router.ServeHTTP(rec, qeRequest(http.MethodPost, "/query-targets/22/execute", tc.body, token))
+
+			if rec.Code != http.StatusOK {
+				t.Fatalf("status = %d, want 200; body=%s", rec.Code, rec.Body.String())
+			}
+			if !stub.executeCalled {
+				t.Fatal("Execute must run for a well-formed keyed request")
+			}
+			if stub.gotClientKey != tc.key {
+				t.Fatalf("key passed to service = %q, want %q verbatim", stub.gotClientKey, tc.key)
+			}
+		})
+	}
+}
+
+func TestSavedAndNavigationRoutes_StrictJSONBody(t *testing.T) {
+	savedURL := "/query-targets/22/saved-statements/7/execute"
+	navURL := "/query-targets/9001/related-records"
+	navValid := `{"source":{"database":"orders_db","object":"order_items","kind":"table","foreignKey":"fk"},"localValues":["42"]}`
+
+	savedCases := []struct {
+		name string
+		body string
+	}{
+		{"case alias Values", `{"Values":{}}`},
+		{"duplicate values alias", `{"values":{},"Values":{}}`},
+		{"uppercase key alias", `{"clientExecutionId":"k","CLIENTEXECUTIONID":""}`},
+		{"nested pagination alias", `{"values":{},"pagination":{"Page":1}}`},
+		{"values null", `{"values":null}`},
+		{"values scalar", `{"values":"x"}`},
+		{"clientExecutionId null", `{"clientExecutionId":null}`},
+		{"maxRows null", `{"maxRows":null}`},
+		{"pagination null", `{"pagination":null}`},
+		{"capabilities null member", `{"capabilities":["cellTruncated",null]}`},
+		{"unknown field", `{"statement":"select 1","values":{}}`},
+		{"whole body null", `null`},
+		{"duplicate field", `{"values":{},"values":{}}`},
+	}
+	for _, tc := range savedCases {
+		t.Run("saved/"+tc.name, func(t *testing.T) {
+			stub := &stubQueryExec{}
+			router := newTemplateExecRouter(stub)
+			rec := httptest.NewRecorder()
+			router.ServeHTTP(rec, qeRequest(http.MethodPost, savedURL, tc.body, templateExecToken(t)))
+			if rec.Code != http.StatusBadRequest {
+				t.Fatalf("status = %d, want 400; body=%s", rec.Code, rec.Body.String())
+			}
+			if stub.templateCalled {
+				t.Fatal("ExecuteSavedStatement must not run on a malformed payload")
+			}
+		})
+	}
+
+	navCases := []struct {
+		name string
+		body string
+	}{
+		{"case alias Source", `{"Source":{"database":"orders_db","object":"o","kind":"table","foreignKey":"f"},"localValues":["1"]}`},
+		{"nested source alias", `{"source":{"Database":"orders_db","object":"o","kind":"table","foreignKey":"f"},"localValues":["1"]}`},
+		{"unknown source member", `{"source":{"database":"orders_db","object":"o","kind":"table","foreignKey":"f","hint":"x"},"localValues":["1"]}`},
+		{"uppercase key alias", navValid[:len(navValid)-1] + `,"clientExecutionId":"k","CLIENTEXECUTIONID":""}`},
+		{"source null", `{"source":null,"localValues":["1"]}`},
+		{"source database null", `{"source":{"database":null,"object":"o","kind":"table","foreignKey":"f"},"localValues":["1"]}`},
+		{"source schema null", `{"source":{"database":"orders_db","schema":null,"object":"o","kind":"table","foreignKey":"f"},"localValues":["1"]}`},
+		{"source object null", `{"source":{"database":"orders_db","object":null,"kind":"table","foreignKey":"f"},"localValues":["1"]}`},
+		{"source kind null", `{"source":{"database":"orders_db","object":"o","kind":null,"foreignKey":"f"},"localValues":["1"]}`},
+		{"source foreignKey null", `{"source":{"database":"orders_db","object":"o","kind":"table","foreignKey":null},"localValues":["1"]}`},
+		{"source member wrong type", `{"source":{"database":42,"object":"o","kind":"table","foreignKey":"f"},"localValues":["1"]}`},
+		{"localValues null", `{"source":{"database":"orders_db","object":"o","kind":"table","foreignKey":"f"},"localValues":null}`},
+		{"localValues null member", `{"source":{"database":"orders_db","object":"o","kind":"table","foreignKey":"f"},"localValues":[null]}`},
+		{"localValues non-string member", `{"source":{"database":"orders_db","object":"o","kind":"table","foreignKey":"f"},"localValues":[42]}`},
+		{"clientExecutionId null", navValid[:len(navValid)-1] + `,"clientExecutionId":null}`},
+		{"maxRows null", navValid[:len(navValid)-1] + `,"maxRows":null}`},
+		{"capabilities null member", navValid[:len(navValid)-1] + `,"capabilities":[null]}`},
+		{"whole body null", `null`},
+		{"duplicate localValues", navValid[:len(navValid)-1] + `,"localValues":["1"]}`},
+	}
+	for _, tc := range navCases {
+		t.Run("nav/"+tc.name, func(t *testing.T) {
+			stub := &stubQueryExec{}
+			router := newNavRouter(stub)
+			rec := httptest.NewRecorder()
+			router.ServeHTTP(rec, qeRequest(http.MethodPost, navURL, tc.body, navBearer(t)))
+			if rec.Code != http.StatusBadRequest {
+				t.Fatalf("status = %d, want 400; body=%s", rec.Code, rec.Body.String())
+			}
+			if stub.navCalled {
+				t.Fatal("NavigateRelatedRecords must not run on a malformed payload")
+			}
+		})
+	}
+
+	// Positive shape controls: a valid body still reaches each service, and
+	// localValues retains its empty-string binding semantics.
+	t.Run("nav/valid body reaches service", func(t *testing.T) {
+		stub := &stubQueryExec{}
+		router := newNavRouter(stub)
+		rec := httptest.NewRecorder()
+		router.ServeHTTP(rec, qeRequest(http.MethodPost, navURL, navValid, navBearer(t)))
+		if !stub.navCalled {
+			t.Fatal("valid navigation body must reach the service")
+		}
+	})
+	t.Run("nav/empty-string member valid", func(t *testing.T) {
+		stub := &stubQueryExec{}
+		router := newNavRouter(stub)
+		rec := httptest.NewRecorder()
+		router.ServeHTTP(rec, qeRequest(http.MethodPost, navURL,
+			`{"source":{"database":"orders_db","object":"o","kind":"table","foreignKey":"f"},"localValues":[""]}`, navBearer(t)))
+		if !stub.navCalled {
+			t.Fatalf("empty-string localValues member stays valid: %d %s", rec.Code, rec.Body.String())
+		}
+	})
+	t.Run("saved/missing values reaches service", func(t *testing.T) {
+		stub := &stubQueryExec{}
+		router := newTemplateExecRouter(stub)
+		rec := httptest.NewRecorder()
+		router.ServeHTTP(rec, qeRequest(http.MethodPost, savedURL, `{"clientExecutionId":"k"}`, templateExecToken(t)))
+		if !stub.templateCalled {
+			t.Fatalf("static saved statement body must reach the service: %d", rec.Code)
+		}
+	})
 }

@@ -419,33 +419,39 @@ func TestNavigateRelatedRecords_ResponseNoSQLNoDSN(t *testing.T) {
 
 func TestNavigateRelatedRecords_FailClosedPGContractFields(t *testing.T) {
 	// WHY: source.schema is the pinned-schema segment of composite connection
-	// identity and clientExecutionId arms the claim protocol — neither is
-	// wired until its owning ticket. They must fail closed instead of being
-	// silently ignored.
-	cases := []struct {
-		name string
-		body string
-	}{
-		{"source.schema", `{"source":{"database":"orders_db","schema":"app","object":"order_items","kind":"table","foreignKey":"fk"},"localValues":["42"]}`},
-		{"clientExecutionId", `{"source":{"database":"orders_db","object":"order_items","kind":"table","foreignKey":"fk"},"localValues":["42"],"clientExecutionId":"exec-1"}`},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			stub := &stubQueryExec{}
-			router := newNavRouter(stub)
+	// identity — it stays fail-closed for MySQL/TiDB. clientExecutionId arms
+	// the claim protocol and is now wired: a valid key reaches the service.
+	t.Run("source.schema", func(t *testing.T) {
+		stub := &stubQueryExec{}
+		router := newNavRouter(stub)
 
-			rec := httptest.NewRecorder()
-			router.ServeHTTP(rec, qeRequest(http.MethodPost, "/query-targets/9001/related-records", tc.body, navBearer(t)))
+		rec := httptest.NewRecorder()
+		router.ServeHTTP(rec, qeRequest(http.MethodPost, "/query-targets/9001/related-records",
+			`{"source":{"database":"orders_db","schema":"app","object":"order_items","kind":"table","foreignKey":"fk"},"localValues":["42"]}`, navBearer(t)))
 
-			if rec.Code != http.StatusBadRequest {
-				t.Fatalf("status = %d, want 400; body=%s", rec.Code, rec.Body.String())
-			}
-			if !strings.Contains(rec.Body.String(), "validation_failed") {
-				t.Fatalf("body = %s, want validation_failed", rec.Body.String())
-			}
-			if stub.navCalled {
-				t.Fatal("NavigateRelatedRecords must not run when unwired contract fields are set")
-			}
-		})
-	}
+		if rec.Code != http.StatusBadRequest {
+			t.Fatalf("status = %d, want 400; body=%s", rec.Code, rec.Body.String())
+		}
+		if !strings.Contains(rec.Body.String(), "validation_failed") {
+			t.Fatalf("body = %s, want validation_failed", rec.Body.String())
+		}
+		if stub.navCalled {
+			t.Fatal("NavigateRelatedRecords must not run when source.schema is set")
+		}
+	})
+	t.Run("clientExecutionId", func(t *testing.T) {
+		stub := &stubQueryExec{}
+		router := newNavRouter(stub)
+
+		rec := httptest.NewRecorder()
+		router.ServeHTTP(rec, qeRequest(http.MethodPost, "/query-targets/9001/related-records",
+			`{"source":{"database":"orders_db","object":"order_items","kind":"table","foreignKey":"fk"},"localValues":["42"],"clientExecutionId":"exec-1"}`, navBearer(t)))
+
+		if rec.Code != http.StatusOK {
+			t.Fatalf("status = %d, want 200; body=%s", rec.Code, rec.Body.String())
+		}
+		if !stub.navCalled {
+			t.Fatal("NavigateRelatedRecords must run when a valid clientExecutionId is set")
+		}
+	})
 }

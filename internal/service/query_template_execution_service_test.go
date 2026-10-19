@@ -280,8 +280,13 @@ func TestExecuteSavedStatementRecordsStatementReadFailure(t *testing.T) {
 	svc, repo, executor, _ := newTemplateExecutionTestService(model.QuerySavedStatement{}, readerErr)
 
 	_, err := svc.ExecuteSavedStatement(context.Background(), 1, 9001, 7, templateExecuteRequest(nil))
-	if !errors.Is(err, readerErr) {
-		t.Fatalf("error = %v, want wrapped reader error", err)
+	// WHY: the raw repository error is never returned — a generic read fault
+	// surfaces the bare backend sentinel only.
+	if !errors.Is(err, ErrQueryBackendFailure) {
+		t.Fatalf("error = %v, want ErrQueryBackendFailure", err)
+	}
+	if errors.Is(err, readerErr) {
+		t.Fatalf("error = %v must not wrap the raw reader error", err)
 	}
 	if executor.templateCalls != 0 {
 		t.Fatalf("QueryTemplate calls = %d, want 0", executor.templateCalls)
@@ -313,10 +318,11 @@ func TestExecuteSavedStatementRecordsRequestValidationRejection(t *testing.T) {
 	if executor.templateCalls != 0 {
 		t.Fatalf("QueryTemplate calls = %d, want 0", executor.templateCalls)
 	}
-	// WHY: request validation occurs after target resolution, so rejection must
-	// be durable evidence even though no statement is compiled or executed.
-	if len(repo.pairCalls) != 1 || repo.pairCalls[0].rec.Status != model.QueryExecutionRejected {
-		t.Fatalf("request validation evidence = %+v, want one rejected pair", repo.pairCalls)
+	// WHY: request shape is validated before any external call, so an invalid
+	// shape never resolves access, never reads the statement, and produces no
+	// evidence pair — there is no valid target to attribute the attempt to.
+	if len(repo.pairCalls) != 0 || len(repo.insertedAttempts) != 0 || len(repo.auditEvents) != 0 {
+		t.Fatalf("shape rejection must write nothing: %+v", repo.pairCalls)
 	}
 }
 

@@ -692,10 +692,17 @@ func TestResultContractHTTP_ZeroRowPageContract(t *testing.T) {
 	}
 }
 
-func TestResultContractHTTP_ClientExecutionIDStaysClosed(t *testing.T) {
+func TestResultContractHTTP_ClientExecutionIDKeyedAndConnectionSelectorsClosed(t *testing.T) {
+	// The ordinary route accepts a client execution key and runs the real
+	// keyed claim protocol; the composite database/schema identity stays
+	// fail-closed until the PostgreSQL execution path wires it.
 	fx := setupResultContractFixture(t)
 	rec := fx.rcPost(t, fx.executePath(), `{"statement":"select id from query_e2e_aux.rc_cells where id = 1","clientExecutionId":"abc-123"}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("keyed status = %d, want 200 — the claim protocol is wired; body=%s", rec.Code, rec.Body.String())
+	}
+	rec = fx.rcPost(t, fx.executePath(), `{"statement":"select id from query_e2e_aux.rc_cells where id = 1","database":"pgdb"}`)
 	if rec.Code != http.StatusBadRequest {
-		t.Fatalf("status = %d, want 400 — the claim protocol stays closed; body=%s", rec.Code, rec.Body.String())
+		t.Fatalf("database status = %d, want 400 — the composite identity stays closed; body=%s", rec.Code, rec.Body.String())
 	}
 }
