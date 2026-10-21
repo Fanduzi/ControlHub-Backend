@@ -1,23 +1,11 @@
 //go:build integration
 
-// Package integration — real-HTTP vertical proof for keyed PostgreSQL
-// ordinary, saved-statement, and related-navigation execution (PG-HTTP-T12,
-// issue #120).
-// input: shared MySQL fixture (real router/auth/repository/claim/evidence
-// stack), a disposable PostgreSQL 16 with a restricted role and the nav
-// fixture catalog, two in-process assemblies — the default closed instance
-// and the construction-time-enabled instance
-// output: TestPGKeyedHTTP_* — the closed assembly refuses all three PG POSTs
-// without claim occupancy; the enabled assembly carries each request through
-// handler → adapter → keyed PG orchestration → native executor → disclosure →
-// finalize → delivered envelope; evidence, replay, capability, scope, and
-// response-fidelity assertions all run against real persisted rows
-// pos: T12 production-path acceptance — requests travel the real
-// api.NewRouter; no test hand-composes claim/finalize calls. The
-// WithPGHTTPEntries capability is wired only on this fixture's second
-// assembly; the default assembly in the same process stays fail-closed and
-// cmd/server is unchanged.
+// Package integration — real-HTTP vertical proof for keyed PostgreSQL ordinary, saved-statement, and related-navigation execution (PG-HTTP-T12, issue #120).
+// input: shared MySQL fixture (real router/auth/repository/claim/evidence stack), a disposable PostgreSQL 16 with a restricted role and the nav fixture catalog, two in-process assemblies — the default closed instance and the construction-time-enabled instance
+// output: TestPGKeyedHTTP_* — the closed assembly refuses all three PG POSTs, plus setupPGHTTPFixtureOn (image-parametrized build for version attempts) without claim occupancy; the enabled assembly carries each request through handler → adapter → keyed PG orchestration → native executor → disclosure → finalize → delivered envelope; evidence, replay, capability, scope, and response-fidelity assertions all run against real persisted rows
+// pos: T12 production-path acceptance — requests travel the real api.NewRouter; no test hand-composes claim/finalize calls. The WithPGHTTPEntries capability is wired only on this fixture's second assembly; the default assembly in the same process stays fail-closed and cmd/server is unchanged.
 // note: if this file changes, update this header and module README.md.
+
 package integration
 
 import (
@@ -62,8 +50,13 @@ type pgHTTPFixture struct {
 // construction-bound, not request-bound.
 func setupPGHTTPFixture(t *testing.T) pgHTTPFixture {
 	t.Helper()
+	return setupPGHTTPFixtureOn(t, "postgres:16-alpine")
+}
+
+func setupPGHTTPFixtureOn(t *testing.T, image string) pgHTTPFixture {
+	t.Helper()
 	db := setupTestDB(t)
-	pg := newPGNavFixture(t)
+	pg := newPGNavFixtureOn(t, image)
 
 	userID := insertAuthzTestUser(t, db, "pghttp-admin@example.com", "admin")
 	t.Cleanup(func() { deleteAuthzTestUser(t, db, userID) })

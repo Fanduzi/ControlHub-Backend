@@ -1,23 +1,9 @@
-// Package service orchestrates the internal keyed PostgreSQL execution
-// entries over the closed pgClaimedEntryKind enum (ordinary, saved, and
-// navigation).
+// Package service orchestrates the internal keyed PostgreSQL execution entries over the closed pgClaimedEntryKind enum (ordinary, saved, and navigation).
 // input: context, errors, fmt, strings, time, internal/model, internal/pgsql
-// output: ExecutePGClaimed, PGClaimedExecuteRequest, PGClaimedOutcome,
-// ErrQueryExecutionAlreadyExists, ErrQueryExecutionConflict,
-// WithPGClaimOrchestration — plus the private pgClaimedPrepared runner
-// pos: T10-C keyed claim orchestration (issue #118, frozen G9 order) plus
-// the T8-C delivery seam (issue #116) — each entry's front half validates
-// shape, resolves access, resolves defaults (explicit schema verbatim),
-// and computes its digest; ONE executePGClaimedPrepared runner then owns
-// atomic TryClaimExecution → governed outcome → consistency gate on a
-// coordinator-owned pre-finalize snapshot → the sole keyed
-// FinalizeClaimWithAudit → DecideResultDelivery on that snapshot → result
-// rebuilt from the decision's owned rows/matrix. The kind picks the audit
-// event (query.executed for ordinary/saved, related_record_navigation for
-// navigation) and statement persistence: only ordinary stores the masked
-// preview and owner-only full statement; saved/navigation always persist
-// the withheld preview and empty FullStatement. Not an HTTP route.
+// output: ExecutePGClaimed, PGClaimedExecuteRequest, PGClaimedOutcome, ErrQueryExecutionAlreadyExists, ErrQueryExecutionConflict, WithPGClaimOrchestration — plus the private pgClaimedPrepared runner
+// pos: T10-C keyed claim orchestration (issue #118, frozen G9 order) plus the T8-C delivery seam (issue #116) plus T12-R1 exits (issue #120) — each entry's front half validates shape, resolves access, resolves defaults (explicit schema verbatim), and computes its digest; ONE executePGClaimedPrepared runner then owns atomic TryClaimExecution → governed outcome → consistency gate on a coordinator-owned pre-finalize snapshot → the sole keyed FinalizeClaimWithAudit → DecideResultDelivery on that snapshot → result rebuilt from the decision's owned rows/matrix. The kind picks the audit event (query.executed for ordinary/saved, related_record_navigation for navigation) and statement persistence: only ordinary stores the masked preview and owner-only full statement; saved/navigation always persist the withheld preview and empty FullStatement. Not an HTTP route.
 // note: if this file changes, update this header and module README.md.
+
 package service
 
 import (
@@ -103,15 +89,20 @@ type PGClaimedOutcome struct {
 // Database/Schema are the resolved connection scope (pinned schema after
 // default resolution); Page/PageSize/MaxRows are the resolved window; and
 // DurationMs/ExecutedAt are copied from the finalized history record itself,
-// never re-measured at response time.
+// never re-measured at response time. LimitApplied is the execution-window
+// fact — the LIMIT literal the rewritten statement actually carried
+// (PaginatePG's FetchCount, sentinel-inclusive) — copied from the
+// coordinator's own delivery snapshot, never recomputed from the request
+// and never the total row budget.
 type PGClaimedDeliveryFacts struct {
-	Database   string
-	Schema     string
-	Page       int
-	PageSize   int
-	MaxRows    int
-	DurationMs int64
-	ExecutedAt time.Time
+	Database     string
+	Schema       string
+	Page         int
+	PageSize     int
+	MaxRows      int
+	LimitApplied int
+	DurationMs   int64
+	ExecutedAt   time.Time
 }
 
 // pgClaimStore is the narrow repository seam the keyed orchestrator needs:
@@ -313,7 +304,7 @@ func (s *QueryExecutionService) ExecutePGClaimed(ctx context.Context, identity m
 		// existing NULL-key rejected pair; the key stays unoccupied so a
 		// later, permitted request can claim it.
 		return s.rejectPGClaimedAccess(ctx, access.Target, identity, pgClaimedEntryOrdinary,
-			req.Database, req.Schema, pgClaimedOrdinaryRawDigest(req), accessErrMessage(err), start)
+			req.Database, req.Schema, pgClaimedOrdinaryRawDigest(req), err, start)
 	}
 	cred := access.Credential
 
@@ -468,6 +459,7 @@ func (s *QueryExecutionService) executePGClaimedPrepared(ctx context.Context, p 
 		delivery = &PGDisclosedResult{
 			Columns:      append([]PGDisclosedColumn(nil), res.Columns...),
 			Page:         res.Page,
+			FetchCount:   res.FetchCount,
 			Refs:         clonePGRefSlice(res.Refs),
 			PublicProofs: clonePGProofSlice(res.PublicProofs),
 			Sources:      clonePGSourceCatalog(res.Sources),
@@ -558,6 +550,12 @@ func (s *QueryExecutionService) executePGClaimedPrepared(ctx context.Context, p 
 		MaxRows:    p.maxRows,
 		DurationMs: rec.DurationMs,
 		ExecutedAt: rec.CreatedAt,
+	}
+	if delivery != nil {
+		// The executed window (sentinel-inclusive FetchCount) is the
+		// limitApplied the transport publishes — a real page's LIMIT may be
+		// below or above pageSize and is unrelated to the row budget.
+		facts.LimitApplied = int(delivery.FetchCount)
 	}
 
 	// The outcome's evidence must tell the same terminal story as the
@@ -760,14 +758,36 @@ func accessErrMessage(err error) string {
 // is untouched — a later permitted request may still occupy it. The caller
 // supplies the entry kind (which fixes the audit event family) and the
 // connection scope/digest the evidence row carries; ordinary callers pass
-// the raw request scope so the row's fields are unchanged.
-func (s *QueryExecutionService) rejectPGClaimedAccess(ctx context.Context, target model.QueryTarget, identity model.QueryExecutionIdentity, kind pgClaimedEntryKind, database, schema, digest, msg string, start time.Time) (PGClaimedOutcome, error) {
+// the raw request scope so the row's fields are unchanged. The persisted
+// row always carries the generic "query_not_allowed" denial contract; the
+// returned error keeps only the normalized connection sentinels for the
+// transport (pgAccessRefusalError) — raw driver or internal text never
+// escapes into the unwrap chain either way.
+func (s *QueryExecutionService) rejectPGClaimedAccess(ctx context.Context, target model.QueryTarget, identity model.QueryExecutionIdentity, kind pgClaimedEntryKind, database, schema, digest string, accessErr error, start time.Time) (PGClaimedOutcome, error) {
 	rec := s.buildPGClaimEvidenceRecord(target, identity, kind, database, schema, digest,
-		model.QueryExecutionRejected, "query_not_allowed", msg, start)
+		model.QueryExecutionRejected, "query_not_allowed", accessErrMessage(accessErr), start)
 	if _, perr := s.persistEvidencePair(ctx, rec, kind.evidenceKind()); perr != nil {
 		return PGClaimedOutcome{}, errPersistAttempt
 	}
-	return PGClaimedOutcome{}, fmt.Errorf("%w: %s", ErrQueryNotAllowed, msg)
+	return PGClaimedOutcome{}, pgAccessRefusalError(accessErr)
+}
+
+// pgAccessRefusalError picks the transport-visible identity of an access
+// refusal by sentinel classification — never by message text. The three
+// connection sentinels already carry fixed safe messages and publish their
+// own HTTP codes, so they surface verbatim; every other refusal
+// (TargetAccessError policy/secret/binding detail or an unexpected
+// internal error) stays the generic not-allowed denial.
+func pgAccessRefusalError(accessErr error) error {
+	switch {
+	case errors.Is(accessErr, ErrSchemaConnectionNotFound):
+		return ErrSchemaConnectionNotFound
+	case errors.Is(accessErr, ErrSchemaConnectionDisabled):
+		return ErrSchemaConnectionDisabled
+	case errors.Is(accessErr, ErrSchemaBindingMismatch):
+		return ErrSchemaBindingMismatch
+	}
+	return fmt.Errorf("%w: %s", ErrQueryNotAllowed, accessErrMessage(accessErr))
 }
 
 // failPGClaimedAccess records the NULL-key failed pair for a claim-store

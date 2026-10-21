@@ -1,20 +1,11 @@
 //go:build integration
 
-// Package integration — real PG16 + real MySQL vertical for the keyed
-// related-record navigation entry (PG-MULTI-ENTRY stage 3).
-// input: shared MySQL fixture (real target/credential/claim/execution/
-// disclosure repos), a disposable PostgreSQL 16 with a restricted role and
-// FK mappings, and the production NavigatePGRelatedRecordsClaimed entry
-// output: TestPGMultiEntryNavigation* — vertical lifecycle with trusted
-// relation metadata; composite/same-name/cross-schema/self/quoted mappings;
-// locator edge values; pre-claim refusal pairs; disclosure blocking before
-// the wire; delivery gate; real constraint-drift and lock-protection proofs
-// via labeled injection wrappers
-// pos: stage-3 production-orchestration proof — requests travel the real
-// service entry; no test hand-composes claim/finalize calls. Drift and lock
-// proofs use wrappers over the REAL repositories (forwarding real work) to
-// schedule admin DDL — labeled injection, never a pretend client.
+// Package integration — real PG16 + real MySQL vertical for the keyed related-record navigation entry (PG-MULTI-ENTRY stage 3).
+// input: shared MySQL fixture (real target/credential/claim/execution/ disclosure repos), a disposable PostgreSQL 16 with a restricted role and FK mappings, and the production NavigatePGRelatedRecordsClaimed entry
+// output: TestPGMultiEntryNavigation* — vertical lifecycle with trusted, plus newPGNavFixtureOn (image-parametrized catalog for T12-R1 versions) relation metadata; composite/same-name/cross-schema/self/quoted mappings; locator edge values; pre-claim refusal pairs; disclosure blocking before the wire; delivery gate; real constraint-drift and lock-protection proofs via labeled injection wrappers
+// pos: stage-3 production-orchestration proof — requests travel the real service entry; no test hand-composes claim/finalize calls. Drift and lock proofs use wrappers over the REAL repositories (forwarding real work) to schedule admin DDL — labeled injection, never a pretend client.
 // note: if this file changes, update this header and module README.md.
+
 package integration
 
 import (
@@ -41,7 +32,12 @@ import (
 // for the delivery gate, and a no-USAGE-schema source.
 func newPGNavFixture(t *testing.T) pgDiscFixture {
 	t.Helper()
-	fix := newPGDiscFixture(t)
+	return newPGNavFixtureOn(t, "postgres:16-alpine")
+}
+
+func newPGNavFixtureOn(t *testing.T, image string) pgDiscFixture {
+	t.Helper()
+	fix := newPGDiscFixtureOn(t, image)
 	setupPGNavFixtureData(t, fix)
 	return fix
 }

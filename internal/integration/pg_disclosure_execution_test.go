@@ -1,16 +1,11 @@
 //go:build integration
 
 // Package integration — real-MySQL + real-PG16 vertical proof for T9-B.
-// input: shared MySQL fixture (real policy repository + real PG target
-// resource), a disposable PostgreSQL 16 with a restricted role, and the
-// production ExecutePGGovernedDisclosed entry
-// output: the closed-loop acceptance — canonical policies written through
-// the real T9-A repository drive the real executor's pre-wire preflight and
-// post-cleanup transform
-// pos: T9-B acceptance A/B (issue #117) — the end-to-end disclosure layer
-// over two real stores; broader matrix coverage lives in the service
-// package's real-PG tests
+// input: shared MySQL fixture (real policy repository + real PG target resource), a disposable PostgreSQL 16 with a restricted role, and the production ExecutePGGovernedDisclosed entry
+// output: the closed-loop acceptance — canonical policies written through, plus newPGDiscFixtureOn (the image-parametrized fixture for the T12-R1 version-compat matrix) the real T9-A repository drive the real executor's pre-wire preflight and post-cleanup transform
+// pos: T9-B acceptance A/B (issue #117) — the end-to-end disclosure layer over two real stores; broader matrix coverage lives in the service package's real-PG tests
 // note: if this file changes, update this header and module README.md.
+
 package integration
 
 import (
@@ -45,9 +40,17 @@ type pgDiscFixture struct {
 
 func newPGDiscFixture(t *testing.T, opts ...testcontainers.ContainerCustomizer) pgDiscFixture {
 	t.Helper()
+	return newPGDiscFixtureOn(t, "postgres:16-alpine", opts...)
+}
+
+// newPGDiscFixtureOn starts a disposable PostgreSQL on an explicit image —
+// the version-compat matrix runs the same fixture body on PG14/15/17 while
+// the default entry stays pinned to PG16.
+func newPGDiscFixtureOn(t *testing.T, image string, opts ...testcontainers.ContainerCustomizer) pgDiscFixture {
+	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 	defer cancel()
-	container, err := pgc.Run(ctx, "postgres:16-alpine",
+	container, err := pgc.Run(ctx, image,
 		append([]testcontainers.ContainerCustomizer{
 			pgc.WithDatabase("discdb"),
 			pgc.WithUsername(pgMetaAdminUser),

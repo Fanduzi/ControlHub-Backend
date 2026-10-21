@@ -1,20 +1,9 @@
 // Package service holds the keyed related-record navigation front half.
-// input: QueryExecutionIdentity, targetID, PGClaimedNavigationRequest
-// (source identity + ordered locator strings + paging + key + capabilities)
-// output: PGClaimedNavigationOutcome — runner outcome plus trusted relation
-// metadata on terminal success; every terminal state flows through the same
-// shared claimed-execution runner, never a separate claim/finalize path
-// pos: PG-MULTI-ENTRY stage 3 — the server-selected related_record_navigation
-// entry: request-shape validation before any access, governed access on the
-// source database, one bounded pre-claim metadata preparation (R1-3: every
-// preparation error canonicalizes to a bare sentinel via navPrepFail before
-// outcome selection — factory sentinels return their safe identity with one
-// NULL-key failed pair, wrapped detail never surfaces), digest over
-// resolved identity + ordered locators, then the shared prepared runner.
-// Binding SQL and the locator plan come only from the trusted private
-// builder; raw locator text, generated SQL, and OID metadata never reach
-// errors, history, or audit.
+// input: QueryExecutionIdentity, targetID, PGClaimedNavigationRequest (source identity + ordered locator strings + paging + key + capabilities)
+// output: PGClaimedNavigationOutcome — runner outcome plus trusted relation metadata on terminal success; every terminal state flows through the same shared claimed-execution runner, never a separate claim/finalize path
+// pos: PG-MULTI-ENTRY stage 3 — the server-selected related_record_navigation entry: request-shape validation before any access, governed access on the source database, one bounded pre-claim metadata preparation (R1-3: every preparation error canonicalizes to a bare sentinel via navPrepFail before outcome selection — factory sentinels return their safe identity with one NULL-key failed pair, wrapped detail never surfaces), digest over resolved identity + ordered locators, then the shared prepared runner. Binding SQL and the locator plan come only from the trusted private builder; raw locator text, generated SQL, and OID metadata never reach errors, history, or audit.
 // note: if this file changes, update this header and module README.md.
+
 package service
 
 import (
@@ -159,7 +148,7 @@ func (s *QueryExecutionService) NavigatePGRelatedRecordsClaimed(ctx context.Cont
 			return PGClaimedNavigationOutcome{}, fmt.Errorf("%w: %s", ErrQueryValidationFailed, "source database is required")
 		}
 		out, rerr := s.rejectPGClaimedAccess(ctx, access.Target, identity, pgClaimedEntryNavigation,
-			source.Database, source.Schema, nullKeyDigest, accessErrMessage(err), start)
+			source.Database, source.Schema, nullKeyDigest, err, start)
 		return PGClaimedNavigationOutcome{PGClaimedOutcome: out}, rerr
 	}
 	target := access.Target

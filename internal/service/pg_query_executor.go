@@ -1,22 +1,9 @@
 // Package service runs the governed PostgreSQL execution attempt end to end.
-// input: attempt context with deadline, T2-validated *pgx.ConnConfig,
-// resolved database/pinned schema, user statement text, optional private
-// trusted parameter plan, optional requirePinnedSchema (saved/navigation
-// entries prove the pinned schema even for constant/fully-qualified
-// statements), pgsql.PageOptions, timeout
-// output: ExecutePGGoverned, ExecutePGGovernedOutcome, PGExecuteInput,
-// PGVerifiedResult, PGResultColumn, errPGExecInternal — verified result
-// plus per-attempt PGAttemptEvidence (stage/status/backend identity/
-// remote_state/sql-sent facts) or the frozen classified error
-// pos: T7-S3/S4 internal execution closure (frozen G4 steps 1–10, G10
-// 5b/5c) — guard + plan snapshot → dense $k ParamRef contract → pool →
-// BEGIN READ ONLY + G4 → virtualxid/identity → PGBind → rewrite →
-// pre-wire expected-record validation → T9-B disclosure preflight → R1-1
-// parameter-provenance preflight (Parse/Describe + fixed probe) → result
-// ExecParams fresh parse → bounded materialize → FD verify → lock audit →
-// ROLLBACK + remote observation → teardown → deliver. UserSQLSent ORs the
-// provenance describe's own transmission fact into the result's send bit
+// input: attempt context with deadline, T2-validated *pgx.ConnConfig, resolved database/pinned schema, user statement text, optional private trusted parameter plan, optional requirePinnedSchema (saved/navigation entries prove the pinned schema even for constant/fully-qualified statements), pgsql.PageOptions, timeout
+// output: ExecutePGGoverned, ExecutePGGovernedOutcome, PGExecuteInput, PGVerifiedResult (incl. FetchCount, the executed-window scalar the pagination window actually rewrote — T12-R1), PGResultColumn, errPGExecInternal — verified result plus per-attempt PGAttemptEvidence (stage/status/backend identity/ remote_state/sql-sent facts) or the frozen classified error
+// pos: T7-S3/S4 internal execution closure (frozen G4 steps 1–10, G10 5b/5c) — guard + plan snapshot → dense $k ParamRef contract → pool → BEGIN READ ONLY + G4 → virtualxid/identity → PGBind → rewrite → pre-wire expected-record validation → T9-B disclosure preflight → R1-1 parameter-provenance preflight (Parse/Describe + fixed probe) → result ExecParams fresh parse → bounded materialize → FD verify → lock audit → ROLLBACK + remote observation → teardown → deliver. UserSQLSent ORs the provenance describe's own transmission fact into the result's send bit
 // note: if this file changes, update this header and module README.md.
+
 package service
 
 import (
@@ -114,10 +101,15 @@ type PGVerifiedResult struct {
 	Rows          [][]*string
 	CellTruncated [][]bool
 	Page          pgsql.PageResult
-	Refs          []pgsql.RangeVarRef
-	PublicProofs  []pgsql.PublicColumnProof
-	Sources       map[pgsql.SourceOccurrenceID]pgsql.SourceOccurrence
-	BoundRefs     map[pgsql.RefID]*PGBoundRef
+	// FetchCount is the execution-window fact: the LIMIT literal the
+	// rewritten statement actually carried (sentinel-inclusive, 0 for a
+	// LIMIT 0 window). It is distinct from the page row count and the
+	// server-owned row budget.
+	FetchCount   int64
+	Refs         []pgsql.RangeVarRef
+	PublicProofs []pgsql.PublicColumnProof
+	Sources      map[pgsql.SourceOccurrenceID]pgsql.SourceOccurrence
+	BoundRefs    map[pgsql.RefID]*PGBoundRef
 }
 
 // pgExecAttempt owns every resource of one governed attempt: the execution
@@ -471,6 +463,7 @@ func runPGGovernedAttempt(ctx context.Context, in PGExecuteInput, disc *pgDisclo
 		return nil, nil, a.fail(err)
 	}
 	out.Page = page
+	out.FetchCount = win.FetchCount
 	out.Refs = rw.Refs
 	out.PublicProofs = rw.PublicProofs
 	out.Sources = rw.SourceCatalog

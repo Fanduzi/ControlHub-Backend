@@ -1,10 +1,11 @@
 //go:build integration
 
-// Package integration hosts the shared Testcontainers environment.
-// input: testcontainers MySQL 8.0, goose migrations, internal/pgsql GuardPG warm-up
+// Package integration — Package integration hosts the shared Testcontainers environment.
+// input: testcontainers MySQL 8.0, goose migrations, internal/pgsql GuardPG warm-up, plus the CH_T12_ORPHAN_CHILD env guard that re-dispatches this binary into pgOrphanChildMain before any suite setup (T12-R1 process-exit evidence)
 // output: globalEnv (container + migrated *sql.DB) and setupTestDB per-test connections
 // pos: suite-level fixture for every real-MySQL integration test in this package
 // note: if this file changes, update this header and module README.md.
+
 package integration
 
 import (
@@ -39,6 +40,12 @@ type testEnv struct {
 }
 
 func TestMain(m *testing.M) {
+	// Controlled child mode: the T12-R1 orphan-claim test re-executes this
+	// binary as a test-owned server process. The child wires the production
+	// chain against the shared fixture DSN and never runs the suite.
+	if ready := os.Getenv("CH_T12_ORPHAN_CHILD"); ready != "" {
+		os.Exit(pgOrphanChildMain(ready))
+	}
 	ctx := context.Background()
 
 	// The wazero-backed pg_query compiler loads lazily on the first GuardPG

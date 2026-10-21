@@ -1,20 +1,11 @@
 //go:build integration
 
-// Package integration — real PG16 + real MySQL vertical for the keyed
-// saved-statement entry (PG-MULTI-ENTRY stage 2, issue #118 + #119).
-// input: shared MySQL fixture (real target/credential/claim/execution/saved
-// repositories), a disposable PostgreSQL 16 with the restricted ro_disc
-// role, and the production ExecutePGSavedStatementClaimed entry
-// output: TestPGMultiEntrySaved_* — vertical flow over static and
-// parameterized templates, scope/ownership denials, per-call re-read,
-// pre-claim value rejections, native-$n and LIMIT :n refusal, pinned-schema
-// and connection-context enforcement, withheld statement persistence, the
-// post-finalize delivery gate, finalize-failure precedence, and the
-// update-after-claim compiled-snapshot race control
-// pos: the saved entry converges on the same claim/finalize/delivery runner
-// as the ordinary entry; these tests drive the production chain end to end —
-// no manual claim/finalize composition, no fake outcome function
+// Package integration — real PG16 + real MySQL vertical for the keyed saved-statement entry (PG-MULTI-ENTRY stage 2, issue #118 + #119).
+// input: shared MySQL fixture (real target/credential/claim/execution/saved repositories), a disposable PostgreSQL 16 with the restricted ro_disc role, and the production ExecutePGSavedStatementClaimed entry
+// output: TestPGMultiEntrySaved_* — vertical flow over static and parameterized templates, scope/ownership denials, per-call re-read, pre-claim value rejections, native-$n and LIMIT :n refusal, pinned-schema and connection-context enforcement, withheld statement persistence, the post-finalize delivery gate, finalize-failure precedence, and the update-after-claim compiled-snapshot race control
+// pos: the saved entry converges on the same claim/finalize/delivery runner as the ordinary entry; these tests drive the production chain end to end — no manual claim/finalize composition, no fake outcome function
 // note: if this file changes, update this header and module README.md.
+
 package integration
 
 import (
@@ -484,8 +475,8 @@ func TestPGMultiEntrySaved_SchemaAndConnection(t *testing.T) {
 	})
 	_, err = svc.ExecutePGSavedStatementClaimed(ctx, userIdentity(pgSavedOwner), disabledTarget, stmt.ID,
 		savedRequest("pgmulti-saved-sc-disabled", nil))
-	if !errors.Is(err, service.ErrQueryNotAllowed) {
-		t.Fatalf("disabled connection = %v, want not_allowed", err)
+	if !errors.Is(err, service.ErrSchemaConnectionDisabled) {
+		t.Fatalf("disabled connection = %v, want ErrSchemaConnectionDisabled", err)
 	}
 	if claimOccupied(t, db, disabledTarget, "pgmulti-saved-sc-disabled") {
 		t.Fatal("disabled connection occupied the key")
@@ -499,8 +490,8 @@ func TestPGMultiEntrySaved_SchemaAndConnection(t *testing.T) {
 	})
 	_, err = svc.ExecutePGSavedStatementClaimed(ctx, userIdentity(pgSavedOwner), deletedTarget, stmt.ID,
 		savedRequest("pgmulti-saved-sc-deleted", nil))
-	if !errors.Is(err, service.ErrQueryNotAllowed) {
-		t.Fatalf("deleted connection = %v, want not_allowed", err)
+	if !errors.Is(err, service.ErrSchemaConnectionNotFound) {
+		t.Fatalf("deleted connection = %v, want ErrSchemaConnectionNotFound", err)
 	}
 	if claimOccupied(t, db, deletedTarget, "pgmulti-saved-sc-deleted") {
 		t.Fatal("deleted connection occupied the key")
@@ -517,8 +508,8 @@ func TestPGMultiEntrySaved_SchemaAndConnection(t *testing.T) {
 	})
 	_, err = svc.ExecutePGSavedStatementClaimed(ctx, userIdentity(pgSavedOwner), reboundTarget, stmt.ID,
 		savedRequest("pgmulti-saved-sc-rebound", nil))
-	if !errors.Is(err, service.ErrQueryNotAllowed) {
-		t.Fatalf("rebound connection = %v, want not_allowed", err)
+	if !errors.Is(err, service.ErrSchemaBindingMismatch) {
+		t.Fatalf("rebound connection = %v, want ErrSchemaBindingMismatch", err)
 	}
 	if claimOccupied(t, db, reboundTarget, "pgmulti-saved-sc-rebound") {
 		t.Fatal("rebound connection occupied the key")

@@ -1,19 +1,9 @@
 // Package service orchestrates the keyed saved-statement PostgreSQL entry.
 // input: context, database/sql, encoding/json, errors, fmt, internal/model
-// output: ExecutePGSavedStatementClaimed — the saved entry of the shared
-// keyed PG runner
-// pos: PG-MULTI-ENTRY stage 2 (issue #118 + saved-statement execution):
-// request shape → target lookup → ONE joined statement snapshot read (R1-2:
-// its failure branch returns only bare canonical sentinels — canceled,
-// timeout, not-found, backend — each with one NULL-key fixed-evidence pair;
-// wrapped or joined read errors never surface) →
-// ownership/scope authorization → access resolution on the statement's own
-// connection scope → typed value validation → template compilation → saved
-// digest → the shared claimed runner. Saved executions never persist
-// statement text, template identifiers, declarations, or parameter values —
-// every evidence row carries the fixed withheld preview and an empty full
-// statement.
+// output: ExecutePGSavedStatementClaimed — the saved entry of the shared keyed PG runner
+// pos: PG-MULTI-ENTRY stage 2 (issue #118 + saved-statement execution): request shape → target lookup → ONE joined statement snapshot read (R1-2: its failure branch returns only bare canonical sentinels — canceled, timeout, not-found, backend — each with one NULL-key fixed-evidence pair; wrapped or joined read errors never surface) → ownership/scope authorization → access resolution on the statement's own connection scope → typed value validation → template compilation → saved digest → the shared claimed runner. Saved executions never persist statement text, template identifiers, declarations, or parameter values — every evidence row carries the fixed withheld preview and an empty full statement.
 // note: if this file changes, update this header and module README.md.
+
 package service
 
 import (
@@ -179,7 +169,7 @@ func (s *QueryExecutionService) ExecutePGSavedStatementClaimed(
 				statement.DatabaseName, statement.SchemaName, nullKeyDigest, start)
 		default:
 			return s.rejectPGClaimedAccess(ctx, access.Target, identity, pgClaimedEntrySaved,
-				statement.DatabaseName, statement.SchemaName, nullKeyDigest, accessErrMessage(err), start)
+				statement.DatabaseName, statement.SchemaName, nullKeyDigest, err, start)
 		}
 	}
 	cred := access.Credential

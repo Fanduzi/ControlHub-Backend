@@ -1,20 +1,11 @@
 //go:build integration
 
-// Package integration — real PG16 + real MySQL vertical for T10-C keyed claim
-// orchestration and mixed state reads (issue #118, frozen G9).
-// input: shared MySQL fixture (real target/credential/claim/execution repos),
-// a disposable PostgreSQL 16 with a restricted role, the production
-// ExecutePGClaimed entry, and the real ListHistory read path
-// output: TestPGClaimed* — vertical flow, concurrent admission, digest
-// conflict, evidence-boundary rows, defaults/capabilities digest equivalence,
-// cancel finalize, finalize-failure rollback, derived running/unknown reads
-// incl. NULL-budget legacy rows, explicit-schema scope + keyed binding
-// rejections, masked-preview persistence/GET privacy, byte-exact database
-// scope filters, typed-actor scope, and the real HTTP list read
-// pos: T10-C production-orchestration proof — requests travel the real
-// service entry; no test hand-composes claim/finalize calls for the covered
-// paths. The HTTP POST gate stays closed; reads are the only HTTP surface.
+// Package integration — real PG16 + real MySQL vertical for T10-C keyed claim orchestration and mixed state reads (issue #118, frozen G9).
+// input: shared MySQL fixture (real target/credential/claim/execution repos), a disposable PostgreSQL 16 with a restricted role, the production ExecutePGClaimed entry, and the real ListHistory read path
+// output: TestPGClaimed* — vertical flow, concurrent admission, digest conflict, evidence-boundary rows, defaults/capabilities digest equivalence, cancel finalize, finalize-failure rollback, derived running/unknown reads incl. NULL-budget legacy rows, explicit-schema scope + keyed binding rejections, masked-preview persistence/GET privacy, byte-exact database scope filters, typed-actor scope, and the real HTTP list read
+// pos: T10-C production-orchestration proof — requests travel the real service entry; no test hand-composes claim/finalize calls for the covered paths. The HTTP POST gate stays closed; reads are the only HTTP surface.
 // note: if this file changes, update this header and module README.md.
+
 package integration
 
 import (
@@ -252,12 +243,15 @@ func TestPGClaimed_EvidenceBoundary(t *testing.T) {
 		t.Fatal("unknown target occupied a key")
 	}
 
-	// Disabled credential: one NULL-key rejected pair; key stays free.
+	// Disabled credential: one NULL-key rejected pair; key stays free. R1-1:
+	// the normalized connection sentinel keeps its identity through the
+	// shared rejection exit — the persisted row still carries the generic
+	// query_not_allowed denial contract.
 	disabledTarget := createPGInstance(t, db, "t10c-disabled-"+strings.ReplaceAll(t.Name(), "/", "-"), envStaging, fix.host, fix.port)
 	insertPGCredential(t, db, disabledTarget, "discdb", "app", pgClaimCredRef, false, string(model.QueryEnvPolicyNonProdOnly))
 	if _, err := svc.ExecutePGClaimed(ctx, userIdentity(claimUserActor), disabledTarget,
-		claimedRequest("t10c-b-denied", `SELECT 1`)); !errors.Is(err, service.ErrQueryNotAllowed) {
-		t.Fatalf("disabled credential = %v, want not_allowed", err)
+		claimedRequest("t10c-b-denied", `SELECT 1`)); !errors.Is(err, service.ErrSchemaConnectionDisabled) {
+		t.Fatalf("disabled credential = %v, want ErrSchemaConnectionDisabled", err)
 	}
 	if claimOccupied(t, db, disabledTarget, "t10c-b-denied") {
 		t.Fatal("access denial occupied the key")

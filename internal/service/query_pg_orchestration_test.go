@@ -228,7 +228,12 @@ func TestExecutePGClaimed_TargetNotFound(t *testing.T) {
 }
 
 // A resolved target with refused access writes exactly one NULL-key rejected
-// pair and leaves the key unoccupied.
+// pair and leaves the key unoccupied. The normalized connection sentinels
+// keep their own identity for the transport (R1-1): the transport publishes
+// query_connection_disabled/not_found and dsn_binding_mismatch while the
+// persisted record stays the generic query_not_allowed denial contract —
+// the record's error code is deliberately not per-category so history stays
+// uniform with every other access refusal.
 func TestExecutePGClaimed_AccessDeniedNullKeyPair(t *testing.T) {
 	t.Parallel()
 	_, cred, dsn := pgClaimFixture()
@@ -236,8 +241,8 @@ func TestExecutePGClaimed_AccessDeniedNullKeyPair(t *testing.T) {
 	repo := &fakeExecRepo{credentials: map[uint64]model.QueryCredentialMetadata{9002: cred}}
 	svc := newClaimedService(repo, &fakeResolver{dsn: dsn})
 	_, err := svc.ExecutePGClaimed(context.Background(), userExecutionIdentity(7), 9002, validClaimedRequest())
-	if !errors.Is(err, ErrQueryNotAllowed) {
-		t.Fatalf("error = %v, want ErrQueryNotAllowed", err)
+	if !errors.Is(err, ErrSchemaConnectionDisabled) {
+		t.Fatalf("error = %v, want ErrSchemaConnectionDisabled", err)
 	}
 	if len(repo.claimInputs) != 0 {
 		t.Fatal("access denial occupied the key")
@@ -255,6 +260,106 @@ func TestExecutePGClaimed_AccessDeniedNullKeyPair(t *testing.T) {
 	if rec.ActorUserID != 7 {
 		t.Fatalf("actor = %d, want user 7", rec.ActorUserID)
 	}
+}
+
+// Sentinel classification through the shared rejection exit (R1-1): the
+// three normalized connection sentinels surface their own identity —
+// verbatim, with no unwrap of driver text — while policy, secret, and
+// unexpected internal refusals stay the generic ErrQueryNotAllowed denial.
+// Every case writes the same single NULL-key query_not_allowed pair.
+func TestExecutePGClaimed_AccessDenialSentinels(t *testing.T) {
+	t.Parallel()
+	target, cred, dsn := pgClaimFixture()
+	prodTarget := target
+	prodTarget.ConnectionContext.Environment = "production"
+
+	cases := map[string]struct {
+		cred    *model.QueryCredentialMetadata
+		dsn     string
+		resErr  error
+		target  model.QueryTarget
+		wantErr error
+	}{
+		"missing connection row": {wantErr: ErrSchemaConnectionNotFound, dsn: dsn},
+		"disabled connection": {
+			cred:    credPtr(cred, func(c *model.QueryCredentialMetadata) { c.Enabled = false }),
+			dsn:     dsn,
+			wantErr: ErrSchemaConnectionDisabled,
+		},
+		"dsn binding mismatch": {
+			cred:    &cred,
+			dsn:     "postgres://u:p@127.0.0.1:1/otherdb",
+			wantErr: ErrSchemaBindingMismatch,
+		},
+		"environment policy blocked": {
+			cred:    &cred,
+			dsn:     dsn,
+			target:  prodTarget,
+			wantErr: ErrQueryNotAllowed,
+		},
+		"secret resolve failure": {
+			cred:    &cred,
+			resErr:  errors.New("vault unreachable"),
+			wantErr: ErrQueryNotAllowed,
+		},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			tgt := tc.target
+			if tgt.ResourceID == 0 {
+				tgt = target
+			}
+			repo := &fakeExecRepo{credentials: map[uint64]model.QueryCredentialMetadata{}}
+			if tc.cred != nil {
+				repo.credentials[9002] = *tc.cred
+			}
+			svc := newClaimedServiceOn(repo, &fakeResolver{dsn: tc.dsn, err: tc.resErr},
+				fakeTargetRepo{targets: []model.QueryTarget{tgt}})
+			_, err := svc.ExecutePGClaimed(context.Background(), userExecutionIdentity(7), 9002, validClaimedRequest())
+			if !errors.Is(err, tc.wantErr) {
+				t.Fatalf("error = %v, want %v", err, tc.wantErr)
+			}
+			if errors.Is(err, ErrSchemaConnectionNotFound) || errors.Is(err, ErrSchemaConnectionDisabled) ||
+				errors.Is(err, ErrSchemaBindingMismatch) {
+				if !errors.Is(err, tc.wantErr) || errors.Is(err, ErrQueryNotAllowed) {
+					t.Fatalf("connection sentinel wrapped under not-allowed: %v", err)
+				}
+			}
+			if len(repo.claimInputs) != 0 {
+				t.Fatal("access denial occupied the key")
+			}
+			if len(repo.pairCalls) != 1 {
+				t.Fatalf("pairCalls = %d, want 1", len(repo.pairCalls))
+			}
+			rec := repo.pairCalls[0].rec
+			if rec.Status != model.QueryExecutionRejected || rec.ErrorCode != "query_not_allowed" ||
+				rec.ClientExecutionID != nil {
+				t.Fatalf("rejected record = %+v, want NULL-key query_not_allowed", rec)
+			}
+		})
+	}
+}
+
+// A persistence failure during the rejection write still outranks the access
+// verdict itself — the transport publishes 502, never the connection code.
+func TestExecutePGClaimed_AccessDenialPersistFailure(t *testing.T) {
+	t.Parallel()
+	repo := &fakeExecRepo{credentials: map[uint64]model.QueryCredentialMetadata{}}
+	repo.pairErr = errors.New("history db down")
+	svc := newClaimedService(repo, &fakeResolver{dsn: "postgres://u:p@127.0.0.1:1/appdb"})
+	_, err := svc.ExecutePGClaimed(context.Background(), userExecutionIdentity(7), 9002, validClaimedRequest())
+	if !errors.Is(err, ErrQueryBackendFailure) {
+		t.Fatalf("error = %v, want ErrQueryBackendFailure (persist attempt outranks access verdict)", err)
+	}
+	if errors.Is(err, ErrSchemaConnectionNotFound) {
+		t.Fatalf("persistence failure masked as access verdict: %v", err)
+	}
+}
+
+func credPtr(c model.QueryCredentialMetadata, mutate func(*model.QueryCredentialMetadata)) *model.QueryCredentialMetadata {
+	mutate(&c)
+	return &c
 }
 
 // Same key + same digest → already-exists; nothing executes, nothing written.
@@ -775,7 +880,7 @@ func TestExecutePGClaimed_PreClaimPreviewWithheld(t *testing.T) {
 	svc := newClaimedService(repo, &fakeResolver{dsn: dsn})
 	req := validClaimedRequest()
 	req.Statement = `SELECT 'SECRET-P1' FROM app.t`
-	if _, err := svc.ExecutePGClaimed(context.Background(), userExecutionIdentity(7), 9002, req); !errors.Is(err, ErrQueryNotAllowed) {
+	if _, err := svc.ExecutePGClaimed(context.Background(), userExecutionIdentity(7), 9002, req); !errors.Is(err, ErrSchemaConnectionDisabled) {
 		t.Fatalf("access denial = %v", err)
 	}
 	if len(repo.pairCalls) != 1 || repo.pairCalls[0].rec.StatementPreview != pgClaimedWithheldPreview {
