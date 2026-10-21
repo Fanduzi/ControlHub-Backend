@@ -1,9 +1,9 @@
 //go:build integration
 
-// Package integration — PG-HTTP-T12-R1 real-transport evidence: client disconnects, lock-wait timeouts, and a killed subprocess orphan claim.
-// input: shared MySQL fixture, disposable PG16 with a slow seqscan table and a lockable gate table, the enabled assembly served over a real socket
-// output: TestPGKeyedHTTP_ClientAbort*, TestPGKeyedHTTP_LockWaitTimeout, TestPGKeyedHTTP_OrphanClaimProcessExit; the child entry point pgOrphanChildMain is dispatched from TestMain under env guard
-// pos: group A/B of the R1 acceptance — HTTP disconnect and process death are proven as distinct facts; no admin terminate substitutes for the native cancel, and the claim exists because a real request created it
+// Package integration — PG-HTTP-T12-R1 real-transport evidence: client disconnects, lock-wait timeouts, and a killed subprocess orphan claim; R2 adds the formal HTTP GET read-back of that claim.
+// input: shared MySQL fixture, disposable PG16 with a slow seqscan table and a lockable gate table, the enabled assembly plus an independent reader router, both served over real sockets
+// output: TestPGKeyedHTTP_ClientAbort*, TestPGKeyedHTTP_LockWaitTimeout, TestPGKeyedHTTP_OrphanClaimProcessExit; the child entry point pgOrphanChildMain is dispatched from TestMain under env guard; orphan read helpers pgReaderRouter/orphanHTTPGet* and backend-activity probes orphanDrainBackends/countPGBackends
+// pos: group A/B of the R1 acceptance plus R2-A — HTTP disconnect and process death are proven as distinct facts, and the orphan's first read is the real GET /query-targets/{id}/executions through an independently wired authenticated router under wall and derived clocks; tampered responders prove the assertions are load-bearing
 // note: if this file changes, update this header and module README.md.
 
 package integration
@@ -14,9 +14,11 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -553,16 +555,21 @@ func TestPGKeyedHTTP_OrphanClaimProcessExit(t *testing.T) {
 		t.Fatalf("orphan wrote %d executions / %d audits, want 0/0", execs, audits)
 	}
 
-	// Independent reader #1, real clock: the claim reports running — the
-	// recorded budget has not yet expired.
-	reader := newPGReaderService(db, wallClock{})
-	kind, status := readClaimView(t, reader, userID, targetID, "r1-orphan")
-	if kind != string(model.QueryExecutionListItemClaim) || status != string(model.QueryExecutionViewRunning) {
-		t.Fatalf("reader1 view = %s/%s, want claim/running", kind, status)
-	}
+	// Wait for the killed attempt's server-side backend to drain so the
+	// remote-activity counts around the reads are comparable — a leftover
+	// backend would be a stale count, not a reader probe.
+	orphanDrainBackends(t, admin)
 
-	// Independent reader #2, derived clock beyond budget+grace: the same
-	// claim reports unknown — never a fabricated terminal state.
+	// R2-A: the orphan's first read happens through the real HTTP GET path
+	// on an independent reader assembly — fresh api.NewRouter + real auth
+	// over a live socket. The direct ListHistory call stays only as an
+	// auxiliary cross-check, never the acceptance path.
+	readerRouter := pgReaderRouter(t, db, newPGReaderService(db, wallClock{}))
+	readerSrv := httptest.NewServer(readerRouter)
+	defer readerSrv.Close()
+	rtok := childHTTPLogin(t, readerSrv.URL, "pg-r1-orphan@example.com")
+
+	// Snapshot the claim row before the reads — the GETs must not mutate it.
 	var claimedAt time.Time
 	var budget int64
 	if err := db.QueryRow(
@@ -573,10 +580,116 @@ func TestPGKeyedHTTP_OrphanClaimProcessExit(t *testing.T) {
 	if budget <= 0 {
 		t.Fatalf("claim recorded no attempt budget: %d", budget)
 	}
-	reader2 := newPGReaderService(db, fwdClock{claimedAt.Add(time.Duration(budget)*time.Millisecond + 61*time.Second)})
-	kind, status = readClaimView(t, reader2, userID, targetID, "r1-orphan")
-	if kind != string(model.QueryExecutionListItemClaim) || status != string(model.QueryExecutionViewUnknown) {
-		t.Fatalf("reader2 view = %s/%s, want claim/unknown", kind, status)
+	execs0, audits0, _ := claimExecCounts(t, db, targetID, "r1-orphan")
+	backends0 := countPGBackends(t, admin)
+
+	// Reader #1, wall clock — the first GET after the process exit reports
+	// the claim still running (its recorded budget has not yet expired).
+	orphanHTTPGet(t, readerSrv, rtok, targetID, "r1-orphan", "discdb", string(model.QueryExecutionViewRunning))
+
+	// Auxiliary service-level cross-check — same projection, not the
+	// acceptance path.
+	if kind, status := readClaimView(t, newPGReaderService(db, wallClock{}), userID, targetID, "r1-orphan"); kind != string(model.QueryExecutionListItemClaim) || status != string(model.QueryExecutionViewRunning) {
+		t.Fatalf("auxiliary service read = %s/%s, want claim/running", kind, status)
+	}
+
+	// Reader #2, derived clock advanced past the recorded budget+grace —
+	// the same claim reports unknown. This is a clock-controlled
+	// derivation, not a remote-query timeout, and unknown does not claim
+	// the database stopped.
+	reader2Router := pgReaderRouter(t, db, newPGReaderService(db,
+		fwdClock{claimedAt.Add(time.Duration(budget)*time.Millisecond + 61*time.Second)}))
+	readerSrv2 := httptest.NewServer(reader2Router)
+	defer readerSrv2.Close()
+	rtok2 := childHTTPLogin(t, readerSrv2.URL, "pg-r1-orphan@example.com")
+	orphanHTTPGet(t, readerSrv2, rtok2, targetID, "r1-orphan", "discdb", string(model.QueryExecutionViewUnknown))
+
+	// The reads changed nothing: claim still occupied-but-unlinked, no new
+	// terminal/audit rows, and no new remote activity — the GET path never
+	// finalizes, releases the key, or probes the backend.
+	if !claimOccupied(t, db, targetID, "r1-orphan") {
+		t.Fatal("orphan claim released by the GET reads")
+	}
+	var linked2 sql.NullInt64
+	var claimedAt2 time.Time
+	if err := db.QueryRow(
+		`SELECT execution_id, claimed_at FROM query_execution_claims WHERE target_resource_id = ? AND client_execution_id = 'r1-orphan'`,
+		targetID).Scan(&linked2, &claimedAt2); err != nil {
+		t.Fatalf("re-read claim: %v", err)
+	}
+	if linked2.Valid || !claimedAt2.Equal(claimedAt) {
+		t.Fatalf("claim mutated by GETs: linked=%v claimed_at %v->%v", linked2, claimedAt, claimedAt2)
+	}
+	if execs, audits, _ := claimExecCounts(t, db, targetID, "r1-orphan"); execs != execs0 || audits != audits0 {
+		t.Fatalf("GETs wrote evidence: %d/%d -> %d/%d", execs0, audits0, execs, audits)
+	}
+	if got := countPGBackends(t, admin); got != backends0 {
+		t.Fatalf("reader GETs opened remote activity: %d -> %d", backends0, got)
+	}
+
+	// Authorization boundary on the real GET: no credential is denied, and
+	// a governed-select machine credential does not read the orphan claim —
+	// the existing history rule denies machine reads wholesale.
+	if resp, err := http.Get(fmt.Sprintf("%s/query-targets/%d/executions?database=discdb&clientExecutionId=r1-orphan", readerSrv.URL, targetID)); err != nil || resp.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("unauthenticated GET = %v/%v, want 401", resp, err)
+	} else {
+		_ = resp.Body.Close()
+	}
+	machToken := mkReaderMachine(t, db, userID)
+	req, _ := http.NewRequest(http.MethodGet,
+		fmt.Sprintf("%s/query-targets/%d/executions?database=discdb&clientExecutionId=r1-orphan", readerSrv.URL, targetID), nil)
+	req.Header.Set("Authorization", "Bearer "+machToken)
+	mresp, err := readerSrv.Client().Do(req)
+	if err != nil {
+		t.Fatalf("machine GET: %v", err)
+	}
+	_ = mresp.Body.Close()
+	if mresp.StatusCode == http.StatusOK {
+		t.Fatal("machine credential read the orphan claim — machine reads must stay denied")
+	}
+
+	// Load-bearing reverse controls: test-side servers that drop the claim
+	// item or corrupt its status serialization must trip the same
+	// assertions — proving the read-path checks can catch a regression, not
+	// that production emitted such a response.
+	tampers := map[string]func(it map[string]any) (keep bool){
+		"drop_claim":   func(it map[string]any) bool { return it["kind"] != "claim" },
+		"wrong_status": func(it map[string]any) bool { it["status"] = "succeeded"; return true },
+		"wrong_id": func(it map[string]any) bool {
+			it["id"] = float64(424242) // fabricate a terminal id on the claim
+			return true
+		},
+	}
+	for name, tamper := range tampers {
+		tamper := tamper
+		tampered := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			rec := httptest.NewRecorder()
+			readerRouter.ServeHTTP(rec, r)
+			var page struct {
+				Items []map[string]any `json:"items"`
+			}
+			if err := json.Unmarshal(rec.Body.Bytes(), &page); err == nil {
+				kept := make([]map[string]any, 0, len(page.Items))
+				for _, it := range page.Items {
+					if tamper(it) {
+						kept = append(kept, it)
+					}
+				}
+				page.Items = kept
+				body, _ := json.Marshal(page)
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(rec.Code)
+				_, _ = w.Write(body)
+				return
+			}
+			w.WriteHeader(rec.Code)
+			_, _ = w.Write(rec.Body.Bytes())
+		}))
+		_, err := orphanHTTPGetErr(t, tampered, rtok, targetID, "r1-orphan", "discdb", string(model.QueryExecutionViewRunning))
+		tampered.Close()
+		if err == nil {
+			t.Fatalf("tampered response %q passed the orphan assertions — the read-path checks are not load-bearing", name)
+		}
 	}
 
 	// A same-key retry on a fully-wired enabled assembly is refused — the
@@ -593,9 +706,9 @@ func TestPGKeyedHTTP_OrphanClaimProcessExit(t *testing.T) {
 		MachineCredentialService:   service.NewMachinePrincipalService(mysqlrepo.NewMachinePrincipalRepository(db)),
 		QueryExecutionAuth:         api.QueryExecutionAuthConfig{Clock: time.Now},
 	})
-	rtok := mustLogin(t, retryRouter, "pg-r1-orphan@example.com", "secret123")
+	rtok3 := mustLogin(t, retryRouter, "pg-r1-orphan@example.com", "secret123")
 	rr := doBearerWithBody(t, retryRouter, http.MethodPost,
-		fmt.Sprintf("/query-targets/%d/execute", targetID), rtok,
+		fmt.Sprintf("/query-targets/%d/execute", targetID), rtok3,
 		`{"statement":"SELECT id, note FROM app.orphan_gate WHERE id = 1","database":"discdb","clientExecutionId":"r1-orphan"}`)
 	if rr.Code != http.StatusConflict {
 		t.Fatalf("same-key retry on orphan claim: %d, want 409; body=%s", rr.Code, rr.Body.String())
@@ -603,4 +716,139 @@ func TestPGKeyedHTTP_OrphanClaimProcessExit(t *testing.T) {
 	if execs, audits, _ := claimExecCounts(t, db, targetID, "r1-orphan"); execs != 0 || audits != 0 {
 		t.Fatalf("retry fabricated terminal evidence: %d/%d", execs, audits)
 	}
+}
+
+// ---------------------------------------------------------------------------
+// R2-A helpers — real-HTTP orphan reads.
+// ---------------------------------------------------------------------------
+
+// pgReaderRouter wires an execution-read service into the production router —
+// the independent reader for the orphan claim, served over a real socket.
+func pgReaderRouter(t *testing.T, db *sql.DB, svc *service.QueryExecutionService) http.Handler {
+	t.Helper()
+	savedRepo := mysqlrepo.NewQuerySavedStatementRepository(db)
+	targetRepo := mysqlrepo.NewQueryTargetRepository(db)
+	return api.NewRouter(api.Dependencies{
+		AuthService:           service.NewAuthService(mysqlrepo.NewUserRepository(db), authzIntegrationSecret),
+		AuditService:          service.NewAuditService(mysqlrepo.NewAuditRepository(db)),
+		QueryExecutionService: svc,
+		QuerySavedStatementService: service.NewQuerySavedStatementService(
+			savedRepo, savedRepo, targetRepo,
+			service.NewQueryGuard(service.QueryGuardConfig{DefaultMaxRows: 100, HardMaxRows: 500})),
+		MachineCredentialService: service.NewMachinePrincipalService(mysqlrepo.NewMachinePrincipalRepository(db)),
+		QueryExecutionAuth:       api.QueryExecutionAuthConfig{Clock: time.Now},
+	})
+}
+
+// orphanHTTPGetErr issues the real point-read GET over a live socket and
+// returns the single claim item after running the full orphan contract
+// assertions — used directly on tampered responders, so every check is
+// load-bearing.
+func orphanHTTPGetErr(t *testing.T, srv *httptest.Server, token string, targetID uint64, key, database, wantStatus string) (map[string]any, error) {
+	t.Helper()
+	q := url.Values{}
+	q.Set("database", database)
+	q.Set("clientExecutionId", key)
+	req, err := http.NewRequest(http.MethodGet,
+		fmt.Sprintf("%s/query-targets/%d/executions?%s", srv.URL, targetID, q.Encode()), nil)
+	if err != nil {
+		t.Fatalf("build orphan GET: %v", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
+	resp, err := srv.Client().Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("orphan GET transport: %w", err)
+	}
+	defer resp.Body.Close()
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("orphan GET read: %w", err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("orphan GET status = %d; body=%s", resp.StatusCode, body)
+	}
+	var page struct {
+		Items []map[string]any `json:"items"`
+	}
+	if err := json.Unmarshal(body, &page); err != nil {
+		return nil, fmt.Errorf("orphan GET decode: %w", err)
+	}
+	if len(page.Items) != 1 {
+		return nil, fmt.Errorf("items = %d, want exactly 1", len(page.Items))
+	}
+	item := page.Items[0]
+	if item["kind"] != "claim" {
+		return nil, fmt.Errorf("kind = %v, want claim", item["kind"])
+	}
+	if item["status"] != wantStatus {
+		return nil, fmt.Errorf("status = %v, want %s", item["status"], wantStatus)
+	}
+	if v, ok := item["id"]; ok && v != nil {
+		return nil, fmt.Errorf("claim item id = %v — must stay null (unassigned)", v)
+	}
+	if item["clientExecutionId"] != key {
+		return nil, fmt.Errorf("clientExecutionId = %v, want %s", item["clientExecutionId"], key)
+	}
+	if item["database"] != database || item["schema"] != "app" {
+		return nil, fmt.Errorf("connection scope = %v/%v, want %s/app", item["database"], item["schema"], database)
+	}
+	return item, nil
+}
+
+func orphanHTTPGet(t *testing.T, srv *httptest.Server, token string, targetID uint64, key, database, wantStatus string) map[string]any {
+	t.Helper()
+	item, err := orphanHTTPGetErr(t, srv, token, targetID, key, database, wantStatus)
+	if err != nil {
+		t.Fatalf("orphan HTTP read: %v", err)
+	}
+	return item
+}
+
+// orphanDrainBackends waits until the killed attempt leaves no ACTIVE ch-t6
+// backend — the parent's fixture pools stay alive-but-idle until test
+// cleanup, so only state='active' marks the child's result query. Bounded,
+// so a stuck backend fails the test.
+func orphanDrainBackends(t *testing.T, admin *pgx.Conn) {
+	t.Helper()
+	deadline := time.Now().Add(20 * time.Second)
+	for {
+		var n int64
+		if err := admin.QueryRow(context.Background(),
+			`SELECT count(*) FROM pg_catalog.pg_stat_activity
+			  WHERE application_name = 'ch-t6' AND state = 'active'
+			    AND pid <> pg_backend_pid()`).Scan(&n); err == nil && n == 0 {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("orphaned backend never drained")
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+}
+
+// countPGBackends returns the number of ch-t6 backends — the reader GET path
+// must not open remote activity.
+func countPGBackends(t *testing.T, admin *pgx.Conn) int64 {
+	t.Helper()
+	var n int64
+	if err := admin.QueryRow(context.Background(),
+		`SELECT count(*) FROM pg_catalog.pg_stat_activity
+		  WHERE application_name = 'ch-t6' AND pid <> pg_backend_pid()`).Scan(&n); err != nil {
+		t.Fatalf("count backends: %v", err)
+	}
+	return n
+}
+
+// mkReaderMachine mints a governed-select machine credential on the shared
+// fixture — history reads must still deny it.
+func mkReaderMachine(t *testing.T, db *sql.DB, userID uint64) string {
+	t.Helper()
+	issued, err := service.NewMachinePrincipalService(mysqlrepo.NewMachinePrincipalRepository(db)).Create(
+		context.Background(),
+		service.AuthenticatedUser{ID: userID, Role: "admin"},
+		model.MachinePrincipalCreateRequest{Name: "pg-r1-reader-mach", Scopes: []model.MachineScope{model.MachineScopeGovernedSelect}})
+	if err != nil {
+		t.Fatalf("create reader machine: %v", err)
+	}
+	return issued.Secret
 }
