@@ -40,6 +40,8 @@ type stubQueryExec struct {
 	gotPagination  *model.QueryExecutePaginationRequest
 	gotClientKey   string
 	gotStatement   string
+	gotDatabase    string
+	gotSchema      string
 	gotNavRequest  model.RelatedRecordNavigationRequest
 	gotQuery       model.QueryExecutionListQuery
 	executeCalled  bool
@@ -75,6 +77,8 @@ func (s *stubQueryExec) Execute(_ context.Context, identity model.QueryExecution
 	s.gotPagination = req.Pagination
 	s.gotClientKey = req.ClientExecutionID
 	s.gotStatement = req.Statement
+	s.gotDatabase = req.Database
+	s.gotSchema = req.Schema
 	resp := s.executeResp
 	if req.Pagination != nil {
 		resp.Pagination = &model.QueryExecutePaginationResponse{
@@ -1471,19 +1475,26 @@ func newApplyPathBlockedService() *service.QueryExecutionService {
 	)
 }
 
-func TestQueryExecution_Execute_FailClosedPGContractFields(t *testing.T) {
-	// WHY: database/schema select a composite connection identity that stays
-	// fail-closed until the PostgreSQL execution path (T7/T12) wires it.
-	// Accepting them silently would misroute identity, so they fail closed
-	// with a controlled validation error. clientExecutionId is now wired:
-	// it is exercised separately as a positive keyed expectation.
+func TestQueryExecution_Execute_EngineFieldsReachServiceVerbatim(t *testing.T) {
+	// WHY: database/schema select a composite connection identity whose
+	// required/forbidden semantics depend on the trusted target engine —
+	// knowledge the handler does not have. Since T12 the handler applies
+	// only engine-agnostic shape validation (ValidateShape) and must carry
+	// these fields to the service verbatim: no trimming, no case folding,
+	// no rejection. The service then decides — PostgreSQL requires them
+	// under the wired capability; MySQL/TiDB keep rejecting them. The
+	// fail-closed verdicts live in the service and are covered there and
+	// in the real-HTTP integration boundary test.
 	cases := []struct {
-		name string
-		body string
+		name         string
+		body         string
+		wantDatabase string
+		wantSchema   string
 	}{
-		{"database", `{"statement":"select 1","database":"pgdb"}`},
-		{"schema", `{"statement":"select 1","schema":"app"}`},
-		{"both", `{"statement":"select 1","database":"pgdb","schema":"app","clientExecutionId":"exec-1"}`},
+		{"database", `{"statement":"select 1","database":"pgdb"}`, "pgdb", ""},
+		{"schema", `{"statement":"select 1","schema":"app"}`, "", "app"},
+		{"both", `{"statement":"select 1","database":"pgdb","schema":"app","clientExecutionId":"exec-1"}`, "pgdb", "app"},
+		{"verbatim-casing", `{"statement":"select 1","database":" DiscDB ","schema":" App "}`, " DiscDB ", " App "},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -1494,14 +1505,15 @@ func TestQueryExecution_Execute_FailClosedPGContractFields(t *testing.T) {
 			rec := httptest.NewRecorder()
 			router.ServeHTTP(rec, qeRequest(http.MethodPost, "/query-targets/22/execute", tc.body, token))
 
-			if rec.Code != http.StatusBadRequest {
-				t.Fatalf("status = %d, want 400; body=%s", rec.Code, rec.Body.String())
+			if rec.Code != http.StatusOK {
+				t.Fatalf("status = %d, want 200; body=%s", rec.Code, rec.Body.String())
 			}
-			if !strings.Contains(rec.Body.String(), "validation_failed") {
-				t.Fatalf("body = %s, want validation_failed", rec.Body.String())
+			if !stub.executeCalled {
+				t.Fatal("Execute must receive shape-clean engine fields for the service to arbitrate")
 			}
-			if stub.executeCalled {
-				t.Fatal("Execute must not run when unwired contract fields are set")
+			if stub.gotDatabase != tc.wantDatabase || stub.gotSchema != tc.wantSchema {
+				t.Fatalf("scope fields = (%q,%q), want verbatim (%q,%q)",
+					stub.gotDatabase, stub.gotSchema, tc.wantDatabase, tc.wantSchema)
 			}
 		})
 	}

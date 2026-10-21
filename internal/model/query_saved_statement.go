@@ -173,6 +173,12 @@ type QuerySavedStatementExecuteRequest struct {
 	// "cellTruncated"); checked by the post-finalize delivery gate (T8-B).
 	// Capabilities never participate in claim replay identity.
 	Capabilities []string `json:"capabilities,omitempty"`
+	// ScopeDatabase carries the ?database= connection-scope selector set by
+	// the HTTP layer — it is never decoded from the request body. For
+	// PostgreSQL targets it is a required single value that must equal the
+	// authorized statement's recorded database inside the same snapshot;
+	// for every other engine a non-empty value is a scope violation.
+	ScopeDatabase string `json:"-"`
 }
 
 // Validate enforces the request-level limits: non-negative maxRows, the

@@ -88,6 +88,30 @@ type PGClaimedOutcome struct {
 	Status      model.QueryExecutionStatus
 	Result      *PGDisclosedResult
 	Evidence    *PGAttemptEvidence
+	// Delivery is the narrow public-metadata set the shared runner fills
+	// exactly once, after the keyed finalize persists: the resolved
+	// connection scope, page window, and row budget, plus the finalized
+	// record's timing. A transport adapter builds its response from these
+	// scalars — it never re-derives scope or invents timestamps. The value
+	// stays zero on every path that never finalized (shape failures, access
+	// denials, claim conflicts, pre-claim evidence pairs).
+	Delivery PGClaimedDeliveryFacts
+}
+
+// PGClaimedDeliveryFacts is the runner-owned scalar metadata a transport
+// adapter needs to project the persisted attempt into a public response.
+// Database/Schema are the resolved connection scope (pinned schema after
+// default resolution); Page/PageSize/MaxRows are the resolved window; and
+// DurationMs/ExecutedAt are copied from the finalized history record itself,
+// never re-measured at response time.
+type PGClaimedDeliveryFacts struct {
+	Database   string
+	Schema     string
+	Page       int
+	PageSize   int
+	MaxRows    int
+	DurationMs int64
+	ExecutedAt time.Time
 }
 
 // pgClaimStore is the narrow repository seam the keyed orchestrator needs:
@@ -487,6 +511,7 @@ func (s *QueryExecutionService) executePGClaimedPrepared(ctx context.Context, p 
 	if p.kind.persistsStatement() {
 		preview = pgClaimedStatementPreview(p.statement)
 	}
+	finished := s.clock.Now()
 	rec := model.QueryExecutionRecord{
 		TargetResourceID:  p.targetID,
 		Engine:            target.ConnectionContext.Engine,
@@ -496,12 +521,12 @@ func (s *QueryExecutionService) executePGClaimedPrepared(ctx context.Context, p 
 		StatementPreview:  preview,
 		Status:            status,
 		RowCount:          rowCount,
-		DurationMs:        s.clock.Now().Sub(p.start).Milliseconds(),
+		DurationMs:        finished.Sub(p.start).Milliseconds(),
 		ErrorCode:         code,
 		ErrorMessage:      msg,
 		RemoteState:       ev.RemoteState,
 		ClientExecutionID: &p.clientKey,
-		CreatedAt:         s.clock.Now(),
+		CreatedAt:         finished,
 	}
 	if p.identity.Kind == model.QueryExecutionActorUser {
 		rec.ActorUserID = p.identity.ID
@@ -522,6 +547,18 @@ func (s *QueryExecutionService) executePGClaimedPrepared(ctx context.Context, p 
 	if ferr != nil {
 		return PGClaimedOutcome{}, errPersistAttempt
 	}
+	// The public-delivery scalars derive from the record the finalize just
+	// persisted — resolved scope/window plus the record's own timing — and
+	// are filled exactly once here. Adapters consume them verbatim.
+	facts := PGClaimedDeliveryFacts{
+		Database:   p.database,
+		Schema:     p.schema,
+		Page:       p.page,
+		PageSize:   p.pageSize,
+		MaxRows:    p.maxRows,
+		DurationMs: rec.DurationMs,
+		ExecutedAt: rec.CreatedAt,
+	}
 
 	// The outcome's evidence must tell the same terminal story as the
 	// persisted row and outcome status. The executor's record is its own —
@@ -539,10 +576,10 @@ func (s *QueryExecutionService) executePGClaimedPrepared(ctx context.Context, p 
 	}
 
 	if contractFault {
-		return PGClaimedOutcome{ExecutionID: execID, Status: status, Evidence: outEv}, ErrQueryBackendFailure
+		return PGClaimedOutcome{ExecutionID: execID, Status: status, Evidence: outEv, Delivery: facts}, ErrQueryBackendFailure
 	}
 	if execErr != nil {
-		return PGClaimedOutcome{ExecutionID: execID, Status: status, Evidence: outEv}, execErr
+		return PGClaimedOutcome{ExecutionID: execID, Status: status, Evidence: outEv, Delivery: facts}, execErr
 	}
 
 	// Post-finalize delivery gate (G2): the success pair is already
@@ -559,7 +596,7 @@ func (s *QueryExecutionService) executePGClaimedPrepared(ctx context.Context, p 
 		Capabilities:  p.capabilities,
 	})
 	if derr != nil {
-		return PGClaimedOutcome{ExecutionID: execID, Status: status, Evidence: outEv}, derr
+		return PGClaimedOutcome{ExecutionID: execID, Status: status, Evidence: outEv, Delivery: facts}, derr
 	}
 	// The returned object is the coordinator's own snapshot — never the
 	// producer's: its rows are rebuilt from the decision's owned payload
@@ -569,7 +606,7 @@ func (s *QueryExecutionService) executePGClaimedPrepared(ctx context.Context, p 
 	// and delivered.
 	delivery.Rows = pgDecisionRowsDisclosed(decision.Rows)
 	delivery.CellTruncated = decision.CellTruncated
-	return PGClaimedOutcome{ExecutionID: execID, Status: status, Result: delivery, Evidence: outEv}, nil
+	return PGClaimedOutcome{ExecutionID: execID, Status: status, Result: delivery, Evidence: outEv, Delivery: facts}, nil
 }
 
 // pgDisclosedRowsAny adapts native-text cells to the shared [][]any

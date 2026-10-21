@@ -88,8 +88,9 @@ type QueryExecuteRequest struct {
 	MaxRows    int                            `json:"maxRows,omitempty"`
 	Pagination *QueryExecutePaginationRequest `json:"pagination,omitempty"`
 	// Database and Schema are the composite connection-identity selectors.
-	// They are accepted in the contract but rejected while non-empty until the
-	// PostgreSQL execution path is wired (T7/T12).
+	// Engine decides their contract at the service layer: PostgreSQL
+	// requires a non-empty database (schema defaults to the connection's
+	// default_schema), while every other engine keeps them fail-closed.
 	Database string `json:"database,omitempty"`
 	Schema   string `json:"schema,omitempty"`
 	// ClientExecutionID is the idempotency key for the MySQL/TiDB execution
@@ -105,13 +106,29 @@ type QueryExecuteRequest struct {
 }
 
 // Validate enforces the ordinary execute-request shape before any lookup:
-// statement non-blank, bounded, valid UTF-8, and NUL-free; maxRows
-// non-negative; pagination shape when supplied; database/schema empty (the
-// composite connection identity is not enabled for this engine);
-// clientExecutionId optional — empty selects the legacy keyless path, a
-// non-empty key is byte-verbatim: bounded, valid UTF-8, NUL-free, never
-// normalized, and never required to be a UUID.
+// ValidateShape plus the engine-independent legacy rule that database and
+// schema stay empty. The database/schema acceptance boundary moved to the
+// service dispatch layer, where the trusted engine is known: PostgreSQL
+// targets consume the fields under their own governed validation while
+// every other engine still fails closed on them.
 func (r QueryExecuteRequest) Validate() error {
+	if err := r.ValidateShape(); err != nil {
+		return err
+	}
+	if r.Database != "" || r.Schema != "" {
+		return errors.New("database and schema are not accepted until the postgresql execution path is enabled")
+	}
+	return nil
+}
+
+// ValidateShape is the engine-agnostic half of Validate: statement
+// non-blank, bounded, valid UTF-8, and NUL-free; maxRows non-negative;
+// pagination shape when supplied; clientExecutionId optional — empty
+// selects the legacy keyless path, a non-empty key is byte-verbatim:
+// bounded, valid UTF-8, NUL-free, never normalized, and never required to
+// be a UUID. Database/schema identifier shape and requiredness belong to
+// the engine-specific layer, so they are not checked here.
+func (r QueryExecuteRequest) ValidateShape() error {
 	if strings.TrimSpace(r.Statement) == "" {
 		return errors.New("statement is required")
 	}
@@ -131,9 +148,6 @@ func (r QueryExecuteRequest) Validate() error {
 		if err := ValidatePagination(r.Pagination.Page, r.Pagination.PageSize); err != nil {
 			return err
 		}
-	}
-	if r.Database != "" || r.Schema != "" {
-		return errors.New("database and schema are not accepted until the postgresql execution path is enabled")
 	}
 	return validateExecutionRequestKey(r.ClientExecutionID)
 }

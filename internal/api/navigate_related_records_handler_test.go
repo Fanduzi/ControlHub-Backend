@@ -417,26 +417,31 @@ func TestNavigateRelatedRecords_ResponseNoSQLNoDSN(t *testing.T) {
 	}
 }
 
-func TestNavigateRelatedRecords_FailClosedPGContractFields(t *testing.T) {
-	// WHY: source.schema is the pinned-schema segment of composite connection
-	// identity — it stays fail-closed for MySQL/TiDB. clientExecutionId arms
-	// the claim protocol and is now wired: a valid key reaches the service.
+func TestNavigateRelatedRecords_SourceSchemaReachesServiceVerbatim(t *testing.T) {
+	// WHY: source.schema is the pinned-schema segment of composite
+	// connection identity — required for PostgreSQL, forbidden for
+	// MySQL/TiDB. Only the service knows the trusted engine, so since T12
+	// the handler validates the source shape and carries schema verbatim;
+	// the per-engine verdict (and the closed-assembly denial) is decided
+	// inside the service and covered there and in the real-HTTP boundary
+	// test. clientExecutionId arms the claim protocol: a valid key reaches
+	// the service.
 	t.Run("source.schema", func(t *testing.T) {
 		stub := &stubQueryExec{}
 		router := newNavRouter(stub)
 
 		rec := httptest.NewRecorder()
 		router.ServeHTTP(rec, qeRequest(http.MethodPost, "/query-targets/9001/related-records",
-			`{"source":{"database":"orders_db","schema":"app","object":"order_items","kind":"table","foreignKey":"fk"},"localValues":["42"]}`, navBearer(t)))
+			`{"source":{"database":"orders_db","schema":" App ","object":"order_items","kind":"table","foreignKey":"fk"},"localValues":["42"]}`, navBearer(t)))
 
-		if rec.Code != http.StatusBadRequest {
-			t.Fatalf("status = %d, want 400; body=%s", rec.Code, rec.Body.String())
+		if rec.Code != http.StatusOK {
+			t.Fatalf("status = %d, want 200; body=%s", rec.Code, rec.Body.String())
 		}
-		if !strings.Contains(rec.Body.String(), "validation_failed") {
-			t.Fatalf("body = %s, want validation_failed", rec.Body.String())
+		if !stub.navCalled {
+			t.Fatal("NavigateRelatedRecords must receive a shape-clean source.schema for the service to arbitrate")
 		}
-		if stub.navCalled {
-			t.Fatal("NavigateRelatedRecords must not run when source.schema is set")
+		if stub.gotNavRequest.Source.Schema != " App " {
+			t.Fatalf("source.schema = %q, want verbatim pass-through", stub.gotNavRequest.Source.Schema)
 		}
 	})
 	t.Run("clientExecutionId", func(t *testing.T) {

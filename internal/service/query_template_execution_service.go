@@ -56,6 +56,28 @@ func (s *QueryExecutionService) ExecuteSavedStatement(ctx context.Context, actor
 		return model.QueryExecuteResponse{}, ErrQueryBackendFailure
 	}
 
+	// Engine dispatch: only when the construction-time PG HTTP capability is
+	// wired may a postgresql target leave the legacy path. The ?database=
+	// scope is engine-bound: PG requires an explicit single non-empty value
+	// (matched to the authorized statement's own snapshot inside the
+	// orchestrator); every other engine keeps the legacy empty-scope
+	// contract and must not let a PG-style selector slide in.
+	if s.pgHTTPEntries {
+		target, terr := s.pgDispatchTarget(ctx, targetID)
+		if terr != nil {
+			return model.QueryExecuteResponse{}, terr
+		}
+		if isPGEngine(target.ConnectionContext.Engine) {
+			if err := model.ValidateIdentifierShape("database", req.ScopeDatabase, true); err != nil {
+				return model.QueryExecuteResponse{}, fmt.Errorf("%w: %v", ErrQueryValidationFailed, err)
+			}
+			return s.executeSavedPGHTTP(ctx, identity, target, statementID, req)
+		}
+	}
+	if req.ScopeDatabase != "" {
+		return model.QueryExecuteResponse{}, fmt.Errorf("%w: database is not accepted for this target", ErrQueryValidationFailed)
+	}
+
 	// The request belongs to this attempt: clone every caller-owned mutable
 	// field — the raw values map and each RawMessage byte slice, the
 	// pagination struct, and the capability list — before any external call

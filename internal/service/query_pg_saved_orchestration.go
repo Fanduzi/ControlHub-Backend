@@ -147,6 +147,14 @@ func (s *QueryExecutionService) ExecutePGSavedStatementClaimed(
 		(statement.Scope == model.QuerySavedStatementPersonal && statement.OwnerUserID != identity.ID) {
 		return s.rejectPGClaimedSavedNotFound(ctx, target, identity, nullKeyDigest, start)
 	}
+	// The HTTP layer's ?database= scope constraint is checked against this
+	// same authorized snapshot — never a second read, and never a redirect
+	// of the stored statement onto another connection. An empty scope is
+	// unconstrained (direct internal callers keep their approved semantics);
+	// a non-empty mismatch renders the statement invisible in this scope.
+	if req.ScopeDatabase != "" && req.ScopeDatabase != statement.DatabaseName {
+		return s.rejectPGClaimedSavedNotFound(ctx, target, identity, nullKeyDigest, start)
+	}
 	definitions := make([]TemplateParameterDefinition, len(statement.Parameters))
 	for index, parameter := range statement.Parameters {
 		definitions[index] = TemplateParameterDefinition{

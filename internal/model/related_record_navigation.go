@@ -151,4 +151,15 @@ type RelatedRecordNavigationResponse struct {
 	ReferencedDatabase string   `json:"referencedDatabase"`
 	ReferencedObject   string   `json:"referencedObject"`
 	ReferencedColumns  []string `json:"referencedColumns"`
+	// SourceSchema and ReferencedSchema carry the PostgreSQL relation
+	// identities: a PG navigation reports both schemas separately from the
+	// fixed connection database. They are absent for engines without schema
+	// namespaces.
+	SourceSchema     string `json:"sourceSchema,omitempty"`
+	ReferencedSchema string `json:"referencedSchema,omitempty"`
+	// Context echoes the server-resolved execution context (the connection
+	// database and the pinned schema the attempt executed under) — never the
+	// referenced relation's own schema. Absent for engines without a pinned
+	// connection context.
+	Context *QueryExecutionContext `json:"context,omitempty"`
 }

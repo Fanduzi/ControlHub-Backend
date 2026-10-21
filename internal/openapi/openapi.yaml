@@ -344,11 +344,16 @@ paths:
         and payload caps. Allowed statements: SELECT, SHOW DATABASES, SHOW TABLES,
         SHOW COLUMNS, DESCRIBE/DESC, EXPLAIN SELECT. Schema-qualified metadata
         forms (SHOW TABLES FROM db, SHOW COLUMNS FROM db.tbl, DESCRIBE db.tbl)
-        are allowed. Accepts either a fresh current User bearer (bounded TTL and
-        Authorization Version) or an independent Machine Credential with the
-        governed-select scope. Evidence records the verified User or Machine
-        Principal identity, never the Machine Credential ID or secret. The actor
-        is never accepted in the request body. The resolved DSN is never returned.
+        are allowed. For a PostgreSQL target — reachable only where the
+        server-side PG HTTP capability is wired — the same route runs a single
+        guarded read-only SELECT under the keyed claim protocol; database is
+        required, schema defaults to the connection's defaultSchema, and a
+        clientExecutionId is mandatory. Accepts either a fresh current User
+        bearer (bounded TTL and Authorization Version) or an independent
+        Machine Credential with the governed-select scope. Evidence records
+        the verified User or Machine Principal identity, never the Machine
+        Credential ID or secret. The actor is never accepted in the request
+        body. The resolved DSN is never returned.
       security:
         - bearerAuth: []
         - machineCredential: []
@@ -706,12 +711,14 @@ paths:
         foreign key metadata from the live schema, constructs a parameterized
         SELECT from trusted referenced identifiers, binds local values via
         database/sql placeholders, and returns bounded result rows plus
-        relation metadata. The browser never supplies referenced identifiers,
-        SQL, credentials, DSN, or actor identity. Requires a fresh Bearer
-        token (same TTL as query execution). Every attempt is recorded with
-        fixed action "related_record_navigation" and relation identity only;
-        localValues, result rows, SQL, credentials, and raw errors are never
-        persisted.
+        relation metadata. For a PostgreSQL target — reachable only where the
+        server-side PG HTTP capability is wired — source.schema is required
+        and the relation is re-verified inside the claimed execution. The
+        browser never supplies referenced identifiers, SQL, credentials, DSN,
+        or actor identity. Requires a fresh Bearer token (same TTL as query
+        execution). Every attempt is recorded with fixed action
+        "related_record_navigation" and relation identity only; localValues,
+        result rows, SQL, credentials, and raw errors are never persisted.
       security:
         - bearerAuth: []
       parameters:
@@ -2952,13 +2959,19 @@ paths:
         validates the submitted typed values against the stored parameter
         declarations, compiles placeholders into positional driver bindings,
         and runs target access, read-only guard, disclosure preflight,
-        executor, response caps, history, and audit unchanged. Every template
-        page is a fresh execution; a disclosure-policy change takes effect on
-        later pages. The request accepts only values, maxRows, and optional
-        governed pagination. SQL text, parameter declarations, identities,
-        roles, credentials, DSNs, and policy/audit/result fields are rejected.
-        Parameter values are protected content and never appear in history,
-        audit, logs, errors, or the response. Requires a fresh Bearer token.
+        executor, response caps, history, and audit unchanged. For a
+        PostgreSQL target — reachable only where the server-side PG HTTP
+        capability is wired — a single ?database= scope value is required and
+        must equal the statement's recorded database; the saved statement is
+        compiled and executed under the keyed claim protocol on its own
+        authorized snapshot, never redirected to another connection. Every
+        template page is a fresh execution; a disclosure-policy change takes
+        effect on later pages. The request accepts only values, maxRows, and
+        optional governed pagination. SQL text, parameter declarations,
+        identities, roles, credentials, DSNs, and policy/audit/result fields
+        are rejected. Parameter values are protected content and never appear
+        in history, audit, logs, errors, or the response. Requires a fresh
+        Bearer token.
       security:
         - bearerAuth: []
       parameters:
@@ -2978,6 +2991,19 @@ paths:
             format: int64
             minimum: 1
           description: Saved statement ID.
+        - name: database
+          in: query
+          required: false
+          schema:
+            type: string
+            maxLength: 128
+          description: >
+            Engine-bound connection scope. Required single non-empty value
+            for PostgreSQL targets — it must equal the authorized saved
+            statement's recorded database or the statement is not found in
+            this scope. Repeated parameters and non-empty values on
+            MySQL/TiDB targets are rejected (validation_failed). The
+            statement is never redirected to another connection.
       requestBody:
         required: true
         content:
@@ -6053,25 +6079,24 @@ components:
           type: string
           maxLength: 64
           description: >
-            Optional verbatim idempotency key for the MySQL/TiDB
-            execution-claim protocol: at most 64 Unicode characters, valid
-            UTF-8, no NUL. A non-empty key occupies one claim slot per
-            target — replaying the identical request returns
-            execution_already_exists (409) and reusing the key with a
-            different request digest returns client_execution_id_conflict
-            (409). Omitted or empty means no idempotence guarantee: every
-            request runs as a fresh attempt. Capabilities never participate
-            in replay identity. PostgreSQL execution stays closed.
+            Verbatim idempotency key for the execution-claim protocol: at
+            most 64 Unicode characters, valid UTF-8, no NUL. Required
+            non-empty for PostgreSQL targets. On MySQL/TiDB a non-empty key
+            occupies one claim slot per target — replaying the identical
+            request returns execution_already_exists (409) and reusing the
+            key with a different request digest returns
+            client_execution_id_conflict (409); omitted or empty means no
+            idempotence guarantee and every request runs as a fresh attempt.
+            Capabilities never participate in replay identity.
         capabilities:
           type: array
           items:
             type: string
             enum: [cellTruncated]
           description: >
-            Declared client result-contract capabilities. Active on the
-            MySQL/TiDB governed paths: a page containing a truncated cell is
-            only delivered when cellTruncated is declared, otherwise the
-            response is result_contract_upgrade_required (409).
+            Declared client result-contract capabilities. A page containing a
+            truncated cell is only delivered when cellTruncated is declared,
+            otherwise the response is result_contract_upgrade_required (409).
     QuerySavedStatementListResponse:
       type: object
       required: [items, pageInfo, canManageSharedTemplates]
@@ -7231,8 +7256,10 @@ components:
             - pg_version_unsupported
             - profile_not_supported
             - query_backend_error
+            - query_binding_mismatch
             - query_connection_disabled
             - query_connection_not_found
+            - query_dependency_not_approved
             - query_execution_not_found
             - query_explain_not_supported
             - query_not_allowed
@@ -7287,48 +7314,51 @@ components:
         statement:
           type: string
           description: >
-            A single MySQL/TiDB read-only SQL statement. Allowed: SELECT, SHOW
-            DATABASES, SHOW TABLES, SHOW COLUMNS, DESCRIBE/DESC, EXPLAIN SELECT.
-            Schema-qualified metadata forms (SHOW TABLES FROM db, SHOW COLUMNS
-            FROM db.tbl, DESCRIBE db.tbl) are allowed.
+            A single read-only SQL statement in the target's own dialect.
+            MySQL/TiDB allowed: SELECT, SHOW DATABASES, SHOW TABLES, SHOW
+            COLUMNS, DESCRIBE/DESC, EXPLAIN SELECT. Schema-qualified metadata
+            forms (SHOW TABLES FROM db, SHOW COLUMNS FROM db.tbl, DESCRIBE
+            db.tbl) are allowed. PostgreSQL accepts a single SELECT (joins,
+            read-only CTEs, subqueries, set operations, window functions, and
+            a top-level bounded LIMIT/OFFSET/FETCH FIRST window); everything
+            else is a controlled rejection.
         database:
           type: string
           maxLength: 128
           description: >
             Composite connection-identity selector. Required non-empty for
-            PostgreSQL targets; must be omitted/empty for MySQL/TiDB. The
-            backend rejects non-empty values with validation_failed until the
-            PostgreSQL execution path is enabled.
+            PostgreSQL targets; must be omitted/empty for MySQL/TiDB targets
+            on this route (validation_failed otherwise).
         schema:
           type: string
           maxLength: 128
           description: >
             Optional pinned schema for the execution. PostgreSQL defaults to
             the connection's defaultSchema; non-empty values are rejected for
-            MySQL/TiDB and until the PostgreSQL execution path is enabled.
+            MySQL/TiDB targets (validation_failed).
         clientExecutionId:
           type: string
           maxLength: 64
           description: >
-            Optional verbatim idempotency key for the MySQL/TiDB
-            execution-claim protocol: at most 64 Unicode characters, valid
-            UTF-8, no NUL. A non-empty key occupies one claim slot per
-            target — replaying the identical request returns
-            execution_already_exists (409) and reusing the key with a
-            different request digest returns client_execution_id_conflict
-            (409). Omitted or empty means no idempotence guarantee: every
-            request runs as a fresh attempt. Capabilities never participate
-            in replay identity. PostgreSQL execution stays closed.
+            Verbatim idempotency key for the execution-claim protocol: at
+            most 64 Unicode characters, valid UTF-8, no NUL. Required
+            non-empty for PostgreSQL targets. On MySQL/TiDB a non-empty key
+            occupies one claim slot per target — replaying the identical
+            request returns execution_already_exists (409) and reusing the
+            key with a different request digest returns
+            client_execution_id_conflict (409); omitted or empty means no
+            idempotence guarantee and every request runs as a fresh attempt.
+            Capabilities never participate in replay identity.
         capabilities:
           type: array
           items:
             type: string
             enum: [cellTruncated]
           description: >
-            Declared client result-contract capabilities. Active on the
-            MySQL/TiDB governed paths: a page containing a truncated cell is
-            only delivered when cellTruncated is declared, otherwise the
-            response is result_contract_upgrade_required (409).
+            Declared client result-contract capabilities. A page containing a
+            truncated cell is only delivered when cellTruncated is declared,
+            otherwise the response is result_contract_upgrade_required (409).
+            The attempt itself is still recorded success.
         maxRows:
           type: integer
           minimum: 0
@@ -7340,8 +7370,11 @@ components:
           $ref: "#/components/schemas/QueryExecutePaginationRequest"
           description: >
             Optional governed result paging boundary. When present, page and
-            pageSize are validated strictly. When absent, execution keeps its
-            single-response behavior and returns all rows up to the row cap.
+            pageSize are validated strictly. When absent on MySQL/TiDB,
+            execution keeps its single-response behavior and returns all rows
+            up to the row cap; PostgreSQL executions always resolve a bounded
+            window (absent defaults to page 1 at the server default size) and
+            always report pagination.
     QueryExecutePaginationRequest:
       type: object
       required: [page, pageSize]
@@ -7370,7 +7403,9 @@ components:
         Server-computed page metadata for governed query-result paging.
         HasPreviousPage and HasNextPage are derived from the offset and
         effective row cap; they never leak total-row counts or snapshot
-        identifiers. Present only when the request included pagination.
+        identifiers. Present only when the request included pagination on
+        MySQL/TiDB; PostgreSQL executions always report their resolved
+        window.
       properties:
         page:
           type: integer
@@ -7468,8 +7503,9 @@ components:
           $ref: "#/components/schemas/QueryExecutePaginationResponse"
           description: >
             Present only when the request included a pagination object and the
-            statement is a bare SELECT. Absent for metadata statements (SHOW,
-            DESCRIBE) and when pagination was not requested.
+            statement is a bare SELECT on MySQL/TiDB — absent for metadata
+            statements (SHOW, DESCRIBE) and when pagination was not requested
+            there. PostgreSQL executions always report their resolved window.
         context:
           type: object
           description: >
@@ -7588,9 +7624,10 @@ components:
           type: string
           maxLength: 128
           description: >
-            Pinned-schema segment of the composite connection identity.
-            Required for PostgreSQL sources; must stay empty for engines
-            without schema namespaces until the PostgreSQL path is enabled.
+            Source-object schema segment of the composite connection
+            identity. Required non-empty for PostgreSQL sources; a non-empty
+            value is rejected for MySQL/TiDB targets (validation_failed),
+            where source.database keeps its browse-scope meaning.
         object:
           type: string
           minLength: 1
@@ -7636,25 +7673,24 @@ components:
           type: string
           maxLength: 64
           description: >
-            Optional verbatim idempotency key for the MySQL/TiDB
-            execution-claim protocol: at most 64 Unicode characters, valid
-            UTF-8, no NUL. A non-empty key occupies one claim slot per
-            target — replaying the identical request returns
-            execution_already_exists (409) and reusing the key with a
-            different request digest returns client_execution_id_conflict
-            (409). Omitted or empty means no idempotence guarantee: every
-            request runs as a fresh attempt. Capabilities never participate
-            in replay identity. PostgreSQL execution stays closed.
+            Verbatim idempotency key for the execution-claim protocol: at
+            most 64 Unicode characters, valid UTF-8, no NUL. Required
+            non-empty for PostgreSQL targets. On MySQL/TiDB a non-empty key
+            occupies one claim slot per target — replaying the identical
+            request returns execution_already_exists (409) and reusing the
+            key with a different request digest returns
+            client_execution_id_conflict (409); omitted or empty means no
+            idempotence guarantee and every request runs as a fresh attempt.
+            Capabilities never participate in replay identity.
         capabilities:
           type: array
           items:
             type: string
             enum: [cellTruncated]
           description: >
-            Declared client result-contract capabilities. Active on the
-            MySQL/TiDB governed paths: a page containing a truncated cell is
-            only delivered when cellTruncated is declared, otherwise the
-            response is result_contract_upgrade_required (409).
+            Declared client result-contract capabilities. A page containing a
+            truncated cell is only delivered when cellTruncated is declared,
+            otherwise the response is result_contract_upgrade_required (409).
     RelatedRecordNavigationResponse:
       type: object
       required:
@@ -7737,6 +7773,31 @@ components:
           items:
             type: string
           description: Referenced columns in schema ordinal order
+        sourceSchema:
+          type: string
+          description: >
+            Source-object schema identity — PostgreSQL navigations report it
+            separately from the fixed connection database. Absent for engines
+            without schema namespaces.
+        referencedSchema:
+          type: string
+          description: >
+            Referenced-object schema identity resolved from verified FK
+            metadata — PostgreSQL navigations report it separately from the
+            fixed connection database. Absent for engines without schema
+            namespaces.
+        context:
+          type: object
+          description: >
+            Server-resolved execution context echo: the connection database
+            and the pinned schema the attempt executed under — never the
+            referenced relation's own schema. Absent for engines without a
+            pinned connection context.
+          properties:
+            database:
+              type: string
+            schema:
+              type: string
     QueryWorkspaceWorksheet:
       type: object
       additionalProperties: false

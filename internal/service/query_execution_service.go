@@ -195,6 +195,14 @@ type QueryExecutionService struct {
 	// the production constructor installs preparePGNavigation, which runs
 	// the one bounded READ ONLY FK-mapping probe before claim.
 	pgNavPrepare pgNavPrepareFunc
+	// pgHTTPEntries is the construction-time capability that lets the three
+	// HTTP-facing methods dispatch postgresql-engine targets into the keyed
+	// PG orchestration entries. False is the default-off release gate: every
+	// non-enabled instance keeps the legacy fail-closed behavior — the
+	// engine gate denies the attempt and the connection-scope request
+	// fields stay rejected. It is set only by WithPGHTTPEntries and can
+	// never be opened by request fields, roles, or target labels.
+	pgHTTPEntries bool
 }
 
 // QueryEvidencePersistenceFailures exposes the dimensionless persistence-
@@ -232,6 +240,34 @@ func NewQueryExecutionService(
 	}
 }
 
+// WithPGHTTPEntries installs the construction-time PostgreSQL HTTP
+// capability: the three HTTP-facing methods dispatch postgresql-engine
+// targets into the keyed PG orchestration entries (ExecutePGClaimed,
+// ExecutePGSavedStatementClaimed, NavigatePGRelatedRecordsClaimed). It is a
+// release gate only — connection enabled state, environment policy,
+// credential binding, guards, disclosure, and evidence gates all still
+// apply, and it never widens user/machine privileges. Production assembly
+// does not call it; the integration fixture enables it explicitly so real
+// HTTP traffic can exercise the governed chain. The receiver is mutated;
+// one service instance is exactly one capability verdict.
+func (s *QueryExecutionService) WithPGHTTPEntries() *QueryExecutionService {
+	s.pgHTTPEntries = true
+	return s
+}
+
+// pgDispatchTarget reads the minimal target metadata the engine dispatch
+// needs — identity only, never a DSN, credential, claim, or connection. The
+// read is separate from governed access resolution: it cannot open a
+// database connection or occupy a key. An unreadable target fails the
+// request before any engine decision.
+func (s *QueryExecutionService) pgDispatchTarget(ctx context.Context, targetID uint64) (model.QueryTarget, error) {
+	target, err := s.access.findTarget(ctx, targetID)
+	if err != nil {
+		return model.QueryTarget{}, ErrQueryTargetNotFound
+	}
+	return target, nil
+}
+
 // Execute runs one guarded SELECT for a target and records the attempt. It
 // returns a response on success or a sentinel error otherwise. Every reachable
 // outcome (rejected, failed, timeout, success) is persisted to history + audit;
@@ -248,6 +284,23 @@ func (s *QueryExecutionService) Execute(ctx context.Context, identity model.Quer
 	}
 	if targetID == 0 {
 		return model.QueryExecuteResponse{}, fmt.Errorf("%w: target id is required", ErrQueryValidationFailed)
+	}
+	if err := req.ValidateShape(); err != nil {
+		return model.QueryExecuteResponse{}, fmt.Errorf("%w: %v", ErrQueryValidationFailed, err)
+	}
+	// Engine dispatch: only when the construction-time PG HTTP capability is
+	// wired may a postgresql target leave the legacy path. The minimal
+	// metadata read never resolves credentials, never connects, and never
+	// occupies a key — governed access, claims, and all PG-specific
+	// required-field checks belong to the orchestrator.
+	if s.pgHTTPEntries {
+		target, terr := s.pgDispatchTarget(ctx, targetID)
+		if terr != nil {
+			return model.QueryExecuteResponse{}, terr
+		}
+		if isPGEngine(target.ConnectionContext.Engine) {
+			return s.executePGHTTP(ctx, identity, target, req)
+		}
 	}
 	if err := req.Validate(); err != nil {
 		return model.QueryExecuteResponse{}, fmt.Errorf("%w: %v", ErrQueryValidationFailed, err)
@@ -697,6 +750,19 @@ func (s *QueryExecutionService) NavigateRelatedRecords(ctx context.Context, acto
 	}
 	if err := req.Validate(); err != nil {
 		return model.RelatedRecordNavigationResponse{}, fmt.Errorf("%w: %v", ErrQueryValidationFailed, err)
+	}
+	// Engine dispatch: only when the construction-time PG HTTP capability is
+	// wired may a postgresql target leave the legacy path — source.schema is
+	// the PG source-identity segment there, not a rejected field. The
+	// minimal metadata read never resolves credentials or occupies a key.
+	if s.pgHTTPEntries {
+		target, terr := s.pgDispatchTarget(ctx, targetID)
+		if terr != nil {
+			return model.RelatedRecordNavigationResponse{}, terr
+		}
+		if isPGEngine(target.ConnectionContext.Engine) {
+			return s.navigatePGHTTP(ctx, identity, target, req)
+		}
 	}
 	// The pinned-schema selector stays fail-closed for the MySQL/TiDB
 	// navigation path; source.database keeps its browse-scope meaning.

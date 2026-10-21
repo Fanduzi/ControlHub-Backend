@@ -1,7 +1,7 @@
 // Package api provides HTTP handlers and routing for the ControlHub REST API.
-// input: bytes, context, encoding/json, errors, fmt, io, net/http, strconv, strings, time, chi, internal/model, internal/service
-// output: user-or-machine ordinary execute identity, route-local strict execute decoder, user-only sibling query and owner-only statement handlers, controlled error mapping with claim 409 sentinels, queryExecutionAPI/queryExecutionStatementAPI interfaces
-// pos: HTTP handlers for governed execute/history/owner-only statement retrieval, saved-statement execution, and related-record navigation. All three execution entries accept an optional verbatim clientExecutionId claim key through route-local strict decoders with exact case-sensitive field allowlists and explicit-null rejection on every typed scalar/member (nested source members included); ordinary database/schema and navigation source.schema stay fail-closed for MySQL/TiDB. The history list mixes terminal rows with claim-derived entries and accepts database/clientExecutionId filters plus the v2 mixed-ordering cursor (T10-C). Execute/related disclosure blocks publish query_result_disclosure_blocked (Issue #48); target-not-enabled remains query_not_allowed; claim replay/conflict publishes execution_already_exists/client_execution_id_conflict and post-finalize result-contract refusals publish result_contract_upgrade_required as 409 on all three result routes (T8-B).
+// input: bytes, context, encoding/json, errors, fmt, io, net/http, strconv, strings, time, chi, internal/model, internal/pgsql, internal/service
+// output: user-or-machine ordinary execute identity, route-local strict execute decoder, user-only sibling query and owner-only statement handlers, controlled error mapping with claim 409 sentinels and the PG governed vocabulary (pgsql.RejectError codes, connection/version sentinels), queryExecutionAPI/queryExecutionStatementAPI interfaces
+// pos: HTTP handlers for governed execute/history/owner-only statement retrieval, saved-statement execution, and related-record navigation. All three execution entries accept an optional verbatim clientExecutionId claim key through route-local strict decoders with exact case-sensitive field allowlists and explicit-null rejection on every typed scalar/member (nested source members included); engine-dependent field semantics (ordinary database/schema, navigation source.schema, saved ?database= single-value scope) are decided inside the service by the trusted target engine — PostgreSQL only when its construction-time HTTP capability is wired, MySQL/TiDB fail-closed there (T12). The history list mixes terminal rows with claim-derived entries and accepts database/clientExecutionId filters plus the v2 mixed-ordering cursor (T10-C). Execute/related disclosure blocks publish query_result_disclosure_blocked (Issue #48); target-not-enabled remains query_not_allowed; claim replay/conflict publishes execution_already_exists/client_execution_id_conflict and post-finalize result-contract refusals publish result_contract_upgrade_required as 409 on all three result routes (T8-B).
 // note: if this file changes, update header and README.md
 package api
 
@@ -21,6 +21,7 @@ import (
 	"github.com/go-chi/chi/v5"
 
 	"github.com/fan/controlhub/internal/model"
+	"github.com/fan/controlhub/internal/pgsql"
 	"github.com/fan/controlhub/internal/service"
 )
 
@@ -313,7 +314,11 @@ func handleExecuteQuery(svc queryExecutionAPI) http.HandlerFunc {
 			writeJSONError(w, http.StatusBadRequest, "validation_failed", "invalid request payload")
 			return
 		}
-		if err := req.Validate(); err != nil {
+		// Engine-independent shape only — database/schema semantics belong
+		// to the trusted-engine dispatch inside the service (PostgreSQL
+		// consumes them when its construction-time HTTP capability is
+		// wired; MySQL/TiDB still reject them there).
+		if err := req.ValidateShape(); err != nil {
 			writeJSONError(w, http.StatusBadRequest, "validation_failed", err.Error())
 			return
 		}
@@ -416,6 +421,18 @@ func handleExecuteSavedStatement(svc queryExecutionAPI) http.HandlerFunc {
 		if err := req.Validate(); err != nil {
 			writeJSONError(w, http.StatusBadRequest, "validation_failed", err.Error())
 			return
+		}
+		// ?database= is the engine-bound connection scope: a repeated
+		// parameter is ambiguous and rejected here; the single value —
+		// empty included — reaches the service verbatim, where the
+		// trusted engine decides whether it is required (PostgreSQL) or
+		// forbidden (MySQL/TiDB).
+		if raw, present := r.URL.Query()["database"]; present {
+			if len(raw) != 1 {
+				writeJSONError(w, http.StatusBadRequest, "validation_failed", "database parameter must be a single value")
+				return
+			}
+			req.ScopeDatabase = raw[0]
 		}
 		actorUserID, ok := actorUserIDFromContext(r.Context())
 		if !ok {
@@ -612,6 +629,9 @@ func parseExecutionFilters(r *http.Request) (status *model.QueryExecutionStatus,
 // No guard, policy, credential, or target-database validation issue becomes a 500.
 // ErrQueryDisclosureBlocked is matched before ErrQueryNotAllowed because execute
 // rejections wrap both; matching the other way published query_not_allowed.
+// PG governed-path errors the sentinels do not cover — *pgsql.RejectError and
+// the connection/version sentinels — reach writePGGovernedError before the
+// internal-error default.
 func writeQueryExecutionError(w http.ResponseWriter, err error) {
 	switch {
 	case errors.Is(err, service.ErrQueryValidationFailed):
@@ -622,8 +642,13 @@ func writeQueryExecutionError(w http.ResponseWriter, err error) {
 		writeJSONError(w, http.StatusForbidden, "query_not_allowed", err.Error())
 	case errors.Is(err, service.ErrQueryTargetNotFound):
 		writeJSONError(w, http.StatusNotFound, "query_target_not_found", err.Error())
-	case errors.Is(err, service.ErrQueryTimeout):
+	case errors.Is(err, service.ErrQueryTimeout), errors.Is(err, context.DeadlineExceeded):
 		writeJSONError(w, http.StatusRequestTimeout, "query_timeout", err.Error())
+	case errors.Is(err, context.Canceled):
+		// A caller-cancelled PG attempt is the cancelled terminal record on
+		// the wire family — same fixed backend verdict the MySQL path
+		// publishes (query_canceled → 502), never the driver text.
+		writeJSONError(w, http.StatusBadGateway, "query_backend_error", "query canceled")
 	case errors.Is(err, service.ErrQueryBackendFailure):
 		writeJSONError(w, http.StatusBadGateway, "query_backend_error", err.Error())
 	case errors.Is(err, service.ErrQueryExecutionAlreadyExists):
@@ -638,8 +663,59 @@ func writeQueryExecutionError(w http.ResponseWriter, err error) {
 		// response is a controlled 409 with no result payload.
 		writeJSONError(w, http.StatusConflict, "result_contract_upgrade_required", err.Error())
 	default:
+		if writePGGovernedError(w, err) {
+			return
+		}
 		writeJSONError(w, http.StatusInternalServerError, "internal_error", "unexpected server failure")
 	}
+}
+
+// writePGGovernedError maps the controlled PostgreSQL vocabulary the shared
+// sentinels do not cover. *pgsql.RejectError carries an already-safe
+// code/message; the connection-scope and pool-factory sentinels reuse their
+// documented query/schema-surface conventions. Every code maps to a fixed
+// status — an unlisted RejectError code is a wiring defect and surfaces the
+// same internal_error the unclassified default publishes, never a guessed
+// class. Returns true when it wrote a response.
+func writePGGovernedError(w http.ResponseWriter, err error) bool {
+	var reject *pgsql.RejectError
+	switch {
+	case errors.As(err, &reject):
+		switch reject.Code {
+		case "validation_failed",
+			"page_out_of_range",
+			"unsupported_limit_offset_form":
+			writeJSONError(w, http.StatusBadRequest, reject.Code, reject.Error())
+		case "query_object_not_found",
+			"schema_not_found":
+			writeJSONError(w, http.StatusNotFound, reject.Code, reject.Error())
+		case "query_not_allowed",
+			"query_schema_not_usable",
+			"query_reference_not_witnessable",
+			"query_dependency_not_approved",
+			"query_binding_mismatch":
+			writeJSONError(w, http.StatusForbidden, reject.Code, reject.Error())
+		default:
+			writeJSONError(w, http.StatusInternalServerError, "internal_error", "unexpected server failure")
+		}
+	case errors.Is(err, service.ErrSchemaConnectionNotFound):
+		writeJSONError(w, http.StatusNotFound, "query_connection_not_found", err.Error())
+	case errors.Is(err, service.ErrSchemaConnectionDisabled):
+		writeJSONError(w, http.StatusForbidden, "query_connection_disabled", err.Error())
+	case errors.Is(err, service.ErrSchemaBindingMismatch):
+		writeJSONError(w, http.StatusForbidden, "dsn_binding_mismatch", err.Error())
+	case errors.Is(err, service.ErrSchemaNotFound):
+		writeJSONError(w, http.StatusNotFound, "schema_not_found", err.Error())
+	case errors.Is(err, service.ErrSchemaNotUsable):
+		writeJSONError(w, http.StatusForbidden, "query_schema_not_usable", err.Error())
+	case errors.Is(err, service.ErrPGVersionUnsupported):
+		writeJSONError(w, http.StatusBadRequest, service.PGVersionUnsupportedCode, err.Error())
+	case errors.Is(err, service.ErrPGConnectFailed), errors.Is(err, service.ErrPGVersionReadFailed):
+		writeJSONError(w, http.StatusBadGateway, "query_backend_error", err.Error())
+	default:
+		return false
+	}
+	return true
 }
 
 // executionPagination is the validated pagination boundary for the history
@@ -777,14 +853,9 @@ func handleNavigateRelatedRecords(svc queryExecutionAPI) http.HandlerFunc {
 			writeJSONError(w, http.StatusBadRequest, "validation_failed", err.Error())
 			return
 		}
-		// source.schema (pinned-schema selector) stays fail-closed for the
-		// MySQL/TiDB navigation path; source.database keeps its existing
-		// browse-scope meaning.
-		if req.Source.Schema != "" {
-			writeJSONError(w, http.StatusBadRequest, "validation_failed",
-				"source.schema is not accepted until the postgresql execution path is enabled")
-			return
-		}
+		// source.schema semantics belong to the trusted-engine dispatch
+		// inside the service — required for PostgreSQL, still fail-closed
+		// for MySQL/TiDB there.
 		actorUserID, ok := actorUserIDFromContext(r.Context())
 		if !ok {
 			writeJSONError(w, http.StatusInternalServerError, "internal_error", "authenticated actor missing")
@@ -815,8 +886,10 @@ func writeNavigationError(w http.ResponseWriter, err error) {
 		writeJSONError(w, http.StatusForbidden, "query_not_allowed", err.Error())
 	case errors.Is(err, service.ErrQueryTargetNotFound):
 		writeJSONError(w, http.StatusNotFound, "query_target_not_found", err.Error())
-	case errors.Is(err, service.ErrQueryTimeout):
+	case errors.Is(err, service.ErrQueryTimeout), errors.Is(err, context.DeadlineExceeded):
 		writeJSONError(w, http.StatusRequestTimeout, "query_timeout", err.Error())
+	case errors.Is(err, context.Canceled):
+		writeJSONError(w, http.StatusBadGateway, "query_backend_error", "query canceled")
 	case errors.Is(err, service.ErrQueryBackendFailure):
 		writeJSONError(w, http.StatusBadGateway, "query_backend_error", err.Error())
 	case errors.Is(err, service.ErrQueryExecutionAlreadyExists):
@@ -826,6 +899,9 @@ func writeNavigationError(w http.ResponseWriter, err error) {
 	case errors.Is(err, service.ErrResultContractUpgradeRequired):
 		writeJSONError(w, http.StatusConflict, "result_contract_upgrade_required", err.Error())
 	default:
+		if writePGGovernedError(w, err) {
+			return
+		}
 		writeJSONError(w, http.StatusInternalServerError, "internal_error", "unexpected server failure")
 	}
 }
