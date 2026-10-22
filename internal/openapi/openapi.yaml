@@ -7832,6 +7832,17 @@ components:
               minLength: 1
               maxLength: 128
             - enum: [null]
+        activeSchema:
+          oneOf:
+            - type: string
+              minLength: 1
+              maxLength: 128
+            - enum: [null]
+          description: >-
+            Optional PostgreSQL namespace pin for the worksheet execution
+            context. Absent or null for MySQL/TiDB worksheets and for
+            PostgreSQL worksheets that resolve to the connection's
+            defaultSchema.
     QueryWorkspace:
       type: object
       additionalProperties: false

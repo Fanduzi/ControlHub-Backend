@@ -558,6 +558,9 @@ func TestQueryTargetService_List_ConnectionsCompositeIdentity(t *testing.T) {
 	if !got[0].AvailableActions.Export {
 		t.Fatal("a resolved PG connection must mark the CSV affordance available")
 	}
+	if !got[0].AvailableActions.Run {
+		t.Fatal("a resolved PG connection must mark the run affordance available")
+	}
 	// Target-level readiness stays the legacy ''-row derivation — composite
 	// connection readiness is expressed per connection, never copied up.
 	if got[0].Readiness == model.ReadinessReady {
@@ -598,5 +601,32 @@ func TestQueryTargetService_List_ConnectionsListerErrorFailsLoud(t *testing.T) {
 
 	if got, _, err := svc.List(context.Background(), model.QueryTargetListQuery{}); err == nil {
 		t.Fatalf("lister error must fail List loud, got %+v", got)
+	}
+}
+
+// TestQueryTargetService_List_ConnectionsUnresolvedStaysLocked proves the
+// fixture affordance gate fails closed: a PG target whose connections are all
+// disabled or unresolved keeps Run/Export off — connections[] alone never
+// implies executability.
+func TestQueryTargetService_List_ConnectionsUnresolvedStaysLocked(t *testing.T) {
+	store := newFakeCredentialStore()
+	store.metadata[credentialStoreKey{credentialTargetID, "analytics"}] = pgCredentialMeta("analytics", "app", "PG_ANALYTICS_RO", false, model.QueryEnvPolicyNonProdOnly)
+	target := credentialTarget("postgresql", "db.internal", 5432, "staging")
+	svc := NewQueryTargetService(fakeTargetRepo{targets: []model.QueryTarget{target}}).
+		WithCredentialReader(store).
+		WithCredentialResolver(&fakeResolver{dsns: map[string]string{
+			"PG_ANALYTICS_RO": "postgres://ro:pw@db.internal:5432/analytics?sslmode=disable",
+		}}).
+		WithConnectionLister(store)
+
+	got, _, err := svc.List(context.Background(), model.QueryTargetListQuery{})
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if got[0].AvailableActions.Run || got[0].AvailableActions.Export {
+		t.Fatal("a PG target with no resolved connection must keep run/export affordances off")
+	}
+	if len(got[0].Connections) != 1 || got[0].Connections[0].Enabled {
+		t.Fatalf("disabled connection must still be listed verbatim, got %+v", got[0].Connections)
 	}
 }

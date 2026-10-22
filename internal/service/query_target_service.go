@@ -169,6 +169,12 @@ func (s *QueryTargetService) populateConnections(ctx context.Context, target *mo
 	}
 	target.Connections = conns
 	if pgResolved {
+		// A resolver-verified PG connection makes the run and CSV affordances
+		// available in the fixture assembly; readiness stays the target-level
+		// ''-row derivation and is never copied up from a composite row. The
+		// POST path still re-checks binding and per-connection policy — this
+		// is a read-model capability, not an execution grant.
+		target.AvailableActions.Run = true
 		target.AvailableActions.Export = true
 	}
 	return nil

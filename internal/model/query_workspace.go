@@ -27,6 +27,11 @@ type QueryWorkspaceWorksheet struct {
 	TargetResourceID uint64  `json:"targetResourceId"`
 	Statement        string  `json:"statement"`
 	ActiveDatabase   *string `json:"activeDatabase"`
+	// ActiveSchema is the optional PostgreSQL namespace pin for the worksheet
+	// context. Omitted for MySQL/TiDB and for PostgreSQL worksheets that use
+	// the connection's default schema. Validated with the same identifier
+	// bounds as ActiveDatabase.
+	ActiveSchema *string `json:"activeSchema,omitempty"`
 }
 
 type QueryWorkspace struct {
@@ -76,6 +81,14 @@ func (r QueryWorkspacePutRequest) Validate() error {
 				return fmt.Errorf("worksheet activeDatabase must contain 1 to %d characters", MaxQueryWorkspaceDatabaseNameLength)
 			}
 			if err := validateNoControlCharacters("worksheet activeDatabase", *worksheet.ActiveDatabase); err != nil {
+				return err
+			}
+		}
+		if worksheet.ActiveSchema != nil {
+			if strings.TrimSpace(*worksheet.ActiveSchema) == "" || utf8.RuneCountInString(*worksheet.ActiveSchema) > MaxQueryWorkspaceDatabaseNameLength {
+				return fmt.Errorf("worksheet activeSchema must contain 1 to %d characters", MaxQueryWorkspaceDatabaseNameLength)
+			}
+			if err := validateNoControlCharacters("worksheet activeSchema", *worksheet.ActiveSchema); err != nil {
 				return err
 			}
 		}
