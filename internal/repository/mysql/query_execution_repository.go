@@ -115,6 +115,51 @@ func (r *QueryExecutionRepository) GetCredential(ctx context.Context, resourceID
 	return meta, nil
 }
 
+// ListCredentials returns every credential row for one resource, ordered by
+// database_name (the composite connection key, ” first). It is the
+// connections[] enumeration read for the query target list: rows are scanned
+// and re-validated with the same fail-closed rules as GetCredential — a row
+// with an invalid credential_ref or environment_policy fails the whole list
+// (ErrInvalidCredentialMetadata), never degrades into a silently dropped
+// connection. It never returns a DSN or password — only metadata.
+func (r *QueryExecutionRepository) ListCredentials(ctx context.Context, resourceID uint64) ([]model.QueryCredentialMetadata, error) {
+	const q = `select id, resource_id, database_name, default_schema, engine, credential_ref, enabled, environment_policy
+	           from query_target_credentials where resource_id = ? order by database_name`
+	rows, err := r.db.QueryContext(ctx, q, resourceID)
+	if err != nil {
+		return nil, fmt.Errorf("list query credentials: %w", err)
+	}
+	defer rows.Close()
+
+	var out []model.QueryCredentialMetadata
+	for rows.Next() {
+		var (
+			meta      model.QueryCredentialMetadata
+			enabled   bool
+			policyStr string
+		)
+		if err := rows.Scan(
+			&meta.ID, &meta.ResourceID, &meta.DatabaseName, &meta.DefaultSchema,
+			&meta.Engine, &meta.CredentialRef, &enabled, &policyStr,
+		); err != nil {
+			return nil, fmt.Errorf("list query credentials scan: %w", err)
+		}
+		meta.Enabled = enabled
+		meta.EnvironmentPolicy = model.QueryEnvironmentPolicy(policyStr)
+		if vErr := model.ValidateCredentialRef(meta.CredentialRef); vErr != nil {
+			return nil, fmt.Errorf("credential_ref for resource %d is invalid: %w", resourceID, model.ErrInvalidCredentialMetadata)
+		}
+		if pErr := meta.EnvironmentPolicy.Validate(); pErr != nil {
+			return nil, fmt.Errorf("environment_policy for resource %d is invalid: %w", resourceID, model.ErrInvalidCredentialMetadata)
+		}
+		out = append(out, meta)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("list query credentials rows: %w", err)
+	}
+	return out, nil
+}
+
 // UpsertCredentialMetadata writes or replaces a target's credential metadata. It
 // is shared by the local/dev seed path (cmd/querydev) and the Phase 38A product
 // write path, so it validates the credential_ref and environment_policy in-method

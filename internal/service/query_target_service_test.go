@@ -514,3 +514,89 @@ func TestQueryTargetService_List_UnexpectedCredentialReadErrorFailsLoud(t *testi
 		t.Fatalf("unexpected read error must fail List loud, got targets %+v", got)
 	}
 }
+
+// TestQueryTargetService_List_ConnectionsCompositeIdentity proves the
+// connections[] projection emits one verbatim entry per credential row with a
+// PER-CONNECTION resolver-verified runtime: a disabled sibling neither drags
+// the resolved connection down nor borrows its status, and the resolved PG
+// connection is what turns on the CSV affordance. WHY: the browser must pick
+// (target, database) from real server state — a copied or target-level
+// runtime would let the UI offer a connection the execute path would reject.
+func TestQueryTargetService_List_ConnectionsCompositeIdentity(t *testing.T) {
+	store := newFakeCredentialStore()
+	store.metadata[credentialStoreKey{credentialTargetID, "analytics"}] = pgCredentialMeta("analytics", "app", "PG_ANALYTICS_RO", false, model.QueryEnvPolicyNonProdOnly)
+	store.metadata[credentialStoreKey{credentialTargetID, "labdb"}] = pgCredentialMeta("labdb", "app", "PG_LABDB_RO", true, model.QueryEnvPolicyNonProdOnly)
+	target := credentialTarget("postgresql", "db.internal", 5432, "staging")
+	svc := NewQueryTargetService(fakeTargetRepo{targets: []model.QueryTarget{target}}).
+		WithCredentialReader(store).
+		WithCredentialResolver(&fakeResolver{dsns: map[string]string{
+			"PG_LABDB_RO":     "postgres://ro:pw@db.internal:5432/labdb?sslmode=disable",
+			"PG_ANALYTICS_RO": "postgres://ro:pw@db.internal:5432/analytics?sslmode=disable",
+		}}).
+		WithConnectionLister(store)
+
+	got, _, err := svc.List(context.Background(), model.QueryTargetListQuery{})
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	conns := got[0].Connections
+	if len(conns) != 2 {
+		t.Fatalf("connections = %+v, want 2 entries", conns)
+	}
+	if conns[0].Database != "analytics" || conns[1].Database != "labdb" {
+		t.Fatalf("connections must be ordered by database_name, got %+v", conns)
+	}
+	if conns[0].Runtime != model.QueryCredentialRuntimeDisabled {
+		t.Fatalf("disabled connection runtime = %q, want %q (sibling's resolved state must not leak)", conns[0].Runtime, model.QueryCredentialRuntimeDisabled)
+	}
+	if conns[1].Runtime != model.QueryCredentialRuntimeSecretResolved {
+		t.Fatalf("resolved connection runtime = %q, want %q", conns[1].Runtime, model.QueryCredentialRuntimeSecretResolved)
+	}
+	if conns[0].Enabled {
+		t.Fatal("disabled connection must report enabled=false verbatim")
+	}
+	if !got[0].AvailableActions.Export {
+		t.Fatal("a resolved PG connection must mark the CSV affordance available")
+	}
+	// Target-level readiness stays the legacy ''-row derivation — composite
+	// connection readiness is expressed per connection, never copied up.
+	if got[0].Readiness == model.ReadinessReady {
+		t.Fatal("PG target-level readiness must not claim ready from a composite row")
+	}
+}
+
+// TestQueryTargetService_List_ConnectionsOmittedByDefault proves the default
+// assembly (no WithConnectionLister) keeps connections[] absent — the browser
+// must never enumerate connections a production listener does not serve.
+func TestQueryTargetService_List_ConnectionsOmittedByDefault(t *testing.T) {
+	store := newFakeCredentialStore()
+	target := credentialTarget("postgresql", "db.internal", 5432, "staging")
+	svc := NewQueryTargetService(fakeTargetRepo{targets: []model.QueryTarget{target}}).
+		WithCredentialReader(store).
+		WithCredentialResolver(&fakeResolver{})
+
+	got, _, err := svc.List(context.Background(), model.QueryTargetListQuery{})
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if got[0].Connections != nil {
+		t.Fatalf("default assembly must omit connections[], got %+v", got[0].Connections)
+	}
+}
+
+// TestQueryTargetService_List_ConnectionsListerErrorFailsLoud proves a
+// connections enumeration failure fails the whole List — a target must never
+// ship a silently half-populated connections[].
+func TestQueryTargetService_List_ConnectionsListerErrorFailsLoud(t *testing.T) {
+	store := newFakeCredentialStore()
+	store.listErr = errors.New("connections read failed")
+	target := credentialTarget("postgresql", "db.internal", 5432, "staging")
+	svc := NewQueryTargetService(fakeTargetRepo{targets: []model.QueryTarget{target}}).
+		WithCredentialReader(store).
+		WithCredentialResolver(&fakeResolver{}).
+		WithConnectionLister(store)
+
+	if got, _, err := svc.List(context.Background(), model.QueryTargetListQuery{}); err == nil {
+		t.Fatalf("lister error must fail List loud, got %+v", got)
+	}
+}

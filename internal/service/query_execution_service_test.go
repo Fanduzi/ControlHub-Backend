@@ -423,7 +423,11 @@ func (f *fakeExecRepo) GetSuccessfulExecutionStatement(_ context.Context, execut
 // closed), then return the configured DSN/error. It records whether it was
 // called so tests can assert no env lookup happens with an unvalidated ref.
 type fakeResolver struct {
-	dsn       string
+	dsn string
+	// dsns maps credential_ref -> DSN for tests that need per-connection
+	// bindings (e.g. two PG connections on one target bound to different
+	// databases). When nil the single dsn field answers every ref.
+	dsns      map[string]string
 	err       error
 	called    bool
 	calls     int
@@ -440,6 +444,9 @@ func (f *fakeResolver) Resolve(_ context.Context, ref string) (string, error) {
 	}
 	if f.err != nil {
 		return "", f.err
+	}
+	if f.dsns != nil {
+		return f.dsns[ref], nil
 	}
 	return f.dsn, nil
 }

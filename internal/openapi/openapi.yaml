@@ -5125,8 +5125,9 @@ components:
           description: >-
             Query Connection rows of this target keyed by
             (resourceId, database). A legacy MySQL/TiDB target reports a
-            single entry with an empty database. Omitted until the
-            composite-key credential read is wired (T2).
+            single entry with an empty database. Omitted on the default
+            assembly; emitted when the composite-key credential read is wired
+            (the E2E fixture listener).
           items:
             type: object
             required: [database, defaultSchema, enabled, environmentPolicy]
@@ -5141,6 +5142,12 @@ components:
                 type: boolean
               environmentPolicy:
                 $ref: "#/components/schemas/QueryEnvironmentPolicy"
+              runtime:
+                $ref: "#/components/schemas/QueryCredentialRuntimeStatus"
+                description: >-
+                  This connection's own resolver-verified runtime status —
+                  never copied from a sibling connection. Absent when no
+                  credential resolver is wired.
     QueryTargetConnectionContext:
       type: object
       required: [environment, owner, engine, host, port]

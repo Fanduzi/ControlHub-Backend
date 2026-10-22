@@ -1,6 +1,6 @@
 // Package model provides domain entities for the resource management system.
 // input: fmt package
-// output: QueryTarget read-model types incl. per-connection identity, query capability/readiness/safety enums, QueryTargetSafetyStateDictionary + Validate
+// output: QueryTarget read-model types incl. per-connection identity/runtime, query capability/readiness/safety enums, QueryTargetSafetyStateDictionary + Validate
 // pos: Read-only query target context for the Query Workbench (Phase 36 shell + Phase 37 readiness)
 // note: if this file changes, update header and README.md
 package model
@@ -123,12 +123,17 @@ type QueryTargetSchemaPreviewNode struct {
 // QueryTargetConnection is one Query Connection row belonging to a target:
 // the (resource_id, database_name) composite identity with its pinned default
 // schema and enablement. A legacy MySQL/TiDB target reports a single entry
-// with an empty database. Empty until the credential-join read is wired (T2).
+// with an empty database. Empty on the default assembly until the
+// credential-join read is wired (T2); the T13/T14 E2E fixture assembly wires
+// it via QueryTargetService.WithConnectionLister. Runtime is the
+// per-connection resolver-verified status — never copied between
+// connections and empty when no resolver is wired.
 type QueryTargetConnection struct {
-	Database          string                 `json:"database"`
-	DefaultSchema     string                 `json:"defaultSchema"`
-	Enabled           bool                   `json:"enabled"`
-	EnvironmentPolicy QueryEnvironmentPolicy `json:"environmentPolicy"`
+	Database          string                       `json:"database"`
+	DefaultSchema     string                       `json:"defaultSchema"`
+	Enabled           bool                         `json:"enabled"`
+	EnvironmentPolicy QueryEnvironmentPolicy       `json:"environmentPolicy"`
+	Runtime           QueryCredentialRuntimeStatus `json:"runtime,omitempty"`
 }
 
 // QueryTarget is the read-only query capability context for one database

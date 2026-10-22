@@ -1,6 +1,6 @@
 // Package main provides tests for the ControlHub application entry point
 // wiring.
-// input: buildDependencies, internal/config
+// input: serverboot.Build, internal/config
 // output: TestBuildDependencies_WiresResourceAndProfileServices and query workspace/statement dependency assertions
 // pos: Proves production DI wires resource/profile plus query workspace and private statement endpoints
 // note: if this file changes, update header and README.md
@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/fan/controlhub/internal/config"
+	"github.com/fan/controlhub/internal/serverboot"
 )
 
 // TestBuildDependencies_WiresResourceAndProfileServices pins the production
@@ -19,7 +20,7 @@ import (
 // PUT/PATCH/DELETE profile endpoints) must both be present in the router
 // dependencies.
 func TestBuildDependencies_WiresResourceAndProfileServices(t *testing.T) {
-	deps := buildDependencies(nil, config.Config{JWTSecret: strings.Repeat("a", 32)})
+	deps, _ := serverboot.Build(nil, config.Config{JWTSecret: strings.Repeat("a", 32)})
 	if deps.ResourceService == nil {
 		t.Fatal("ResourceService is nil")
 	}

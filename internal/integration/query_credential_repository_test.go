@@ -1,9 +1,10 @@
 //go:build integration
 
-// Package integration provides Testcontainers-backed tests for the Phase 38A
-// query credential metadata repository operations (Task B2): product-safe
-// get/upsert/delete, in-method validation guard, fail-closed read of an invalid
-// stored ref, the no-DSN-stored invariant, and the composite (resource, database) connection-key semantics.
+// Package integration — Phase 38A query credential metadata repository tests.
+// input: shared MySQL testcontainer fixture, QueryExecutionRepository credential methods
+// output: get/upsert/delete, fail-closed reads, composite connection-key and ListCredentials enumeration tests
+// pos: Real-MySQL boundary for the governed query credential metadata store
+// note: if this file changes, update this header and module README.md.
 package integration
 
 import (
@@ -348,6 +349,61 @@ func TestQueryCredentialRepository_UpsertRejectsEngineMismatchedIdentity(t *test
 				t.Fatalf("rejected upsert must not write a row for %q", tc.name)
 			}
 		})
+	}
+}
+
+// TestQueryCredentialRepository_ListCredentials proves the connections[]
+// enumeration read on a real schema: every (resource_id, database_name) row is
+// returned ordered by database_name (” first), verbatim metadata only, and a
+// bypassed-invalid row fails the whole list closed rather than being skipped.
+// WHY: the query target list must never emit a half-enumerated or silently
+// dropped connection set for a composite-identity target.
+func TestQueryCredentialRepository_ListCredentials(t *testing.T) {
+	db, repo := newCredentialRepoTestDB(t)
+	ctx := context.Background()
+	const rid uint64 = 7700000011
+
+	// Insert out of order to prove the read orders by database_name.
+	rows := []model.QueryCredentialMetadata{
+		{ResourceID: rid, Engine: "postgresql", DatabaseName: "labdb", DefaultSchema: "app",
+			CredentialRef: "PG_LABDB_RO", Enabled: true, EnvironmentPolicy: model.QueryEnvPolicyNonProdOnly},
+		{ResourceID: rid, Engine: "postgresql", DatabaseName: "analytics", DefaultSchema: "app",
+			CredentialRef: "PG_ANALYTICS_RO", Enabled: false, EnvironmentPolicy: model.QueryEnvPolicyAllEnvironments},
+		{ResourceID: rid, Engine: "mysql", CredentialRef: "ORDER_MYSQL_RO",
+			Enabled: true, EnvironmentPolicy: model.QueryEnvPolicyNonProdOnly},
+	}
+	for _, m := range rows {
+		if err := repo.UpsertCredentialMetadata(ctx, m); err != nil {
+			t.Fatalf("upsert %q: %v", m.DatabaseName, err)
+		}
+	}
+
+	got, err := repo.ListCredentials(ctx, rid)
+	if err != nil {
+		t.Fatalf("ListCredentials: %v", err)
+	}
+	if len(got) != 3 {
+		t.Fatalf("ListCredentials returned %d rows, want 3", len(got))
+	}
+	wantOrder := []string{"", "analytics", "labdb"}
+	for i, want := range wantOrder {
+		if got[i].DatabaseName != want {
+			t.Fatalf("row %d database_name = %q, want %q (deterministic composite-key order)", i, got[i].DatabaseName, want)
+		}
+	}
+	if got[2].DefaultSchema != "app" || !got[2].Enabled || got[2].CredentialRef != "PG_LABDB_RO" {
+		t.Fatalf("PG row metadata must round-trip verbatim, got %+v", got[2])
+	}
+	if got[1].Enabled {
+		t.Fatal("a disabled connection row must be reported verbatim, not filtered")
+	}
+
+	// A row inserted bypassing write-path validation fails the whole list
+	// closed — it is never silently skipped from the enumeration.
+	const rid2 uint64 = 7700000012
+	mustExec(t, db, `insert into query_target_credentials (resource_id, engine, credential_ref, enabled, environment_policy) values (?, 'mysql', 'bad-ref!', false, 'non_prod_only')`, rid2)
+	if _, err := repo.ListCredentials(ctx, rid2); !errors.Is(err, model.ErrInvalidCredentialMetadata) {
+		t.Fatalf("ListCredentials on a corrupt row err = %v, want ErrInvalidCredentialMetadata", err)
 	}
 }
 
