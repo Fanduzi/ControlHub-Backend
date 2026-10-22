@@ -630,3 +630,58 @@ func TestQueryTargetService_List_ConnectionsUnresolvedStaysLocked(t *testing.T) 
 		t.Fatalf("disabled connection must still be listed verbatim, got %+v", got[0].Connections)
 	}
 }
+
+// TestQueryTargetService_List_ConnectionsMySQLResolvedGrantsExport proves the
+// fixture-only CSV affordance for mysql/tidb: when the connections lister is
+// wired, a resolver-verified ''-row credential grants Export on an executable
+// target — the same trusted resolution that already grants Run. WHY: the e2e
+// proxy no longer rewrites availableActions, so the real backend must emit
+// export from each target's own trusted credential, and cmd/server never
+// wires this path so production keeps export=false.
+func TestQueryTargetService_List_ConnectionsMySQLResolvedGrantsExport(t *testing.T) {
+	store := newFakeCredentialStore()
+	store.metadata[credentialStoreKey{credentialTargetID, ""}] = credentialMeta("ORDER_MYSQL_RO", true, model.QueryEnvPolicyNonProdOnly)
+	target := credentialTarget("mysql", "db.internal", 3306, "staging")
+	svc := NewQueryTargetService(fakeTargetRepo{targets: []model.QueryTarget{target}}).
+		WithCredentialReader(store).
+		WithCredentialResolver(&fakeResolver{dsn: testResolverDSN}).
+		WithConnectionLister(store)
+
+	got, _, err := svc.List(context.Background(), model.QueryTargetListQuery{})
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if !got[0].AvailableActions.Run {
+		t.Fatal("resolver-verified ''-row credential must keep the run affordance available")
+	}
+	if !got[0].AvailableActions.Export {
+		t.Fatal("resolver-verified ''-row credential must grant the CSV affordance in the fixture assembly")
+	}
+	if len(got[0].Connections) != 1 || got[0].Connections[0].Runtime != model.QueryCredentialRuntimeSecretResolved {
+		t.Fatalf("the ''-row connection must report its own resolved runtime, got %+v", got[0].Connections)
+	}
+}
+
+// TestQueryTargetService_List_ConnectionsMySQLUnresolvedKeepsExportOff is the
+// negative half: a disabled ''-row credential leaves the target locked and
+// Export off — connections[] presence alone never implies the affordance.
+func TestQueryTargetService_List_ConnectionsMySQLUnresolvedKeepsExportOff(t *testing.T) {
+	store := newFakeCredentialStore()
+	store.metadata[credentialStoreKey{credentialTargetID, ""}] = credentialMeta("ORDER_MYSQL_RO", false, model.QueryEnvPolicyNonProdOnly)
+	target := credentialTarget("mysql", "db.internal", 3306, "staging")
+	svc := NewQueryTargetService(fakeTargetRepo{targets: []model.QueryTarget{target}}).
+		WithCredentialReader(store).
+		WithCredentialResolver(&fakeResolver{dsn: testResolverDSN}).
+		WithConnectionLister(store)
+
+	got, _, err := svc.List(context.Background(), model.QueryTargetListQuery{})
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if got[0].AvailableActions.Run || got[0].AvailableActions.Export {
+		t.Fatal("a disabled ''-row credential must keep run/export affordances off")
+	}
+	if len(got[0].Connections) != 1 || got[0].Connections[0].Runtime != model.QueryCredentialRuntimeDisabled {
+		t.Fatalf("the ''-row connection must report disabled verbatim, got %+v", got[0].Connections)
+	}
+}

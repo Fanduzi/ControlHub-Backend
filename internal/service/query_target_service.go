@@ -143,7 +143,10 @@ func (s *QueryTargetService) List(ctx context.Context, q model.QueryTargetListQu
 // postgresql target with at least one resolver-verified connection the result
 // contract can produce exportable pages, so the CSV affordance is marked
 // available; per-column disclosure and the cell-truncation matrix still gate
-// every concrete export. Other engines keep their existing action flags.
+// every concrete export. A mysql/tidb target whose own ''-row credential is
+// resolver-verified gains the same read-model CSV affordance in this
+// fixture-only path — cmd/server never wires the connections lister, so
+// production targets still report export=false.
 func (s *QueryTargetService) populateConnections(ctx context.Context, target *model.QueryTarget) error {
 	rows, err := s.connections.ListCredentials(ctx, target.ResourceID)
 	if err != nil {
@@ -151,6 +154,7 @@ func (s *QueryTargetService) populateConnections(ctx context.Context, target *mo
 	}
 	conns := make([]model.QueryTargetConnection, 0, len(rows))
 	pgResolved := false
+	resolved := false
 	for i := range rows {
 		row := rows[i]
 		conn := model.QueryTargetConnection{
@@ -161,8 +165,11 @@ func (s *QueryTargetService) populateConnections(ctx context.Context, target *mo
 		}
 		if s.resolver != nil {
 			conn.Runtime = InspectCredentialRuntime(ctx, s.resolver, *target, &row)
-			if isPGEngine(target.ConnectionContext.Engine) && conn.Runtime == model.QueryCredentialRuntimeSecretResolved {
-				pgResolved = true
+			if conn.Runtime == model.QueryCredentialRuntimeSecretResolved {
+				resolved = true
+				if isPGEngine(target.ConnectionContext.Engine) {
+					pgResolved = true
+				}
 			}
 		}
 		conns = append(conns, conn)
@@ -175,6 +182,13 @@ func (s *QueryTargetService) populateConnections(ctx context.Context, target *mo
 		// POST path still re-checks binding and per-connection policy — this
 		// is a read-model capability, not an execution grant.
 		target.AvailableActions.Run = true
+		target.AvailableActions.Export = true
+	} else if resolved && target.AvailableActions.Run {
+		// mysql/tidb with its own resolver-verified ''-row credential: the CSV
+		// affordance is granted only here (the test-only connections lister is
+		// never wired by cmd/server), so production targets still report
+		// export=false. Run is already derived from the same ''-row runtime —
+		// export is never granted to a locked target.
 		target.AvailableActions.Export = true
 	}
 	return nil
