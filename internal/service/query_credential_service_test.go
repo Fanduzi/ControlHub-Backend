@@ -1,5 +1,10 @@
-// Package service provides tests for the Phase 38A query credential metadata
-// service (Task B3): the runtime-status matrix, the readiness correction
+// Package service — Phase 38A query credential metadata service tests.
+// input: context, database/sql, errors, slices, strings, testing, internal/model
+// output: runtime-status matrix, readiness correction, admin upsert/delete audit, composite connection tests + fakeCredentialStore fake
+// pos: Unit boundary for credential service + shared credential-store fake consumed by target-service tests
+// note: if this file changes, update header and README.md
+//
+// Covers (Task B3): the runtime-status matrix, the readiness correction
 // (metadata alone never makes a target ready), and admin-gated upsert/delete
 // with audit recording.
 package service
@@ -8,6 +13,8 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"slices"
+	"strings"
 	"testing"
 
 	"github.com/fan/controlhub/internal/model"
@@ -29,6 +36,7 @@ type fakeCredentialStore struct {
 	upserts   []model.QueryCredentialMetadata
 	deletes   []uint64
 	audits    []credentialAuditCall
+	listErr   error
 	upsertErr error
 	deleteErr error
 	auditErr  error
@@ -58,6 +66,24 @@ func (f *fakeCredentialStore) GetCredential(_ context.Context, rid uint64, datab
 		return model.QueryCredentialMetadata{}, sql.ErrNoRows
 	}
 	return m, nil
+}
+
+// ListCredentials mirrors the repository enumeration: every stored row for
+// the resource ordered by database_name, fail-closed on listErr.
+func (f *fakeCredentialStore) ListCredentials(_ context.Context, rid uint64) ([]model.QueryCredentialMetadata, error) {
+	if f.listErr != nil {
+		return nil, f.listErr
+	}
+	var out []model.QueryCredentialMetadata
+	for key, m := range f.metadata {
+		if key.resourceID == rid {
+			out = append(out, m)
+		}
+	}
+	slices.SortFunc(out, func(a, b model.QueryCredentialMetadata) int {
+		return strings.Compare(a.DatabaseName, b.DatabaseName)
+	})
+	return out, nil
 }
 
 func (f *fakeCredentialStore) UpsertCredentialMetadataWithAudit(_ context.Context, m model.QueryCredentialMetadata, actor uint64, etype, result string) error {

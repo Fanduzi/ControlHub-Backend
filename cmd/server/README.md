@@ -5,7 +5,7 @@ Application bootstrap and manual dependency injection.
 ## Files
 | File | Responsibility |
 |------|---------------|
-| main.go | Load config, validate JWT_SECRET, wire resource/relation plus query workspace/private statement and machine services into api.Dependencies, start HTTP server |
+| main.go | Load config, validate JWT_SECRET, build the shared production dependency graph via internal/serverboot.Build (PostgreSQL HTTP entries stay closed — the Parts capabilities are discarded), start HTTP server |
 | main_test.go | Production dependency assertions for resource/profile and query workspace/private statement routes |
 | shutdown.go | Graceful drain seam: serve until SIGTERM/SIGINT, stop new traffic and drain in-flight handlers for at most a fixed ten seconds (Issue #37) |
 

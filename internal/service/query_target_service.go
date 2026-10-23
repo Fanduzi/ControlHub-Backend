@@ -1,6 +1,6 @@
 // Package service provides business logic for resource reads and typed profile assembly.
 // input: internal/model (QueryTarget, QueryTargetListQuery, QueryCredentialMetadata, QueryEnvironmentPolicy, QueryCredentialRuntimeStatus), context, database/sql, errors, strings
-// output: QueryTargetRepository + QueryCredentialReader interfaces, NewQueryTargetService, WithCredentialReader, WithCredentialResolver, QueryTargetService.List, readTargetCredential, classifyQueryKind, completeQueryTarget, completeQueryTargetWithRuntime, credentialAllowsExecution, isExecutableEngine, isCredentialManagedEngine, isPGEngine
+// output: QueryTargetRepository + QueryCredentialReader + QueryConnectionLister interfaces, NewQueryTargetService, WithCredentialReader, WithCredentialResolver, WithConnectionLister, QueryTargetService.List, populateConnections, readTargetCredential, classifyQueryKind, completeQueryTarget, completeQueryTargetWithRuntime, credentialAllowsExecution, isExecutableEngine, isCredentialManagedEngine, isPGEngine
 // pos: Query target read model — sources database_instance targets and derives workbench context + Phase 37 readiness, with the Phase 38A runtime-gated readiness correction
 // note: if this file changes, update header and README.md
 package service
@@ -33,6 +33,18 @@ type QueryCredentialReader interface {
 	GetCredential(ctx context.Context, resourceID uint64, databaseName string) (model.QueryCredentialMetadata, error)
 }
 
+// QueryConnectionLister enumerates a target's credential/connection rows for
+// the connections[] read-model projection (spec G1 composite identity). The
+// concrete implementation is the query execution repository; it is optional —
+// the default production assembly does not wire it, so connections[] stays
+// omitted. The T13/T14 E2E fixture listener wires it so the browser can
+// enumerate real PostgreSQL (target, database) connections.
+type QueryConnectionLister interface {
+	// ListCredentials returns every connection row of one resource ordered by
+	// database_name ('' first), fail-closed on a corrupt row.
+	ListCredentials(ctx context.Context, resourceID uint64) ([]model.QueryCredentialMetadata, error)
+}
+
 // QueryTargetService assembles the query target read model: it sources raw
 // database_instance targets from the repository and derives the full workbench
 // context (capability, readiness, governance, locked actions) for each.
@@ -40,6 +52,7 @@ type QueryTargetService struct {
 	repo        QueryTargetRepository
 	credentials QueryCredentialReader
 	resolver    QueryCredentialResolver
+	connections QueryConnectionLister
 }
 
 // NewQueryTargetService creates a QueryTargetService backed by the given
@@ -70,6 +83,18 @@ func (s *QueryTargetService) WithCredentialResolver(resolver QueryCredentialReso
 	return &cp
 }
 
+// WithConnectionLister returns a copy of the service wired to enumerate each
+// target's connection rows into connections[]. Rows are projected verbatim —
+// a disabled connection reports itself, never drags siblings down, and no
+// sibling's credential/runtime is copied onto it. When the credential resolver
+// is also wired, each row additionally carries its own resolver-verified
+// runtime status. The receiver is not mutated.
+func (s *QueryTargetService) WithConnectionLister(lister QueryConnectionLister) *QueryTargetService {
+	cp := *s
+	cp.connections = lister
+	return &cp
+}
+
 // List returns query targets for the Query Workbench. Raw targets from the
 // repository carry only identity and connection context; this method derives the
 // remaining capability/readiness/governance/action state. When a credential
@@ -97,6 +122,11 @@ func (s *QueryTargetService) List(ctx context.Context, q model.QueryTargetListQu
 		} else {
 			targets[i] = completeQueryTarget(targets[i], cred)
 		}
+		if s.connections != nil {
+			if err := s.populateConnections(ctx, &targets[i]); err != nil {
+				return nil, nil, err
+			}
+		}
 	}
 	var pageInfo *model.PageInfo
 	if q.Page > 0 && q.PageSize > 0 {
@@ -104,6 +134,64 @@ func (s *QueryTargetService) List(ctx context.Context, q model.QueryTargetListQu
 		pageInfo = &pi
 	}
 	return targets, pageInfo, nil
+}
+
+// populateConnections fills target.Connections with one verbatim entry per
+// credential row and, when the resolver is wired, the per-connection runtime
+// status inspected against that row alone. A lister read error fails the whole
+// list loud — a half-enumerated connections[] is never emitted. For a
+// postgresql target with at least one resolver-verified connection the result
+// contract can produce exportable pages, so the CSV affordance is marked
+// available; per-column disclosure and the cell-truncation matrix still gate
+// every concrete export. A mysql/tidb target whose own ''-row credential is
+// resolver-verified gains the same read-model CSV affordance in this
+// fixture-only path — cmd/server never wires the connections lister, so
+// production targets still report export=false.
+func (s *QueryTargetService) populateConnections(ctx context.Context, target *model.QueryTarget) error {
+	rows, err := s.connections.ListCredentials(ctx, target.ResourceID)
+	if err != nil {
+		return err
+	}
+	conns := make([]model.QueryTargetConnection, 0, len(rows))
+	pgResolved := false
+	resolved := false
+	for i := range rows {
+		row := rows[i]
+		conn := model.QueryTargetConnection{
+			Database:          row.DatabaseName,
+			DefaultSchema:     row.DefaultSchema,
+			Enabled:           row.Enabled,
+			EnvironmentPolicy: row.EnvironmentPolicy,
+		}
+		if s.resolver != nil {
+			conn.Runtime = InspectCredentialRuntime(ctx, s.resolver, *target, &row)
+			if conn.Runtime == model.QueryCredentialRuntimeSecretResolved {
+				resolved = true
+				if isPGEngine(target.ConnectionContext.Engine) {
+					pgResolved = true
+				}
+			}
+		}
+		conns = append(conns, conn)
+	}
+	target.Connections = conns
+	if pgResolved {
+		// A resolver-verified PG connection makes the run and CSV affordances
+		// available in the fixture assembly; readiness stays the target-level
+		// ''-row derivation and is never copied up from a composite row. The
+		// POST path still re-checks binding and per-connection policy — this
+		// is a read-model capability, not an execution grant.
+		target.AvailableActions.Run = true
+		target.AvailableActions.Export = true
+	} else if resolved && target.AvailableActions.Run {
+		// mysql/tidb with its own resolver-verified ''-row credential: the CSV
+		// affordance is granted only here (the test-only connections lister is
+		// never wired by cmd/server), so production targets still report
+		// export=false. Run is already derived from the same ''-row runtime —
+		// export is never granted to a locked target.
+		target.AvailableActions.Export = true
+	}
+	return nil
 }
 
 // readTargetCredential reads one target's credential metadata and classifies the

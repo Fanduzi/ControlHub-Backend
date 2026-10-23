@@ -266,8 +266,10 @@ ControlHub is a read-heavy resource management backend exposing dictionary-drive
 |--------|-------------|-----|
 | cmd/server | Application entry point, dependency wiring, graceful shutdown drain (Issue #37) | [README](cmd/server/README.md) |
 | cmd/e2e-fixture-bootstrap | TEST/CI-ONLY admin+editor fixture provisioning for isolated E2E runs; refuses the retired 0002 seed identities | [README](cmd/e2e-fixture-bootstrap/README.md) |
+| cmd/e2e-pg-server | TEST/CI-ONLY long-lived E2E listener: the shared production assembly plus the explicit PostgreSQL HTTP + connections[] gates; refuses non-disposable metadata DSNs | [README](cmd/e2e-pg-server/README.md) |
 | internal/api | HTTP handlers, routing, CORS, test server | [README](internal/api/README.md) |
 | internal/service | Business logic, repository interfaces | [README](internal/service/README.md) |
+| internal/serverboot | Shared production dependency assembly (`serverboot.Build`) consumed by cmd/server and the E2E fixture listener | [README](internal/serverboot/README.md) |
 | internal/repository/mysql | MySQL data access, SQL queries | [README](internal/repository/mysql/README.md) |
 | internal/model | Domain structs, taxonomy constants, validation | [README](internal/model/README.md) |
 | internal/config | Environment and .env configuration loading | [README](internal/config/README.md) |

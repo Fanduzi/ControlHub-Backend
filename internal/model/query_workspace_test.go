@@ -57,6 +57,9 @@ func TestQueryWorkspacePutRequestRejectsInvalidAggregateShape(t *testing.T) {
 		{name: "empty active database", worksheets: []QueryWorkspaceWorksheet{{ID: valid.ID, Name: valid.Name, TargetResourceID: valid.TargetResourceID, ActiveDatabase: new(string)}}},
 		{name: "long active database", worksheets: []QueryWorkspaceWorksheet{{ID: valid.ID, Name: valid.Name, TargetResourceID: valid.TargetResourceID, ActiveDatabase: stringPointer(strings.Repeat("d", MaxQueryWorkspaceDatabaseNameLength+1))}}},
 		{name: "active database control character", worksheets: []QueryWorkspaceWorksheet{{ID: valid.ID, Name: valid.Name, TargetResourceID: valid.TargetResourceID, ActiveDatabase: stringPointer("orders\narchive")}}},
+		{name: "empty active schema", worksheets: []QueryWorkspaceWorksheet{{ID: valid.ID, Name: valid.Name, TargetResourceID: valid.TargetResourceID, ActiveSchema: new(string)}}},
+		{name: "long active schema", worksheets: []QueryWorkspaceWorksheet{{ID: valid.ID, Name: valid.Name, TargetResourceID: valid.TargetResourceID, ActiveSchema: stringPointer(strings.Repeat("s", MaxQueryWorkspaceDatabaseNameLength+1))}}},
+		{name: "active schema control character", worksheets: []QueryWorkspaceWorksheet{{ID: valid.ID, Name: valid.Name, TargetResourceID: valid.TargetResourceID, ActiveSchema: stringPointer("sales\nops")}}},
 		{name: "duplicate ids", worksheets: []QueryWorkspaceWorksheet{valid, valid}},
 	}
 	for _, tt := range tests {
