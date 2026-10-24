@@ -5,7 +5,7 @@ Application bootstrap and manual dependency injection.
 ## Files
 | File | Responsibility |
 |------|---------------|
-| main.go | Load config, validate JWT_SECRET, build the shared production dependency graph via internal/serverboot.Build (PostgreSQL HTTP entries stay closed — the Parts capabilities are discarded), start HTTP server |
+| main.go | Load config, validate JWT_SECRET, build the shared production dependency graph via internal/serverboot.Build (PostgreSQL HTTP entries stay closed unless `CONTROLHUB_PG_HTTP_ENTRIES=on` — the Parts capabilities are discarded; see `internal/config/README.md` for the exact accepted spellings), start HTTP server |
 | main_test.go | Production dependency assertions for resource/profile and query workspace/private statement routes |
 | shutdown.go | Graceful drain seam: serve until SIGTERM/SIGINT, stop new traffic and drain in-flight handlers for at most a fixed ten seconds (Issue #37) |
 
@@ -40,7 +40,8 @@ SIGTERM and SIGINT stop accepting new traffic and begin a bounded graceful drain
 ## Shared Guards
 - `QueryGuard` is constructed once and reused by execution, explain, and saved-statement services.
 - The saved-statement service additionally wires `WithPGContext(queryExecutionRepo, accessResolver)` (T11): PostgreSQL context validation and the G12 `RestoreContext` revalidation reuse the shared resolver and the composite connection metadata store.
-- The execution service additionally wires `WithPGClaimOrchestration(queryDisclosureRepo)` (T10-C): the internal keyed PostgreSQL entry (`ExecutePGClaimed`) shares the canonical five-part disclosure policy store for its provenance preflight. No HTTP route exposes the keyed entry — PostgreSQL POST execution remains closed.
+- The execution service additionally wires `WithPGClaimOrchestration(queryDisclosureRepo)` (T10-C): the internal keyed PostgreSQL entry (`ExecutePGClaimed`) shares the canonical five-part disclosure policy store for its provenance preflight. No HTTP route exposes the keyed entry — PostgreSQL POST execution stays closed unless the deployment flag `CONTROLHUB_PG_HTTP_ENTRIES=on` opens it at Build.
+- Release gate (Production Enablement R2): when `Config.PGHTTPEntries` is on, `serverboot.Build` opens `WithPGHTTPEntries` and `WithConnectionLister` together in one branch; both stay off otherwise. The flag opens the surface only — per-connection `enabled`/`environment_policy`/DSN binding and all guards/disclosure/finalize mechanics are unchanged, and closing the flag again removes no history, claims, or audit rows.
 - Startup warms `pgsql.GuardPG` once (T10-C): the wazero-backed pg_query compiler loads lazily and would otherwise charge a multi-second process-wide compile to the first governed attempt's frozen statement budget.
 
 ## Exports

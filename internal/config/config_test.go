@@ -138,6 +138,59 @@ func TestLoadAcceptsMissingQueryExecutionTokenMaxAgeEnvVar(t *testing.T) {
 	}
 }
 
+func TestLoadPGHTTPEntriesGate(t *testing.T) {
+	// WHY: the production PG HTTP release gate must be exact — only an
+	// explicit, correctly spelled "on" opens construction-time assembly.
+	// Loose forms ("true", "1", "ON", padded variants) are operator mistakes
+	// and must fail startup closed instead of silently defaulting either way.
+	unsetEnv(t, "APP_PORT")
+	unsetEnv(t, "DATABASE_DSN")
+	unsetEnv(t, "JWT_SECRET")
+
+	for _, tc := range []struct {
+		name    string
+		set     bool
+		value   string
+		want    bool
+		wantErr bool
+	}{
+		{"unset", false, "", false, false},
+		{"empty", true, "", false, false},
+		{"off", true, "off", false, false},
+		{"on", true, "on", true, false},
+		{"true is rejected", true, "true", false, true},
+		{"false is rejected", true, "false", false, true},
+		{"one is rejected", true, "1", false, true},
+		{"zero is rejected", true, "0", false, true},
+		{"uppercase is rejected", true, "ON", false, true},
+		{"padded on is rejected", true, " on", false, true},
+		{"padded off is rejected", true, "off ", false, true},
+		{"typo is rejected", true, "onn", false, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if tc.set {
+				t.Setenv("CONTROLHUB_PG_HTTP_ENTRIES", tc.value)
+			} else {
+				unsetEnv(t, "CONTROLHUB_PG_HTTP_ENTRIES")
+			}
+
+			cfg, err := Load()
+			if tc.wantErr {
+				if err != ErrInvalidPGHTTPEntries {
+					t.Fatalf("Load() = %v, want ErrInvalidPGHTTPEntries", err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("Load(): %v", err)
+			}
+			if cfg.PGHTTPEntries != tc.want {
+				t.Fatalf("PGHTTPEntries = %v, want %v", cfg.PGHTTPEntries, tc.want)
+			}
+		})
+	}
+}
+
 func unsetEnv(t *testing.T, key string) {
 	t.Helper()
 

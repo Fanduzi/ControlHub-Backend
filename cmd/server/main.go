@@ -1,7 +1,7 @@
 // Package main provides the ControlHub application entry point.
 // input: config.LoadDotEnv/Load/ValidateJWTSecret, serverboot.Build (shared production assembly incl. pgsql.GuardPG warm-up), api.NewRouter, os/signal Notify (SIGTERM/SIGINT), net.Listen
 // output: main() binary entry point; runServer() graceful-drain lifecycle (shutdown.go)
-// pos: Application bootstrap and lifecycle: validates the signing secret before opening the database, builds the shared production dependency graph via internal/serverboot, then serves HTTP; SIGTERM/SIGINT stop new traffic and drain in-flight handlers for at most ten seconds (Issue #37). PostgreSQL HTTP execution stays closed here — serverboot.Build never enables WithPGHTTPEntries.
+// pos: Application bootstrap and lifecycle: validates the signing secret before opening the database, builds the shared production dependency graph via internal/serverboot, then serves HTTP; SIGTERM/SIGINT stop new traffic and drain in-flight handlers for at most ten seconds (Issue #37). PostgreSQL HTTP execution stays closed unless CONTROLHUB_PG_HTTP_ENTRIES=on — serverboot.Build gates both PG construction-time capabilities on that one flag, which can never be opened by HTTP requests.
 // note: if wiring, startup validation, or the shutdown contract changes, update this header and cmd/server/README.md
 package main
 
