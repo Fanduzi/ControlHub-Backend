@@ -29,5 +29,20 @@ The single dependency-injection seam that builds the production
 - `Build` performs the `pgsql.GuardPG` warm-up (the wazero WASM compile) so
   no governed attempt loses its frozen statement budget to the compile.
 
+## Feature Rollback
+
+Function rollback for PostgreSQL HTTP execution is a deployment change, not a
+database change: set `CONTROLHUB_PG_HTTP_ENTRIES` back to `off` (or unset)
+and restart the service under the normal deployment procedure — the gate is a
+construction-time assembly decision, so it only re-closes when the process is
+rebuilt and restarted. Rollback MUST NOT be performed via Goose Down: the
+00029–00032 migrations and their Down guards stay applied, and no schema,
+claim, execution, or audit rows are deleted by closing the gate. Requests in
+flight during rollback are not guaranteed to have completed; they converge
+under the existing contracts — attempt deadline, `statement_timeout`,
+server-initiated cancel, and claim-derived `running`/`unknown` reads. A
+structural schema downgrade is a separate high-risk change requiring its own
+assessment and authorization.
+
 Dependency flow: `serverboot` → `api`, `service`, `repository/mysql`,
 `config`, `pgsql`. Nothing imports `serverboot` except `cmd/*` entry points.
