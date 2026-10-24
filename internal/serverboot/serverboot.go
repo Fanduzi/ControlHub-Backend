@@ -2,7 +2,7 @@
 // both entry points that must serve the identical governed surface.
 // input: database/sql handle, internal/config, mysql repositories, service constructors, api.Dependencies, pgsql.GuardPG warm-up (T10-C wasm compile outside attempt budgets)
 // output: Build (production dependency assembly) + Parts (the concrete services a test-only assembly may additionally gate), RealClock
-// pos: single dependency-injection seam shared by cmd/server (production, default-closed PG) and cmd/e2e-pg-server (TEST-ONLY fixture listener that explicitly enables the PG HTTP entries); behavior changes belong here exactly once
+// pos: single dependency-injection seam shared by cmd/server (production, default-closed PG unless CONTROLHUB_PG_HTTP_ENTRIES=on) and cmd/e2e-pg-server (TEST-ONLY fixture listener that explicitly enables the PG HTTP entries); behavior changes belong here exactly once
 // note: if this file changes, update header and README.md
 package serverboot
 
@@ -21,14 +21,17 @@ import (
 // Parts exposes the concrete services an explicit test-only assembly may
 // additionally gate (e.g. the E2E fixture listener calls
 // QueryExecutionService.WithPGHTTPEntries and
-// QueryTargetService.WithConnectionLister). cmd/server discards it, so the
-// production binary always keeps the default-closed PostgreSQL HTTP gate.
+// QueryTargetService.WithConnectionLister). cmd/server discards it; the
+// production binary can open the PostgreSQL HTTP gate only through the
+// cfg.PGHTTPEntries deployment flag, never through Parts.
 type Parts struct {
 	// QueryExecutionService is the concrete execution service; its
-	// WithPGHTTPEntries capability is never enabled by Build.
+	// WithPGHTTPEntries capability is enabled by Build only when
+	// cfg.PGHTTPEntries is on.
 	QueryExecutionService *service.QueryExecutionService
 	// QueryTargetService is the concrete target read model; its
-	// WithConnectionLister connections[] projection is never wired by Build.
+	// WithConnectionLister connections[] projection is wired by Build only
+	// when cfg.PGHTTPEntries is on, in the same branch as the HTTP entries.
 	QueryTargetService *service.QueryTargetService
 	// QueryExecutions is the shared execution repository, also the
 	// QueryConnectionLister a fixture assembly may wire onto the target read
@@ -42,10 +45,11 @@ type RealClock struct{}
 func (RealClock) Now() time.Time { return time.Now() }
 
 // Build wires the full production dependency graph from the repository layer
-// to api.Dependencies. It is the exact assembly cmd/server serves; callers
-// that need a test-only capability receive the same graph through Parts and
-// must flip construction-time options themselves — Build never opens the
-// PostgreSQL HTTP entries on its own.
+// to api.Dependencies. It is the exact assembly cmd/server serves. The
+// PostgreSQL HTTP gate stays closed unless cfg.PGHTTPEntries is on — the
+// explicit deployment configuration (CONTROLHUB_PG_HTTP_ENTRIES=on) — in
+// which case Build opens both construction-time capabilities in one branch;
+// a test-only assembly may instead flip them itself through Parts.
 func Build(db *sql.DB, cfg config.Config) (api.Dependencies, Parts) {
 	dictRepo := mysql.NewDictionaryRepository(db)
 	relationRepo := mysql.NewRelationRepository(db)
@@ -140,6 +144,19 @@ func Build(db *sql.DB, cfg config.Config) (api.Dependencies, Parts) {
 		RealClock{},
 		service.NewExplainAuditRecorder(queryExecutionRepo),
 	)
+
+	// Release assembly gate: CONTROLHUB_PG_HTTP_ENTRIES=on opens both
+	// construction-time capabilities atomically in this single branch —
+	// the PG HTTP execution entries and the connections[] read model.
+	// One flag flips both, so no deployment can reach a half-enabled state
+	// (entries without the read model, or vice versa). With the flag off
+	// the graph stays exactly the default-closed production shape. Opening
+	// here grants no connection any privilege: enabled, environment_policy,
+	// and credential binding still govern every request.
+	if cfg.PGHTTPEntries {
+		queryExecutionSvc.WithPGHTTPEntries()
+		queryTargetSvc = queryTargetSvc.WithConnectionLister(queryExecutionRepo)
+	}
 
 	return api.Dependencies{
 			ResourceService:                service.NewResourceService(resourceRepo, relationRepo),
