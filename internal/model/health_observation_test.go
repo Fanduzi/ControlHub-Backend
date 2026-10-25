@@ -1,8 +1,4 @@
 // Package model provides tests for resource health observations.
-// input: HealthObservation freshness calculation and time.Duration thresholds
-// output: freshness boundary, per-type fallback, and worst-fresh effective-health tests
-// pos: Pure domain contract for Issue 81 resource health calculation
-// note: if this file changes, update this header and module README.md.
 package model
 
 import (

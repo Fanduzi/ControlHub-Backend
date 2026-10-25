@@ -1,8 +1,4 @@
 // Package service provides tests for the governed template statement compiler.
-// input: errors, reflect, regexp, strconv, strings, testing, DATA-DOG/go-sqlmock
-// output: TestTemplateStatementCompiler* (source-order, guard, rejection, and driver-binding proofs)
-// pos: Test-first proof that server-owned named placeholders become positional driver bindings without bypassing the AST guard
-// note: if this file changes, update header and README.md
 package service
 
 import (

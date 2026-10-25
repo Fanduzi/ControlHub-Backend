@@ -1,8 +1,4 @@
 // Package model provides domain entities for the resource management system.
-// input: encoding/json, fmt, strings, time, unicode/utf8, MaxSavedStatementSize, shared metadata control-character validation
-// output: bounded QueryWorkspaceWorksheet, QueryWorkspace, and metadata-control-safe QueryWorkspacePutRequest contracts
-// pos: Opaque one-row-per-owner query worksheet aggregate without target resolution or SQL guarding
-// note: if this file changes, update this header and module README.md.
 package model
 
 import (

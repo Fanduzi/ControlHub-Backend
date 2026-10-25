@@ -1,18 +1,6 @@
 //go:build integration
 
 // Package integration — real-MySQL claim + real-PG16 cancel vertical proof for T10-B.
-// input: shared MySQL fixture (real claim repository + real PG target
-// resource), a disposable PostgreSQL 16 with a restricted role, and the
-// production ExecutePGGovernedOutcome entry
-// output: the G-group acceptance — a claimed execution is cancelled for
-// real, and the executor's internal evidence (backend pid, backend_start,
-// remote_state, cancelled class) is consumed by the real
-// FinalizeClaimWithAudit path on a cancellation-durable window
-// pos: T10-B evidence consumption proof (issue #118, frozen G9) — a test
-// composition of real components, NOT the production three-entry claim
-// orchestration; no finalize SQL is duplicated and the T10-A protocol is
-// unchanged
-// note: if this file changes, update this header and module README.md.
 package integration
 
 import (

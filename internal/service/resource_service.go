@@ -1,8 +1,4 @@
 // Package service provides business logic for resource reads, writes, and typed profile assembly.
-// input: internal/model resource identity, batched typed profiles, required incident relations, health observations, effective values, writes, and read contracts
-// output: resource CRUD, server-derived completeness, governed-profile reads, shared update validation, health ingestion, effective-value projections, audited inventory/override mutations, and bulk preview/confirm delegation
-// pos: Business logic for governed resource identity, batched read projections, typed profiles, operational health evidence, effective values, and bulk mutation checks
-// note: if this file changes, update this header and module README.md.
 package service
 
 import (

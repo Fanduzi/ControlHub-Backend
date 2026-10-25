@@ -1,8 +1,4 @@
 // Package service provides the governed Explain service for Phase 38N.
-// input: context, errors, fmt, time, internal/model, internal/pgsql
-// output: QueryExplainService, NewQueryExplainService, WithPGExplain, ExplainAuditRecorder (interface), QueryExplainAuditRepository (interface)
-// pos: Orchestrates governed target access, engine-dispatched SELECT-only guard (Vitess for MySQL, pg_query for PostgreSQL), typed Explain executor, normalization, and fixed audit
-// note: if this file changes, update header and README.md
 package service
 
 import (

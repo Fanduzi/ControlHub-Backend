@@ -1,8 +1,3 @@
--- input: query execution evidence and application-owned user IDs at schema version 27
--- output: one-row-per-owner query workspaces, nullable private execution statements, and fail-loud data-preserving rollback at schema version 28
--- pos: storage foundation and guarded downgrade for persistent query worksheets and owner-only successful-statement reuse
--- note: if this file changes, update this header and migrations/README.md.
-
 -- +goose Up
 
 CREATE TABLE query_workspaces (

@@ -1,17 +1,5 @@
 // Package service — shared-runner fault-matrix and ownership proofs across
 // every claimed entry kind.
-// input: fakeExecRepo + injected pgOutcomeFn/pgNavPrepare seams; sequential
-// mutations only (no unsynchronized-concurrency promise is made or needed)
-// output: TestPGClaimedRunner_* — identical internal-fault handling for
-// ordinary/saved/navigation: contract faults finalize failed with the fixed
-// code, status surfaces agree, delivered payloads are detached snapshots
-// (nested provenance carriers included, both directions, and stable across
-// the keyed finalize boundary); the closed entry kind rejects unknown
-// values before any claim; caller slices are owned before preparation
-// pos: PG-MULTI-ENTRY stage 4 packet item 7 — the shared runner owns the
-// consistency gate for all kinds; entry-kind event selection and detachment
-// are proven uniformly
-// note: if this file changes, update this header and module README.md.
 package service
 
 import (

@@ -1,9 +1,5 @@
 // Package pgsql implements the PostgreSQL governed read-only query front half
 // (spec G4/G5/G10 stage: parse → guard → classify → qualify → inject).
-// input: user SQL statement or matching *GuardResult, pinned schema, ColumnResolver, optional PageOptions (RewritePaginated/RewriteFromGuardPaginated)
-// output: Rewrite, RewritePaginated, RewriteFromGuardPaginated, RewriteResult — executable transport SQL + witness records + public output names/proofs + original entity refs + qualified text (+ PageWindow when paginated)
-// pos: the T4 transform pipeline — guard original text, qualify by byte insertion, reparse, G6-paginate the root window (RewritePaginated only), witness-inject, deparse once to internal transport, then reparse-verify the deparsed form before it may reach a connection; the ParamRef number set is a pipeline invariant checked at qualification, injection, and round-trip (duplicated reference nodes stay legal — set identity only); deparsed SQL is never persisted or displayed
-// note: if this file changes, update header and README.md
 package pgsql
 
 import (

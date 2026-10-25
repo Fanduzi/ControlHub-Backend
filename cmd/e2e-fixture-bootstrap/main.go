@@ -1,15 +1,5 @@
 // Package main is an explicit TEST/CI-ONLY fixture provisioning command.
 //
-// input: os, strings, errors, context, database/sql, crypto/sha256, encoding/hex, fmt, io, log, internal/config, go-sql-driver/mysql
-// output: main() — explicit one-shot binary (go run ./cmd/e2e-fixture-bootstrap), runFixtureBootstrap seam, resolveFixtureConfig, parseDisposableDSN, verifyFixtureDatabase, hashPassword, printReport
-// pos: Creates or reactivates admin AND editor fixture identities for isolated
-// E2E runs, gated by an explicit test-mode capability, a dedicated disposable
-// metadata DSN (loopback host + *_e2e database name), migration-00016
-// verification with retired seeds inactive, ASCII-only .invalid fixture emails
-// (RFC 2606), and refusal of the published 0002 seed identities. Never invoked
-// at server startup, never logs passwords.
-// note: if this file changes, update header and README.md
-//
 // SAFETY BOUNDARY (the primary production guard):
 //
 // This command cannot mutate a production database by accident. It requires

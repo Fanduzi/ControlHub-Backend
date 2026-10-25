@@ -1,8 +1,4 @@
 // Package mysql tests collector scan ledger persistence.
-// input: context, crypto/sha256, database/sql, errors, fmt, testing, time, sqlmock, collector scan models, and the ingestion ceiling
-// output: caller-owned transaction, ledger idempotency/conflict, bounded state admission, presence truncation, and collector CI state transition coverage
-// pos: Focused SQL contract for the idempotent collector ledger/state transaction boundary
-// note: if this file changes, update this header and module README.md.
 package mysql
 
 import (

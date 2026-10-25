@@ -1,8 +1,4 @@
 // Package service provides authentication business logic — credential validation and token generation.
-// input: internal/model (UserCredential, LoginRequest, LoginResponse), crypto/hmac, crypto/sha256, encoding/hex, encoding/base64, strconv
-// output: NewAuthService, AuthService.Login, AuthService.VerifyToken, AuthService.ChangeUserRole, AuthService.SetUserActive, AuthService.ResetUserPassword, AuthService.LegacyHashCount, AuthenticatedUser, ErrInvalidCredentials, ErrInvalidToken, ErrInvalidAuthorizationMutation, UserCredentialRepository
-// pos: Authentication business logic — credential validation, versioned token generation, current-state token verification (Authorization Version), and transparent legacy-to-Argon2id password migration
-// note: if this file changes, update header and README.md
 package service
 
 import (

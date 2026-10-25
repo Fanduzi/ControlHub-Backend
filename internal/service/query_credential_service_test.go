@@ -1,8 +1,4 @@
 // Package service — Phase 38A query credential metadata service tests.
-// input: context, database/sql, errors, slices, strings, testing, internal/model
-// output: runtime-status matrix, readiness correction, admin upsert/delete audit, composite connection tests + fakeCredentialStore fake
-// pos: Unit boundary for credential service + shared credential-store fake consumed by target-service tests
-// note: if this file changes, update header and README.md
 //
 // Covers (Task B3): the runtime-status matrix, the readiness correction
 // (metadata alone never makes a target ready), and admin-gated upsert/delete

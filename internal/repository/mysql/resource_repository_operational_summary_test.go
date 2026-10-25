@@ -1,8 +1,4 @@
 // Package mysql tests fail-closed cluster operational summary attachment.
-// input: context, database/sql, errors, testing, sqlmock, and resource models
-// output: member-rollup query/scan/observation failures surface as errors instead of empty summaries
-// pos: SQL-level regression for Issue #88 silent cluster rollup swallow
-// note: if this file changes, update this header and module README.md.
 package mysql
 
 import (

@@ -1,8 +1,4 @@
 // Package api provides tests for the bounded untrusted-Bearer audit persistence budget.
-// input: net/http, net/http/httptest, encoding/json, testing, github.com/go-chi/chi/v5, internal/service
-// output: TestBoundedBearerAudit_* router tests
-// pos: Proves missing Authorization emits no audit event, supplied untrusted Bearer rejection persistence is bounded at 60/min per process via the existing AuthAuditEmitter seam, budget exhaustion preserves 401/handler non-execution, and verified role denials stay unbounded
-// note: if this file changes, update header and README.md
 package api
 
 import (

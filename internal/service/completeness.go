@@ -1,8 +1,4 @@
 // Package service provides server-derived resource completeness rules.
-// input: model resource identity, typed profile values, resolved relationship views, and the relationship matrix
-// output: DeriveCompleteness returns a read-only completeness score, status, and missing requirement keys
-// pos: Pure inventory-quality projection shared by future resource read paths
-// note: if this file changes, update this header and module README.md.
 package service
 
 import (

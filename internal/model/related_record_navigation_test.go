@@ -1,8 +1,4 @@
 // Package model provides tests for related-record navigation request validation.
-// input: testing, internal/model
-// output: TestRelatedRecordNavigationRequest_Validate_*
-// pos: Unit tests for request shape validation, bounds, and controlled error messages
-// note: if this file changes, update header and README.md
 package model
 
 import (

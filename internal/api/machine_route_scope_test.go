@@ -1,8 +1,4 @@
 // Package api provides HTTP handlers and routing for the ControlHub REST API.
-// input: context, errors, net/http, net/http/httptest, strings, testing, internal/model, internal/service
-// output: table-driven machine read/collector route scopes, verified health observer attribution, truthful execute identity, user-only sibling-route, and controlled-error contract tests
-// pos: Router-level regression boundary for independent machine authentication, principal-bound collector health writes, and ordinary governed execution
-// note: if this file changes, update this header and module README.md.
 package api
 
 import (

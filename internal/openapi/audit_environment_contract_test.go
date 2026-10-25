@@ -1,8 +1,4 @@
 // Package openapi tests the published API contract.
-// input: bytes, testing, embedded OpenAPI YAML
-// output: audit environment-filter parameter contract test
-// pos: Regression coverage for audit list query documentation
-// note: if this file changes, update this header and README.md.
 package openapi
 
 import (

@@ -1,10 +1,6 @@
 //go:build integration
 
 // Package integration proves PostgreSQL saved-statement context persistence and the G12 restore revalidation against real state.
-// input: disposable PostgreSQL 16, disposable MySQL control plane, production repositories, TargetAccessResolver, livePGSchemaCatalog, pgx native binds
-// output: TestPostgreSQLSavedStatement* — context round trip, restore failure matrix (disabled/deleted connection, rebound DSN, dropped schema, revoked USAGE, no cross-database fallback), ?database= list-scope isolation incl. disabled-connection readability, and a component-level proof that compiled $k statements bind through the real driver
-// pos: T11 vertical evidence (issue #119) — restore probes the LIVE server, so fixture mutations must run through the admin connection, never the restricted role; PG user/execute endpoints stay closed and are not exercised here beyond the fail-closed assertion
-// note: if this file changes, update this header and module README.md.
 package integration
 
 import (

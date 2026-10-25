@@ -1,8 +1,3 @@
--- input: application-owned administrator IDs and validated machine-principal credential metadata
--- output: machine_principals and machine_principal_credentials tables at schema version 25 with no foreign keys and up to seven closed scopes per credential
--- pos: forward-only persistence for independent machine identities and hashed scoped credentials
--- note: if this file changes, update this header and migrations/README.md.
-
 -- +goose Up
 
 CREATE TABLE machine_principals (

@@ -2,16 +2,6 @@
 // auth-compatible hashing, mandatory fixture credentials, the explicit
 // test-mode capability, the disposable-DSN isolation gate, migration-00016
 // verification, legacy-seed refusal, and password-safe reporting.
-// input: testing, bytes, strings, context, database/sql, os
-// output: TestHashPassword_*, TestResolveFixtureConfig_*, TestParseDisposableDSN_*,
-// TestVerifyFixtureDatabase_*, TestPrintReport_* unit tests
-// pos: Locks the command contract: SHA-256 hashing stays login-compatible, every
-// fixture credential and the test-mode capability are mandatory with no
-// defaults, the metadata DSN must be a loopback disposable *_e2e database,
-// migration 00016 must be applied with retired seeds inactive, the published
-// 0002 seed identities are refused, and neither password nor hash ever reaches
-// output.
-// note: if this file changes, update header and README.md
 package main
 
 import (

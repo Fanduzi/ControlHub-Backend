@@ -1,11 +1,6 @@
 //go:build integration
 
 // Package integration — PG-HTTP-T12-R1 acceptance over the real router: connection sentinels (R1-1), limitApplied window (R1-2), HTTP matrix.
-// input: shared MySQL fixture + disposable PG16 (nav catalog), the enabled and default-closed assemblies from setupPGHTTPFixture
-// output: TestPGKeyedHTTP_AccessSentinels, TestPGKeyedHTTP_LimitApplied, TestPGKeyedHTTP_AccessSentinelPersistFailure, TestPGKeyedHTTP_FinalizeFailure, TestPGKeyedHTTP_ConcurrencyMatrix, TestPGKeyedHTTP_AuthScope, TestPGKeyedHTTP_ResponseContractAndCSV, TestPGKeyedHTTP_FailClosed, TestPGKeyedHTTP_VersionMatrix
-// pos: R1 continuous-fix pass — real HTTP only; the closed assembly stays fail-closed and production wiring keeps no WithPGHTTPEntries call.
-// note: if this file changes, update this header and module README.md.
-
 package integration
 
 import (

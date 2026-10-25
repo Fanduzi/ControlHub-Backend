@@ -1,8 +1,4 @@
 // Package mysql provides tests for query workspace persistence.
-// input: context, database/sql, encoding/json, errors, testing, time, sqlmock, go-sql-driver/mysql, internal/model, internal/service
-// output: missing workspace, owner isolation, exact SQL arguments, insert/update OCC, and service-parity conflict mapping tests
-// pos: SQL contract coverage for the one-row-per-owner query workspace aggregate
-// note: if this file changes, update this header and module README.md.
 package mysql
 
 import (

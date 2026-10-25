@@ -1,10 +1,6 @@
 //go:build integration
 
 // Package integration provides real-MySQL coverage for the operator access boundary.
-// input: context, encoding/json, fmt, net/http, net/http/httptest, strings, testing, time, internal/api, internal/model, internal/repository/mysql, internal/service, internal/testsupport/operatoraccess
-// output: TestOperatorAccessBoundary integration case, including health observation and bounded multipart ingestion
-// pos: Proves the operator access matrix on real MySQL with self-contained resource and query-target fixtures
-// note: if this file changes, update this header and module README.md.
 package integration
 
 import (

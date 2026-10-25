@@ -1,23 +1,5 @@
 // Package service produces the bounded internal evidence for one governed
 // PostgreSQL attempt, including cancellation remote-state observation.
-// input: attempt identity (backend pid + backend_start), the attempt's stage
-// and statement fate facts, the final classified error, T2-validated
-// *pgx.ConnConfig copy
-// output: PGAttemptEvidence, PGAttemptStage, pgAttemptStatus,
-// observeRemoteState/pgProbeBackendState — scalars only: stage, status,
-// backend identity, remote_state, and whether user SQL reached the wire;
-// never a connection, transaction, resolver, secret key, DSN, statement
-// text, parameter, cell value, or raw driver error
-// pos: T10-B cancel/remote-state evidence (issue #118, frozen G9 cancel
-// clause + G4 ownership) — pgx v5.11.0 turns context cancel into a real
-// CancelRequest via DeadlineContextWatcherHandler + asyncClose on a NEW
-// control connection; pgxpool destroys the unsynchronized conn. Remote
-// truth comes only from the bounded independent pg_stat_activity probe;
-// pgStmtFateAfterRead folds remote facts independently of the primary
-// error; the probe exposes test-only dial/row/SQL seams. R1-1:
-// parameterDescribeSent ORs the provenance describe dispatch into
-// UserSQLSent — the result fate stays on the result ExecParams alone
-// note: if this file changes, update this header and module README.md.
 package service
 
 import (

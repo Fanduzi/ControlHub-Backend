@@ -1,11 +1,4 @@
 // Package mysql provides MySQL-backed repository implementations.
-// input: database/sql, context, errors, fmt, strings, internal/model
-// output: NewQuerySavedStatementRepository, MySQLQuerySavedStatementRepository (QuerySavedStatementReader, QuerySavedStatementWriter)
-// pos: MySQL data access for Phase 38R governed saved statements CRUD with
-// atomic audit; GetByID reads the statement header and parameter
-// declarations in ONE LEFT JOIN snapshot so a concurrent UpdateWithAudit can
-// never yield a mixed statement/declaration version
-// note: if this file changes, update header and README.md
 package mysql
 
 import (

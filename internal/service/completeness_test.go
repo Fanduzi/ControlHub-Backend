@@ -1,8 +1,4 @@
 // Package service tests server-derived resource completeness rules.
-// input: each resource type's minimum identity, matrix-valid structural relation, and invalid structural endpoints
-// output: exhaustive complete/partial score, missing-key, label-ignore, matrix-validation, and input-immutability checks
-// pos: Public pure completeness-rule seam against the relationship matrix
-// note: if this file changes, update this header and module README.md.
 package service
 
 import (

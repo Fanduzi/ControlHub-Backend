@@ -1,8 +1,4 @@
 // Package mysql provides MySQL-backed repository implementations.
-// input: context, database/sql, errors, fmt, slices, collector scan models, and the ingestion row ceiling
-// output: locked retry lookup plus bounded caller-transaction collector ledger and idempotent per-principal/per-CI state application
-// pos: Durable idempotency and lifecycle-state boundary for completed collector scans
-// note: if this file changes, update this header and module README.md.
 package mysql
 
 import (

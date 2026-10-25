@@ -1,8 +1,4 @@
 // Package mysql provides MySQL-backed repository implementations.
-// input: context, crypto/sha256, database/sql, encoding/json, fmt, internal/model, internal/service
-// output: atomic hash-only machine-principal credential persistence, safe lifecycle list metadata, and administrator audit
-// pos: MySQL repository for the independent machine-principal lifecycle
-// note: if this file changes, update this header and module README.md.
 package mysql
 
 import (

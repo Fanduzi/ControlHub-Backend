@@ -1,14 +1,4 @@
 // Package service tests the construction-time PG HTTP dispatch gate.
-// input: testing, context, errors, encoding/json, internal/model fixtures,
-// the shared fake repos/executor
-// output: TestPGHTTPDispatch_* — default-closed legacy verdicts, enabled PG
-// dispatch into the keyed orchestration, per-engine field arbitration, and
-// the minimal-dispatch-read contract (no credentials, no claim, no SQL)
-// pos: T12 PG-HTTP unit coverage (issue #120) — proves the capability is
-// assembly-bound and request-inert: the same requests under the default
-// assembly keep every legacy verdict, and the same service without the
-// option never reaches the keyed PG entries.
-// note: if this file changes, update this header and module README.md.
 package service
 
 import (

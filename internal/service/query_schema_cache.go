@@ -1,10 +1,6 @@
 // Package service provides a bounded in-memory cache for schema metadata
 // queries. It reuses the shared Clock interface for testable TTLs and
 // golang.org/x/sync/singleflight for request coalescing.
-// input: encoding/json, sync, time, golang.org/x/sync/singleflight, internal/model
-// output: QuerySchemaCache, schemaCacheKey, NewQuerySchemaCache
-// pos: Bounded in-memory schema metadata cache with TTL, eviction, and boundary-safe singleflight keys
-// note: if this file changes, update header and README.md
 package service
 
 import (

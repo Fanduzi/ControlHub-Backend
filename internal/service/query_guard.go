@@ -1,8 +1,4 @@
 // Package service provides business logic for the read-only query sandbox.
-// input: errors, fmt, math, strconv, strings, vitess.io/vitess/go/vt/sqlparser
-// output: QueryGuardConfig, GuardedQuery, NewQueryGuard, QueryGuard.Guard, QueryGuard.GuardPaginatedSelect, QueryGuard.GuardExplainSelect, QueryGuard.GuardSavedStatement, guard sentinel errors
-// pos: AST-backed MySQL/TiDB read-only guard — rejects non-read statements, side-effecting functions, locking clauses, and enforces a backend-owned LIMIT
-// note: if this file changes, update header and README.md
 package service
 
 import (

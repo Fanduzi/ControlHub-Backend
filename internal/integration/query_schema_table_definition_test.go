@@ -1,10 +1,6 @@
 //go:build integration
 
 // Package integration proves MySQL table-definition reads against the schema sandbox.
-// input: shared MySQL fixture, QuerySchemaService.GetTableDefinition, SHOW CREATE TABLE
-// output: base-table definition, view rejection, missing-table rejection, and audit non-disclosure tests
-// pos: Real-MySQL proof that definition SQL stays ephemeral and unsupported objects are rejected
-// note: if this file changes, update this header and module README.md.
 package integration
 
 import (

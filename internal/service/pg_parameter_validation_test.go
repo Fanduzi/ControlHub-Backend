@@ -1,15 +1,5 @@
 // Package service — R1-1 classifier unit proofs for the parameter-provenance
 // seam and the main result path.
-// input: constructed *pgconn.PgError / PrepareError-shaped inputs (a test
-// As-carrier stands in for the driver's private PrepareError inner field —
-// labeled construction, not a real Prepare), attempt contexts
-// output: TestPGParameterProbeClassify, TestPGParameterDescribeClassify,
-// TestPGMainTransportNoParameterMap — probe conversion codes map to the
-// fixed rejection, describe maps only Parse-failed inference codes, and the
-// main transport path never maps a parameter SQLSTATE regardless of plan
-// pos: PG-MULTI-ENTRY R1-1 — the classifiers are the attribution boundary:
-// context and 57014 keep priority everywhere, unknown detail stays backend
-// note: if this file changes, update header and module README.md
 package service
 
 import (

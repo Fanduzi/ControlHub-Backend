@@ -1,10 +1,6 @@
 //go:build integration
 
 // Package integration exercises the bootstrap-admin command against real MySQL.
-// input: os/exec, environment credentials, and the shared migrated MySQL database
-// output: TestBootstrapAdminCommandCreatesAndReactivatesAdmin
-// pos: Proves the operator CLI creates an authentication-compatible admin and idempotently reactivates it
-// note: if this file changes, update header and README.md
 package integration
 
 import (

@@ -1,8 +1,4 @@
 // Package service provides the MySQL Explain executor for Phase 38N.
-// input: context, database/sql, encoding/json, errors, fmt, go-sql-driver/mysql
-// output: ExplainStatement (sealed), QueryExplainExecutor (typed interface), MySQLExplainExecutor, ExplainRawPlan, MaxExplainPlanBytes
-// pos: Runs EXPLAIN FORMAT=JSON against a target DB under a read-only transaction; never executes the bare SELECT
-// note: if this file changes, update header and README.md
 package service
 
 import (

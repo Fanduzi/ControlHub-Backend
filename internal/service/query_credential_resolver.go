@@ -1,8 +1,4 @@
 // Package service provides the env-backed credential resolver for the query sandbox.
-// input: fmt, os, internal/model
-// output: EnvCredentialResolver, NewEnvCredentialResolver (implements QueryCredentialResolver)
-// pos: Resolves a validated credential_ref to a DSN from the process environment (DSN never stored in ControlHub tables)
-// note: if this file changes, update header and README.md
 package service
 
 import (

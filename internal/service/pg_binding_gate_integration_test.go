@@ -2,21 +2,6 @@
 
 // Package service proves the T7-S2 transaction-internal binding gate and
 // resolver against a disposable PostgreSQL server.
-// input: context, errors, fmt, strings, sync, testing, time, jackc/pgx/v5,
-// jackc/pgx/v5/pgxpool, internal/pgsql
-// output: acceptance tests A–G for the frozen contract — touch-confirmed
-// bindings and RefID preservation, controlled rejections (including
-// table-level access denial and vanished names at the touch stage), FD
-// self-proof against same-name replacement, lock-wait timeout under the
-// remaining budget, post-touch DDL blocking, view dependency boundary,
-// recursive pg_inherits collection, relisshared-accurate approved/probe
-// identities, resolver pinned-schema normalization, native CommonType
-// verdicts, cancellation, and the real resolver wired into
-// RewriteFromGuardPaginated
-// pos: T7-S2 real-PostgreSQL acceptance — production OpenPostgresPool,
-// test-owned BEGIN READ ONLY + G4 session settings, production PGBind, then
-// the S1 rewrite seam; transport SQL is never executed in this slice
-// note: if this file changes, update this header and module README.md.
 package service
 
 import (

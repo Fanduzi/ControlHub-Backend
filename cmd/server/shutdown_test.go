@@ -1,8 +1,4 @@
 // Package main provides tests for the ControlHub application entry point.
-// input: fmt, io, net, net/http, os, os/signal, sync, syscall, testing, time
-// output: TestRunServer_* lifecycle tests, TestRunServer_TerminationSignalsBeginGracefulDrain
-// pos: Deterministic lifecycle tests for the graceful drain seam — traffic stop, successful drain, bound exhaustion, second-signal force exit, server failure, the fixed-one-message log contract, and real SIGTERM/SIGINT wiring (Issue #37)
-// note: if this file changes, update header and cmd/server/README.md
 package main
 
 import (

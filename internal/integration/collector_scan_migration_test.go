@@ -1,10 +1,6 @@
 //go:build integration
 
 // Package integration provides real-MySQL migration rollback evidence.
-// input: testing, strings, database/sql, pressly/goose, migration 00027
-// output: TestCollectorScanMigrationDownGuard
-// pos: Proves migration 00027 cannot erase collector idempotency or Missing evidence during downgrade
-// note: if this file changes, update this header and module README.md.
 package integration
 
 import (

@@ -1,10 +1,6 @@
 //go:build integration
 
 // Package integration — T8-A result-contract composition tests (issue #116).
-// input: context, errors, strings, testing, Testcontainers MySQL, internal/model, internal/repository/mysql, internal/service
-// output: TestResultContract* — success-pair-then-gate ordering and upstream-failure precedence against the real MySQL evidence repository; NOT three-entry-point HTTP wiring
-// pos: Proves evidence pair → delivery gate ordering on real persistence
-// note: if this file changes, update header and README.md
 package integration
 
 import (

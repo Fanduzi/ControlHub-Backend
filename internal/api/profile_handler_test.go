@@ -1,10 +1,4 @@
 // Package api provides HTTP tests for profile write endpoints.
-// input: internal/api test server, internal/model, net/http, net/http/httptest, encoding/json
-// output: TestPutResourceProfile_*, TestPatchResourceProfile_*, TestPutAndPatchDomainNameProfileNormalizeAndRejectResolutionTarget
-// pos: Validates PUT/PATCH profile writes including Domain Name FQDN normalize and resolution-target rejection
-// output: TestPutResourceProfile_*, TestPatchResourceProfile_*
-// pos: Validates PUT full-replacement, PATCH partial-merge, strict JSON decoding, and field validation at the HTTP seam including Database Proxy identity
-// note: if this file changes, update header and README.md
 package api
 
 import (

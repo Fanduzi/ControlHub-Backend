@@ -1,8 +1,4 @@
 // Package openapi_test verifies the embedded OpenAPI contract.
-// input: embedded OpenAPI YAML, kin-openapi parser, internal/testsupport/operatoraccess
-// output: TestOpenAPIUsesTheOperatorAccessBoundary
-// pos: Proves every protected operation documents the status codes its operatoraccess class requires
-// note: if this file changes, update header and README.md
 package openapi_test
 
 import (

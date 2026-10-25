@@ -1,8 +1,4 @@
 // Package service provides tests for dictionary services.
-// input: internal/service (all dictionary services), internal/model
-// output: TestResourceTypeServiceList, TestRelationTypeServiceList, TestLifecycleStatusServiceList, TestHealthStatusServiceList
-// pos: Validates dictionary service listing with fake repos
-// note: if this file changes, update header and README.md
 package service
 
 import (

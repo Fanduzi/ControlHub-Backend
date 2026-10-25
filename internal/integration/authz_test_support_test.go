@@ -1,10 +1,6 @@
 //go:build integration
 
 // Package integration provides shared authorization test support for integration tests.
-// input: bytes, context, database/sql, encoding/json, net/http, net/http/httptest, testing, internal/model, internal/service
-// output: shared authz constants, login/bearer/user and execution-identity helpers, and query handler stubs
-// pos: Lets same-package integration tests reuse login, bearer, user-seeding, and query-stub support without duplication
-// note: if this file changes, update header and README.md
 package integration
 
 import (

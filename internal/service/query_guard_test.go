@@ -1,8 +1,4 @@
 // Package service provides tests for the read-only query guard.
-// input: errors, strings, testing, vitess sqlparser (via query_guard)
-// output: TestQueryGuard* (allow/reject/limit/digest cases)
-// pos: Unit tests for the AST-backed MySQL/TiDB read-only guard
-// note: if this file changes, update header and README.md
 package service
 
 import (

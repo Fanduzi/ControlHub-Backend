@@ -1,10 +1,6 @@
 //go:build integration
 
 // Package integration proves MySQL relationship-map edges against the schema sandbox.
-// input: shared MySQL fixture, QuerySchemaService.GetRelationshipMap, parent/child foreign key
-// output: inbound, outbound, empty, history-free, and audit relationship-map tests
-// pos: Real-MySQL proof that a relationship map stays on one table and does not write query history
-// note: if this file changes, update this header and module README.md.
 package integration
 
 import (

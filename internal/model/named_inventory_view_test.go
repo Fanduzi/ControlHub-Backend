@@ -1,8 +1,4 @@
 // Package model tests named inventory view validation.
-// input: testing and named inventory view state values
-// output: positive-ID filter validation regression tests
-// pos: Public named-view state validation contract tests
-// note: if this file changes, update this header and README.md.
 package model
 
 import "testing"

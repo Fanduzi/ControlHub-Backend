@@ -1,10 +1,6 @@
 //go:build integration
 
 // Package integration validates the disposable query target fixture against MySQL.
-// input: shared integration harness, query fixture, credential seed, and MySQL
-// output: readiness, execution, identity idempotency, and binding regression tests
-// pos: real-MySQL coverage for the dev query target fixture
-// note: if this file changes, update header and README.md
 package integration
 
 import (

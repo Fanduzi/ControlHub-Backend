@@ -1,11 +1,5 @@
 // Package service pins the G9 claim-digest contract to fixed golden vectors
 // and collision boundaries.
-// input: testing, service digest entry points
-// output: deterministic digest proofs for the three typed admission entries
-// pos: T10-C digest unit coverage (issue #118) — same resolved request must
-// produce the same digest; any semantic difference must change it;
-// clientExecutionId/capabilities never enter the byte stream
-// note: if this file changes, update this header and module README.md.
 package service
 
 import (

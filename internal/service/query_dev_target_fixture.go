@@ -1,9 +1,4 @@
 // Package service provides the local/dev query target fixture.
-//
-// input: context, errors, net, strconv, strings, go-sql-driver/mysql, internal/model
-// output: QueryDevTargetFixtureConfig, DevTargetDictionary, DevTargetResourceStore, QueryDevTargetFixture, NewQueryDevTargetFixture, EnsureLocalQueryTarget, ParseMySQLDSNHostPort, fixture sentinel errors
-// pos: Explicit, dev/test-only orchestration that ensures one local database_instance query target + profile so the existing credential seed can make it ready. Reuses existing repository methods only — no new repository method, no migration, no credential-binding change. The DSN never enters this path; host/port arrive pre-parsed.
-// note: if this file changes, update header and README.md
 package service
 
 import (

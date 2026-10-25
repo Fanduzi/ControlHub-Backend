@@ -1,10 +1,6 @@
 //go:build integration
 
 // Package integration provides real-MySQL HTTP proofs for query workspace and private execution statements.
-// input: shared MySQL/auth/query fixtures, api router, workspace/execution repositories and services
-// output: owner workspace OCC plus owner-only successful-user statement access and non-leaking list/audit tests
-// pos: Real-DB HTTP acceptance boundary for frontend issues 39 and 41
-// note: if this file changes, update this header and module README.md.
 package integration
 
 import (

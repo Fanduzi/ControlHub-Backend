@@ -1,8 +1,4 @@
 // Package api provides HTTP handlers and routing for the ControlHub REST API.
-// input: net/http, strconv, strings, internal/model, internal/service
-// output: handleListQueryTargets, parseQueryTargetListQuery
-// pos: Read-only HTTP handler for GET /query-targets (Query Workbench target context)
-// note: if this file changes, update header and README.md
 package api
 
 import (

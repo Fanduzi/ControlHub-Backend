@@ -1,10 +1,6 @@
 //go:build integration
 
 // Package integration provides real-MySQL evidence for migration 00032.
-// input: database/sql, strings, testing, pressly/goose, migration 00032
-// output: TestClaimAttemptTimeoutMigration* — up adds the nullable per-attempt budget column; down refuses only while a stored budget would be destroyed
-// pos: Guards the T10-C running/unknown derivation threshold at the schema layer (issue #118)
-// note: if this file changes, update header and README.md
 package integration
 
 import (

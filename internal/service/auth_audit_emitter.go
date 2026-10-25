@@ -1,8 +1,4 @@
 // Package service provides business logic for authentication audit event emission.
-// input: expvar, sync, time
-// output: AuthAuditEmitter, NoopEmitter, BoundedAuthAuditEmitter, NewBoundedAuthAuditEmitter, BearerRejectBudget, NewBearerRejectBudget, ProcessBearerRejectBudget, BoundedBearerRejectedLimit, AuthAuditSuppressedRejections
-// pos: Interface for emitting auth/authz audit events; fail-open: callers never block on failure; bounded decorator caps untrusted Bearer rejection persistence via one process-shared budget
-// note: if this file changes, update header and README.md
 package service
 
 import (

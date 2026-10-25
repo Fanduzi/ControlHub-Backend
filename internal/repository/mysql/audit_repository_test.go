@@ -1,8 +1,4 @@
 // Package mysql provides MySQL-backed repository implementations.
-// input: database/sql/driver test doubles, internal/model, encoding/json, testing, time
-// output: user/machine actor scan plus operator/resource/principal/environment filter SQL contract tests
-// pos: Regression coverage for truthful MySQL audit actor projection and filtering
-// note: if this file changes, update header and README.md
 package mysql
 
 import (

@@ -1,8 +1,4 @@
 // Package model provides domain entities for the resource management system.
-// input: errors, time packages
-// output: Resource struct with governed identity, health evidence, read-only Completeness and explicitly truncated per-principal collector presence, plus ResourceProfileResponse, ResourceType, identity types, and OriginFromSource
-// pos: Core inventory entity and operator read-model contract
-// note: if this file changes, update this header and module README.md.
 package model
 
 import (

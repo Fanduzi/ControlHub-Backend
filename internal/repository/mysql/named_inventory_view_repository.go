@@ -1,8 +1,4 @@
 // Package mysql provides MySQL-backed repository implementations.
-// input: context, database/sql, encoding/json, internal/model
-// output: NamedInventoryViewRepository CRUD and shared-only read seam
-// pos: Persistence for personal and shared named inventory views
-// note: if this file changes, update this header and module README.md.
 package mysql
 
 import (

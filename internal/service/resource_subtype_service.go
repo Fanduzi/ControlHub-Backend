@@ -1,8 +1,4 @@
 // Package service provides static dictionary service for resource subtype taxonomy.
-// input: internal/model (DictionaryItem, ResourceSubtypeDictionary)
-// output: NewResourceSubtypeService, ResourceSubtypeService.List
-// pos: Static dictionary service for resource subtype taxonomy (reads from in-memory model, no DB)
-// note: if this file changes, update header and README.md
 package service
 
 import "github.com/fan/controlhub/internal/model"

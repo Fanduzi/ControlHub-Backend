@@ -1,10 +1,4 @@
 // Package model provides tests for taxonomy subtype dictionaries and validation.
-// input: testing, ResourceSubtypeDictionary, ValidateResourceSubtype
-// output: TestResourceSubtypeValidate*, TestResourceSubtypeDictionary*
-// pos: Pins Domain Name dns, Virtual IP floating, and service worker taxonomy; rejects unknown subtypes
-// output: TestResourceSubtype* functions
-// pos: Pins Database Proxy technology subtypes and Control Plane ha_monitor, and rejects ambiguous ha
-// note: if this file changes, update header and README.md
 package model
 
 import "testing"

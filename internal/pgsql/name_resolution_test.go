@@ -1,8 +1,4 @@
 // Package pgsql implements the PostgreSQL governed read-only query front half.
-// input: synthetic SQL strings over stub schemas
-// output: intent tests for CTE visibility classification, witnessable-position verdicts, canonical byte-offset qualification, and guard rejections
-// pos: tests encode WHY (governance contract), not just parser behavior
-// note: if this file changes, update header and README.md
 package pgsql
 
 import (

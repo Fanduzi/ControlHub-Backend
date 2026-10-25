@@ -2,12 +2,6 @@
 // the remote-state verdict table, and the transport fate fold. No database
 // is needed — the verdicts are pure functions over one pg_stat_activity
 // row shape and the transport read/close error pair.
-// input: constructed errors, pg_stat_activity row shapes
-// output: TestPGAttemptStatus*, TestPGRemoteStateVerdict*,
-// TestPGStmtFateAfterRead
-// pos: proves evidence classification and remote-state semantics without a
-// live server; the real-server proof lives in the integration matrix
-// note: if this file changes, update this header and module README.md.
 package service
 
 import (

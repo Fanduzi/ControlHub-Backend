@@ -1,8 +1,4 @@
 // Package pgsql implements the PostgreSQL governed read-only query front half.
-// input: attempt-local RangeVar RefID mapping and rewritten FROM-item layouts
-// output: SourceOccurrenceID/SourceRef/SourceOccurrence, FDOrigin, PublicColumnProof, ErrEvidenceUnavailable — exported verification records shared by rewrite output and the future executor
-// pos: T7-S1 verification record types; identifies terminal source slots separately from propagation carriers and keeps public-column dependency completeness distinct from FD origin evidence
-// note: if this file changes, update header and README.md
 package pgsql
 
 import (

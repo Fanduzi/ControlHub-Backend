@@ -1,10 +1,6 @@
 //go:build integration
 
 // Package integration provides real-MySQL evidence for migration 00031.
-// input: database/sql, fmt, strings, testing, pressly/goose, migration 00031
-// output: TestClaimCollationMigration* — up preserves rows while making claim/key identity case-exact; down refuses whenever a stored identity would widen under ai_ci
-// pos: Guards the G9 execution-claim opaque-key identity at the physical collation layer (issue #118, T10-A)
-// note: if this file changes, update header and README.md
 package integration
 
 import (

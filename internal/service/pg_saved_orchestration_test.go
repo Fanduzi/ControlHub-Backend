@@ -1,14 +1,4 @@
 // Package service tests the keyed saved-statement PostgreSQL entry.
-// input: testing, context, errors, sql, json, internal/model fixtures,
-// fake statement reader + claim repo
-// output: TestPGSavedStatementClaimed_* — shape ordering, authorized single
-// read, typed-value/compile rejections before claim, keyed finalize with
-// withheld preview and empty full statement, digest shape, and the private
-// parameter plan handed to the attempt
-// pos: PG-MULTI-ENTRY stage 2 unit coverage — the saved entry converges on
-// the shared claimed runner; every pre-claim refusal writes the fixed
-// NULL-key pair with no statement text
-// note: if this file changes, update this header and module README.md.
 package service
 
 import (

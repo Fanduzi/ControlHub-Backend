@@ -1,8 +1,4 @@
 // Package service provides controlled CI ingestion parsing, preview reconciliation, and confirm service delegation.
-// input: stdlib CSV/JSON/SHA-256 utilities, context, and internal/model identity/relation types
-// output: ParseIngestion, ordinary and collector preview seams, User/collector confirmation delegation including empty terminal collector receipts, controlled scan/state-limit conflicts, additive observed diffs, and validation contracts
-// pos: Shared issue #83 ingestion contract and issue #87 reachable collector preview/confirmation service protocol
-// note: if this file changes, update this header and module README.md.
 package service
 
 import (

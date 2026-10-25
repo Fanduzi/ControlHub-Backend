@@ -1,10 +1,6 @@
 //go:build integration
 
 // Package integration provides Testcontainers-backed tests for governed saved statement persistence.
-// input: shared MySQL fixture, saved-statement repository, target fixtures
-// output: owner-scoped CRUD/visibility lifecycle, the legacy empty-context regression anchor (T11), and TestSavedStatementSnapshot_ConsistentAcrossConcurrentUpdate — GetByID must return one coherent statement/declaration version under concurrent UpdateWithAudit
-// pos: Real-MySQL persistence boundary for Phase 38R saved statements
-// note: if this file changes, update this header and module README.md.
 package integration
 
 import (

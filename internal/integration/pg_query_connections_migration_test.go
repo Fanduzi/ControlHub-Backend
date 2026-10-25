@@ -1,10 +1,6 @@
 //go:build integration
 
 // Package integration provides real-MySQL evidence for migration 00029.
-// input: testing, strings, database/sql, pressly/goose, migration 00029
-// output: TestPGQueryConnectionsMigration*
-// pos: Proves migration 00029 applies composite connection identity + claims, keeps legacy ” defaults, and refuses a downgrade that would erase PostgreSQL-scoped data
-// note: if this file changes, update this header and module README.md.
 package integration
 
 import (

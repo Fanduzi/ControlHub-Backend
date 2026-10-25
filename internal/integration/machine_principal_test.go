@@ -1,10 +1,6 @@
 //go:build integration
 
 // Package integration provides real-MySQL machine-principal lifecycle proofs.
-// input: bytes, context, database/sql, encoding/json, errors, fmt, log, strings, testing, time, internal/model, internal/repository/mysql, internal/service
-// output: one-time secret, hash-only persistence, audit absence, expiry, revoke, overlap, last-used, all-seven-scope, and rollback tests
-// pos: Real-MySQL security-boundary coverage for machine principals at schema version 25
-// note: if this file changes, update this header and module README.md.
 package integration
 
 import (

@@ -1,10 +1,6 @@
 //go:build integration
 
 // Package service proves OpenPostgresPool against a disposable PostgreSQL server.
-// input: context, errors, fmt, strconv, strings, sync, testing, time, jackc/pgx/v5, jackc/pgx/v5/pgxpool, testcontainers postgres
-// output: TestPostgresPool_RealServer, TestPostgresPool_ConstructedVersionGate, TestPostgresPool_ReconnectVersionGate, TestPostgresPool_VersionProbeBudget, TestPostgresPool_VersionReadFailureCleansUp
-// pos: T3 acceptance — production factory dial, real server_version_num, native ExecParams, reconnect version gate, and failure cleanup
-// note: if this file changes, update this header and module README.md.
 package service
 
 import (

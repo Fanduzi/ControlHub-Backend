@@ -1,10 +1,6 @@
 //go:build integration
 
 // Package integration validates the test-only result-reply observation barrier.
-// input: mock MySQL packet peer and the plaintext fixture wire observer
-// output: TestMySQLKeyedWireObserverReply
-// pos: Self-test of command-forward versus first-server-reply facts; not a database or HTTP cancellation proof
-// note: if this file changes, update this header and module README.md.
 package integration
 
 import (

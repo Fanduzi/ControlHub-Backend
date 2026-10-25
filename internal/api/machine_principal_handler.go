@@ -1,8 +1,4 @@
 // Package api provides HTTP handlers and routing for the ControlHub REST API.
-// input: context, errors, net/http, chi/v5, internal/model, internal/service
-// output: safe machine-principal lifecycle list, administration handlers, and controlled errors
-// pos: HTTP boundary for one-time machine credential issuance and lifecycle
-// note: if this file changes, update this header and module README.md.
 package api
 
 import (

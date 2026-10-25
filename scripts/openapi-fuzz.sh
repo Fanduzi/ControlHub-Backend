@@ -1,10 +1,7 @@
 #!/usr/bin/env bash
-# input: CONTROLHUB_FUZZ_BEARER_TOKEN, running ControlHub server, Schemathesis
-# output: authenticated OpenAPI fuzz report
-# pos: Exercises protected API operations against the OpenAPI contract
-# note: if this file changes, update scripts/README.md
-# note: fuzz exclusions are a governed contract — see the OpenAPI Fuzz Exclusion Contract in scripts/README.md
 # openapi-fuzz.sh — Run Schemathesis against a ControlHub server.
+# Fuzz exclusions are a governed contract — see the OpenAPI Fuzz Exclusion
+# Contract in scripts/README.md.
 #
 # Usage: openapi-fuzz.sh <base_url>
 #   base_url: e.g. http://127.0.0.1:38001

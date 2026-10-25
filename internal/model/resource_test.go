@@ -1,8 +1,4 @@
 // Package model provides domain entities for the resource management system.
-// input: internal/model (all types and dictionaries), testing
-// output: Test* functions
-// pos: Validates taxonomy constants and dictionary completeness
-// note: if this file changes, update header and README.md
 package model
 
 import (

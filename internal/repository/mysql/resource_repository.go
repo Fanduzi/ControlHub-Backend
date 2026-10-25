@@ -1,8 +1,4 @@
 // Package mysql provides MySQL-backed repository implementations.
-// input: crypto/sha256, database/sql, time, internal/model, internal/service
-// output: resource CRUD, batched list identity/profile summaries, GetResourcesByIDs, bounded typed-profile/collector-presence reads, exact/presence label filtering, health observations/effective health, fail-closed cluster operational summaries, observed/effective values, validated previews, audited versioned manual overrides, atomic bulk mutation, and state-capped User/collector atomic ingestion confirmation including empty terminal receipts
-// pos: MySQL resource persistence, identity/typed-profile/collector-presence projections, current health evidence, effective values, inventory search, and shared resource/scan transaction authority
-// note: if this file changes, update this header and module README.md.
 package mysql
 
 import (

@@ -1,8 +1,3 @@
--- input: user-attributed query_executions and nullable-user audit_events at schema version 25
--- output: XOR query evidence identity and at-most-one user/machine audit identity, indexed without foreign keys
--- pos: truthful Machine Principal attribution for governed-select execution evidence
--- note: if this file changes, update this header and migrations/README.md.
-
 -- +goose Up
 
 ALTER TABLE query_executions

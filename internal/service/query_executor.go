@@ -1,8 +1,4 @@
 // Package service provides the MySQL/TiDB query executor for the read-only sandbox.
-// input: context, database/sql, fmt, strings, time, go-sql-driver/mysql, internal/model
-// output: MySQLQueryExecutor, NewMySQLQueryExecutor, QueryExecutorCaps, newScanPointer, normalizeScanned (implements QueryDatabaseExecutor)
-// pos: Runs guarded ordinary, compiler-owned template, and navigation SELECTs against a target DB under read-only transactions with column/cell/payload caps; emits the aligned cellTruncated matrix from the same scan pass that retains values; paginated windows reject on payload-cap overflow, non-paged results truncate; preserves SQL NULL as JSON null
-// note: if this file changes, update header and README.md
 package service
 
 import (

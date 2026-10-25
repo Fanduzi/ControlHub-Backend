@@ -1,10 +1,6 @@
 //go:build integration
 
 // Package integration runs real-MySQL integration tests.
-// input: database/sql, encoding/json, strings, testing, internal/model, internal/repository/mysql
-// output: Inventory resource/profile/relationship audit atomicity and observed/manual/effective value persistence tests
-// pos: Proves inventory changes, relationship rules, observations, overrides, and provenance against disposable MySQL
-// note: if this file changes, update this header and module README.md.
 package integration
 
 import (

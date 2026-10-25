@@ -1,13 +1,4 @@
 // Package service tests the keyed PostgreSQL orchestration contract.
-// input: testing, time, context, errors, os, internal/model fixtures, internal/pgsql warm-up
-// output: TestExecutePGClaimed_* — admission order, evidence-pair boundary,
-// duplicate/conflict classification, keyed finalize, and deriveClaimViewStatus
-// pos: T10-C claim-orchestration unit coverage for issue #118 — every test
-// encodes the frozen G9 order; no real PostgreSQL or MySQL is involved, the
-// governed chain either rejects at the guard or fails at the DSN endpoint;
-// T8-C-R1 adds the delivery-snapshot ownership proofs (bidirectional
-// isolation plus finalize-boundary mutation via the fake's finalizeHook)
-// note: if this file changes, update this header and module README.md.
 package service
 
 import (

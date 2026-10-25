@@ -2,21 +2,6 @@
 // values are validated on their own parameter-only protocol surface so a
 // conversion failure's origin is proven, never inferred from SQLSTATE
 // coincidence on the result path.
-// input: the attempt-owned plan wire values and the rewritten user
-// statement, on the live READ ONLY execution transaction under the armed
-// remaining budget
-// output: validatePGParameterInputs — describes the original statement
-// (server-inferred ParamOIDs), then runs ONE fixed zero-row
-// parameter-shaped probe carrying only the caller's values; a conversion
-// failure there becomes the fixed safe rejection because the parameter is
-// its only possible source. Describe failures count as parameter-origin
-// only on PrepareError ParseComplete=false with an inference-specific
-// SQLSTATE; everything else keeps the ordinary taxonomy.
-// pos: PG-MULTI-ENTRY R1-1 — runs after disclosure preflight and before the
-// single result ExecParams; no user identifier, type, value, or statement
-// body enters the generated probe text, and no result statement executes
-// twice.
-// note: if this file changes, update header and module README.md
 package service
 
 import (

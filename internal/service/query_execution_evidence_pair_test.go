@@ -1,8 +1,4 @@
 // Package service tests the Execution Evidence Pair recording entry.
-// input: context, errors, testing, time, internal/model
-// output: TestPersistEvidencePair_*
-// pos: Tests at persistEvidencePair — the single write for every Evidence-Bearing Query Attempt: detached window, fixed audit event type, verbatim identity, fail-closed rollback
-// note: if this file changes, update this header and module README.md.
 package service
 
 import (

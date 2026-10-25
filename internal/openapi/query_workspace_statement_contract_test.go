@@ -1,8 +1,4 @@
 // Package openapi_test verifies the query workspace and private statement OpenAPI slice.
-// input: context, testing, kin-openapi parser, embedded OpenAPI YAML
-// output: singular workspace GET/PUT, owner statement GET, schema, error-code, list non-disclosure, and server-computed canRestore assertions
-// pos: Contract regression coverage for frontend issues 39 and 41, including truthful history restore eligibility
-// note: if this file changes, update this header and module README.md.
 package openapi_test
 
 import (

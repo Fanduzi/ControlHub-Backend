@@ -1,8 +1,4 @@
 // Package mysql provides MySQL-backed repository implementations.
-// input: database/sql, context, errors, fmt, internal/model, internal/service
-// output: NewQueryDisclosureRepository, MySQLQueryDisclosureRepository (QueryDisclosureReader, QueryDisclosureWriter)
-// pos: MySQL data access for Phase 38Q governed result-disclosure policy CRUD
-// note: if this file changes, update header and README.md
 package mysql
 
 import (

@@ -1,8 +1,3 @@
--- input: resources table and existing typed profile tables at schema version 18
--- output: resource_profiles_domain_name, resource_profiles_virtual_ip, subtype backfill
--- pos: typed minimum-identity profiles for Domain Name and Virtual IP
--- note: if this file changes, update header and internal/repository/mysql/README.md
-
 -- +goose Up
 -- +goose StatementBegin
 create table resource_profiles_domain_name (

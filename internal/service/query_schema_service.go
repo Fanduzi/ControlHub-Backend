@@ -1,10 +1,6 @@
 // Package service provides the QuerySchemaService which orchestrates schema
 // metadata introspection: it gates on target access, caches results, calls the
 // inspector when needed, and writes audit events for every attempt.
-// input: context, errors, fmt, internal/model
-// output: QuerySchemaService, NewQuerySchemaService, ObjectDetails, GetObjectDetails, ListSchemas, ErrSchema* sentinels
-// pos: Governed schema metadata service with caching and audit
-// note: if this file changes, update header and README.md
 package service
 
 import (

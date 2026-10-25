@@ -1,8 +1,4 @@
 // Package service provides tests for governed saved-statement (template) execution.
-// input: context, database/sql, encoding/json, errors, strings, testing, time, internal/model
-// output: TestExecuteSavedStatement* (reread, authorization matrix, typed values, per-page chain, post-target no-value evidence, atomic Execution Evidence Pair writes; newTemplateExecutionTestServiceWithDisclosure for injectable disclosure planners)
-// pos: Unit tests for Template Execution rejected/failed evidence, cancellation durability (Issues #35/#61), and per-page disclosure wrapping ErrQueryDisclosureBlocked (Issue #48)
-// note: if this file changes, update this header and module README.md.
 package service
 
 import (

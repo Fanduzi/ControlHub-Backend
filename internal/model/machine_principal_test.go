@@ -1,8 +1,4 @@
 // Package model provides domain entities for the resource management system.
-// input: testing and time
-// output: machine-principal read/collector scope and credential-expiry contract tests
-// pos: Pure security-boundary regression coverage for machine and collector credentials
-// note: if this file changes, update this header and module README.md.
 package model
 
 import (

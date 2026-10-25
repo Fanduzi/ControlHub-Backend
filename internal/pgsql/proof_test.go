@@ -1,8 +1,4 @@
 // Package pgsql implements the PostgreSQL governed read-only query front half.
-// input: synthetic SQL strings over metadata-capable stub resolvers
-// output: intent tests for RefID/RefPath mapping, public-column proof records, source occurrence catalogs, witness covered-source/carrier propagation, VALUES expression dependencies, named-window clause resolution, and correlated-subquery scope handling
-// pos: T7-S1 verification-record tests; asserts rewrite-time evidence coordinates without claiming live PostgreSQL execution semantics
-// note: if this file changes, update header and README.md
 package pgsql
 
 import (

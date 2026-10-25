@@ -1,8 +1,4 @@
 // Package service implements business logic for resource management.
-// input: crypto/rand, crypto/sha256, encoding/base64, fmt, strings
-// output: opaque machine-credential generation and hash lookup parsing
-// pos: Secret-material boundary for machine-principal credentials
-// note: if this file changes, update this header and module README.md.
 package service
 
 import (

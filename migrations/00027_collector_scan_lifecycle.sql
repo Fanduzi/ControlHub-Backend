@@ -1,8 +1,3 @@
--- input: verified machine-principal IDs, collector scan receipts, and governed resource IDs at schema version 26
--- output: idempotent collector scan ledger, capped per-principal/per-CI missing state, and fail-loud data-preserving rollback
--- pos: durable persistence contract for collector complete-scan lifecycle transitions
--- note: if this file changes, update this header and migrations/README.md.
-
 -- +goose Up
 -- Principal/resource identity integrity remains application-owned, matching the
 -- existing machine-principal and inventory persistence conventions.

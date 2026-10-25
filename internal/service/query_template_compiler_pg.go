@@ -1,8 +1,4 @@
 // Package service provides the PostgreSQL dialect of the governed template compiler.
-// input: errors, fmt, strings, internal/pgsql
-// output: TemplateStatementCompiler.CompilePG, validatePGDeclarations — declared :name markers become generated $k placeholders bound by the driver, never interpolated
-// pos: G8 PostgreSQL template compilation (T11) — one lexical pass rewrites declared :name markers to positional $k parameters; casts, literals, comments, dollar-quoted bodies, and array slices pass through verbatim; native $n input is rejected; each declared parameter must appear exactly once; the compiled statement still owes GuardPG and the G6 pagination gate
-// note: if this file changes, update header and README.md
 package service
 
 import (

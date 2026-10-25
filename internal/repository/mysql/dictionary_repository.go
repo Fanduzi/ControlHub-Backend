@@ -1,8 +1,4 @@
 // Package mysql provides MySQL-backed repository implementations.
-// input: database/sql, internal/model
-// output: NewDictionaryRepository, DictionaryRepository struct
-// pos: Hybrid dictionary data access — DB-backed for reference data, static for taxonomy dictionaries
-// note: if this file changes, update header and README.md
 package mysql
 
 import (

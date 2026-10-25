@@ -4,10 +4,6 @@
 // query credential metadata API path (Task B6): admin upsert/get/delete through
 // the real service + repository + resolver, the runtime-gated readiness
 // correction, audit recording, and the no-DSN-stored invariant.
-// input: shared MySQL fixture, credential API/service/repository/resolver, canonical manual-origin target fixtures
-// output: admin upsert/get/delete lifecycle, readiness correction, audit, and no-DSN-stored invariant tests
-// pos: Real-MySQL boundary for the governed query credential metadata API
-// note: if this file changes, update this header and module README.md.
 package integration
 
 import (

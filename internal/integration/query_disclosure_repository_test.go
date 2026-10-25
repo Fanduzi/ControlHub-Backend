@@ -1,10 +1,6 @@
 //go:build integration
 
 // Package integration provides Testcontainers tests for disclosure policy repository operations.
-// input: testing, database/sql, internal/model, internal/repository/mysql, internal/service
-// output: TestQueryDisclosureRepository_* integration tests
-// pos: Proves canonical five-part CRUD, conflict/not-found/idempotent semantics, and NO PAD utf8mb4_0900_bin name fidelity (incl. trailing-space sibling keys) against real MySQL
-// note: if this file changes, update header and README.md
 package integration
 
 import (

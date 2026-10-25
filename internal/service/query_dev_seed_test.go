@@ -1,8 +1,4 @@
 // Package service provides tests for the local/dev query credential seeder.
-// input: context, errors, strings, testing, internal/model
-// output: TestQueryDevSeed_* (fake writer + reused fakeTargetRepo/fakeResolver fixtures)
-// pos: Unit tests for the dev seed config validation, target/DSN binding, and metadata shape
-// note: if this file changes, update header and README.md
 package service
 
 import (

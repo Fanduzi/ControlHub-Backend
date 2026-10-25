@@ -1,8 +1,4 @@
 // Package mysql provides tests for atomic query-evidence persistence.
-// input: bytes, context, database/sql, errors, log, strings, testing, time, sqlmock, internal/model
-// output: machine identity atomic pair/rollback/history and private-statement-availability tests plus dimensionless persistence-failure counter and fixed safe log tests
-// pos: Proves truthful actor/statement-availability projection, pair atomicity, and value-free failure telemetry
-// note: if this file changes, update header and README.md
 package mysql
 
 import (

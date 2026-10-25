@@ -1,8 +1,4 @@
 // Package service provides business logic for audit event queries.
-// input: internal/model (AuditEvent, AuditListQuery, PageInfo)
-// output: NewAuditService, AuditService.List/ListByResourceID, AuditRepository interface
-// pos: Business logic for audit event queries with pagination support
-// note: if this file changes, update header and README.md
 package service
 
 import (

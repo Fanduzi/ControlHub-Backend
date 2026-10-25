@@ -1,8 +1,4 @@
 // Package pgsql_test exercises the exported PostgreSQL rewrite API from outside the package.
-// input: GuardPG results, exact original SQL, pinned schema, stub resolver, PageOptions
-// output: cross-package acceptance for RewriteFromGuardPaginated and same-analysis rejection checks
-// pos: API boundary test for the narrow T7-S1 seam; verifies callers can reuse a GuardResult without constructing internal state
-// note: if this file changes, update header and README.md
 package pgsql_test
 
 import (

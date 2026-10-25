@@ -1,10 +1,6 @@
 //go:build integration
 
 // Package integration provides real-MySQL schema proofs for goose migrations.
-// input: database/sql, Testcontainers database, and schema migrations
-// output: migration-32 schema, collector/user/machine constraints and indexes, seed, and no-FK proofs
-// pos: real-MySQL clean-migration schema contract coverage
-// note: if this file changes, update this header and module README.md.
 package integration
 
 import (

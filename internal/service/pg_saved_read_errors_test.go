@@ -1,13 +1,4 @@
 // Package service — R1-2 fault taxonomy for the saved entry's snapshot read.
-// input: scripted QuerySavedStatementReader seams (block-on-context, injected
-// errors), fakeExecRepo, injected pgOutcomeFn
-// output: TestPGSavedRead* — the GetByID failure branch returns bare
-// canonical sentinels, writes exactly one NULL-key evidence pair with fixed
-// status/code/message, never leaks wrapped detail, and leaves the client key
-// free for a later real attempt
-// pos: PG-MULTI-ENTRY R1-2 — reader fault injection only; no real MySQL
-// timeout is simulated, the reader's error is the controlled seam
-// note: if this file changes, update header and module README.md
 package service
 
 import (

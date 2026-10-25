@@ -1,8 +1,4 @@
 // Package service implements business logic for resource management.
-// input: crypto/sha256, strings, and testing
-// output: opaque machine-credential generation and parsing contract tests
-// pos: Pure credential-material security regression coverage
-// note: if this file changes, update this header and module README.md.
 package service
 
 import (

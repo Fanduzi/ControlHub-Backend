@@ -1,10 +1,6 @@
 //go:build integration
 
 // Package integration — Phase 38A query credential metadata repository tests.
-// input: shared MySQL testcontainer fixture, QueryExecutionRepository credential methods
-// output: get/upsert/delete, fail-closed reads, composite connection-key and ListCredentials enumeration tests
-// pos: Real-MySQL boundary for the governed query credential metadata store
-// note: if this file changes, update this header and module README.md.
 package integration
 
 import (

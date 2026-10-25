@@ -1,8 +1,4 @@
 // Package model provides domain types for the resource topology read model.
-// input: none
-// output: TopologyResponse, TopologyNode, TopologyEdge, TopologyGroup, TopologyQuery
-// pos: Response and query types for GET /resources/{id}/topology
-// note: if this file changes, update header and README.md
 package model
 
 type TopologyDirection string

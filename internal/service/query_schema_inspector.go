@@ -1,11 +1,5 @@
 // Package service provides a parameterized MySQL/TiDB schema inspector that
 // queries information_schema with fixed SQL and bind parameters.
-// input: context, database/sql, strings, unicode/utf8, go-sql-driver/mysql, internal/model
-// output: QuerySchemaInspector interface, TableDefinition, MySQLSchemaInspector, EscapeSchemaSearch, GetTableDefinition
-// pos: Introspects databases, objects (tables/views), columns, indexes, and
-// foreign keys from information_schema using parameterized queries; never
-// interpolates external values into SQL text
-// note: if this file changes, update header and README.md
 package service
 
 import (

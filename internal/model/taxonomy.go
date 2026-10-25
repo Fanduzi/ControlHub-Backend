@@ -1,8 +1,4 @@
 // Package model provides domain entities for the resource management system.
-// input: fmt package
-// output: All type constants, XxxDictionary() functions, Validate() methods
-// pos: Central taxonomy registry — single source of truth for all enum-like types
-// note: if this file changes, update header and README.md
 package model
 
 import "fmt"

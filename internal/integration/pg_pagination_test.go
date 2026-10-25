@@ -1,10 +1,6 @@
 //go:build integration
 
 // Package integration provides real-PostgreSQL paginated rewrite proofs.
-// input: disposable PostgreSQL container, live pg_attribute resolver, pgsql.RewritePaginated, 220-row page fixtures
-// output: G6 execution-window proofs — generated paginated SQL returns exactly the user's page slice with witness and FD integrity, incl. native LIMIT/OFFSET integer-spelling/int64 boundary acceptance and the unordered final-page AST window
-// pos: T5 acceptance — computed fetch windows execute correctly against real PostgreSQL, incl. DISTINCT Q+D roots
-// note: if this file changes, update this header and module README.md.
 package integration
 
 import (

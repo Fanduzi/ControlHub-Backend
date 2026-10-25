@@ -1,8 +1,4 @@
 // Package api provides HTTP handlers and routing for the ControlHub REST API.
-// input: internal/api, internal/model, net/http, net/http/httptest, encoding/json
-// output: Governed identity/profile tests plus list/detail completeness and explicitly truncated collector-presence projection, bounded key/key:value inventory filtering, health reads, effective-value provenance, versioned override tests, and admin bulk preview/confirm handler coverage
-// pos: Validates governed identity, typed profiles, server-derived completeness/collector presence, search filters, Issue 81 health evidence, Issue 78 override conflicts, and bulk review/confirm behavior at the HTTP seam
-// note: if this file changes, update this header and module README.md.
 package api
 
 import (

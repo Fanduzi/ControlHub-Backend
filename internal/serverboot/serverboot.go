@@ -1,9 +1,5 @@
 // Package serverboot assembles the production HTTP dependency graph once for
 // both entry points that must serve the identical governed surface.
-// input: database/sql handle, internal/config, mysql repositories, service constructors, api.Dependencies, pgsql.GuardPG warm-up (T10-C wasm compile outside attempt budgets)
-// output: Build (production dependency assembly) + Parts (the concrete services a test-only assembly may additionally gate), RealClock
-// pos: single dependency-injection seam shared by cmd/server (production, default-closed PG unless CONTROLHUB_PG_HTTP_ENTRIES=on) and cmd/e2e-pg-server (TEST-ONLY fixture listener that explicitly enables the PG HTTP entries); behavior changes belong here exactly once
-// note: if this file changes, update header and README.md
 package serverboot
 
 import (

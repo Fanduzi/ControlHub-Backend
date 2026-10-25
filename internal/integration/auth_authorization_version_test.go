@@ -2,10 +2,6 @@
 
 // Package integration provides real-MySQL coverage for Authorization Version
 // invalidation and governed-query freshness.
-// input: crypto/hmac, crypto/sha256, database/sql, encoding/base64, encoding/hex, encoding/json, net/http, internal/api, internal/repository/mysql, internal/service
-// output: TestAuthorizationVersion_* integration cases
-// pos: Proves an already-issued Backend Bearer Credential becomes invalid after role change, disablement, or password reset against real MySQL, and that governed-query freshness stays fixed at eight hours
-// note: if this file changes, update header and README.md
 package integration
 
 import (

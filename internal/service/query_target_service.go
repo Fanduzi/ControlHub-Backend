@@ -1,8 +1,4 @@
 // Package service provides business logic for resource reads and typed profile assembly.
-// input: internal/model (QueryTarget, QueryTargetListQuery, QueryCredentialMetadata, QueryEnvironmentPolicy, QueryCredentialRuntimeStatus), context, database/sql, errors, strings
-// output: QueryTargetRepository + QueryCredentialReader + QueryConnectionLister interfaces, NewQueryTargetService, WithCredentialReader, WithCredentialResolver, WithConnectionLister, QueryTargetService.List, populateConnections, applyPGConnectionReadiness, readTargetCredential, classifyQueryKind, completeQueryTarget, completeQueryTargetWithRuntime, credentialAllowsExecution, isExecutableEngine, isCredentialManagedEngine, isPGEngine
-// pos: Query target read model — sources database_instance targets and derives workbench context + Phase 37 readiness, with the Phase 38A runtime-gated readiness correction and composite PostgreSQL connection-aggregate readiness
-// note: if this file changes, update header and README.md
 package service
 
 import (

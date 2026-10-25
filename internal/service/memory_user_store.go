@@ -1,8 +1,4 @@
 // Package service provides an in-memory UserCredentialRepository for tests.
-// input: sync, strings, internal/model
-// output: NewMemoryUserStore, MemoryUserStore
-// pos: Test/fake durable authorization state — FindByID/FindByEmail plus role/active/password mutators that bump Authorization Version
-// note: if this file changes, update header and README.md
 package service
 
 import (

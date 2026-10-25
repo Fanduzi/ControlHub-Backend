@@ -1,8 +1,4 @@
 // Package model provides domain entities for the resource management system.
-// input: errors, fmt, math, time, unicode/utf8 packages
-// output: QueryExecution* and QueryResult* types, internal full-statement availability and public restore eligibility/statement response, validated user-or-machine execution identity, ordinary execute-request Validate with optional verbatim clientExecutionId key rules, pagination/status/remote-state/error contracts, connection-scope request fields, query credential policy/ref validators
-// pos: Query sandbox execution requests, responses, history records with server-computed restore eligibility, and owner-reusable statement response
-// note: if this file changes, update header and README.md
 package model
 
 import (

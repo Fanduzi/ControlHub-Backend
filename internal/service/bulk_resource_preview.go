@@ -1,8 +1,4 @@
 // Package service provides resource mutation preview contracts.
-// input: standard-library hashing, JSON, reflection, sorting, and formatting packages
-// output: pure bulk resource mutation preview request, result, validation, and fingerprinting
-// pos: service-layer preview contract with no persistence dependency
-// note: if this file changes, update this header and module README.md.
 package service
 
 import (

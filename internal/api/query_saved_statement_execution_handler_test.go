@@ -1,8 +1,4 @@
 // Package api provides tests for the template-execution handler.
-// input: encoding/json, errors, net/http, net/http/httptest, strings, testing, chi, internal/model, internal/service
-// output: TestTemplateExecute_* (strict request decoding, controlled field errors, error mapping including query_result_disclosure_blocked, actor from token)
-// pos: Handler + auth coverage for POST /query-targets/{id}/saved-statements/{statementId}/execute (Phase 38W); disclosure blocks publish query_result_disclosure_blocked (Issue #48)
-// note: if this file changes, update header and README.md
 package api
 
 import (

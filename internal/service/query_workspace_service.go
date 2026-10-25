@@ -1,8 +1,4 @@
 // Package service provides business logic for actor-owned query workspaces.
-// input: context, errors, internal/model
-// output: QueryWorkspaceService Get/validated OCC Put and ErrQueryWorkspaceConflict
-// pos: Thin owner-only service boundary over the one-row query workspace aggregate
-// note: if this file changes, update this header and module README.md.
 package service
 
 import (

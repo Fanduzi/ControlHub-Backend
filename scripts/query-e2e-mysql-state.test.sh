@@ -1,9 +1,5 @@
 #!/usr/bin/env bash
 # Query E2E fixture state regression (run with `bash scripts/query-e2e-mysql-state.test.sh`).
-# input: a temporary XDG_STATE_HOME and a stub Docker executable
-# output: proves legacy migration, identity-isolated per-user state paths, cross-directory reuse, down scoping, and missing-state fail-fast
-# pos: regression guard for the per-identity per-user fixture handoff used by run-query-dev.sh
-# note: keep this Docker-free; it tests only credential-state ownership and lifecycle decisions
 set -euo pipefail
 
 ROOT="$(mktemp -d "${TMPDIR:-/tmp}/query-e2e-state.XXXXXX")"

@@ -1,8 +1,4 @@
 // Package service provides business logic for typed profile writes.
-// input: encoding/json, internal/model (ResourceType, Resource), ProfileRepository interface
-// output: NewProfileService, ProfileService.PutProfile/PatchProfile/DeleteProfile, ProfileRepository interface, minimum manual identity validation
-// pos: Business logic for resource profile upserts with archived-resource guard, strict field validation, Domain Name/Virtual IP identity, Database Proxy/Control Plane identity, PATCH partial-merge semantics, and manual-registration identity
-// note: if this file changes, update this header and module README.md.
 package service
 
 import (

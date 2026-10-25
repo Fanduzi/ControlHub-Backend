@@ -1,8 +1,4 @@
 // Package service provides business logic for the query target read model.
-// input: context, errors, testing, internal/model
-// output: TestClassifyQueryKind, TestCompleteQueryTarget_*, TestQueryTargetService_List_*
-// pos: Unit tests for the pure query target derivation (engine -> capability/readiness/governance) and the Phase 38A runtime-gated List credential-read classification
-// note: if this file changes, update header and README.md
 package service
 
 import (

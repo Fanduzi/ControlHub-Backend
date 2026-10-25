@@ -2,10 +2,6 @@
 
 // Package integration provides real-MySQL coverage for the Argon2id password
 // migration lifecycle.
-// input: database/sql, errors, testing, internal/repository/mysql, internal/service
-// output: TestArgon2idMigration_* integration cases
-// pos: Proves legacy SHA-256 to Argon2id migration, upgrade atomicity, new/reset writes, and legacy count against real MySQL
-// note: if this file changes, update header and README.md
 package integration
 
 import (

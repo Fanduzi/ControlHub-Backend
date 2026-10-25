@@ -1,8 +1,4 @@
 // Package api provides tests for the topology HTTP handler.
-// input: net/http/httptest, internal/api
-// output: topology handler test suite
-// pos: Handler tests for GET /resources/{id}/topology
-// note: if this file changes, update this header and module README.md.
 package api
 
 import (

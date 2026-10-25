@@ -1,9 +1,4 @@
 // Package service orchestrates the internal keyed PostgreSQL execution entries over the closed pgClaimedEntryKind enum (ordinary, saved, and navigation).
-// input: context, errors, fmt, strings, time, internal/model, internal/pgsql
-// output: ExecutePGClaimed, PGClaimedExecuteRequest, PGClaimedOutcome, ErrQueryExecutionAlreadyExists, ErrQueryExecutionConflict, WithPGClaimOrchestration — plus the private pgClaimedPrepared runner
-// pos: T10-C keyed claim orchestration (issue #118, frozen G9 order) plus the T8-C delivery seam (issue #116) plus T12-R1 exits (issue #120) — each entry's front half validates shape, resolves access, resolves defaults (explicit schema verbatim), and computes its digest; ONE executePGClaimedPrepared runner then owns atomic TryClaimExecution → governed outcome → consistency gate on a coordinator-owned pre-finalize snapshot → the sole keyed FinalizeClaimWithAudit → DecideResultDelivery on that snapshot → result rebuilt from the decision's owned rows/matrix. The kind picks the audit event (query.executed for ordinary/saved, related_record_navigation for navigation) and statement persistence: only ordinary stores the masked preview and owner-only full statement; saved/navigation always persist the withheld preview and empty FullStatement. Not an HTTP route.
-// note: if this file changes, update this header and module README.md.
-
 package service
 
 import (

@@ -1,8 +1,4 @@
 // Package model provides tests for governed saved-statement domain validation.
-// input: fmt, strings, testing
-// output: TestQuerySavedStatement* — scope/declaration/optional connection-name boundaries incl. the database/schema request fields (T11)
-// pos: Unit tests for the saved-statement request validation contract
-// note: if this file changes, update header and README.md
 package model
 
 import (

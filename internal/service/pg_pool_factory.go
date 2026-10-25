@@ -1,8 +1,4 @@
 // Package service provides the PostgreSQL connection factory for the governed query workbench.
-// input: context, errors, fmt, strconv, strings, sync, time, jackc/pgx/v5, jackc/pgx/v5/pgxpool
-// output: OpenPostgresPool, PGPoolErrorCode, ErrPGVersionUnsupported, ErrPGConnectFailed, ErrPGVersionReadFailed, PGVersionUnsupportedCode
-// pos: Builds one native pgxpool from a T2-validated ConnConfig, checks SHOW server_version_num on every new physical connection within a finite probe budget, and closes the pool on every failure
-// note: if this file changes, update this header and module README.md.
 package service
 
 import (

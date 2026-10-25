@@ -1,8 +1,4 @@
 // Package pgsql implements the PostgreSQL governed read-only query front half.
-// input: guarded+qualified *pg.ParseResult plus caller-resolved PageOptions
-// output: PageOptions, PageWindow, PageResult, PaginatePG, RewritePaginated — G6 execution-window rewrite of root LIMIT/OFFSET
-// pos: G6 execution-window stage (T5) — turns the user's root LIMIT/OFFSET window plus the platform row budget into an execution window (pageSize+1 sentinel fetch at O+(page-1)*pageSize) rewritten once into the root SelectStmt before witness injection; accepted root literals are nonnegative int64 integers incl. PG radix prefixes (0x/0o/0b), legal digit separators and decimal leading zeros; window arithmetic validates fully before the tree is touched; Result reports the delivered page/sentinel/budget boundary without implying additional DB rows exist
-// note: if this file changes, update header and README.md
 package pgsql
 
 import (

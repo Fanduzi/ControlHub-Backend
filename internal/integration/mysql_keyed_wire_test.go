@@ -1,10 +1,6 @@
 //go:build integration
 
 // Package integration observes MySQL-protocol result commands on isolated test targets.
-// input: plaintext uncompressed fixture connections, Vitess table references, command frames
-// output: mysqlKeyedWireObserver, separate command-forward/reply counts and request/reply test barriers
-// pos: Test-only wire observation of selected result statements and first server replies, not server completion or execution evidence persistence
-// note: if this file changes, update this header and module README.md.
 package integration
 
 import (

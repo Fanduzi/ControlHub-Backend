@@ -1,8 +1,4 @@
 // Package service evaluates and applies result-disclosure policies for query results (fail-closed).
-// input: context, database/sql, errors, fmt, mysql DSN, internal/model, QuerySchemaInspector, QueryTargetRepository
-// output: QueryDisclosureService, DisclosurePlan, ColumnDisclosure, QueryDisclosureReader/Writer, ErrQueryDisclosure* sentinels
-// pos: fail-closed disclosure governance (Phase 38Q); policy refusals stay blocked while machinery failures use a distinct backend sentinel (Issue #35); management paths enforce the canonical five-part scope with the engine-conditional schema rule (T9-A) and share one name-shape validation path across create/update/delete (T9-A-R1)
-// note: if this file changes, update header and README.md
 package service
 
 import (

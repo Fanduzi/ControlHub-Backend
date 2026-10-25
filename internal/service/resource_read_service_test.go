@@ -1,8 +1,4 @@
 // Package service provides tests for resource read operations.
-// input: internal/service ResourceService.List/Get/GetProfile, internal/model, testing
-// output: TestResourceRead* functions, including batched completeness profiles
-// pos: Validates resource read pagination, error handling, and projection batching
-// note: if this file changes, update this header and module README.md.
 package service
 
 import (

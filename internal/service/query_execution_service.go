@@ -1,8 +1,4 @@
 // Package service provides business logic for the Phase 37/38S read-only query sandbox.
-// input: context, database/sql, errors, fmt, math, net, strconv, strings, time, go-sql-driver/mysql, internal/model
-// output: QueryExecutionService, validated user/machine Execute identity, owner-only successful statement retrieval and history restore eligibility, repository/resolver/executor/clock interfaces, sentinel errors, ListHistory, validateDSNBinding
-// pos: Orchestrates ordinary user/machine governed execution plus user-only template/navigation and private statement retrieval/restore projection through one atomic identity-aware evidence implementation while preserving cancellation and disclosure behavior; an explicit mysqlExecutionAttempt carries the claim policy through the shared chain so a keyed request admits before the guard and finalizes exactly once (keyless pair or keyed finalize), never both; validates producer result evidence before disclosure (T8-B-R1) and evaluates the shared post-finalize result-delivery gate after each committed success pair (T8-B) on a coordinator-owned pre-finalize snapshot; the navigation entry fails closed on a nil inspector snapshot and returns bare canonical sentinels for pre-claim read failures
-// note: if this file changes, update this header and module README.md.
 package service
 
 import (

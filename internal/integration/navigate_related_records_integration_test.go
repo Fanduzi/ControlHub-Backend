@@ -2,10 +2,6 @@
 
 // Package integration provides real-MySQL coverage for related-record
 // navigation across resource types.
-// input: database/sql, testing, internal/model, internal/repository/mysql, internal/service, canonical manual-origin target fixtures
-// output: TestNavigateRelatedRecords_Integration_* cases
-// pos: Proves relation-driven navigation over real MySQL state
-// note: if this file changes, update header and README.md
 package integration
 
 import (

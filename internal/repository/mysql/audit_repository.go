@@ -1,8 +1,4 @@
 // Package mysql provides MySQL-backed repository implementations.
-// input: database/sql, internal/model
-// output: NewAuditRepository, user/machine-aware AuditRepository lists with actor labels and resource-environment projections
-// pos: MySQL audit_events pagination, filtering, scan, and user/machine/resource search
-// note: if this file changes, update header and README.md
 package mysql
 
 import (

@@ -1,8 +1,4 @@
 // Package api provides tests for the related-record navigation handler.
-// input: bytes, context, encoding/json, fmt, net/http, net/http/httptest, strings, testing, time, chi, internal/model, internal/service
-// output: TestNavigateRelatedRecords_* (handler auth, body validation, error mapping including Preflight and Apply-path query_result_disclosure_blocked vs query_not_allowed, response shape)
-// pos: Handler + auth middleware coverage for POST /query-targets/{id}/related-records (Phase 38J, Issue #48 disclosure Controlled Error Code including Apply after executor success)
-// note: if this file changes, update header and README.md
 package api
 
 import (

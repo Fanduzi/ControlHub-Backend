@@ -1,10 +1,6 @@
 //go:build integration
 
 // Package integration provides real-MySQL migration rollback evidence.
-// input: testing, strings, database/sql, pressly/goose, migration 00028
-// output: TestQueryWorkspaceMigrationDownGuard*
-// pos: Proves migration 00028 cannot erase workspace drafts or reusable full SQL during downgrade
-// note: if this file changes, update this header and module README.md.
 package integration
 
 import (

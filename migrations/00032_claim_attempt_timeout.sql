@@ -1,8 +1,3 @@
--- input: claim rows carry no record of the attempt budget the claimant resolved at admission at version 31
--- output: nullable attempt_timeout_ms on query_execution_claims with a guarded rollback at version 32
--- pos: per-attempt budget evidence for the running/unknown derivation threshold (issue #118, T10-C)
--- note: if this file changes, update this header and migrations/README.md.
-
 -- +goose Up
 
 -- The claim occupancy row records the statement-timeout budget the claimant

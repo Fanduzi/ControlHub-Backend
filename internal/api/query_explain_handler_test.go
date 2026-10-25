@@ -1,8 +1,4 @@
 // Package api provides tests for the governed Explain handler.
-// input: bytes, context, errors, net/http, net/http/httptest, strings, testing, internal/model, internal/service
-// output: TestQueryExplain_* covering error mapping, fixed messages, no-leak
-// pos: Phase 38N — prove the handler uses fixed messages (never err.Error()) and rejects typed EXPLAIN/DML/DDL
-// note: mirrors the execute handler test pattern; the stub implements queryExplainAPI
 package api
 
 import (

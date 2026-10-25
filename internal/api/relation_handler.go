@@ -1,8 +1,4 @@
 // Package api provides HTTP handlers and routing for the ControlHub REST API.
-// input: net/http, internal/service
-// output: relation list/rule-discovery/create/delete handlers
-// pos: HTTP handlers for relation discovery, listing, and maintenance
-// note: if this file changes, update this header and module README.md.
 package api
 
 import (

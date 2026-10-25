@@ -1,8 +1,4 @@
 // Package service provides PostgreSQL tests for QuerySavedStatementService.
-// input: context, errors, testing, internal/model
-// output: TestQuerySavedStatementServicePG* — engine-aware context validation, PG declaration validation through the real guard/pagination path, and the G12 RestoreContext revalidation matrix
-// pos: T11 service-boundary evidence for saved-statement context persistence and restore; unit-level seams only — the live-PostgreSQL restore proof lives in the integration file
-// note: if this file changes, update header and README.md
 package service
 
 import (

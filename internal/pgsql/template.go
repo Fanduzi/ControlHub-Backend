@@ -1,14 +1,4 @@
 // Package pgsql implements the PostgreSQL governed read-only query front half.
-// input: raw template SQL text
-// output: TemplatePlaceholder, ScanTemplatePlaceholders — G8 single-pass lexical scan
-// pos: G8 template placeholder scan (T11) — recognizes :name markers only in code
-//
-//	positions; '..' E'..' U&'..' ".." literals and quoted identifiers, -- and
-//	nested /* */ comments, $tag$ dollar-quoted bodies, and [..] array slices
-//	never yield placeholders; :: stays a cast; native $n parameters are
-//	rejected so generated $k bindings can never collide with user text
-//
-// note: if this file changes, update header and README.md
 package pgsql
 
 import (

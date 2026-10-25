@@ -1,8 +1,4 @@
 // Package mysql provides MySQL-backed repository implementations.
-// input: database/sql, context, errors, internal/model
-// output: NewUserRepository, UserRepository struct
-// pos: MySQL data access for users table — credential lookup, Authorization Version mutators, UpgradePasswordHash for legacy migration, CountLegacyHashUsers
-// note: if this file changes, update header and README.md
 package mysql
 
 import (

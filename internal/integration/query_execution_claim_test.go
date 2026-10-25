@@ -1,10 +1,6 @@
 //go:build integration
 
 // Package integration provides Testcontainers-backed tests for the G9 execution-claim storage protocol (issue #118, T10-A).
-// input: context, database/sql, errors, fmt, strings, sync, testing, time, Testcontainers MySQL, internal/model, internal/repository/mysql
-// output: TestClaim* suite covering acquisition/dup/conflict, terminal finalize atomicity + failure injection, ownership isolation, concurrent readers, NULL-key coexistence, cancellation-durable window, and exact key collation
-// pos: Proves the claim storage protocol against real MySQL without PostgreSQL user SQL or T7 executor wiring
-// note: if this file changes, update header and README.md
 package integration
 
 import (

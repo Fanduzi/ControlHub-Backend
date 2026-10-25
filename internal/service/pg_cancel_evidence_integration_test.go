@@ -2,22 +2,6 @@
 
 // Package service proves the T10-B cancel contract end to end against a
 // disposable PostgreSQL 16 server.
-// input: context, errors, encoding/binary, fmt, io, net, strings, sync,
-// sync/atomic, testing, time, jackc/pgx/v5, internal/model, internal/pgsql
-// output: acceptance tests — real CancelRequest packet on the wire (frame
-// shape / successful write / peer close as separate tiers), the strict
-// native-cancel stopped proof and its blocked-write negative control, the
-// three races, stopped/unknown probe outcomes, identity boundaries, error
-// classes, bounded convergence and recovery; T10-B-R1 adds pre-send unsent
-// convergence, local-rejection completion, early identity retention, and
-// the phase-marked single-window probe proof
-// pos: T10-B real-PostgreSQL acceptance (issue #118, frozen G9 cancel
-// clause) — ro_bind runs the production Outcome chain; the CancelRequest
-// tiers observe the wire without storing secrets, the remote verdict is a
-// real second connection's pg_stat_activity read in one window, and its
-// in-flight observation is pinned to the exact probe pid + per-run marker
-// (admin self-match and unrelated sleepers proven unable to satisfy it)
-// note: if this file changes, update this header and module README.md.
 package service
 
 import (

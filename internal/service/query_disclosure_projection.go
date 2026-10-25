@@ -1,8 +1,4 @@
 // Package service resolves result-column provenance from guarded SQL projections.
-// input: context, errors, fmt, strings, internal/model, Vitess AST
-// output: ColumnProvenance (incl. SourceSchema), ProjectionPlan, column provenance resolvers
-// pos: provenance seam feeding the disclosure plan; SourceSchema is the empty-schema identity for MySQL/TiDB
-// note: if this file changes, update header and README.md
 package service
 
 import (

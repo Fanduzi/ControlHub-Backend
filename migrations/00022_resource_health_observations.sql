@@ -1,8 +1,3 @@
--- input: resources table with health_status used as the legacy manual health override
--- output: nullable manual overrides and one latest health observation per resource and observer
--- pos: durable MySQL storage for Issue 81 health evidence and override clearing
--- note: if this file changes, update this header and internal/repository/mysql/README.md.
-
 -- +goose Up
 -- +goose StatementBegin
 alter table resources

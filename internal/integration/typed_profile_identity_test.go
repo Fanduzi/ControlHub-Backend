@@ -1,10 +1,6 @@
 //go:build integration
 
 // Package integration provides real-MySQL coverage for core CI typed profiles.
-// input: context, encoding/json, testing, internal/model, internal/repository/mysql, internal/service
-// output: TestTypedProfileManualIdentity*
-// pos: Proves core CI typed-profile identity, worker subtype, and T01 profile audit on MySQL
-// note: if this file changes, update header and README.md
 package integration
 
 import (

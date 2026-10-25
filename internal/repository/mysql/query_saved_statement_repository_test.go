@@ -1,8 +1,4 @@
 // Package mysql provides sqlmock-backed tests for the saved-statement repository.
-// input: database/sql, testing, time, DATA-DOG/go-sqlmock, internal/model
-// output: TestCreateWithAudit*/TestUpdateWithAudit*/read-path tests — exact SQL and argument binding incl. the database_name/schema_name context columns (T11); GetByID asserts the single joined header+declarations snapshot contract: one LEFT JOIN query, contiguous ordinals, no partial NULL parameter rows, bounded count
-// pos: Write-path SQL shape and atomic audit coverage for governed saved statements
-// note: if this file changes, update header and README.md
 package mysql
 
 import (

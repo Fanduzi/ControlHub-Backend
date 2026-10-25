@@ -1,8 +1,4 @@
 // Package service provides the Phase 38A query credential metadata service.
-// input: context, database/sql, errors, fmt, internal/model
-// output: QueryCredentialMetadataStore interface, InspectCredentialRuntime, QueryCredentialService, NewQueryCredentialService, GetStatus/Upsert/Delete with composite (resource,database) addressing, validateConnectionSelector, ErrQueryCredential* sentinels
-// pos: Phase 38A authenticated credential METADATA management — runtime status inspection (resolver + per-engine binding incl. PG dbname match, never returning the DSN), admin-gated composite-key upsert/delete, and audit recording
-// note: if this file changes, update header and README.md
 package service
 
 import (

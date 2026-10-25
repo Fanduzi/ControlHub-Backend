@@ -1,8 +1,4 @@
 // Package model provides domain entities for the resource management system.
-// input: fmt, regexp, strings, time packages
-// output: ResultDisclosureMode type, ResultDisclosurePolicy struct, ResultDisclosurePolicyUpsertRequest (five-part canonical key incl. SchemaName), ValidateIdentifierShape, ValidateLegacyScopeIdentifier, ResultDisclosurePolicyListQuery
-// pos: Governed result-disclosure policy for per-column query result visibility
-// note: if this file changes, update header and README.md
 package model
 
 import (

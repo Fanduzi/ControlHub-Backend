@@ -1,15 +1,5 @@
 // Package pgsql implements the PostgreSQL governed read-only query front half
 // (spec G4/G5/G10 stage: parse → guard → classify → qualify → inject).
-// input: a *GuardResult from GuardPG and an expected bound-parameter count
-// output: ValidateParameterBindings — dense {1..count} ParamRef coverage on
-// the immutable same-analysis tree; rewrite-internal paramRefNumbers /
-// requireSameParamSet keeping the $k number set identical across qualify,
-// inject, and the deparse round-trip
-// pos: PG-MULTI-ENTRY stage 1 parameter contract — binding is by ParamRef
-// number, never traversal order; duplicated references stay legal (set
-// semantics), and an unbound statement permits no ParamRef at all. No
-// parameter value ever enters this package — only the numeric shape
-// note: if this file changes, update header and README.md
 package pgsql
 
 import (

@@ -1,8 +1,4 @@
 // Package config tests validate configuration loading behavior.
-// input: internal/config (Config, Load, LoadDotEnv, ValidateJWTSecret, ErrQueryExecutionTokenMaxAgeRejected)
-// output: TestConfig* test functions
-// pos: Validates config loading, signing-secret validation, and fixed-freshness enforcement
-// note: if config loading or validation changes, update this header
 package config
 
 import (

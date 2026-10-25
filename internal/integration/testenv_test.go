@@ -1,11 +1,6 @@
 //go:build integration
 
 // Package integration — Package integration hosts the shared Testcontainers environment.
-// input: testcontainers MySQL 8.0, goose migrations, internal/pgsql GuardPG warm-up, plus the CH_T12_ORPHAN_CHILD env guard that re-dispatches this binary into pgOrphanChildMain before any suite setup (T12-R1 process-exit evidence)
-// output: globalEnv (container + migrated *sql.DB) and setupTestDB per-test connections
-// pos: suite-level fixture for every real-MySQL integration test in this package
-// note: if this file changes, update this header and module README.md.
-
 package integration
 
 import (

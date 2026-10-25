@@ -2,10 +2,6 @@
 
 // Package integration provides regression coverage for the forward-only seed
 // credential remediation migration.
-// input: database/sql, encoding/json, net/http, net/http/httptest, testing, internal/repository/mysql, internal/service
-// output: TestSeedUsersDisabledAfterRemediation regression case
-// pos: Proves migration 00016 deactivates both published seed users and kills their published credentials end to end
-// note: if this file changes, update header and README.md
 package integration
 
 import (

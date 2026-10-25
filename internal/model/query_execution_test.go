@@ -1,8 +1,4 @@
 // Package model provides tests for query execution domain validators.
-// input: strings, testing, math, reflect
-// output: TestQueryExecutionIdentityValidate, TestQueryEnvironmentPolicy_*, TestValidateCredentialRef_*, TestQueryExecutePagination*, TestValidatePagination*
-// pos: Unit tests for user/machine execution identity, environment-policy, credential_ref, and governed-result-paging validators
-// note: if this file changes, update header and README.md
 package model
 
 import (

@@ -1,8 +1,4 @@
 // Package service tests audit event query delegation.
-// input: context, testing, internal/model
-// output: AuditService environment-filter forwarding regression test
-// pos: Service contract coverage for global audit list queries
-// note: if this file changes, update this header and README.md.
 package service
 
 import (

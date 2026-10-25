@@ -1,8 +1,4 @@
 // Package service provides tests for the MySQL Explain normalizer.
-// input: encoding/json, strings, testing, internal/model, internal/service
-// output: TestNormalizeExplain* covering every v1 enum, caps, dedup, depth, no-passthrough
-// pos: Phase 38N — prove the normalizer emits only finite enums and never raw plan text
-// note: fixtures are sanitized synthetic shapes mirroring MySQL EXPLAIN FORMAT=JSON structure
 package service
 
 import (

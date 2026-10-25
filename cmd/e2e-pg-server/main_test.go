@@ -1,9 +1,4 @@
 // Package main provides tests for the E2E fixture listener's safety boundary.
-// input: disposableDSNAllowed, buildInfoSHA
-// output: disposable-DSN acceptance/refusal matrix tests
-// pos: proves the fixture listener refuses production-shaped metadata DSNs
-// before serving — loopback + controlhub_*_e2e is the primary guard
-// note: if this file changes, update header and cmd/e2e-pg-server/README.md
 package main
 
 import (

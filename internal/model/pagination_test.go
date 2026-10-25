@@ -1,8 +1,4 @@
 // Package model provides domain entities for the resource management system.
-// input: internal/model
-// output: TestComputeTotalPages, TestNormalizePagination
-// pos: Unit tests for pagination helpers
-// note: if this file changes, update header and README.md
 package model
 
 import "testing"

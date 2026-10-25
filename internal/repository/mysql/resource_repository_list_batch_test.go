@@ -1,8 +1,4 @@
 // Package mysql tests batched list identity and profile-summary reads.
-// input: context, testing, sqlmock, and resource models
-// output: ListResources and GetResourcesByIDs issue one IN query per table
-// pos: Guards list/topology neighbor reads from per-row identity and profile round-trips
-// note: if this file changes, update this header and module README.md.
 package mysql
 
 import (

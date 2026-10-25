@@ -1,8 +1,4 @@
 // Package model provides domain entities for the resource management system.
-// input: time package
-// output: AuditEvent with at-most-one user/machine identity plus privacy-safe actor projection, AuditChange, AuditChangeOperation
-// pos: Append-only event record and field-diff contract for governed changes
-// note: if this file changes, update header and README.md
 package model
 
 import "time"

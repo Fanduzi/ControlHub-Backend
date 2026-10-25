@@ -4,10 +4,6 @@
 // query credential seed path (Task B2): the seed service against real MySQL,
 // end-to-end readiness derivation, select 1 execution, the no-DSN-stored
 // invariant, and a host/port mismatch regression.
-// input: shared MySQL fixture, query-dev seeder, credential environment, query execution service, canonical manual-origin target fixtures
-// output: readiness, truthful user-attributed execution, secret-free persistence, and binding regression tests
-// pos: Real-MySQL boundary for the local/dev query credential seed path
-// note: if this file changes, update this header and module README.md.
 package integration
 
 import (

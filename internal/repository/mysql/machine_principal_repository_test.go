@@ -1,8 +1,4 @@
 // Package mysql provides MySQL-backed repository implementations.
-// input: crypto/sha256, database/sql, database/sql/driver, encoding/json, strings, testing, time, sqlmock, internal/model, internal/service
-// output: machine-principal persistence, audit safety, idempotent last-use, and rollback tests
-// pos: SQL transaction contract coverage for the machine-principal security boundary
-// note: if this file changes, update this header and module README.md.
 package mysql
 
 import (

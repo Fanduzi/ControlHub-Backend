@@ -1,8 +1,4 @@
 // Package api provides tests for the query execution handlers.
-// input: bytes, context, encoding/json, fmt, net/http, net/http/httptest, strings, testing, time, chi, internal/model, internal/service
-// output: TestQueryExecution_* (execute identity, controlled errors, fresh auth, history restore eligibility, and owner-only full-statement detail)
-// pos: HTTP identity, auth, history projection, error-mapping, route-local strict execute-body decoding (duplicates, unknown fields, explicit-null typed scalars incl. nested source members), and clientExecutionId pass-through regression coverage for governed execution and User-only query siblings
-// note: if this file changes, update header and README.md
 package api
 
 import (

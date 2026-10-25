@@ -1,8 +1,4 @@
 // Package openapi_test verifies the embedded OpenAPI contract.
-// input: embedded OpenAPI YAML, kin-openapi parser, internal/model
-// output: OpenAPI schema, audit actor projection, bounded key/key:value resource labels, resource completeness/bounded collector presence, health observation, effective-value override, collector empty-preview/confirm multipart, bulk mutation, topology, pagination, execution, machine auth, and closed error-enum tests
-// pos: Prevents documented API, reachable collector ingestion, and read-only collector-presence contracts from drifting from router behavior
-// note: if this file changes, update this header and module README.md.
 package openapi_test
 
 import (

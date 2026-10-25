@@ -1,19 +1,5 @@
 // Package service verifies the transport result against the rewrite's own
 // proof records before any row is delivered.
-// input: *pgsql.RewriteResult, *PGBindResult, copied FieldDescriptions,
-// private row buffer, connection TypeMap
-// output: verifyPGExpectedLayout, verifyPGPositions,
-// projectPGPublicResult, pgColumnTypeName — a pre-ExecParams expected-record
-// validation (completeness, coordinate map, catalog/binding/guard identity
-// correspondence, witness physical-identity compatibility, slot and
-// attribute-map legality) plus the post-execution per-position FD
-// comparison, witness-stripped public projection, and stable G7 type naming
-// pos: T7-S3 verification split (frozen G10 mechanism 5b) — expectations are
-// validated against the S1/S2 record set and the touch-confirmed bindings
-// BEFORE the transport statement is sent, never reverse-derived from actual
-// FDs; structural gaps are internal evidence failures, real binding
-// contradictions are the controlled query_binding_mismatch rejection
-// note: if this file changes, update this header and module README.md.
 package service
 
 import (

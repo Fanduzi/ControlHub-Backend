@@ -1,16 +1,4 @@
 // Package service holds the private trusted PG text-parameter substrate.
-// input: TemplateStatementInput (declared :name markers + typed values) and
-// the *pgParameterPlan a caller attaches to PGExecuteInput
-// output: pgParameterPlan, compilePGPlan, encodePGParameterText,
-// snapshotPGParameterPlan — owned text values bound by generated $k
-// position; values never enter SQL text
-// pos: PG-MULTI-ENTRY stage 1 — only the template compiler (and later the
-// navigation builder) may produce a plan through the closed source enum;
-// the executor snapshots it independently at attempt entry, proves dense
-// {1..n} ParamRef coverage on the guard tree, and transports owned [][]byte
-// text with server-side type inference. No public arbitrary SQL+Args API
-// exists
-// note: if this file changes, update header and README.md
 package service
 
 import (

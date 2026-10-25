@@ -1,9 +1,5 @@
 // Package pgsql implements the PostgreSQL governed read-only query front half
 // (spec G4/G5/G10 stage: parse → guard → classify → qualify → inject).
-// input: *pg.ParseResult trees (post-parse), pinned schema name
-// output: RefID/RefPath/RangeVarRef/RefKind, collectRangeVarRefs, QualifyEntities — scope-aware RangeVar classification + structural-path identity + byte-offset canonical qualification
-// pos: WITH-position visibility classifier (non-recursive sees earlier same-level+outer, recursive sees all same-level, inner shadows outer, qualified names are always entities, ambiguous ownership rejects) plus witnessable-position verdicts; qualification inserts "schema". at recorded byte offsets only — never rewrites user bytes
-// note: if this file changes, update header and README.md
 package pgsql
 
 import (

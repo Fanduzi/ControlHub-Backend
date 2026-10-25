@@ -1,8 +1,4 @@
 // Package api provides HTTP handlers and routing for the ControlHub REST API.
-// input: net/http, internal/service, internal/model
-// output: handleGetTopology, handleGetEnvironmentTopology
-// pos: HTTP handlers for resource-rooted and environment-scoped topology workspace reads; default depth 2, hop count 1–32
-// note: if this file changes, update this header and module README.md.
 package api
 
 import (

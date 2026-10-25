@@ -2,17 +2,6 @@
 
 // Package integration — privacy proofs for the PG-MULTI-ENTRY claimed
 // entries.
-// input: disposable PG16 fixture + real MySQL production dependencies; saved
-// statements exercising CTE/JOIN/DISTINCT-Q+D shapes and a text-keyed
-// navigation FK, each carrying a distinct synthetic marker (template value,
-// locator value, stored-record comment)
-// output: TestPGMultiEntryPrivacy_* — transient values and generated SQL
-// never appear in error unwrap chains, history preview/full/error columns,
-// audit fields, claim columns, ListHistory, or the claim point-read JSON;
-// the authored comment stays only inside the authorized saved record
-// pos: stage 4 packet item 5 — storage privacy across every evidence
-// surface for both new entries
-// note: if this file changes, update this header and module README.md.
 package integration
 
 import (

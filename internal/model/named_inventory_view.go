@@ -1,8 +1,4 @@
 // Package model provides domain entities for the resource management system.
-// input: encoding/json, fmt, strings, time, unicode/utf8
-// output: NamedInventoryView scope, state, requests, persisted record, and validation
-// pos: Minimal JSON contract for reusable inventory filters, sort, and columns
-// note: if this file changes, update this header and module README.md.
 package model
 
 import (

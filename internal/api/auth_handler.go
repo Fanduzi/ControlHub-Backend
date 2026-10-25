@@ -1,8 +1,4 @@
 // Package api provides HTTP handlers and routing for the ControlHub REST API.
-// input: net/http, internal/service, internal/model
-// output: handleLogin
-// pos: HTTP handler for POST /auth/login
-// note: if this file changes, update header and README.md
 package api
 
 import (

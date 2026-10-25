@@ -1,8 +1,3 @@
--- input: resources identity columns and legacy external_id values at schema version 18
--- output: immutable origin plus normalized aliases and system/value external identifiers
--- pos: forward-only CMDB identity migration with fail-loud legacy external-id preflight
--- note: if this file changes, update header and internal/repository/mysql/README.md
-
 -- +goose Up
 -- +goose StatementBegin
 create procedure migrate_resource_identity_76()

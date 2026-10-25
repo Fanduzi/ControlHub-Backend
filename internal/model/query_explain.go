@@ -1,8 +1,4 @@
 // Package model provides domain entities for the resource management system.
-// input: errors, fmt packages
-// output: Explain v1 request/response model, finite node/risk enums, ExplainAuditOutcome enum
-// pos: Phase 38N governed Explain public contract — versioned, normalized, leak-free
-// note: if this file changes, update header, README.md, and internal/openapi/openapi.yaml
 package model
 
 import (

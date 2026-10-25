@@ -1,8 +1,4 @@
 // Package mysql provides bounded topology relation repository tests.
-// input: database/sql/driver, testing, time, sqlmock, and internal/model
-// output: deterministic bounded topology relation, candidate, and one-observation-per-candidate regression coverage
-// pos: Verifies topology-only queries apply caller-owned row budgets and bounded health projection before scanning
-// note: if this file changes, update this header and module README.md.
 package mysql
 
 import (

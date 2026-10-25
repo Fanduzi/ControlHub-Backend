@@ -1,13 +1,5 @@
 // Package service — unit tests for the T9-B disclosure preflight and
 // transform stages.
-// input: constructed RewriteResult/PGBindResult records and fake
-// QueryDisclosureReader outcomes — no database
-// output: proof→policy-key mapping, policy union semantics, error-class and
-// input-ownership assertions for resolvePGDisclosurePlan/applyPGDisclosure
-// pos: constructed-record layer of the T9-B acceptance matrix — real-PG
-// execution evidence lives in pg_disclosure_integration_test.go and the
-// real-MySQL close-out in internal/integration
-// note: if this file changes, update this header and module README.md.
 package service
 
 import (

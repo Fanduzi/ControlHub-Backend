@@ -1,8 +1,4 @@
 // Package mysql provides tests for private full-statement execution persistence and retrieval.
-// input: context, database/sql, errors, testing, sqlmock, internal/model
-// output: successful-user-only full-statement insert arguments, owner-only retrieval, and mismatch denial tests
-// pos: SQL privacy boundary for reusable successful user execution statements
-// note: if this file changes, update this header and module README.md.
 package mysql
 
 import (

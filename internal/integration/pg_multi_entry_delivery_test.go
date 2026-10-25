@@ -2,20 +2,6 @@
 
 // Package integration — delivery-contract edge cases through the new
 // PG-MULTI-ENTRY saved/navigation entries.
-// input: disposable PG16 fixtures (orders/smallvals plus a dedicated
-// inherited-row navigation fixture with planner parallelism disabled),
-// real MySQL production dependencies
-// output: TestPGMultiEntryDelivery_* — cell-width boundaries, masked and
-// NULL flag semantics (masked-long included), empty/literal-NULL cells,
-// capability gate behavior (unknown refusal with persisted-success id,
-// duplicate capability, duplicate public column matrix alignment), zero
-// rows, G6 page bounds, sentinel-matrix flags across pages, a dedicated
-// nav_cases boundary table (8192/8193/CJK/4-byte/NULL/empty/literal-NULL
-// under raw and masked_no_copy scopes), witness-free projection, and CSV
-// eligibility on real final pages
-// pos: stage 4 packet item 6 — the shared delivery boundary exercised
-// through both keyed entries, not just the ordinary path
-// note: if this file changes, update this header and module README.md.
 package integration
 
 import (

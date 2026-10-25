@@ -1,10 +1,6 @@
 //go:build integration
 
 // Package integration provides real-MySQL evidence for migration 00030.
-// input: testing, strings, database/sql, pressly/goose, migration 00030
-// output: TestDisclosureNoPadMigration*
-// pos: Proves migration 00030 re-collates disclosure name columns to NO PAD, preserves rows and the five-part key, and refuses a downgrade that would merge trailing-space identities
-// note: if this file changes, update this header and module README.md.
 package integration
 
 import (

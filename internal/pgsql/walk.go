@@ -1,9 +1,5 @@
 // Package pgsql implements the PostgreSQL governed read-only query front half
 // (spec G4/G5/G10 stage: parse → guard → classify → qualify → inject).
-// input: github.com/pganalyze/pg_query_go/v6 protobuf AST, google.golang.org/protobuf protoreflect
-// output: msgOf, walkCtx, walkVisit, walkTree — structural-path AST traversal shared by every transform
-// pos: generic parse-tree walker; frames carry {parent message, field, list index, child} so visitors know WHERE a node sits (e.g. RangeVar via fromClause vs whereClause)
-// note: if this file changes, update header and README.md
 package pgsql
 
 import (

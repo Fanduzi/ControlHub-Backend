@@ -1,23 +1,5 @@
 // Package service binds governed PostgreSQL entity references inside the
 // attempt transaction and exposes the attempt-scoped metadata resolver.
-// input: attempt context with deadline, caller-held pgx.Tx (BEGIN READ ONLY,
-// search_path="<pinned>,pg_catalog", TimeZone='UTC', initial
-// statement_timeout), resolved database/pinned schema, the GuardResult
-// output: PGBind, PGBindInput, PGBindResult, PGBoundRef, PGRelationIdentity,
-// PGViewDependency, PGInheritEdge, PGIndexEdge — RefID-keyed touch-confirmed
-// bindings, locked attribute maps, view-dependency closure, pg_inherits
-// children, table-index approval, probe whitelist, in-transaction
-// pgsql.ColumnMetadataResolver
-// pos: T7-S2 binding gate (frozen G4 step 6 / G10 mechanism 2) — pinned
-// USAGE check (unconditional under private requirePinnedSchema, set by the
-// saved/navigation claimed entries), canonical to_regclass resolution,
-// per-entity self-proof touch (FieldDescription DataTypeOID must equal the
-// gate-resolved reltype), attmap under held ACCESS SHARE, recursive
-// view-dependency boundary, inheritance children, native common-type
-// verdicts; private navigationSource re-binds/re-verifies the exact FK
-// definition; pg_constraint joins the probe whitelist only under a nav
-// binding; probe SQL only — user/transport SQL never executes here
-// note: if this file changes, update this header and module README.md.
 package service
 
 import (

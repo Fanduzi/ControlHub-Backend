@@ -1,8 +1,4 @@
 // Package model provides domain entities for the resource management system.
-// input: encoding/json, fmt packages
-// output: ObjectKind type + Validate, DatabaseSummary, SchemaSummary, SchemaListResponse, ObjectSummary, ColumnDetail, IndexDetail, ForeignKeyDetail, TruncationFlags, DatabaseListResponse, ObjectListResponse, ObjectDetailResponse, TableDefinitionResponse
-// pos: Schema metadata response types for the governed query schema introspection API (Phase 38I)
-// note: if this file changes, update header and README.md
 package model
 
 import (

@@ -1,8 +1,4 @@
 // Package model provides tests for query schema domain types.
-// input: reflect, testing
-// output: TestDatabaseListResponse_*, TestObjectListResponse_*, TestObjectDetailResponse_*, TestTableDefinitionResponse_*, TestObjectKind_*, TestTruncationFlags_*, TestNoCredentialFields_*
-// pos: Unit tests for schema metadata response shape contracts and credential leak prevention
-// note: if this file changes, update header and README.md
 package model
 
 import (

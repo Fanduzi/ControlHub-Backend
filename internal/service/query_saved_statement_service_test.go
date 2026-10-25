@@ -1,8 +1,4 @@
 // Package service provides tests for QuerySavedStatementService.
-// input: testing, in-memory service repository fakes
-// output: TestSavedStatement* — CRUD authorization, validation, and composite database list-scope propagation
-// pos: service-layer regression coverage for saved statements (T11); the shared fakeSavedStatementReader also hosts the getHook caller-mutation seam used by the keyed saved-execution ownership proofs
-// note: if this file changes, update header and README.md
 package service
 
 import (

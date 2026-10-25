@@ -1,8 +1,4 @@
 // Package mysql provides the MySQL-backed execution-claim protocol store.
-// input: context, database/sql, errors, fmt, internal/model claim/execution types
-// output: TryClaimExecution, FinalizeClaimWithAudit, GetClaimWithExecution on QueryExecutionRepository + claim sentinels
-// pos: G9 atomic occupancy, keyed evidence-pair finalize, and authorized single-snapshot claim read (issue #118, T10-A)
-// note: if this file changes, update this header and module README.md.
 package mysql
 
 import (

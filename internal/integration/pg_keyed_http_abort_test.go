@@ -1,11 +1,6 @@
 //go:build integration
 
 // Package integration — PG-HTTP-T12-R1 real-transport evidence: client disconnects, lock-wait timeouts, and a killed subprocess orphan claim; R2 adds the formal HTTP GET read-back of that claim.
-// input: shared MySQL fixture, disposable PG16 with a slow seqscan table and a lockable gate table, the enabled assembly plus an independent reader router, both served over real sockets
-// output: TestPGKeyedHTTP_ClientAbort*, TestPGKeyedHTTP_LockWaitTimeout, TestPGKeyedHTTP_OrphanClaimProcessExit; the child entry point pgOrphanChildMain is dispatched from TestMain under env guard; orphan read helpers pgReaderRouter/orphanHTTPGet* and backend-activity probes orphanDrainBackends/countPGBackends
-// pos: group A/B of the R1 acceptance plus R2-A — HTTP disconnect and process death are proven as distinct facts, and the orphan's first read is the real GET /query-targets/{id}/executions through an independently wired authenticated router under wall and derived clocks; tampered responders prove the assertions are load-bearing
-// note: if this file changes, update this header and module README.md.
-
 package integration
 
 import (

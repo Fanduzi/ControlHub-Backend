@@ -1,8 +1,4 @@
 // Package service implements business logic for resource management.
-// input: context, crypto/sha256, database/sql, errors, reflect, testing, time, internal/model
-// output: machine-principal lifecycle, not-found mapping, and authentication service contract tests
-// pos: Service security-boundary regression coverage with a repository fake
-// note: if this file changes, update this header and module README.md.
 package service
 
 import (

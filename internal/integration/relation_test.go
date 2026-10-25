@@ -1,10 +1,6 @@
 //go:build integration
 
 // Package integration provides real-MySQL coverage for relation repository behavior.
-// input: context, database/sql, testing, time, internal/model, internal/repository/mysql, internal/service
-// output: TestResourceRepository relation and profile-summary cases
-// pos: Proves relation queries and profile summaries against disposable MySQL
-// note: if this file changes, update header and README.md
 package integration
 
 import (

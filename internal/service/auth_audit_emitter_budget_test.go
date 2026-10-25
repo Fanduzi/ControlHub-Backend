@@ -1,8 +1,4 @@
 // Package service provides tests for the bounded auth-audit emitter budget.
-// input: sync, testing, time
-// output: TestBoundedAuthAuditEmitter_* unit tests
-// pos: Proves the 60/min window reset, race-safe concurrent consumption, and the passthrough of non-untrusted events at the AuthAuditEmitter seam
-// note: if this file changes, update header and README.md
 package service
 
 import (

@@ -2,10 +2,6 @@
 
 // Package integration provides Testcontainers-backed tests for the Phase 37
 // read-only query sandbox (repository, service end-to-end, audit/history).
-// input: shared MySQL fixture, query repositories/services, credential environment, governed requests, canonical manual-origin target fixtures
-// output: truthful user-attributed query execution, history, audit, paging, disclosure, and failure tests
-// pos: Real-MySQL end-to-end boundary for governed query execution
-// note: if this file changes, update this header and module README.md.
 package integration
 
 import (

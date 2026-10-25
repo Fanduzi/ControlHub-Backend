@@ -1,8 +1,3 @@
--- input: single-connection query targets and name-keyed disclosure/saved-statement/execution evidence at schema version 28
--- output: composite (resource_id, database_name) connection identity, pinned-schema and PostgreSQL evidence columns, guarded downgrade at schema version 29
--- pos: storage foundation for per-database Query Connections and execution claims (spec G1)
--- note: if this file changes, update this header and migrations/README.md.
-
 -- +goose Up
 
 -- A credential row becomes one Query Connection: (resource_id, database_name)

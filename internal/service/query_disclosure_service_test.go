@@ -1,8 +1,4 @@
 // Package service provides tests for QueryDisclosureService.
-// input: testing, internal/model, fakeDisclosureReader, fakeDisclosureWriter, fakeSchemaInspector, fakeTargetRepo
-// output: TestPreflight*, TestPreflightRelatedRecords*, TestApply*, TestUpdatePolicy*, TestCreatePolicy*, TestDeletePolicy* functions
-// pos: Verifies fail-closed preflight/apply behavior, policy CRUD sentinel mapping, and the T9-A engine-conditional schema gate
-// note: if this file changes, update header and README.md
 package service
 
 import (

@@ -1,8 +1,4 @@
 // Package service — keyed MySQL/TiDB execution claim policy and statement evidence metadata.
-// input: context, errors, fmt, time, vitess sqlparser, internal/model
-// output: mysqlEntryKind, mysqlClaimStore, mysqlExecutionAttempt (admit/persistRecord/reject/recordTerminalOutcome/finalizeSuccess/setNavigationRelation/navReject/navPreparationOutcome/navTerminalOutcome), mysqlOrdinaryDigest, mysqlSavedDigest, mysqlNavigationDigest, mysqlStatementMetadata
-// pos: Per-attempt claim/evidence policy the ordinary, saved, and navigation MySQL/TiDB entries carry through the shared guarded chain — one claim admission, exactly one final evidence write (keyless pair or keyed finalize), privacy-safe statement metadata, canonical relation evidence, and the shared owned-snapshot success finalize whose malformed post-Apply evidence clears every user-success artifact; the pre-claim navigation preparation outcome returns the bare canonical sentinel while post-claim outcomes keep the wrapped safe classification; never the PG claim path
-// note: if this file changes, update this header and module README.md.
 package service
 
 import (

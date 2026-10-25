@@ -1,7 +1,4 @@
 // Package api provides HTTP handlers and JSON request parsing for the ControlHub REST API.
-// input: encoding/json, errors, io, net/http
-// output: decodeJSONBody, decodeJSON
-// pos: strict typed JSON decoding with unknown-field and multiple-value rejection
 package api
 
 import (

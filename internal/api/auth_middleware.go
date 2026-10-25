@@ -1,8 +1,4 @@
 // Package api provides HTTP handlers and routing for the ControlHub REST API.
-// input: context, net/http, strings, time, internal/service
-// output: MaxQueryTokenAge, user-only auth/role/query-freshness middleware, actorUserIDFromContext, actorRoleFromContext
-// pos: User Bearer boundary — signature/current Authorization Version checks and explicit machine-credential rejection prevent user/session fallback; untrusted Bearer rejection persistence is bounded by the router-wired per-process budget
-// note: if this file changes, update this header and module README.md.
 package api
 
 import (

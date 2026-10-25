@@ -1,11 +1,6 @@
 //go:build integration
 
 // Package integration — real PG16 + real MySQL vertical for T10-C keyed claim orchestration and mixed state reads (issue #118, frozen G9).
-// input: shared MySQL fixture (real target/credential/claim/execution repos), a disposable PostgreSQL 16 with a restricted role, the production ExecutePGClaimed entry, and the real ListHistory read path
-// output: TestPGClaimed* — vertical flow, concurrent admission, digest conflict, evidence-boundary rows, defaults/capabilities digest equivalence, cancel finalize, finalize-failure rollback, derived running/unknown reads incl. NULL-budget legacy rows, explicit-schema scope + keyed binding rejections, masked-preview persistence/GET privacy, byte-exact database scope filters, typed-actor scope, and the real HTTP list read
-// pos: T10-C production-orchestration proof — requests travel the real service entry; no test hand-composes claim/finalize calls for the covered paths. The HTTP POST gate stays closed; reads are the only HTTP surface.
-// note: if this file changes, update this header and module README.md.
-
 package integration
 
 import (

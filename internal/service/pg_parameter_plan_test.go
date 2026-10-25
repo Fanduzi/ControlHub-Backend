@@ -1,11 +1,4 @@
 // Package service proves the private trusted PG text-parameter substrate offline.
-// input: template inputs, hand-built plans, minimal executor inputs
-// output: compilePGPlan encoding/order/typing proofs, plan snapshot
-// ownership and contract-fault tests, and the pre-wire native-parameter
-// contract (an unbound attempt never lets a ParamRef reach transport)
-// pos: PG-MULTI-ENTRY stage 1 — trusted text values bind by $k number and
-// never enter SQL text; the ordinary path stays unbound and fails closed
-// note: if this file changes, update header and README.md
 package service
 
 import (

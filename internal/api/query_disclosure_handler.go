@@ -1,8 +1,4 @@
 // Package api provides HTTP handlers and routing for the ControlHub REST API.
-// input: context, errors, net/http, internal/model, internal/service
-// output: queryDisclosureAPI interface, handleListPolicies, handleCreatePolicy, handleUpdatePolicy, handleDeletePolicy, writeDisclosureError
-// pos: HTTP handlers for CRUD /query-disclosure-policies (Phase 38Q result-disclosure policy management)
-// note: if this file changes, update header and README.md
 package api
 
 import (

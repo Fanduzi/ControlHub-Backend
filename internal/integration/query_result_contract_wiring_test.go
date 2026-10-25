@@ -1,10 +1,6 @@
 //go:build integration
 
 // Package integration provides real-MySQL HTTP proofs for the T8-B result-contract wiring.
-// input: shared MySQL fixture, real api router, real execution/disclosure/evidence services, canonical manual-origin target fixtures
-// output: TestResultContract* cases covering all three governed result routes — capability gate, byte boundaries, evidence ordering, disclosure, pagination
-// pos: Real-DB HTTP acceptance boundary proving the per-cell truncation matrix flows from production scan through disclosure and evidence finalization to the serialized response on MySQL
-// note: if this file changes, update this header and module README.md.
 package integration
 
 import (

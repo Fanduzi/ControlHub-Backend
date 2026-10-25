@@ -1,10 +1,6 @@
 //go:build integration
 
 // Package integration runs real-MySQL ingestion confirmation tests.
-// input: HTTP multipart/router utilities, database/sql, errors, testing, internal/api/model/repository/mysql/service
-// output: TestIngestionConfirmation* and TestCollectorIngestionConfirmation* real-HTTP empty preview/confirm, bounded state admission, atomic persistence, retry, recovery, read-projection, and no-archive proofs
-// pos: Proves reachable collector HTTP confirmation, bounded state rollback, and operator-visible Missing semantics against disposable MySQL
-// note: if this file changes, update this header and module README.md.
 package integration
 
 import (

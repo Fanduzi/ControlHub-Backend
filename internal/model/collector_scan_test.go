@@ -1,8 +1,4 @@
 // Package model provides domain entities for the resource management system.
-// input: testing and time
-// output: collector complete-scan lifecycle transition contract tests
-// pos: Pure regression coverage for durable collector CI state
-// note: if this file changes, update this header and module README.md.
 package model
 
 import (

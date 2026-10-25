@@ -1,8 +1,4 @@
 // Package service provides tests for controlled CI ingestion parsing and preview reconciliation.
-// input: internal/service ingestion APIs, internal/model, testing
-// output: TestParseIngestion*, TestPreviewIngestion*, and TestConfirmCollectorIngestion* parser, collector-only empty preview, format-independent fingerprint, and confirmation cases
-// pos: Validates strict parsing, pure exact-identity preview behavior, and reachable empty terminal collector delegation without widening ordinary preview
-// note: if this file changes, update header and README.md
 package service
 
 import (

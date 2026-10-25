@@ -1,8 +1,4 @@
 // Package api provides HTTP handlers and routing for the ControlHub REST API.
-// input: net/http/httptest multipart requests and the API test server
-// output: ingestion preview, collector empty CSV/JSON preview-to-confirm flow, User/collector confirm, and collector scan-conflict/state-limit HTTP contract tests
-// pos: Verifies the ingestion upload boundary, collector-only empty fingerprint reachability, terminal scan metadata, and controlled error mapping
-// note: if this file changes, update this header and module README.md.
 package api
 
 import (

@@ -1,8 +1,4 @@
 // Package service tests resource mutation preview contracts.
-// input: testing package and the service preview contract
-// output: runnable coverage for bulk preview semantics and fingerprints
-// pos: service-layer contract verification
-// note: if this file changes, update this header and module README.md.
 package service
 
 import "testing"

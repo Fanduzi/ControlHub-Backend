@@ -1,9 +1,5 @@
 // Package pgsql implements the PostgreSQL governed read-only query front half
 // (spec G4/G5/G10 stage: parse → guard → classify → qualify → inject).
-// input: user SQL text via github.com/wasilibs/go-pgquery; pg_query_go/v6 typed AST
-// output: RejectError, ErrNotReadOnly/ErrNotWitnessable/ErrAmbiguousScope/ErrLayoutUnfreezable, GuardResult, GuardPG — classified original refs plus same-analysis fingerprint for guarded rewrite reuse
-// pos: G5 read-only dialect guard — single SelectStmt, no INTO/locking/data-modifying CTE, recursive forbidden-function denylist; emits classified RangeVar refs with witnessable-position verdicts; controlled error codes map verbatim to the API layer
-// note: if this file changes, update header and README.md
 package pgsql
 
 import (

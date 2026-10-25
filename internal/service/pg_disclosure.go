@@ -1,9 +1,4 @@
 // Package service wires disclosure governance onto the governed PostgreSQL execution chain.
-// input: attempt context with deadline, PGExecuteInput, target resource id, QueryDisclosureReader (T9-A five-part canonical policy lookup)
-// output: ExecutePGGovernedDisclosed, ExecutePGGovernedDisclosedOutcome, PGDisclosureInput, PGDisclosedResult (carries FetchCount verbatim — the executed-window scalar passes through disclosure unrecomputed), PGDisclosedColumn — the internal disclosed result (per-column DisplayMode/CopyAllowed, masked native-text rows) plus the per-attempt PGAttemptEvidence, or the frozen classified error; the plan lives exactly one attempt and never survives past it
-// pos: T9-B disclosure closure (issue #117, frozen G9 stage order + G10 mechanism 5b records) — the preflight consumes THIS attempt's bound and pre-wire-validated provenance before any user byte reaches the wire, and the transform runs only after verification, lock audit, and cleanup all converged; a failed or unverified attempt never reaches disclosure
-// note: if this file changes, update this header and module README.md.
-
 package service
 
 import (

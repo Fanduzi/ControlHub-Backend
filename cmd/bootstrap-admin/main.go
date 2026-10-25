@@ -1,9 +1,4 @@
 // Package main is the explicit operator-invoked bootstrap-admin command.
-//
-// input: os, strings, errors, context, database/sql, crypto/sha256, encoding/hex, fmt, io, log, internal/config, go-sql-driver/mysql
-// output: main() — explicit one-shot binary (go run ./cmd/bootstrap-admin), runBootstrap seam, resolveBootstrapConfig, hashPassword, printReport
-// pos: Creates or reactivates the administrator from deployment-supplied inputs (BOOTSTRAP_ADMIN_EMAIL + BOOTSTRAP_ADMIN_PASSWORD) via an idempotent upsert on the unique users.email; never invoked at server startup, never logs passwords.
-// note: if this file changes, update header and README.md
 package main
 
 import (

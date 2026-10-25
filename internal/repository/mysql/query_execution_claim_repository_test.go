@@ -1,8 +1,4 @@
 // Package mysql provides MySQL-backed repository implementations.
-// input: context, database/sql driver stubs, errors, testing, time, sqlmock, go-sql-driver/mysql, internal/model
-// output: unit tests for claim admission validation, finalize stage failures (commit/rollback), and duplicate-key classification
-// pos: Mocked-DB coverage of claim-protocol error paths that real-MySQL injection cannot reach (commit error, driver-level dup classification)
-// note: if this file changes, update this header and module README.md.
 package mysql
 
 import (

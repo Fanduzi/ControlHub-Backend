@@ -1,8 +1,4 @@
 // Package service provides tests for the governed Explain service.
-// input: context, errors, strings, testing, time, internal/model, internal/service
-// output: TestQueryExplainService* covering access/guard/executor/audit/typed outcomes
-// pos: Phase 38N — prove governed access, no bare-SELECT execution, typed audit, no history row
-// note: stubs the executor and audit recorder; the integration test covers the real MySQL path
 package service
 
 import (

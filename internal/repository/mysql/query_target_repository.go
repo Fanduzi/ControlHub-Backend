@@ -1,8 +1,4 @@
 // Package mysql provides MySQL-backed repository implementations.
-// input: database/sql, context, internal/model, internal/service
-// output: NewQueryTargetRepository, QueryTargetRepository (implements service.QueryTargetRepository)
-// pos: Read-only query target read model — joins database_instance resources with profiles, environments, owners, and cluster membership
-// note: if this file changes, update header and README.md
 package mysql
 
 import (

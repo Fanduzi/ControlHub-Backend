@@ -1,11 +1,4 @@
 // Package service provides tests for the PostgreSQL Explain plan normalizer.
-// input: encoding/json, testing, internal/model
-// output: TestPGExplainNormalizer* covering mapped node types, structural
-// pass-through, estimated rows, risk derivation, and fail-closed envelopes
-// pos: PG sibling of query_explain_normalizer_test.go — the leak-free
-// contract is identical; only the raw plan shape differs
-// note: fixtures are real EXPLAIN (FORMAT JSON) envelopes minus all
-// leak-prone fields (Relation Name, Index Name, Filter are never present)
 package service
 
 import (

@@ -1,10 +1,6 @@
 //go:build integration
 
 // Package integration — real-MySQL A–J acceptance matrix for the keyed multi-entry (ordinary/saved/navigation) execution protocol.
-// input: shared MySQL fixture, real api router/auth/service/repository/disclosure/executor stack, wire observer, fault triggers, frozen digest goldens
-// output: TestMySQLKeyedMatrix* cases proving keyless compatibility, concurrency exactly-once, wire-vs-persistence separation, boundary/failure phases, real HTTP abort, storage faults, privacy/auth, frozen digests, result contracts, and read consistency
-// pos: full production-path acceptance boundary for the keyed claim protocol on MySQL — wire frames, claim rows, and evidence pairs are counted and proven separately; TiDB coverage is intentionally out of scope for this packet
-// note: if this file changes, update this header and module README.md.
 package integration
 
 import (

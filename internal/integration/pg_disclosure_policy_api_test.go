@@ -1,10 +1,6 @@
 //go:build integration
 
 // Package integration provides real-MySQL HTTP proofs for the T9-A disclosure policy management surface.
-// input: shared MySQL/auth/query fixtures, api router, disclosure repository and service
-// output: TestDisclosurePolicyHTTP_* integration tests
-// pos: Real-DB HTTP acceptance boundary for the T9-A schema-scope slice of issue #117
-// note: if this file changes, update this header and module README.md.
 package integration
 
 import (

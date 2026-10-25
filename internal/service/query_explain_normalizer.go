@@ -1,8 +1,4 @@
 // Package service provides the MySQL Explain plan normalizer for Phase 38N.
-// input: encoding/json, errors, fmt, sort, strconv, strings, internal/model
-// output: ExplainNormalizer, NormalizeExplainPlan, HighEstimatedRowsThreshold, MaxExplainNodes, MaxExplainRisks, MaxExplainPlanDepth
-// pos: Translates MySQL EXPLAIN FORMAT=JSON into the v1 bounded, leak-free normalized model
-// note: if this file changes, update header and README.md
 package service
 
 import (

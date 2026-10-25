@@ -1,8 +1,4 @@
 // Package service provides business logic for resource topology projection.
-// input: internal/model topology contracts and repository-bounded relation/candidate reads
-// output: NewTopologyService, TopologyService.BuildTopology, TopologyRepository interface with caller-owned budgets and batched neighbor reads
-// pos: Business logic for capped rooted and workspace topology read models; hop count 1–32 plus node/edge output caps
-// note: if this file changes, update this header and module README.md.
 package service
 
 import (

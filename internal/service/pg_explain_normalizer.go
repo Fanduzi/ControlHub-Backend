@@ -8,11 +8,6 @@
 // (Result, Hash, Limit, …) emit `container` nodes so the rendered tree
 // keeps the native shape. No relation name, index name, predicate, or
 // literal ever leaves this file.
-// input: internal/model — ExplainRawPlan parsed tree
-// output: PGExplainNormalizer.Normalize — NormalizeResult or ErrQueryExplainNotSupported
-// pos: PG sibling of ExplainNormalizer — shared normCtx caps (64 nodes / 16 risks / 64 depth)
-// note: if this file changes, update this header and module README.md.
-
 package service
 
 import (

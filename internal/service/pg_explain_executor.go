@@ -4,11 +4,6 @@
 // read-only transaction + pinned search_path + statement_timeout session
 // contract from execution without claims, witness injection, or evidence
 // rows.
-// input: attempt context with deadline, T2-validated *pgx.ConnConfig, pinned schema, guarded SELECT text
-// output: PGExplainRunner.Explain — bounded raw plan tree or a controlled sentinel; DSNs and driver text never surface
-// pos: PG sibling of MySQLExplainExecutor — same sealed-statement discipline: the runner only ever sends "EXPLAIN (FORMAT JSON) " + guarded select
-// note: if this file changes, update this header and module README.md.
-
 package service
 
 import (

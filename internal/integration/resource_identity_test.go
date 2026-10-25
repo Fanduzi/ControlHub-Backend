@@ -1,10 +1,6 @@
 //go:build integration
 
 // Package integration provides real-MySQL coverage for CMDB resource identity.
-// input: context, errors, testing, internal/model, internal/repository/mysql, internal/service
-// output: TestResourceIdentityRepository_CreateNormalizesAndEnforcesIdentity
-// pos: Proves normalized identity persistence and explicit conflict classification against MySQL
-// note: if this file changes, update header and README.md
 package integration
 
 import (

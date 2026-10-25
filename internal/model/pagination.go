@@ -1,8 +1,4 @@
 // Package model provides domain entities for the resource management system.
-// input: no external dependencies
-// output: PageInfo, ResourceListQuery with owner and key/key:value label filters, ResourceLabelFilter, AuditListQuery (including target environment filtering), pagination constants, ComputeTotalPages, NormalizePagination
-// pos: Shared pagination and filtering types for all list endpoints
-// note: if this file changes, update header and README.md
 package model
 
 const (

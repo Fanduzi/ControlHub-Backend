@@ -1,10 +1,6 @@
 //go:build integration
 
 // Package integration provides real-MySQL coverage for resource health observations.
-// input: disposable MySQL, resource repository, health observations, and inventory audit storage
-// output: latest-per-observer, effective-health, no-observation-audit, and atomic override tests
-// pos: Persistence contract for Issue 81 resource health state
-// note: if this file changes, update this header and module README.md.
 package integration
 
 import (

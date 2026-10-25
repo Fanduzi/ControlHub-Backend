@@ -1,8 +1,4 @@
 // Package api tests named inventory view HTTP handlers.
-// input: net/http, net/http/httptest, testing, internal/model, internal/service
-// output: named inventory view authentication, list/create router contract tests
-// pos: Covers route authentication, view response metadata, strict create decoding, and controlled errors
-// note: if this file changes, update this header and README.md.
 package api
 
 import (

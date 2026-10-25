@@ -1,8 +1,4 @@
 // Package model provides tests for query-workspace validation.
-// input: encoding/json, strings, testing
-// output: bounded/control-free metadata, opaque SQL preservation, and execution-statement JSON contract tests
-// pos: Regression coverage for query workspace and reusable execution statement models
-// note: if this file changes, update this header and module README.md.
 package model
 
 import (

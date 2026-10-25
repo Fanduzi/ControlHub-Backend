@@ -2,19 +2,6 @@
 
 // Package integration — real cancellation proofs for the PG-MULTI-ENTRY
 // claimed entries.
-// input: disposable PG16 fixtures (CPU-bound cartesian template for saved;
-// 5M-row seqscan target with planner alternatives disabled for navigation),
-// real MySQL production dependencies
-// output: TestPGMultiEntryCancel_* — the caller cancels only after the real
-// server reports the actual result statement active (application_name +
-// marker + state; saved adds a 0.25 s query-age barrier, navigation polls
-// state/marker with no age floor), and the entry returns genuine evidence:
-// real backend pid, UserSQLSent true, cancelled status, observed
-// remote_state — never a guessed or fabricated state
-// pos: stage 4 packet item 3 — in-flight cancellation of both new entries
-// through the production methods; completed-call stats are never used for
-// aborted statements
-// note: if this file changes, update this header and module README.md.
 package integration
 
 import (

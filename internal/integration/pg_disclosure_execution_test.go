@@ -1,11 +1,6 @@
 //go:build integration
 
 // Package integration — real-MySQL + real-PG16 vertical proof for T9-B.
-// input: shared MySQL fixture (real policy repository + real PG target resource), a disposable PostgreSQL 16 with a restricted role, and the production ExecutePGGovernedDisclosed entry
-// output: the closed-loop acceptance — canonical policies written through, plus newPGDiscFixtureOn (the image-parametrized fixture for the T12-R1 version-compat matrix) the real T9-A repository drive the real executor's pre-wire preflight and post-cleanup transform
-// pos: T9-B acceptance A/B (issue #117) — the end-to-end disclosure layer over two real stores; broader matrix coverage lives in the service package's real-PG tests
-// note: if this file changes, update this header and module README.md.
-
 package integration
 
 import (

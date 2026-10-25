@@ -1,7 +1,4 @@
 // Package model provides domain entities for the resource management system.
-// input: encoding/json, strings, testing
-// output: TestQuerySavedStatementExecuteRequestDecode, TestQuerySavedStatementExecuteRequestDecodeRejectsMalformed, TestQuerySavedStatementExecuteRequestValidate
-// pos: Strict template-execution request decoding and limits (values object size, maxRows, governed pagination)
 package model
 
 import (

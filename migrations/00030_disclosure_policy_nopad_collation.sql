@@ -1,8 +1,3 @@
--- input: query_result_disclosure_policies name columns still collated utf8mb4_bin (PAD SPACE) at version 29
--- output: four canonical name segments re-collated to utf8mb4_0900_bin (NO PAD) with a guarded rollback
--- pos: Makes the five-part disclosure key byte-exact under MySQL comparison and uniqueness semantics
--- note: if this file changes, update this header and migrations/README.md.
-
 -- +goose Up
 
 -- utf8mb4_bin is PAD SPACE: 'orders' and 'orders ' compare equal under both

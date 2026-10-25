@@ -1,8 +1,3 @@
-# input: public HTTP routes, model JSON shapes, and operator access policy
-# output: served OpenAPI 3.1 contract including machine credentials, scoped reads/collector routes, history restore eligibility, collector empty-preview/terminal-confirm metadata, resource-list filters and read-only per-principal collector presence, ingestion, and bulk mutation review/confirmation
-# pos: canonical machine-readable API boundary, including independent user/machine authentication, server-computed history restoration, reachable collector preview/confirm protocol, collector Missing projection, and inventory audit diffs
-# note: if this file changes, update header and internal/openapi/README.md
-
 openapi: 3.1.0
 info:
   title: ControlHub API

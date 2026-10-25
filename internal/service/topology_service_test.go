@@ -1,8 +1,4 @@
 // Package service provides tests for the resource topology projection.
-// input: internal/model, internal/service
-// output: topology service test suite, including bounded relation/candidate reads, batched neighbor fetches, and sentinel truncation
-// pos: TDD tests for TopologyService.BuildTopology response semantics and caller-owned repository budgets
-// note: if this file changes, update this header and module README.md.
 package service
 
 import (

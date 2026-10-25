@@ -1,8 +1,4 @@
 // Package api provides HTTP handlers and routing for the ControlHub REST API.
-// input: chi/v5, time, internal/model, internal/service (all services)
-// output: Dependencies, NewRouter, CORS, user-or-machine scoped reads/collector writes/ordinary governed execute, and user-only workspace, sibling query, health observation, bulk mutation, ingestion, and admin routes
-// pos: HTTP routing entry point for the closed machine route/scope matrix and authenticated inventory, collector, named-view, topology, workspace, query, and admin operations
-// note: if this file changes, update this header and module README.md.
 package api
 
 import (

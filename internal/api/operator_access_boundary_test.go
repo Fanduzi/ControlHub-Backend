@@ -1,8 +1,4 @@
 // Package api provides HTTP handlers and routing for the ControlHub REST API.
-// input: internal/api router, internal/service, internal/testsupport/operatoraccess, net/http/httptest
-// output: TestOperatorAccessBoundary
-// pos: Router-level authorization matrix for anonymous, editor, and admin operators, driven by the shared operatoraccess policy
-// note: if this file changes, update this header and module README.md.
 package api
 
 import (

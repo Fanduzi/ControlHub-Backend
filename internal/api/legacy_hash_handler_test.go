@@ -1,8 +1,4 @@
 // Package api provides tests for the legacy hash count endpoint.
-// input: crypto/hmac, crypto/sha256, encoding/base64, encoding/hex, encoding/json, fmt, net/http, net/http/httptest, testing, time
-// output: TestGetLegacyHashCount_* tests
-// pos: Validates admin-only access, non-identity-bearing response shape, and viewer/editor rejection
-// note: if this file changes, update header and README.md
 package api
 
 import (

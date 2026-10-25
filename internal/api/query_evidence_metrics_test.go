@@ -1,9 +1,5 @@
 // Package api tests for the Issue #34 (38X-3A) admin-only query-evidence
 // metrics operation.
-// input: internal/api router, expvar, encoding/json, net/http/httptest
-// output: TestQueryEvidenceMetrics* (endpoint 401/403/200 matrix, exact one-field shape, counter)
-// pos: Proves the query-evidence persistence-failure counter is exposed only to administrators
-// note: if this file changes, update header and README.md
 package api
 
 import (

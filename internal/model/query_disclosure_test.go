@@ -1,8 +1,4 @@
 // Package model provides tests for result-disclosure policy domain validators.
-// input: strings, testing
-// output: TestResultDisclosureMode_*, TestResultDisclosurePolicyUpsertRequest_*, TestValidateLegacyScopeIdentifier_*
-// pos: Unit tests for disclosure mode, upsert-request shape validation, and the legacy ASCII scope rule
-// note: if this file changes, update header and README.md
 package model
 
 import (

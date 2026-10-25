@@ -5,17 +5,6 @@
 // #116): production ExecutePGClaimed → real ExecParams scan → positional
 // projection carrying value+flag → real disclosure preflight/transform →
 // the one keyed finalize → the shared DecideResultDelivery gate.
-// input: shared MySQL fixture (real target/credential/claim/execution/
-// disclosure repos), a disposable PostgreSQL 16 with a restricted role,
-// the production ExecutePGClaimed entry
-// output: TestPGClaimedDelivery* — byte-boundary + native-type matrix,
-// positional coordinates, sentinel/zero-row pages, disclosure-preserved
-// flags, delivery-refusal semantics, same-key capability retries, and
-// finalize-failure priority
-// pos: T8-C production-delivery proof — every result travels the real
-// production entry; no test hand-composes a PGVerifiedResult for the
-// covered paths. PG HTTP POST stays closed; this is the internal entry.
-// note: if this file changes, update this header and module README.md.
 package integration
 
 import (

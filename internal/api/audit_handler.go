@@ -1,8 +1,4 @@
 // Package api provides HTTP handlers and routing for the ControlHub REST API.
-// input: fmt, net/http, strconv, strings, internal/service, internal/model
-// output: handleListAuditEvents, handleListResourceAuditEvents with target-resource environment filtering
-// pos: HTTP handlers for audit event listing with pagination, filtering, and search
-// note: if this file changes, update header and README.md
 package api
 
 import (

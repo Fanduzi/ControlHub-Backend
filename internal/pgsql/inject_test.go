@@ -1,8 +1,4 @@
 // Package pgsql implements the PostgreSQL governed read-only query front half.
-// input: synthetic SQL strings over a stub ColumnResolver
-// output: intent tests for layout freezing, witness injection shape, cross-layer propagation, sublink suppression, DISTINCT Q+D, ordinals, reserved names, set-op merging, USING merge-source proofs (structured metadata, missing-capability and defect classification), reparseability
-// pos: tests assert on the deparsed transport SQL structure because the contract is semantic — witnesses must be NULL-typed as the source reltype and never enter expansion/join/group/dedup keys
-// note: if this file changes, update header and README.md
 package pgsql
 
 import (

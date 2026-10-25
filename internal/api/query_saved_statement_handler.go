@@ -1,8 +1,4 @@
 // Package api provides HTTP handlers and routing for the ControlHub REST API.
-// input: context, errors, net/http, internal/model, internal/service
-// output: querySavedStatementAPI interface, handleListSavedStatements, handleCreateSavedStatement, handleUpdateSavedStatement, handleDeleteSavedStatement, writeSavedStatementError
-// pos: HTTP handlers for CRUD /query-targets/{id}/saved-statements (Phase 38R governed saved statements)
-// note: if this file changes, update header and README.md
 package api
 
 import (

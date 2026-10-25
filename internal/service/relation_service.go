@@ -1,8 +1,4 @@
 // Package service implements shared business logic for resource relation reads and writes.
-// input: internal/model and the RelationRepository persistence/audit seam
-// output: RelationService list/create/delete methods and RelationRepository interface
-// pos: Shared relation entry point that applies server rules before atomic persistence
-// note: if this file changes, update this header and module README.md.
 package service
 
 import (

@@ -1,10 +1,6 @@
 //go:build integration
 
 // Package integration proves PostgreSQL schema metadata through the real HTTP handler.
-// input: disposable PostgreSQL 16, production OpenPostgresPool, restricted role, httptest router, MySQL control plane
-// output: TestPostgreSQLSchemaMetadataHTTP acceptance A-J, INCLUDE primary keys, domain nullability, index budget, and statement_timeout
-// pos: T6 vertical proof from fixture through the production pool, metadata service, and schema HTTP routes; user SQL stays rejected
-// note: if this file changes, update this header and module README.md.
 // Issue #114 names GET /connections/{id}/schemas. Frozen G1/G2 and the existing
 // router use GET /query-targets/{id}/schema/schemas?database=. This test follows
 // the frozen route. {id} is the target resource. database selects the connection.

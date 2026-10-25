@@ -1,8 +1,4 @@
 // Package model provides domain entities for the resource management system.
-// input: testing, encoding/json, internal/model
-// output: tests for Explain v1 model enums, validation, and JSON round-trip
-// pos: Phase 38N governed Explain model — every enum fails closed on unknown
-// note: these tests encode WHY the model is finite (no free-form passthrough)
 package model
 
 import (

@@ -1,8 +1,4 @@
 // Package service provides the governed template-execution adapter.
-// input: bytes, context, database/sql, encoding/json, errors, fmt, internal/model
-// output: TemplateValueValidationError, QueryExecutionService.WithTemplateExecution, QueryExecutionService.ExecuteSavedStatement
-// pos: User-only fresh-query-actor saved-statement execution that passes a validated user identity into the shared evidence chain without template identity/values; the saved entry kind withholds all statement-derived history (digest, preview, full statement); the read error classifies cancellation/deadline before sql.ErrNoRows and the returned snapshot is re-verified for exact id/target/known scope as the same invisible not-found (a reader-contract defense — the production WHERE already scopes by target/id); a non-empty clientExecutionId admits the shared MySQL/TiDB claim before compile/guard and finalizes exactly once (keyless pair or keyed finalize)
-// note: if this file changes, update this header and module README.md.
 package service
 
 import (

@@ -16,4 +16,4 @@ rebuilds the schema with bigint identifiers.
 - Downstream: none (leaf in dependency tree)
 
 ## Update Rule
-If cutover logic or config loading changes, update this file and cmd/cutover-local/main.go L3 header.
+If cutover logic or config loading changes, update this file.

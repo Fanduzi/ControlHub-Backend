@@ -1,8 +1,4 @@
 // Package service tests the bounded schema metadata cache: TTL, eviction, key safety, singleflight identity, and refresh.
-// input: testing, time, sync, fmt, internal/model, QuerySchemaCache
-// output: cache lifetime, eviction, secret-free keys, distinct singleflight keys, and refresh-bypass tests
-// pos: Unit proof for the schema metadata cache used by QuerySchemaService
-// note: if this file changes, update this header and module README.md.
 package service
 
 import (

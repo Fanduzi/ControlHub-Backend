@@ -1,8 +1,4 @@
 // Package api provides HTTP handlers and routing for the ControlHub REST API.
-// input: net/http, encoding/json, verified user-or-machine context, internal/service, internal/model
-// output: resource list/detail, bounded key/key:value inventory filtering, audited writes, principal-bound machine health observations, effective-value reads, versioned override set/clear, and admin bulk preview/confirm handlers
-// pos: HTTP boundary for inventory search, trustworthy operational health attribution, effective-value provenance, audited manual overrides, and bulk mutation review
-// note: if this file changes, update this header and module README.md.
 package api
 
 import (

@@ -1,8 +1,4 @@
 // Package api provides the HTTP handler for POST /query-targets/{id}/explain.
-// input: net/http, strings, internal/model, internal/service
-// output: handleExplainQuery, queryExplainAPI (interface), writeQueryExplainError
-// pos: Phase 38N governed Explain endpoint — fresh-actor, target-scoped, leak-free
-// note: if this file changes, update header, README.md, and internal/openapi/openapi.yaml
 package api
 
 import (

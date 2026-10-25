@@ -1,8 +1,4 @@
 // Package api provides HTTP handlers and routing for the ControlHub REST API.
-// input: encoding/json, net/http, internal/repository/mysql, internal/service
-// output: handleAuthAuditMetrics, handleQueryEvidenceMetrics (query-evidence counter read through the service layer)
-// pos: Admin-only operational metrics endpoints for auth audit persistence failures, untrusted-Bearer suppression, and query-evidence persistence failures (Issue #34)
-// note: if this file changes, update header and README.md
 package api
 
 import (

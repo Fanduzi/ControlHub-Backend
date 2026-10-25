@@ -1,8 +1,4 @@
 // Package service manages named inventory views with authorization.
-// input: context, database/sql, errors, fmt, strings, internal/model
-// output: NamedInventoryViewService, repository interface, controlled errors
-// pos: Personal-owner and shared-admin authorization boundary for inventory views
-// note: if this file changes, update this header and module README.md.
 package service
 
 import (

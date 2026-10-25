@@ -1,8 +1,4 @@
 // Package service reads PostgreSQL schema metadata through the production pool factory.
-// input: context, errors, strings, time, jackc/pgx/v5, jackc/pgx/v5/pgconn, internal/model, OpenPostgresPool
-// output: livePGSchemaCatalog, withPGSchema, pgSchemaCatalog
-// pos: Fixed catalog SQL for T6 metadata; user schema and object names are bind parameters, never SQL text
-// note: if this file changes, update this header and module README.md.
 package service
 
 import (

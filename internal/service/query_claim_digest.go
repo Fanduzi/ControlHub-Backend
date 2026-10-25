@@ -1,15 +1,5 @@
 // Package service computes the canonical request digests for the G9
 // execution-claim protocol.
-// input: crypto/sha256, encoding/binary, sort, strconv, string values already
-// resolved by the typed service entry (never raw client JSON)
-// output: DigestOrdinaryExecute, DigestSavedStatement, DigestRelatedRecords,
-// and the typed digest input structs
-// pos: T10-C claim admission digest (issue #118, frozen G9 request_digest
-// contract) — one deterministic v1 length-prefixed encoding shared by the
-// three typed entries so the same semantic request always occupies the same
-// claim digest and different requests never collide; clientExecutionId and
-// capabilities never reach the byte stream
-// note: if this file changes, update this header and module README.md.
 package service
 
 import (

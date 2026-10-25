@@ -1,8 +1,4 @@
 // Package api provides HTTP handlers and routing for the ControlHub REST API.
-// input: internal/api, internal/model, net/http, net/http/httptest, encoding/json
-// output: TestParseAuditListQuery*, TestListAuditEvents* including actor projection, TestListResourceAuditEvents_Unchanged including environment filtering
-// pos: Validates audit event listing with pagination, filtering, and search
-// note: if this file changes, update header and README.md
 package api
 
 import (

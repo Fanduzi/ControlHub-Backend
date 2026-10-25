@@ -1,8 +1,4 @@
 // Package api provides tests for the Phase 38I query schema metadata handlers.
-// input: bytes, context, fmt, net/http, net/http/httptest, strings, testing, time, chi, internal/model, internal/service
-// output: TestQuerySchema_* (auth, parsing, sentinel mapping, special chars, table definitions, no-secret assertions)
-// pos: Handler + auth middleware + error-mapping coverage for the Phase 38I schema metadata endpoints
-// note: if this file changes, update header and README.md
 package api
 
 import (

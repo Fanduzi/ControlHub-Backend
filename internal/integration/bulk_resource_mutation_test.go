@@ -1,10 +1,6 @@
 //go:build integration
 
 // Package integration tests atomic bulk resource confirmation against MySQL.
-// input: context, database/sql, encoding/json, errors, testing, time, internal/model, internal/repository/mysql, internal/service
-// output: TestConfirmBulkResourceMutationMySQL
-// pos: Real-MySQL proof for stable previews, externalId audit, multi-target rollback, and archived/concurrent lock rejection
-// note: if this file changes, update this header and README.md.
 package integration
 
 import (

@@ -1,8 +1,4 @@
 // Package service tests the T8-A result-contract components.
-// input: encoding/json, errors, fmt, strings, testing, time, unicode/utf8, internal/model
-// output: acceptance coverage A-E — byte-boundary truncation, native-text fidelity, matrix alignment, capability gate ordering, CSV eligibility, and both response-envelope JSON contracts
-// pos: Proves the result-contract component on raw (untruncated) inputs; production scanning, evidence, and HTTP wiring are not changed or claimed by this slice
-// note: if this file changes, update this header and module README.md.
 package service
 
 import (

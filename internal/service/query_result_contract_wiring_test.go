@@ -1,8 +1,4 @@
 // Package service tests the T8-B production wiring of the result contract.
-// input: context, errors, testing, time, internal/model
-// output: Test*_CellTruncated* / Test*_ResultContract* cases proving capability propagation, post-finalize gate ordering, and corrupt-evidence handling through the three governed service paths
-// pos: Service-boundary proof that real Execute/ExecuteSavedStatement/NavigateRelatedRecords flows carry the aligned matrix, apply the capability gate only after the success evidence pair, and treat producer matrix faults as internal failures — never fabricated-clean pages; corrupt-evidence cases delegate Apply to the production QueryDisclosureService so the pre-disclosure validation ordering is really exercised (T8-B-R1)
-// note: if this file changes, update this header and module README.md.
 package service
 
 import (

@@ -1,8 +1,4 @@
 // Package service proves PostgreSQL schema access without opening a server.
-// input: context, database/sql, errors, strings, sync, testing, time, jackc/pgx/v5, jackc/pgx/v5/pgconn, internal/model
-// output: TestPostgreSQLSchema_* for connection identity, effective-schema cache identity, singleflight boundaries, and unsupported definitions
-// pos: Unit boundary for T6 metadata access; credential and resolver call logs use their own mutexes. User SQL execution stays outside this file
-// note: if this file changes, update header and README.md
 package service
 
 import (

@@ -1,8 +1,4 @@
 // Package service provides tests for password hashing and verification.
-// input: internal/service (HashPasswordArgon2id, VerifyPassword, IsLegacyHash)
-// output: TestHashPasswordArgon2id*, TestVerifyPassword*, TestIsLegacyHash*, TestDecodeArgon2id*
-// pos: Validates Argon2id hashing, legacy SHA-256 verification, format detection, and strict parameter enforcement
-// note: if this file changes, update header and README.md
 package service
 
 import (

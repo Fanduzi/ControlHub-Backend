@@ -1,8 +1,3 @@
--- input: governed resources and audit actors
--- output: per-source observations and versioned manual overrides
--- pos: minimal persistence for CMDB effective-value projection
--- note: if this file changes, update this header and internal/repository/mysql/README.md.
-
 -- +goose Up
 create table resource_observed_values (
   resource_id bigint unsigned not null,

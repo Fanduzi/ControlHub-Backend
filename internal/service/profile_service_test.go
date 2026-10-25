@@ -1,8 +1,4 @@
 // Package service provides tests for profile write operations.
-// input: internal/service ProfileService, internal/model, testing
-// output: TestProfileService* functions
-// pos: Validates profile write business rules: strict field validation, PUT full replacement, PATCH partial merge, Database Proxy/Control Plane identity
-// note: if this file changes, update header and README.md
 package service
 
 import (

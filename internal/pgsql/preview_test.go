@@ -1,8 +1,4 @@
 // Package pgsql — unit tests for SafeStatementPreview.
-// input: SQL text with literals, dollar-quoted bodies, comments, numbers
-// output: proofs that no literal body or comment text survives the preview
-// pos: T10-C-R1 preview masking coverage (issue #118)
-// note: if this file changes, update header and README.md
 package pgsql
 
 import (

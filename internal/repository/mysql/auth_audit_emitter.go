@@ -1,8 +1,4 @@
 // Package mysql provides MySQL-backed repository implementations.
-// input: database/sql, expvar, internal/model
-// output: NewAuthAuditEmitter, AuthAuditEmitter, AuthAuditPersistenceFailures
-// pos: MySQL data access for auth audit event persistence with fail-open semantics
-// note: if this file changes, update header and README.md
 package mysql
 
 import (

@@ -1,10 +1,6 @@
 //go:build integration
 
 // Package integration — real-MySQL HTTP proof for keyed MySQL/TiDB ordinary, saved-statement, and related-navigation execution.
-// input: shared MySQL fixture, real api router, real auth/repository/disclosure/executor stack, a clientExecutionId key
-// output: TestMySQLKeyedHTTP_{Execute,Saved,Navigation} — one keyed golden-path execution each, claim-backed terminal evidence, 409 replay/conflict, keyless compatibility
-// pos: Real-DB HTTP acceptance boundary proving the keyed claim protocol occupies exactly one claim per entry, finalizes exactly one keyed terminal row with empty MySQL/TiDB connection scope, and leaves the legacy keyless path untouched
-// note: if this file changes, update this header and module README.md.
 package integration
 
 import (

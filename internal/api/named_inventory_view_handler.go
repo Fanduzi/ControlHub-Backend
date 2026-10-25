@@ -1,8 +1,4 @@
 // Package api exposes named inventory view HTTP handlers.
-// input: context, errors, net/http, chi/v5, internal/model, internal/service
-// output: user-visible/shared-only list, create/update/delete handlers, and controlled errors
-// pos: HTTP boundary for user personal/shared and machine shared-only named inventory views
-// note: if this file changes, update this header and module README.md.
 package api
 
 import (

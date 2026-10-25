@@ -1,8 +1,4 @@
 // Package integration provides MySQL-backed integration tests.
-// input: scripts/openapi-fuzz.sh, scripts/schemathesis.toml, scripts/README.md
-// output: OpenAPI fuzz exclusion-contract assertions
-// pos: Prevents silent drift of Schemathesis exclusions away from the documented governance contract
-// note: if changed, update this header and README.md
 package integration
 
 import (

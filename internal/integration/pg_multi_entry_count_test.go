@@ -1,18 +1,6 @@
 //go:build integration
 
 // Package integration — server-side execution-count proofs for PG-MULTI-ENTRY.
-// input: isolated PG16 container with pg_stat_statements preloaded (test-only
-// fixture option), real MySQL production dependencies, lead-authored
-// measurement SQL
-// output: TestPGMultiEntry_ServerExecutionCount — actual completed user
-// result statements counted on the server (the __chub_w transport marker
-// excludes every fixed metadata/touch probe); duplicate, capability,
-// cross-domain, ordinary, schema-changed, and alternate-schema-source
-// retries send nothing; a fresh capable key sends once more
-// pos: stage 4 packet item 2 — send-side counting complements the send-side
-// UserSQLSent fact; persisted history/audit counts are never used as send
-// proof, and completed-call statistics never count aborted statements
-// note: if this file changes, update this header and module README.md.
 package integration
 
 import (

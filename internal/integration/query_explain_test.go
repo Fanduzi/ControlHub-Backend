@@ -1,9 +1,5 @@
 // Package integration provides Testcontainers-backed tests for Phase 38N
 // governed Explain.
-// input: context, database/sql, errors, fmt, strings, testing, internal/model, internal/repository/mysql, internal/service, canonical manual-origin target fixtures
-// output: TestQueryExplain_* — real MySQL EXPLAIN FORMAT=JSON, no history row, audit secrecy
-// pos: Phase 38N — prove Explain cannot execute the bare SELECT, cannot leak raw plan, cannot create normal execution history
-// note: if this file changes, update header and README.md
 //go:build integration
 
 package integration

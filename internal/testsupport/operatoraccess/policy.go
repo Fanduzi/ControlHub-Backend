@@ -1,8 +1,4 @@
 // Package operatoraccess describes every protected API operation and authorization class for tests.
-// input: standard library only
-// output: Class, Operation, All (including topology workspace, schema metadata, ingestion preview/confirm, health-observation ingestion, relationship-rule discovery, and admin-only ops metrics)
-// pos: Single source of truth shared by router, OpenAPI, and integration boundary tests
-// note: if this file changes, update this header and module README.md.
 package operatoraccess
 
 // Class is the authorization class of a protected operation. Consumers derive

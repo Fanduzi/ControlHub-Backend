@@ -1,10 +1,6 @@
 //go:build integration
 
 // Package integration provides MySQL-backed integration tests.
-// input: disposable MySQL, fully wired API router, net/http/httptest, Schemathesis CLI
-// output: OpenAPI fuzz integration coverage for every served operation, including machine-principal lifecycle routes
-// pos: Verifies the production dependency graph and served contract with authenticated generated requests
-// note: if this file changes, update header and README.md
 package integration
 
 import (

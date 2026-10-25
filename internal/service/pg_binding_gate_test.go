@@ -1,14 +1,5 @@
 // Package service unit-covers the deterministic parts of the T7-S2 binding
 // gate without a database.
-// input: testing, context, time, errors, fmt, jackc/pgx/v5/pgconn
-// output: unit tests for remaining-budget millisecond math, context deadline
-// derivation, the cancelled/timeout/internal error classifier, approved-set
-// identity assembly, resolver pinned-schema normalization, and identifier
-// quoting used by probe SQL
-// pos: offline guarantee proofs for T7-S2 — the budget math must never emit a
-// zero/disabling timeout, cancellation must never be reported as a remote
-// stop, and quoted identifiers must stay byte-exact for catalog functions
-// note: if this file changes, update this header and module README.md.
 package service
 
 import (

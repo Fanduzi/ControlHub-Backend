@@ -1,8 +1,4 @@
 // Package service provides tests for the PostgreSQL template compiler dialect.
-// input: errors, reflect, strings, testing, internal/pgsql
-// output: TestTemplateStatementCompilerPG* — $k binding, lexical boundary, and real-guard/pagination rejection proofs
-// pos: G8 compile-path evidence (T11) — compiled statements keep generated $k markers and bound args, never interpolate values, and still owe GuardPG and the G6 pagination gate; compiler-level proofs, not governed execution-chain proof
-// note: if this file changes, update header and README.md
 package service
 
 import (

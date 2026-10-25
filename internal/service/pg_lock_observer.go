@@ -1,21 +1,5 @@
 // Package service audits the attempt transaction's actually-held relation
 // locks through an independent observation connection.
-// input: attempt context with deadline, T2-validated *pgx.ConnConfig copy,
-// PGBindResult approved/probe/edge records, recorded backend pid +
-// virtualtransaction
-// output: auditLockSet, collectDerivedIdentities, pgAuditVerdict —
-// toast-attributed extra identities plus a three-state Verified/Mismatch/
-// Unavailable verdict over the (database_oid, relation_oid) held set
-// pos: T7-S4 lock-set audit (frozen G10 mechanism 5c) — the execution
-// transaction stays open and locked while a second connection reads the
-// backend's pg_locks rows in one shot; identity is (database, relation) with
-// shared catalogs at database 0; only granted locks count as held evidence;
-// every held lock must explain through approved ∪ probe whitelist ∪
-// ownership edges (index/TOAST/inheritance), and every bound entity ref —
-// plus the private navigation source relation when a navigation binding is
-// present — must appear in the held set (derived approved records are
-// explainable, not required — a materialized view's deps are never locked)
-// note: if this file changes, update this header and module README.md.
 package service
 
 import (

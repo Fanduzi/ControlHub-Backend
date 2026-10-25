@@ -1,8 +1,4 @@
 // Package model provides domain entities for the resource management system.
-// input: fmt, strings packages
-// output: RelatedRecordNavigationRequest, RelatedRecordNavigationSource, RelatedRecordNavigationResponse, validation constants
-// pos: Request/response types for the governed FK record navigation endpoint (Phase 38J)
-// note: if this file changes, update header and README.md
 package model
 
 import (

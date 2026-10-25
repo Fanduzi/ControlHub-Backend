@@ -1,11 +1,6 @@
 // Package main tests the bootstrap-admin command's unit-testable seams:
 // auth-compatible hashing, required-credentials validation, and password-safe
 // reporting.
-// input: testing, bytes, strings, os
-// output: TestHashPassword_*, TestResolveBootstrapConfig_*, TestPrintReport_* unit tests
-// pos: Locks the command contract: SHA-256 hashing stays login-compatible, both
-// credentials are mandatory, and neither password nor hash ever reaches output.
-// note: if this file changes, update header and README.md
 package main
 
 import (

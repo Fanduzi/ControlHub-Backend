@@ -1,8 +1,4 @@
 // Package service provides tests for resource and relation write flows.
-// input: internal/service write APIs, internal/model, testing
-// output: TestResourceService* and TestRelationService* functions, including the complete relationship matrix
-// pos: Validates resource identity and complete relationship rules before repository persistence
-// note: if this file changes, update header and README.md
 package service
 
 import (

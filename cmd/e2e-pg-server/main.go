@@ -1,9 +1,5 @@
 // Package main is the TEST/CI-ONLY long-lived E2E listener for the governed
 // PostgreSQL query workbench browser path (issues #121/#122).
-// input: config.LoadDotEnv/Load/ValidateJWTSecret, CONTROLHUB_E2E_FIXTURE_MODE, DATABASE_DSN (disposable *_e2e only), E2E_RUN_ID, serverboot.Build, api.NewRouter, net.Listen, os/signal NotifyContext (SIGTERM/SIGINT)
-// output: main() fixture binary; GET /e2e/assembly run-identity document
-// pos: TEST-ONLY listener serving the exact production dependency graph
-// note: if the fixture gate or identity surface changes, update this header, cmd/e2e-pg-server/README.md, and the frontend E2E harness docs
 //
 // This binary serves the shared serverboot assembly plus the two
 // construction-time gates a real browser needs — the execution service's

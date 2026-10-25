@@ -1,16 +1,4 @@
 // Package service proves the governed executor's offline verification logic.
-// input: constructed FieldDescriptions, rewrite proof records, bound refs,
-// observed pg_locks row sets
-// output: unit tests for evaluatePGLockAudit (three-state verdict),
-// verifyPGExpectedLayout (pre-wire expected-record validation incl. the
-// catalog/binding/guard identity-correspondence fault matrix),
-// verifyPGPositions (per-position FD identity), pgColumnTypeName (G7 naming
-// and the stable unrecognized marker), and projectPGPublicResult (witness
-// strip)
-// pos: T7-S3/S4 offline evidence tests — verdict and position checks are pure
-// functions so every verdict arm and every contradiction form is covered
-// without a database
-// note: if this file changes, update this header and module README.md.
 package service
 
 import (

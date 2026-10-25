@@ -1,15 +1,4 @@
 // Package service tests the keyed related-record navigation PG entry.
-// input: testing, context, errors, internal/model fixtures, fake claim repo +
-// injected pgNavPrepare/pgOutcomeFn seams
-// output: TestPGNavigationClaimed_* / TestPGNavigation* — shape ordering,
-// access/prep refusals with the NULL-key related_record_navigation pair,
-// plan/binding consistency, keyed finalize evidence, and relation metadata
-// scoped to terminal success
-// pos: PG-MULTI-ENTRY stage 3 unit coverage — the navigation entry converges
-// on the shared claimed runner; every pre-claim refusal writes the fixed
-// NULL-key pair under the navigation audit family, and generated SQL/bound
-// locators never reach errors or history
-// note: if this file changes, update this header and module README.md.
 package service
 
 import (

@@ -1,8 +1,4 @@
 // Package migrations_test verifies migration SQL contracts without a database.
-// input: os, strings, and testing
-// output: migration 00027 collector ledger/state schema and data-preserving rollback contract tests
-// pos: Fast pre-MySQL regression coverage for collector lifecycle persistence
-// note: if this file changes, update this header and module README.md.
 package migrations_test
 
 import (

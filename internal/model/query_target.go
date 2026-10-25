@@ -1,8 +1,4 @@
 // Package model provides domain entities for the resource management system.
-// input: fmt package
-// output: QueryTarget read-model types incl. per-connection identity/runtime, query capability/readiness/safety enums, QueryTargetSafetyStateDictionary + Validate
-// pos: Read-only query target context for the Query Workbench (Phase 36 shell + Phase 37 readiness)
-// note: if this file changes, update header and README.md
 package model
 
 import "fmt"

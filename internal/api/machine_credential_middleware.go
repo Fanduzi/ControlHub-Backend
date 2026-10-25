@@ -1,8 +1,4 @@
 // Package api provides HTTP handlers and routing for the ControlHub REST API.
-// input: context, errors, net/http, strings, internal/model, internal/service
-// output: machine-credential authentication, user-or-machine route guard, and identity context
-// pos: Opaque non-browser credential and scoped-route boundary, independent of user sessions
-// note: if this file changes, update this header and module README.md.
 package api
 
 import (

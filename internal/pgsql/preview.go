@@ -1,13 +1,4 @@
 // Package pgsql implements the PostgreSQL governed read-only query front half.
-// input: raw user SQL text
-// output: SafeStatementPreview — a disclosure-safe statement preview for
-// execution-history rows
-// pos: T10-C-R1 history preview masking — reuses the G8 lexical scan
-// constructs: '..' E'..' B'..' X'..' U&'..' literals, $tag$ dollar-quoted
-// bodies, -- and nested /* */ comments, ".." quoted identifiers, and numeric
-// tokens. Literal bodies and comment text never survive into the preview;
-// keywords and identifiers (quoted or not) do.
-// note: if this file changes, update header and README.md
 package pgsql
 
 import (

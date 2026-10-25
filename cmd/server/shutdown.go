@@ -1,8 +1,4 @@
 // Package main provides the ControlHub application entry point.
-// input: context, errors, net, net/http, os, time
-// output: shutdownDrainTimeout, runServer, drainAndExit
-// pos: HTTP server lifecycle seam — serves until a SIGTERM/SIGINT shutdown signal, then stops new traffic and drains in-flight handlers for at most the fixed ten-second bound (Issue #37); a clean drain exits 0, and bound exhaustion, server failure, or a second signal exits 1 after exactly one fixed safe log
-// note: if the shutdown contract (bound, exit codes, log wording, forced-second-signal behavior) changes, update this file, main.go's header, and cmd/server/README.md
 package main
 
 import (

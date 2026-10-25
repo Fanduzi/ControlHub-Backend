@@ -1,8 +1,4 @@
 // Package service provides server-owned business rules for resource relationships.
-// input: internal/model resource taxonomy and RelationService repository lookup
-// output: shared relationship validation and source-specific RelationshipRulesResponse discovery data
-// pos: Single authority for allowed source/target pairs, environment policy, and console discovery
-// note: if this file changes, update this header and module README.md.
 package service
 
 import (

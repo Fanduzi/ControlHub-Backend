@@ -1,9 +1,4 @@
 // Package main is the local/dev-only query credential METADATA seed command.
-//
-// input: os, strconv, strings, errors, io, database/sql, context, fmt, log, config, mysql repos, service seeder + target service + dev target fixture
-// output: main() — dev-only binary (go run ./cmd/querydev / make seed-query-dev-credential / make seed-query-dev-target); QUERY_DEV_DATABASE/QUERY_DEV_DEFAULT_SCHEMA carry the PG connection identity
-// pos: Explicit, idempotent local/dev seed of one query target's credential metadata so the Query Workbench can reach readiness. With QUERY_DEV_ALLOW_TARGET_FIXTURE=true it also ENSURES a local database_instance target + profile (host:port from the credential DSN CONTROLHUB_QUERY_CREDENTIAL_<REF>) before seeding. NOT auto-enabled in production.
-// note: Writes METADATA only (resource_id, engine, credential_ref, enabled, environment_policy). The DSN is read from CONTROLHUB_QUERY_CREDENTIAL_<REF> by the resolver and validated to bind to the target, but it is never stored, logged, or printed. DATABASE_DSN opens the ControlHub metadata DB only; the credential DSN is what is parsed for host:port.
 package main
 
 import (

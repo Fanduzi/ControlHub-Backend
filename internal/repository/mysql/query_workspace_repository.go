@@ -1,8 +1,4 @@
 // Package mysql provides MySQL-backed repository implementations.
-// input: context, database/sql, encoding/json, errors, fmt, internal/model, internal/service
-// output: QueryWorkspaceRepository Get/OCC Put and service-parity ErrQueryWorkspaceConflict
-// pos: One-row-per-owner JSON aggregate persistence for query worksheets
-// note: if this file changes, update this header and module README.md.
 package mysql
 
 import (

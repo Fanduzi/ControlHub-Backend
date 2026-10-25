@@ -1,8 +1,4 @@
 // Package api provides HTTP handlers and routing for the ControlHub REST API.
-// input: net/http/httptest, internal/model, internal/service
-// output: machine-principal HTTP boundary tests
-// pos: Admin lifecycle and machine-credential error contract
-// note: if this file changes, update this header and module README.md.
 package api
 
 import (

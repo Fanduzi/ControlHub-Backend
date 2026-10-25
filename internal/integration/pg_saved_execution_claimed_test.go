@@ -1,11 +1,6 @@
 //go:build integration
 
 // Package integration — real PG16 + real MySQL vertical for the keyed saved-statement entry (PG-MULTI-ENTRY stage 2, issue #118 + #119).
-// input: shared MySQL fixture (real target/credential/claim/execution/saved repositories), a disposable PostgreSQL 16 with the restricted ro_disc role, and the production ExecutePGSavedStatementClaimed entry
-// output: TestPGMultiEntrySaved_* — vertical flow over static and parameterized templates, scope/ownership denials, per-call re-read, pre-claim value rejections, native-$n and LIMIT :n refusal, pinned-schema and connection-context enforcement, withheld statement persistence, the post-finalize delivery gate, finalize-failure precedence, and the update-after-claim compiled-snapshot race control
-// pos: the saved entry converges on the same claim/finalize/delivery runner as the ordinary entry; these tests drive the production chain end to end — no manual claim/finalize composition, no fake outcome function
-// note: if this file changes, update this header and module README.md.
-
 package integration
 
 import (

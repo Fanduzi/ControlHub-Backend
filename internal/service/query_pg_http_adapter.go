@@ -1,9 +1,4 @@
 // Package service adapts the three HTTP-facing governed methods onto the keyed PostgreSQL orchestration entries.
-// input: context, internal/model — trusted identity, dispatched target, decoded request models
-// output: executePGHTTP, executeSavedPGHTTP, navigatePGHTTP — narrow transport adapters that translate public requests into the internal keyed entries and project PGClaimedOutcome back into the shared response envelopes; no second claim/finalize/guard path exists here
-// pos: T12 PG-HTTP dispatch seam (issue #120) — reached only when the construction-time WithPGHTTPEntries capability is wired and the trusted target engine is postgresql. Request adaptation is verbatim: database and schema keep their raw bytes, the client key is never normalized, and the saved/navigation requests add no SQL, declarations, Args, or target selectors. Response projection consumes only governed artifacts — the T12-R1 limitApplied reads the coordinator snapshot's executed-window FetchCount, never the MaxRows budget; the disclosed result, the unique PageResult window facts, and the runner-filled delivery scalars — never raw executor internals (OIDs, attnum, witness columns, sources, or binding metadata).
-// note: if this file changes, update this header and module README.md.
-
 package service
 
 import (

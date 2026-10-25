@@ -1,10 +1,6 @@
 //go:build integration
 
 // Package integration provides real-MySQL saved-statement template-execution tests.
-// input: shared MySQL fixtures, api router, saved-statement/execution services and repositories
-// output: template-execution integration tests (incl. disclosure-change paging regression)
-// pos: Real-DB acceptance boundary for governed saved-statement execution
-// note: if this file changes, update header and README.md
 package integration
 
 import (

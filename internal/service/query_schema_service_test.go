@@ -1,8 +1,4 @@
 // Package service tests QuerySchemaService governance, audit, error mapping, and cache integration.
-// input: context, encoding/json, errors, strings, testing, time, internal/model, fake inspector and access doubles
-// output: database, schema, object, detail, relationship-map, and table-definition service tests
-// pos: Unit proof that schema metadata keeps MySQL behavior and fails closed on access errors
-// note: if this file changes, update this header and module README.md.
 package service
 
 import (

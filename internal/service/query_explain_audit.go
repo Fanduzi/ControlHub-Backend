@@ -1,8 +1,4 @@
 // Package service provides the audit recorder for Phase 38N Explain.
-// input: context, internal/model, internal/repository/mysql (via QueryExecutionRepository)
-// output: ExplainAuditRecorder (implements QueryExplainAuditRecorder)
-// pos: Records fixed query.explain audit events with no statement/plan/error text
-// note: if this file changes, update header and README.md
 package service
 
 import (

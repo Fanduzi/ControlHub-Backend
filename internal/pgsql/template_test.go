@@ -1,8 +1,4 @@
 // Package pgsql implements the PostgreSQL governed read-only query front half.
-// input: synthetic template SQL strings
-// output: TestScanTemplatePlaceholders* — G8 lexical matrix: recognized markers, preserved constructs, controlled rejections
-// pos: G8 scan contract (T11) — placeholder recognition is lexical, never a global replace; casts, literals, comments, dollar quotes, and array slices pass through verbatim while native $n input fails loud
-// note: if this file changes, update header and README.md
 package pgsql
 
 import (

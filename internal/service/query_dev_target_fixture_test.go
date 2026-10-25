@@ -1,8 +1,4 @@
 // Package service validates the disposable query target fixture service.
-// input: fake dictionaries/resource store and query fixture configuration
-// output: validation, identity ownership, idempotency, and fail-closed unit tests
-// pos: unit contract coverage for query dev target orchestration
-// note: if this file changes, update header and README.md
 package service
 
 import (

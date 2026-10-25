@@ -2,18 +2,6 @@
 
 // Package service proves the T7-S3/S4 governed executor end to end against a
 // disposable PostgreSQL 16 server.
-// input: context, errors, fmt, strings, sync, testing, time, jackc/pgx/v5,
-// jackc/pgx/v5/pgconn, internal/pgsql
-// output: acceptance tests for the frozen contract — production
-// OpenPostgresPool → ExecutePGGoverned → PGBind → RewriteFromGuardPaginated →
-// ExecParams → per-position verification → second-connection lock audit →
-// cleanup: simple/constant/zero-row verticals, G7 native-text fidelity,
-// S1/S2 identity layouts, T4/T5 equivalence, blocked-DDL drift, unexplained
-// lock Mismatch, timeout/cancel classification, and resource release
-// pos: T7-S3/S4 real-PostgreSQL acceptance — the restricted ro_bind account
-// runs the whole production chain; admin only builds fixtures and injects
-// controlled interleaves
-// note: if this file changes, update this header and module README.md.
 package service
 
 import (

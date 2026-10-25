@@ -3,10 +3,6 @@
 // engine check, credential validation, policy enforcement, secret resolution,
 // and DSN binding validation so Execute and InspectCredentialRuntime can never
 // drift on governance rules.
-// input: context, database/sql, errors, jackc/pgx/v5, internal/model
-// output: BoundTargetAccess, TargetAccessError, TargetAccessResolver, NewTargetAccessResolver, ResolveMetadata, ResolvePGExecution
-// pos: Shared governed target access resolution — the single path from target ID to bound DSN
-// note: if this file changes, update header and README.md
 package service
 
 import (

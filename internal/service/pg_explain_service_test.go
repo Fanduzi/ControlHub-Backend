@@ -1,12 +1,4 @@
 // Package service provides tests for the PostgreSQL governed Explain path.
-// input: context, errors, testing, time, internal/model, internal/service
-// output: TestQueryExplainServicePG* covering the release gate, engine
-// dispatch, (target,database) access, pg guard, schema defaulting, audit
-// pos: PG sibling of query_explain_service_test.go — the runner is stubbed;
-// the integration/live path is covered against a real PostgreSQL target
-// note: proves Explain never reaches an unwrapped SELECT and never creates
-// a query_executions row — the runner receives statement text it may only
-// send as EXPLAIN (FORMAT JSON) …
 package service
 
 import (

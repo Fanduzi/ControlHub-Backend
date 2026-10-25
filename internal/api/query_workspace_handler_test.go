@@ -1,8 +1,4 @@
 // Package api provides tests for query-workspace HTTP handlers.
-// input: context, encoding/json, net/http, net/http/httptest, strings, testing, internal/model, internal/service
-// output: authenticated owner GET/PUT, strict JSON, size bound, validation, and OCC error-mapping tests
-// pos: HTTP contract regression coverage for the singular query-workspace aggregate route
-// note: if this file changes, update this header and module README.md.
 package api
 
 import (

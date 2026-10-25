@@ -1,15 +1,6 @@
 //go:build integration
 
 // Package service — real-PostgreSQL T9-B disclosure acceptance.
-// input: the shared pgExecFixture (real PG16, restricted role) plus a
-// per-attempt fake QueryDisclosureReader for exact policy control
-// output: the acceptance matrix for the production chain
-// bind/rewrite→record validation→disclosure preflight→ExecParams→positional
-// verification→lock audit→cleanup→transform — including the zero-wire
-// evidence for every pre-wire rejection
-// pos: T9-B disclosure closure real-executor layer (issue #117); the real
-// MySQL policy-store close-out lives in internal/integration
-// note: if this file changes, update this header and module README.md.
 package service
 
 import (

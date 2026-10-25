@@ -1,8 +1,4 @@
 // Package service provides tests for the MySQL Explain executor.
-// input: testing, internal/service
-// output: TestExplainStatement*, TestDispatchSQLForExplain* (structural enforcement)
-// pos: Phase 38N — prove the executor cannot run the bare guarded SELECT
-// note: the integration test covers the real MySQL path; these unit tests prove the structural seam
 package service
 
 import (

@@ -1,8 +1,4 @@
 // Package api provides HTTP handlers and routing for the ControlHub REST API.
-// input: context, errors, net/http, strconv, chi, internal/model, internal/service
-// output: querySchemaAPI interface, handleListSchemaDatabases, handleListSchemaSchemas, handleListSchemaObjects, handleGetObjectDetails, handleGetTableDefinition, handleGetRelationshipMap, writeQuerySchemaError
-// pos: HTTP handlers for GET /query-targets/{id}/schema/databases, /schema/schemas, /schema/objects, /schema/object-details, /schema/table-definition, /schema/relationship-map
-// note: if this file changes, update header and README.md
 package api
 
 import (

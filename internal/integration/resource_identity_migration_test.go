@@ -1,10 +1,6 @@
 //go:build integration
 
 // Package integration provides fail-loud migration coverage for CMDB identity.
-// input: testing, strings, pressly/goose
-// output: TestResourceIdentityMigration_DuplicateLegacyExternalIDFailsBeforeSchemaChange
-// pos: Proves unsafe legacy externalId data aborts migration 21 without dropping source data
-// note: if this file changes, update header and README.md
 package integration
 
 import (

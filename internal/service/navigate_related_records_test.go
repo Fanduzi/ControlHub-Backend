@@ -1,8 +1,4 @@
 // Package service provides tests for the Phase 38J related-record navigation.
-// input: context, errors, strings, testing, time, internal/model
-// output: TestNavigateRelatedRecords_* (fakes for inspector, executor bound queries; navScaffoldWithDisclosure for injectable disclosure planners)
-// pos: Unit tests for FK navigation governance, parameter binding, history/audit, error mapping including Preflight dual-wrap vs Apply exclusive ErrQueryDisclosureBlocked for HTTP (Issue #48), and inspector-phase cancellation/deadline terminal evidence (Issue #40) whose pre-claim outcome returns the bare canonical sentinel
-// note: if this file changes, update header and README.md
 package service
 
 import (

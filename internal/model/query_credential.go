@@ -1,8 +1,4 @@
 // Package model provides domain entities for the resource management system.
-// input: fmt, unicode/utf8 packages
-// output: QueryCredential* request/response/runtime-status types, Validate methods, ValidateConnectionName + composite-identity contract
-// pos: Phase 38A query credential metadata management contract (metadata only; never DSN/password/host/port/actor)
-// note: if this file changes, update header and README.md
 package model
 
 import (

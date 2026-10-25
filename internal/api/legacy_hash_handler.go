@@ -1,8 +1,4 @@
 // Package api provides HTTP handlers and routing for the ControlHub REST API.
-// input: net/http, internal/service
-// output: handleGetLegacyHashCount
-// pos: Admin-only handler for the non-identity-bearing legacy password hash count
-// note: if this file changes, update header and README.md
 package api
 
 import (

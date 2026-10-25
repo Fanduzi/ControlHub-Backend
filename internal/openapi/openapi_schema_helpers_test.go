@@ -1,8 +1,4 @@
 // Package openapi_test verifies the embedded OpenAPI contract.
-// input: kin-openapi parser, parsed OpenAPI document
-// output: shared schema/parameter shape assertion helpers
-// pos: Single source of shape assertions for the OpenAPI contract tests
-// note: if this file changes, update header and README.md
 package openapi_test
 
 import (

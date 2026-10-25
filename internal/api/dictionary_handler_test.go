@@ -1,10 +1,4 @@
 // Package api provides HTTP handlers and routing for the ControlHub REST API.
-// input: internal/api, internal/model, net/http, net/http/httptest, encoding/json
-// output: TestListEnvironments/Owners/Roles/ResourceTypes/RelationTypes/LifecycleStatuses/HealthStatuses/ResourceSubtypes including service worker
-// pos: Validates all dictionary endpoints return correct items, including Domain Name dns, Virtual IP floating, and service worker
-// output: TestListEnvironments/Owners/Roles/ResourceTypes/RelationTypes/LifecycleStatuses/HealthStatuses/ResourceSubtypes
-// pos: Validates all dictionary endpoints return correct items, including Database Proxy technology subtypes and Control Plane ha_monitor
-// note: if this file changes, update header and README.md
 package api
 
 import (

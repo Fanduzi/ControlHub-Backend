@@ -1,8 +1,4 @@
 // Package model provides tests for the QueryTargetSafetyState enum chain.
-// input: slices, strings, testing
-// output: TestQueryTargetSafetyState_*, TestQueryTargetSafetyStateDictionary_*
-// pos: Validates the Phase 37 readonly_sandbox_enabled enum value + dictionary + fail-closed Validate
-// note: if this file changes, update header and README.md
 package model
 
 import (

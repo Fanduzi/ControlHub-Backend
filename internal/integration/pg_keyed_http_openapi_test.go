@@ -1,10 +1,6 @@
 //go:build integration
 
 // Package integration — PG-HTTP-T12-R2 contract proof: real responses from the enabled PG assembly validated against the repository's current internal/openapi/openapi.yaml via kin-openapi, plus load-bearing negative controls on tampered copies.
-// input: the enabled fixture's real router, disposable PG16, embedded openapi.YAML parsed by kin-openapi loaders and the legacy router
-// output: TestPGKeyedHTTP_OpenAPIResponseContract — per-route 200 + one reachable controlled error validated per operation/status/content-type, and tampered copies of a real success body rejected by the same validator
-// pos: R2-B — replaces subset-struct decoding as the public-envelope proof; cross-field semantics OpenAPI cannot express stay in the adjacent tests
-// note: if this file changes, update this header and module README.md.
 package integration
 
 import (

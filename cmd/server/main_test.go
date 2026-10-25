@@ -1,9 +1,5 @@
 // Package main provides tests for the ControlHub application entry point
 // wiring.
-// input: serverboot.Build, internal/config
-// output: TestBuildDependencies_WiresResourceAndProfileServices and query workspace/statement dependency assertions
-// pos: Proves production DI wires resource/profile plus query workspace and private statement endpoints
-// note: if this file changes, update header and README.md
 package main
 
 import (

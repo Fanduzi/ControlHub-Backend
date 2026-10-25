@@ -1,8 +1,4 @@
 // Package mysql tests atomic bulk resource confirmation.
-// input: context, errors, regexp, testing, time, sqlmock, and service contracts
-// output: bulk transaction, externalId persistence, locked validation, and read-only preview coverage
-// pos: Focused repository bulk mutation behavior, including normal update validation parity
-// note: if this file changes, update this header and module README.md.
 package mysql
 
 import (

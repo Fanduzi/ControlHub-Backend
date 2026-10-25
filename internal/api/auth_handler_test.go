@@ -1,8 +1,4 @@
 // Package api provides HTTP handlers and routing for the ControlHub REST API.
-// input: internal/api, internal/model, net/http, net/http/httptest, encoding/json
-// output: TestLogin, TestLoginInvalidPassword, TestLoginRejectsMissingEmail, TestLoginRejectsMissingPassword, TestLoginRejectsMalformedJSON
-// pos: Validates login success and failure flows
-// note: if this file changes, update header and README.md
 package api
 
 import (

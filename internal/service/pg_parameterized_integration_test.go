@@ -2,18 +2,6 @@
 
 // Package service proves the trusted PG text-parameter substrate end to end
 // against the disposable PostgreSQL 16 lab.
-// input: pgExecFixture, pgExecLabConfig ro_bind, compilePGPlan template
-// inputs, *pgParameterPlan on PGExecuteInput
-// output: TestPGExecute_Parameterized* — typed value binding through the
-// full governed chain (text fidelity incl. t/f and int64 bounds, empty vs
-// NULL, occurrence-order numbering, static plan, CTE/JOIN/Q+D shapes),
-// LIMIT :n refused by the real pagination gate before the wire,
-// server-side parameter type errors mapped to the fixed safe rejection, and
-// R1-1 error-origin proofs (statement/data failures under a bound plan keep
-// the backend taxonomy; only the parameter's own cast rejects)
-// pos: PG-MULTI-ENTRY stage 1 real-PostgreSQL acceptance — parameters bind
-// by $k number on the wire, values never enter statement text
-// note: if this file changes, update header and README.md
 package service
 
 import (

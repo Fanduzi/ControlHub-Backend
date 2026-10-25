@@ -1,8 +1,4 @@
 // Package api provides tests for query route auth middleware.
-// input: crypto/hmac, crypto/sha256, encoding/base64, encoding/hex, net/http, net/http/httptest, time, internal/service, internal/model
-// output: TestAuthenticatedActor*, TestEightHourOldBearerIsExpired, TestFreshQueryActor*, TestAuthzVersion*, TestGeneric401*
-// pos: Tests bearer extraction, current Authorization Version verification, actor context, query TTL, generic 401 equivalence
-// note: if this file changes, update header and README.md
 package api
 
 import (

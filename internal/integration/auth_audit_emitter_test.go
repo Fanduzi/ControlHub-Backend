@@ -2,10 +2,6 @@
 
 // Package integration provides real-MySQL coverage for authentication and
 // authorization audit event emission.
-// input: context, database/sql, encoding/json, fmt, log, net/http, testing, internal/api, internal/repository/mysql, internal/service
-// output: TestAuthAudit_* integration cases
-// pos: Proves auth audit events are persisted correctly against real MySQL, fail-open on inject errors (login, bearer, and role-denied 403 outcomes), and never contain prohibited values
-// note: if this file changes, update header and README.md
 package integration
 
 import (

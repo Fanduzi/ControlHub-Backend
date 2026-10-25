@@ -11,3 +11,9 @@
 - **Triage or label changes:** Read [triage-labels.md](docs/agents/triage-labels.md).
 - **Feature/design work, resolved product language, or accepted trade-offs:** Read [domain.md](docs/agents/domain.md), relevant [CONTEXT.md](CONTEXT.md) entries, and applicable [decision records](docs/decisions/).
 - **Setup, running the project, or command lookup:** Read [README.md](README.md) and [Makefile](Makefile).
+
+## Documentation convention
+
+L3 file headers (`input:`, `output:`, `pos:`, `note:`) are retired in this
+repository. Do not add them to source files. Module `README.md` files (L2) and
+the root architecture map (L1) remain in use.

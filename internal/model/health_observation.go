@@ -1,8 +1,4 @@
 // Package model provides domain entities for resource health observations.
-// input: time.Time observation timestamps and caller-supplied freshness thresholds
-// output: HealthObservation, HealthFreshness, threshold lookup, and conservative effective health
-// pos: Pure domain contract for observed resource health, freshness, and effective status
-// note: if this file changes, update this header and module README.md.
 package model
 
 import "time"

@@ -1,11 +1,6 @@
 //go:build integration
 
 // Package integration verifies topology behavior against disposable MySQL.
-// input: internal/model, internal/repository/mysql, internal/service, Testcontainers-backed MySQL
-// output: topology service and bounded repository integration tests, including candidate overflow and effective health
-// pos: Proves topology traversal, cap-plus-sentinel candidates, and bounded multi-observer health semantics against real MySQL
-// note: if this file changes, update this header and module README.md.
-
 package integration
 
 import (

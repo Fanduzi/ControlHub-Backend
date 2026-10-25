@@ -1,8 +1,4 @@
 // Package model provides domain entities for the resource management system.
-// input: fmt and time
-// output: machine-principal records, safe credential lifecycle list metadata, closed read/collector scopes, requests, and bounded credential expiry
-// pos: Domain contract and pure rules for machine-principal credentials
-// note: if this file changes, update this header and module README.md.
 package model
 
 import (

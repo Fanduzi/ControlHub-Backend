@@ -1,8 +1,4 @@
 // Package service tests the PostgreSQL connection factory without a live server.
-// input: context, errors, fmt, net, path/filepath, strings, testing, time, jackc/pgx/v5, jackc/pgx/v5/pgxpool, validatePGDSNBinding
-// output: boundary, version-probe budget, config-preservation, shell-init failure, dial-failure, cancel, and timeout tests for OpenPostgresPool
-// pos: Unit proof that the factory keeps the T2 config, rejects bad versions by number, and returns no pool on dial or shell-init failure
-// note: if this file changes, update this header and module README.md.
 package service
 
 import (

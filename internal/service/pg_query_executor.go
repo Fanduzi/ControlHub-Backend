@@ -1,9 +1,4 @@
 // Package service runs the governed PostgreSQL execution attempt end to end.
-// input: attempt context with deadline, T2-validated *pgx.ConnConfig, resolved database/pinned schema, user statement text, optional private trusted parameter plan, optional requirePinnedSchema (saved/navigation entries prove the pinned schema even for constant/fully-qualified statements), pgsql.PageOptions, timeout
-// output: ExecutePGGoverned, ExecutePGGovernedOutcome, PGExecuteInput, PGVerifiedResult (incl. FetchCount, the executed-window scalar the pagination window actually rewrote — T12-R1), PGResultColumn, errPGExecInternal — verified result plus per-attempt PGAttemptEvidence (stage/status/backend identity/ remote_state/sql-sent facts) or the frozen classified error
-// pos: T7-S3/S4 internal execution closure (frozen G4 steps 1–10, G10 5b/5c) — guard + plan snapshot → dense $k ParamRef contract → pool → BEGIN READ ONLY + G4 → virtualxid/identity → PGBind → rewrite → pre-wire expected-record validation → T9-B disclosure preflight → R1-1 parameter-provenance preflight (Parse/Describe + fixed probe) → result ExecParams fresh parse → bounded materialize → FD verify → lock audit → ROLLBACK + remote observation → teardown → deliver. UserSQLSent ORs the provenance describe's own transmission fact into the result's send bit
-// note: if this file changes, update this header and module README.md.
-
 package service
 
 import (

@@ -1,8 +1,4 @@
 // Package api provides HTTP handlers for profile write endpoints.
-// input: internal/service (ProfileService), internal/api (decodeJSONBody), encoding/json, net/http
-// output: handlePutResourceProfile, handlePatchResourceProfile, handleDeleteResourceProfile
-// pos: HTTP handlers for PUT/PATCH/DELETE /resources/{id}/profile with strict single-JSON-object decoding
-// note: if this file changes, update header and README.md
 package api
 
 import (

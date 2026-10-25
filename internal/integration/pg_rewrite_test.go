@@ -1,10 +1,6 @@
 //go:build integration
 
 // Package integration provides real-PostgreSQL rewrite-equivalence proofs.
-// input: disposable PostgreSQL container, live pg_attribute resolver (ColumnMetadataResolver incl. SQL-backed CommonType), pgsql.Rewrite
-// output: original-vs-rewritten result/ordering/pagination equivalence and witness reltype proofs (incl. JoinReview6 ComputedJoinIdentity forward/reverse/negative terminal computed-JOIN-identity cases)
-// pos: T4 acceptance — generated transport SQL executes correctly against real PostgreSQL
-// note: if this file changes, update this header and module README.md.
 package integration
 
 import (

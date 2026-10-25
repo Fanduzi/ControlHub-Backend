@@ -1,18 +1,5 @@
 // Package service holds the private related-record navigation substrate for
 // the keyed PG entry.
-// input: resolved BoundTargetAccess (validated *pgx.ConnConfig + database),
-// the validated source identity and ordered locator strings
-// output: pgNavigationBinding, pgNavigationColumnPair, preparePGNavigation,
-// newPGNavigationPlan, snapshotPGNavigationBinding, errPGNavNoSource,
-// navPrepFail — the immutable FK mapping the attempt's locked recheck must
-// reproduce, plus bare-sentinel canonicalization of every preparation fault
-// pos: PG-MULTI-ENTRY stage 3 — preparation reads the FK mapping once in its
-// own bounded READ ONLY metadata transaction before claim (fixed probe SQL
-// only, no Guard and no user result SQL); the claim attempt later re-runs the
-// same SQL under held ACCESS SHARE locks and compares the entire mapping.
-// The binding carries canonical catalog identity — never locator values,
-// SQL, or caller-controlled OID lists.
-// note: if this file changes, update this header and module README.md.
 package service
 
 import (

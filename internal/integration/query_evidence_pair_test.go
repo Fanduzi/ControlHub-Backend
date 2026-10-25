@@ -2,10 +2,6 @@
 
 // Package integration provides Testcontainers-backed tests for the Phase 38X-3A
 // atomic Execution Evidence Pair primitive (Issue #34).
-// input: context, database/sql, bytes, log, strings, testing, Testcontainers MySQL, internal/model, internal/repository/mysql
-// output: TestQueryEvidencePair* and TestMachineEvidenceIdentityConstraints (atomicity, telemetry, exactly/at-most-one actor constraints)
-// pos: Proves repository-owned evidence atomicity and migration-26 user/machine identity constraints against real MySQL state
-// note: if this file changes, update header and README.md
 package integration
 
 import (

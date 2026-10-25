@@ -1,8 +1,4 @@
 // Package service provides unit tests for the query executor scan helpers.
-// input: context, database/sql, errors, regexp, strings, testing, DATA-DOG/go-sqlmock
-// output: TestNewScanPointer_*, TestNormalizeScanned_*, TestScanBoundedRows_*, TestMySQLQueryExecutorQueryTemplate* (executor binding, cap, and cellTruncated matrix alignment behavior)
-// pos: Unit tests verifying SQL NULL is preserved as nil, non-null numbers stay numbers, the aligned truncation matrix never outlives a dropped row, and compiler-owned template SQL binds through the read-only executor
-// note: if this file changes, update header and README.md
 package service
 
 import (

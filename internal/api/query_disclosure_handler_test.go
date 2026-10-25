@@ -1,10 +1,6 @@
 // Package api provides tests for the Phase 38Q query disclosure policy
 // handlers: bearer-required access, admin-only writes, strict request decoding,
 // validation, and error mapping.
-// input: net/http, net/http/httptest, testing, chi router, internal/model, internal/service
-// output: TestDisclosure_* handler tests
-// pos: Verifies bearer/admin authorization, strict decoding, and 400/403/404/409 error mapping including list query_result_disclosure_blocked
-// note: if this file changes, update header and README.md
 package api
 
 import (

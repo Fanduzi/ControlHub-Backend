@@ -1,8 +1,4 @@
 // Package config loads environment variables into a typed Config struct.
-// input: os.LookupEnv, os.Getenv, godotenv
-// output: LoadDotEnv, Load, Config struct, HTTPAddress, ValidateJWTSecret, ErrInvalidJWTSecret, ErrQueryExecutionTokenMaxAgeRejected, ErrInvalidPGHTTPEntries
-// pos: Configuration loading and signing-secret validation layer
-// note: if config vars or validation change, update this header and internal/config/README.md
 package config
 
 import (

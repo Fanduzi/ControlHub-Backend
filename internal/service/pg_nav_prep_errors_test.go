@@ -1,15 +1,4 @@
 // Package service — R1-3 preparation-fault taxonomy for the navigation entry.
-// input: navPrepFail unit cases, injected pgNavPrepare seams (bare/wrapped/
-// joined sentinels, unknown errors, markers), fakeExecRepo
-// output: TestNavPrepFail* / TestPGNavigationPrep* — preparation errors
-// always collapse to bare canonical sentinels through both the classifier
-// and the full entry, each fault writes exactly one correct NULL-key
-// navigation pair, and no claim, finalize, outcome call, or secret marker
-// ever escapes the seam
-// pos: PG-MULTI-ENTRY R1-3 — prep-fault injection only; a constructed
-// ErrPGVersionUnsupported is not a real PG13/18 run, and version-reader
-// behavior itself is covered by the pool factory's own tests
-// note: if this file changes, update header and module README.md
 package service
 
 import (

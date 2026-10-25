@@ -1,8 +1,4 @@
 // Package api provides tests for the saved-statement handlers.
-// input: context, encoding/json, net/http, net/http/httptest, strings, testing, time, internal/model, internal/service
-// output: TestSavedStatement* — strict decoding, context field round trip, controlled error mapping
-// pos: HTTP decode/error-mapping regression coverage for CRUD /query-targets/{id}/saved-statements incl. the (database, schema) request fields (T11)
-// note: if this file changes, update header and README.md
 package api
 
 import (

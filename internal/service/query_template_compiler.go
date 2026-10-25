@@ -1,8 +1,4 @@
 // Package service provides the server-owned compiler for governed template statements.
-// input: encoding/json, errors, fmt, math, regexp, strings, vitess.io/vitess/go/vt/sqlparser
-// output: TemplateParameterType, TemplateParameterDefinition, TemplateStatementInput, CompiledTemplateStatement, GuardedTemplateStatement, TemplateStatementCompiler, NewTemplateStatementCompiler, CompileAndGuardPaginated
-// pos: AST-recognized named placeholders become positional driver bindings without interpolating values or changing guard ownership
-// note: if this file changes, update header and README.md
 package service
 
 import (

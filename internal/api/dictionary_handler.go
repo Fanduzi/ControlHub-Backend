@@ -1,8 +1,4 @@
 // Package api provides HTTP handlers and routing for the ControlHub REST API.
-// input: net/http, internal/service, internal/model
-// output: handleListEnvironments/Owners/Roles/ResourceTypes/RelationTypes/LifecycleStatuses/HealthStatuses
-// pos: HTTP handlers for all dictionary endpoints
-// note: if this file changes, update header and README.md
 package api
 
 import (

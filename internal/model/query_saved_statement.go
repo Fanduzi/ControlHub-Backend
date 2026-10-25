@@ -1,8 +1,4 @@
 // Package model provides domain entities for the resource management system.
-// input: encoding/json, fmt, regexp, time, unicode/utf8 packages
-// output: QuerySavedStatement* contracts and shared metadata control-character validation
-// pos: Governed saved statements for target-scoped query library
-// note: if this file changes, update header and README.md
 package model
 
 import (

@@ -7,10 +7,6 @@
 // measurement via `make argon2id-budget`; it is excluded from `go test
 // ./...` because package-parallel CPU contention inflates Argon2id wall time
 // (see docs/decisions/2026-08-14-phase-38x-2g-argon2id-verification-budget.md).
-// input: internal/service (VerifyPassword, HashPasswordArgon2id), docs/decisions/2026-08-14-phase-38x-2g-argon2id-verification-budget.md
-// output: TestArgon2idVerificationBudget
-// pos: Measures multi-sample VerifyPassword wall time with the exact production parameters (m=65536,t=3,p=1) and fails loud if the documented budget is exceeded, without ever lowering the security parameters
-// note: if this file changes, update header and README.md
 package service
 
 import (

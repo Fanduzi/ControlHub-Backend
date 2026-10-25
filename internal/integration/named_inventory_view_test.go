@@ -1,10 +1,6 @@
 //go:build integration
 
 // Package integration provides real-MySQL coverage for named inventory views.
-// input: context, encoding/json, errors, testing, internal/model, internal/repository/mysql, internal/service
-// output: TestNamedInventoryViewContract
-// pos: Real-MySQL contract test for named-view authorization and lossless search-state serialization
-// note: if this file changes, update this header and module README.md.
 package integration
 
 import (

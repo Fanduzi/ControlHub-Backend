@@ -2,16 +2,6 @@
 
 // Package integration — real MySQL trigger failures at the keyed finalize
 // stages for both new entries.
-// input: disposable PG16 stats fixture (the send count proves the retried
-// key never re-executes), real MySQL production repositories — the failure
-// is a scoped BEFORE-trigger SIGNAL, not a repository wrapper
-// output: TestPGMultiEntryTrigger_* — a scoped audit-insert or claim-update
-// trigger makes the keyed finalize fail atomically: backend error, zero
-// Result/ExecutionID, claim occupied but unlinked, no partial rows, and the
-// same key stays a non-executing duplicate
-// pos: stage 4 packet item 4 — real persistence-failure paths through the
-// production entries; distinct from the wrapper-injection fault tests
-// note: if this file changes, update this header and module README.md.
 package integration
 
 import (

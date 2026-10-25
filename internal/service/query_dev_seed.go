@@ -1,8 +1,4 @@
 // Package service provides the local/dev query credential metadata seeder.
-// input: context, errors, fmt, internal/model
-// output: QueryDevCredentialSeedConfig, DevCredentialWriter, QueryDevCredentialSeeder, NewQueryDevCredentialSeeder, Seed, seed sentinel errors
-// pos: Local/dev-only credential METADATA seed path — validates config + engine-keyed connection identity (PG database/default_schema), binds the env DSN to the selected target/connection, and upserts metadata only (the DSN is never stored, logged, or returned)
-// note: if this file changes, update header and README.md
 package service
 
 import (

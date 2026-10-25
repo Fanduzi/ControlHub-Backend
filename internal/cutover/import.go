@@ -1,8 +1,4 @@
 // Package cutover preserves legacy data into the bigint runtime schema.
-// input: context, database/sql, errors, fmt, go-sql-driver/mysql, internal/model
-// output: ImportLegacyData, ImportConfig
-// pos: One-shot migration boundary translating legacy UUID identities into current bigint rows inside a single target transaction
-// note: if this file changes, update this header and README.md
 package cutover
 
 import (

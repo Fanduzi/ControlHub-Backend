@@ -1,10 +1,5 @@
 //go:build integration
 
-// input: shared MySQL fixture (real repositories/auth), a disposable PostgreSQL 16 with the restricted role, and serverboot.Build driven by Config.PGHTTPEntries — the same production entry cmd/server serves
-// output: TestPGHTTPConfigGate_* — production-assembly proof that the deployment flag is default-closed; that "on" atomically opens both the PG HTTP entries and the connections[] read model; and that enabled=false / non_prod_only / all_environments credentials still govern execution per connection
-// pos: Production Enablement R2 acceptance — no test hand-flips WithPGHTTPEntries or WithConnectionLister here; every assembly under test is produced by serverboot.Build from a config value, exactly as cmd/server would wire it
-// note: if this file changes, update this header and module README.md
-
 package integration
 
 import (

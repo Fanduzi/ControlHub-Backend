@@ -1,14 +1,6 @@
 //go:build integration
 
 // Package integration exercises the e2e-fixture-bootstrap CLI against real MySQL.
-// input: os/exec, database/sql, testing, context, fmt, strings, os, path/filepath, github.com/pressly/goose/v3, github.com/fan/controlhub/internal/repository/mysql, github.com/fan/controlhub/internal/service
-// output: TestE2EFixtureBootstrapCommandProvisionsAndRollsBackAgainstMySQL
-// pos: Proves the test/CI-only fixture CLI provisions BOTH fixture operators on a
-// disposable controlhub_*_e2e database, keeps the retired 0002 seeds inactive,
-// reactivates idempotently with authorization_version rotation, never leaks
-// secrets, refuses non-ASCII fixture identities, and rolls back the whole
-// transaction when one identity cannot be provisioned.
-// note: if this file changes, update header and README.md
 package integration
 
 import (

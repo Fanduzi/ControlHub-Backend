@@ -1,8 +1,4 @@
 // Package service — unit tests for the keyed MySQL/TiDB execution attempt policy, ordinary digest contract, and privacy-safe statement metadata.
-// input: counting fakes (claim store, evidence pair, executor, resolver) — never a real database
-// output: admission/evidence matrix proofs, literal digest goldens, masking and ownership assertions, bare-sentinel and nil-provider outcome proofs, controlled bad-reader saved-snapshot proofs, post-Apply malformed-evidence clearing proofs, and entry-clone fault-injection proofs across reader/claim/persistence seams
-// pos: Fast seam-level proof that one TryClaim plus exactly one final evidence write governs every keyed MySQL/TiDB outcome; complements the real-DB HTTP golden test
-// note: if this file changes, update this header and module README.md.
 package service
 
 import (

@@ -1,8 +1,4 @@
 // Package service provides tests for query-workspace business logic.
-// input: context, errors, testing, internal/model
-// output: actor-owned missing reads, validated OCC writes, and conflict propagation tests
-// pos: Service-seam regression coverage for the query workspace aggregate
-// note: if this file changes, update this header and module README.md.
 package service
 
 import (

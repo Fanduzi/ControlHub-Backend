@@ -1,8 +1,4 @@
 // Package service provides business logic for the Phase 37/38S read-only query sandbox.
-// input: errors, fmt, time, unicode/utf8, internal/model
-// output: TruncateCellText, TruncateCellValue, TruncateRow, CellTruncatedMatrix helpers (CloneCellTruncated, AnyCellTruncated), ResultDeliveryInput/Decision + DecideResultDelivery + ErrResultContractUpgradeRequired, DecideCSVExport + ErrCSVExportNotPermitted, CapabilityCellTruncated, ResultCellMaxBytes
-// pos: Post-finalize result-delivery contract for the governed query workbench (T8-A, spec G2/G7): rune-safe per-cell truncation, cellTruncated matrix alignment, capability gate, and CSV export eligibility — shared by all three governed result paths without touching production scanning, evidence, or routing
-// note: if this file changes, update this header and module README.md.
 package service
 
 import (

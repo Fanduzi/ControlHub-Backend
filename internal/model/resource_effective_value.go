@@ -1,8 +1,4 @@
 // Package model provides CMDB effective-value projections.
-// input: JSON-compatible observed and manual values
-// output: EffectiveValue and ValueProvenance read contracts
-// pos: Domain projection for observed values with optional manual override
-// note: if this file changes, update this header and README.md.
 package model
 
 type ValueProvenance struct {

@@ -1,9 +1,5 @@
 // Package service provides password hashing and verification for the
 // authentication boundary.
-// input: golang.org/x/crypto/argon2, crypto/rand, crypto/sha256, crypto/subtle, encoding/hex, encoding/base64, fmt, strings
-// output: HashPasswordArgon2id, VerifyPassword, IsLegacyHash, IsArgon2idHash, decodeArgon2id
-// pos: Argon2id password hashing with strict parameter validation and transparent legacy SHA-256 verification for gradual migration
-// note: if this file changes, update header and README.md
 package service
 
 import (

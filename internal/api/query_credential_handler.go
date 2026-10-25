@@ -1,8 +1,4 @@
 // Package api provides HTTP handlers and routing for the ControlHub REST API.
-// input: context, errors, net/http, chi, internal/model, internal/service
-// output: queryCredentialAPI interface, handleGetQueryCredential, handlePutQueryCredential, handleDeleteQueryCredential, writeQueryCredentialError
-// pos: HTTP handlers for GET/PUT/DELETE /query-targets/{id}/credential (Phase 38A credential metadata management — metadata only, never a DSN)
-// note: if this file changes, update header and README.md
 package api
 
 import (

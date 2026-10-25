@@ -1,8 +1,4 @@
 // Package service implements business logic for resource management.
-// input: context, crypto/sha256, crypto/subtle, database/sql, errors, fmt, strings, time, unicode/utf8, internal/model
-// output: MachinePrincipalService lifecycle/authentication boundary, safe admin list, and repository contract
-// pos: Admin-governed machine-principal application service
-// note: if this file changes, update this header and module README.md.
 package service
 
 import (

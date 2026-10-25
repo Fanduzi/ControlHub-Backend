@@ -1,8 +1,4 @@
 // Package api provides HTTP handlers and routing for the ControlHub REST API.
-// input: internal/api, internal/model, internal/service, net/http, and topology row budgets
-// output: TestServer struct, NewTestServer with fake audit actor/environment, batch-profile, relation, health, effective-value, bulk preview/confirm, bounded topology, and injectable User/collector ingestion results
-// pos: Test infrastructure — fake repositories for typed profiles, completeness relations, health observations, effective values, bulk mutation review, bounded topology reads/candidates, User/collector ingestion confirmation, and a pre-wired handler router
-// note: if this file changes, update this header and module README.md.
 package api
 
 import (

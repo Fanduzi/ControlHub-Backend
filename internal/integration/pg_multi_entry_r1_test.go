@@ -4,17 +4,6 @@
 // acceptance: with a bound plan in flight, a failure that originates in the
 // statement expression or in stored data — not in a parameter's own cast —
 // must persist the failed/backend taxonomy through the real keyed chain.
-// input: shared MySQL fixture (real saved/claim/execution/disclosure
-// repositories), disposable PG16 ro_disc, production
-// ExecutePGSavedStatementClaimed end to end
-// output: TestPGMultiEntryR1_ParameterOrigins — keyed status/code, returned
-// outcome/evidence, nil result, sole claim/finalize for a statement-level
-// 22003 overflow, a stored-data 22P02 cast, and the parameter-cast control
-// pos: PG-MULTI-ENTRY R1-1 — the provenance seam attributes conversion
-// failures to the caller's values only on the parameter's own protocol
-// surface; statement/data failures under a bound plan keep the backend
-// taxonomy through the whole keyed chain.
-// note: if this file changes, update header and module README.md.
 package integration
 
 import (

@@ -1,10 +1,6 @@
 //go:build integration
 
 // Package integration — second half of the keyed multi-entry acceptance matrix: keyed live-path coverage for the MySQL ordinary/saved/navigation entries.
-// input: shared disposable MySQL container (setupTestDB) + km_* fixture tables
-// output: TestMySQLKeyedMatrix{B,E,F,G,I}_* — live admission, abort semantics, atomicity, privacy, and result-contract proofs
-// pos: concurrency, real-HTTP abort, injected storage faults, privacy/authorization, and the result-contract boundary across ordinary/saved/navigation entries; the deterministic single-attempt groups live in mysql_keyed_matrix_test.go.
-// note: if this file changes, update this header and module README.md.
 package integration
 
 import (

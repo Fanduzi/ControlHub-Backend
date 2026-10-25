@@ -1,8 +1,4 @@
 // Package pgsql implements the PostgreSQL governed read-only query front half.
-// input: synthetic SQL strings / parse trees plus stub resolvers
-// output: intent tests for PaginatePG window arithmetic, limit-form acceptance incl. PG radix/separator integer spellings and int64 boundary, option/tree validation, Result bookkeeping, and RewritePaginated pipeline shape
-// pos: G6 window contract — root LIMIT/OFFSET rewritten once into an execution window; tests assert node forms and deparsed transport, never evaluated rows
-// note: if this file changes, update header and README.md
 package pgsql
 
 import (

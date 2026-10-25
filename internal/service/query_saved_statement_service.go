@@ -1,8 +1,4 @@
 // Package service manages governed saved statements with authorization.
-// input: context, database/sql, errors, fmt, math, internal/model, internal/pgsql
-// output: QuerySavedStatementService, NewQuerySavedStatementService, WithPGContext, RestoreContext, QuerySavedStatementReader, QuerySavedStatementWriter
-// pos: Phase 38R saved-statement service — authorization, dialect-aware template validation, (target,database,schema) context persistence and G12 restore revalidation
-// note: if this file changes, update header and README.md
 package service
 
 import (

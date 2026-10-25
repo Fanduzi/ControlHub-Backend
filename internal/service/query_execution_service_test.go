@@ -1,8 +1,4 @@
 // Package service provides tests for the Phase 37/38S query execution service.
-// input: context, errors, fmt, strings, testing, time, internal/model
-// output: TestExecute_* including successful-User full SQL, owner-only statement retrieval/history restore eligibility, machine identity terminal outcomes, readiness/credential tests, and repository/resolver/executor/clock fakes
-// pos: Unit boundary for identity-aware governed execution, private statement access and restore projection, atomic terminal evidence, paging, cancellation durability, credential fail-closed behavior, disclosure error mapping, and executor-fake cellTruncated contract fill (T8-B); fakeExecRepo's finalizeHook/pairHook are the seams for producer/caller-side mutation at the keyed and keyless persistence boundaries (T8-C-R1), its finalizeEvents capture records the (eventType:result) pair the keyed finalize received so entry-kind event selection is assertable (PG-MULTI-ENTRY), fakeNavSchemaInspector.nilDetail injects the (nil,nil) provider-contract violation, and fakeDisclosureService.applyColumns/applyRows inject post-Apply malformed evidence
-// note: if this file changes, update header and README.md
 package service
 
 import (

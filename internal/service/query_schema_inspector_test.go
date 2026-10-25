@@ -1,9 +1,4 @@
 // Package service provides unit tests for the schema inspector.
-// input: testing, strings
-// output: TestEscapeSchemaSearch_*, TestNormalizeTableType_*, TestNormalizeObjectKind_*
-// pos: Pure helper tests for LIKE escaping, table-type normalization, and
-// object-kind normalization; structural verification of QuerySchemaInspector interface
-// note: if this file changes, update header and README.md
 package service
 
 import (

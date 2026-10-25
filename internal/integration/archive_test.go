@@ -1,10 +1,6 @@
 //go:build integration
 
 // Package integration provides real-MySQL coverage for archive service writes.
-// input: context, testing, time, internal/model, internal/repository/mysql, internal/service
-// output: TestServiceArchive_RejectsUpdateAfterArchive, TestServiceUnarchive_AllowsUpdateAfterUnarchive
-// pos: Proves archive/unarchive service writes against real MySQL
-// note: if this file changes, update header and README.md
 package integration
 
 import (

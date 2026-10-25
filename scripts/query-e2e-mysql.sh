@@ -1,9 +1,5 @@
 #!/usr/bin/env bash
 # Phase 37H/38I dedicated Query E2E MySQL fixture (dev/test only).
-# input: docker, openssl, XDG_STATE_HOME (or HOME) and optional QUERY_E2E_MYSQL_* overrides
-# output: per-user mode-0600 fixture credential state isolated per fixture identity (container/port/database/readonly user); `env-file` prints the current identity's path only
-# pos: owns the shared Query E2E fixture credential handoff used by run-query-dev.sh
-# note: update scripts/README.md and run-query-dev.sh when this handoff changes
 #
 # up/down/status for a disposable Docker MySQL used by the Query Workbench
 # ready-target E2E. It creates a query_e2e schema (seed table, stable rows),

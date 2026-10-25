@@ -1,8 +1,4 @@
 // Package model provides domain entities for the resource management system.
-// input: fmt and time
-// output: collector scan ledger values, per-principal read projections, and pure per-CI lifecycle transitions
-// pos: Domain contract for complete-scan omission, retry semantics, and operator-visible collector presence
-// note: if this file changes, update this header and module README.md.
 package model
 
 import (

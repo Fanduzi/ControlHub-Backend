@@ -1,10 +1,6 @@
 //go:build integration
 
 // Package integration provides real-MySQL coverage for legacy cutover import.
-// input: context, database/sql, fmt, strings, testing, time, go-sql-driver/mysql, pressly/goose, internal/cutover
-// output: TestImportLegacyData_* integration cases and cleanup for migrated child tables
-// pos: Proves UUID-to-bigint cutover import against real MySQL: NULL audit actor preservation and fail-loud unknown actor mapping with no partial import
-// note: if this file changes, update this header and README.md
 package integration
 
 import (

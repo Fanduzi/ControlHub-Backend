@@ -1,8 +1,4 @@
 // Package api provides HTTP handlers for actor-owned query workspaces.
-// input: bytes, context, encoding/json, errors, io, net/http, internal/model, internal/service
-// output: queryWorkspaceAPI and GET/PUT /query-workspace handlers with controlled OCC mapping
-// pos: User-only HTTP boundary for the singular query-workspace aggregate
-// note: if this file changes, update this header and module README.md.
 package api
 
 import (

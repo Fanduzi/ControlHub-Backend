@@ -1,8 +1,3 @@
--- input: claim and keyed-execution identity columns still on the case-insensitive utf8mb4_0900_ai_ci table default at version 30
--- output: claim key/scope/digest and executions.client_execution_id re-collated to utf8mb4_0900_bin (case-sensitive NO PAD) with a guarded rollback
--- pos: byte-exact occupancy identity for the G9 execution-claim protocol (issue #118, T10-A)
--- note: if this file changes, update this header and migrations/README.md.
-
 -- +goose Up
 
 -- The claim idempotency key is an opaque client identity: it must compare

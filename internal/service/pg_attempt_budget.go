@@ -1,9 +1,5 @@
 // Package service bounds every governed PostgreSQL attempt statement by the
 // attempt's remaining time, never a fresh full budget.
-// input: context, strconv, time, jackc/pgx/v5
-// output: pgAttemptBudget, pgAttemptBudgetFromContext, pgRemainingStatementTimeoutMs — per-statement SET LOCAL statement_timeout arm computing remaining milliseconds from the attempt deadline
-// pos: G4 step-5 remaining-budget mechanism for T7-S2 — the resolution gate, touch, attribute/dependency/type probes all re-arm before each statement inside the caller's transaction; a spent budget fails closed before any statement is sent
-// note: if this file changes, update this header and module README.md.
 package service
 
 import (

@@ -1,8 +1,4 @@
 // Package mysql provides MySQL-backed repository implementations.
-// input: database/sql, internal/model, topology row budgets, and multi-observer effective-health evidence
-// output: relation CRUD with stable endpoint locks, GetResourcesByIDs, bounded topology relations/candidates, and one-row health projections
-// pos: MySQL data access for bounded rooted/workspace topology reads and candidate-specific effective health
-// note: if this file changes, update this header and module README.md.
 package mysql
 
 import (

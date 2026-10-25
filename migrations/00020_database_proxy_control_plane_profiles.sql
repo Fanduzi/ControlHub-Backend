@@ -1,8 +1,3 @@
--- input: resources table and existing typed profile tables at schema version 18
--- output: resource_profiles_database_proxy, resource_profiles_control_plane_component, ha -> ha_monitor remap
--- pos: typed profiles for Database Proxy and Control Plane Component; fail loud on ambiguous ha coexistence
--- note: if this file changes, update header and internal/repository/mysql/README.md
-
 -- +goose Up
 -- +goose StatementBegin
 create table resource_profiles_database_proxy (

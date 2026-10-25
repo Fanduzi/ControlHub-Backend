@@ -1,11 +1,4 @@
 // Package pgsql proves the trusted text-parameter contract offline.
-// input: GuardPG results over $k-bearing and bare statements, stub resolvers
-// output: ValidateParameterBindings coverage/matrix tests and rewrite
-// parameter-set integrity proofs (qualify/inject/round-trip keep the same
-// numeric set; duplicated references stay legal)
-// pos: PG-MULTI-ENTRY stage 1 — parameter numbers bind by $k identity, never
-// traversal order; an unbound count permits no ParamRef at all
-// note: if this file changes, update header and README.md
 package pgsql
 
 import (

@@ -1,8 +1,4 @@
 // Package model provides domain entities for the resource management system.
-// input: fmt, strings, time, utf8 packages and QueryExecutionIdentity/QueryExecutionRecord
-// output: QueryExecutionClaimInput, QueryExecutionClaim, QueryExecutionClaimView types + Validate
-// pos: Occupancy-record protocol types for the G9 execution claim (issue #118, T10-A); storage only, no client-facing JSON contract
-// note: if this file changes, update this header and module README.md.
 package model
 
 import (

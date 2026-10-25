@@ -1,8 +1,4 @@
 // Package service provides tests for auth login flow and token verification.
-// input: internal/service (AuthService), internal/model, crypto/sha256, crypto/hmac
-// output: TestAuthServiceLogin*, TestVerifyToken*, TestAuthorizationVersion*
-// pos: Validates credential check, versioned token generation, current-state verification, and invalidation causes
-// note: if this file changes, update header and README.md
 package service
 
 import (
