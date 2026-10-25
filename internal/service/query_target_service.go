@@ -1,7 +1,7 @@
 // Package service provides business logic for resource reads and typed profile assembly.
 // input: internal/model (QueryTarget, QueryTargetListQuery, QueryCredentialMetadata, QueryEnvironmentPolicy, QueryCredentialRuntimeStatus), context, database/sql, errors, strings
-// output: QueryTargetRepository + QueryCredentialReader + QueryConnectionLister interfaces, NewQueryTargetService, WithCredentialReader, WithCredentialResolver, WithConnectionLister, QueryTargetService.List, populateConnections, readTargetCredential, classifyQueryKind, completeQueryTarget, completeQueryTargetWithRuntime, credentialAllowsExecution, isExecutableEngine, isCredentialManagedEngine, isPGEngine
-// pos: Query target read model — sources database_instance targets and derives workbench context + Phase 37 readiness, with the Phase 38A runtime-gated readiness correction
+// output: QueryTargetRepository + QueryCredentialReader + QueryConnectionLister interfaces, NewQueryTargetService, WithCredentialReader, WithCredentialResolver, WithConnectionLister, QueryTargetService.List, populateConnections, applyPGConnectionReadiness, readTargetCredential, classifyQueryKind, completeQueryTarget, completeQueryTargetWithRuntime, credentialAllowsExecution, isExecutableEngine, isCredentialManagedEngine, isPGEngine
+// pos: Query target read model — sources database_instance targets and derives workbench context + Phase 37 readiness, with the Phase 38A runtime-gated readiness correction and composite PostgreSQL connection-aggregate readiness
 // note: if this file changes, update header and README.md
 package service
 
@@ -143,7 +143,7 @@ func (s *QueryTargetService) List(ctx context.Context, q model.QueryTargetListQu
 // postgresql target with at least one resolver-verified connection the result
 // contract can produce exportable pages, so the CSV affordance is marked
 // available; per-column disclosure and the cell-truncation matrix still gate
-// every concrete export. A mysql/tidb target whose own ''-row credential is
+// every concrete export. A mysql/tidb target whose own ”-row credential is
 // resolver-verified gains the same read-model CSV affordance in this
 // fixture-only path — cmd/server never wires the connections lister, so
 // production targets still report export=false.
@@ -175,12 +175,15 @@ func (s *QueryTargetService) populateConnections(ctx context.Context, target *mo
 		conns = append(conns, conn)
 	}
 	target.Connections = conns
+	if isPGEngine(target.ConnectionContext.Engine) && s.resolver != nil && len(conns) > 0 {
+		applyPGConnectionReadiness(target, conns)
+	}
 	if pgResolved {
 		// A resolver-verified PG connection makes the run and CSV affordances
-		// available in the fixture assembly; readiness stays the target-level
-		// ''-row derivation and is never copied up from a composite row. The
-		// POST path still re-checks binding and per-connection policy — this
-		// is a read-model capability, not an execution grant.
+		// available in the fixture assembly; the aggregate above derives
+		// readiness from the same per-connection runtimes. The POST path
+		// still re-checks binding and per-connection policy — this is a
+		// read-model capability, not an execution grant.
 		target.AvailableActions.Run = true
 		target.AvailableActions.Export = true
 	} else if resolved && target.AvailableActions.Run {
@@ -192,6 +195,80 @@ func (s *QueryTargetService) populateConnections(ctx context.Context, target *mo
 		target.AvailableActions.Export = true
 	}
 	return nil
+}
+
+// applyPGConnectionReadiness derives a composite PostgreSQL target's
+// target-level readiness/governance from its verbatim per-connection runtime
+// statuses instead of the legacy (resource_id,”)-row derivation — composite
+// targets intentionally carry no ” credential row, so that derivation could
+// only ever report missing_metadata/credential_required even while a real
+// connection resolves and executes. This is a read-model summary only:
+// per-connection runtime stays verbatim in connections[] and the execute
+// path re-checks binding and per-connection policy on every request, so
+// aggregating here never widens execution.
+//
+//   - >=1 secret_resolved            -> ready (mixed states stay per connection)
+//   - all incomplete_connection      -> keep the ”-row missing_connection
+//     derivation (same host/port gap produced it — nothing new to say)
+//   - all disabled/policy_blocked/invalid_ref -> disabled
+//   - otherwise                      -> credential_required; the summary
+//     credentialState prefers the first credential-side gap
+//     (missing_metadata/secret_missing/binding_mismatch) because that is the
+//     actionable fix, falling back to the first row's verbatim status.
+func applyPGConnectionReadiness(target *model.QueryTarget, conns []model.QueryTargetConnection) {
+	resolved, incomplete, locked := 0, 0, 0
+	credentialGap := ""
+	for _, c := range conns {
+		switch c.Runtime {
+		case model.QueryCredentialRuntimeSecretResolved:
+			resolved++
+		case model.QueryCredentialRuntimeIncompleteConnection:
+			incomplete++
+		case model.QueryCredentialRuntimeDisabled,
+			model.QueryCredentialRuntimePolicyBlocked,
+			model.QueryCredentialRuntimeInvalidRef:
+			locked++
+		default:
+			if credentialGap == "" {
+				credentialGap = string(c.Runtime)
+			}
+		}
+	}
+
+	var readiness model.QueryTargetReadiness
+	var safety model.QueryTargetSafetyState
+	credentialState := credentialGap
+	switch {
+	case resolved > 0:
+		readiness = model.ReadinessReady
+		safety = model.SafetyStateReadonlySandboxEnabled
+		credentialState = string(model.QueryCredentialRuntimeSecretResolved)
+	case incomplete == len(conns):
+		return
+	case locked == len(conns):
+		readiness = model.ReadinessDisabled
+		safety = model.SafetyStateExecutionDisabled
+		if credentialState == "" {
+			credentialState = string(conns[0].Runtime)
+		}
+	default:
+		readiness = model.ReadinessCredentialRequired
+		safety = model.SafetyStateCredentialMissing
+		if credentialState == "" {
+			credentialState = string(conns[0].Runtime)
+		}
+	}
+
+	target.Readiness = readiness
+	target.MissingFields = []string{}
+	target.Governance = model.QueryTargetGovernance{
+		ExecutionEnabled: resolved > 0,
+		CredentialState:  credentialState,
+		AuditRequired:    true,
+		SafetyState:      safety,
+		SafetyNote:       querySafetyNoteFor(readiness),
+		PolicyNotes:      policyNotesFor(readiness, target.ConnectionContext.Environment),
+	}
 }
 
 // readTargetCredential reads one target's credential metadata and classifies the

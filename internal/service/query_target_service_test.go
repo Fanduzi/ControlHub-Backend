@@ -561,10 +561,17 @@ func TestQueryTargetService_List_ConnectionsCompositeIdentity(t *testing.T) {
 	if !got[0].AvailableActions.Run {
 		t.Fatal("a resolved PG connection must mark the run affordance available")
 	}
-	// Target-level readiness stays the legacy ''-row derivation — composite
-	// connection readiness is expressed per connection, never copied up.
-	if got[0].Readiness == model.ReadinessReady {
-		t.Fatal("PG target-level readiness must not claim ready from a composite row")
+	// Target-level readiness is the connection aggregate: one resolved
+	// connection makes the composite target ready while each connection row
+	// keeps its own verbatim status above (analytics stays disabled).
+	if got[0].Readiness != model.ReadinessReady {
+		t.Fatalf("one resolved PG connection must surface target-level ready, got %q", got[0].Readiness)
+	}
+	if got[0].Governance.CredentialState != string(model.QueryCredentialRuntimeSecretResolved) {
+		t.Fatalf("credentialState = %q, want secret_resolved", got[0].Governance.CredentialState)
+	}
+	if !got[0].Governance.ExecutionEnabled {
+		t.Fatal("a resolved PG connection must mark executionEnabled")
 	}
 }
 
@@ -584,6 +591,14 @@ func TestQueryTargetService_List_ConnectionsOmittedByDefault(t *testing.T) {
 	}
 	if got[0].Connections != nil {
 		t.Fatalf("default assembly must omit connections[], got %+v", got[0].Connections)
+	}
+	// flag-off parity: with no connections lister the aggregate never runs,
+	// so the closed ''-row derivation keeps the target credential_required.
+	if got[0].Readiness != model.ReadinessCredentialRequired {
+		t.Fatalf("unwired PG assembly readiness = %q, want credential_required", got[0].Readiness)
+	}
+	if got[0].AvailableActions.Run || got[0].AvailableActions.Export {
+		t.Fatal("an assembly without the connections lister must keep run/export off")
 	}
 }
 
@@ -629,11 +644,20 @@ func TestQueryTargetService_List_ConnectionsUnresolvedStaysLocked(t *testing.T) 
 	if len(got[0].Connections) != 1 || got[0].Connections[0].Enabled {
 		t.Fatalf("disabled connection must still be listed verbatim, got %+v", got[0].Connections)
 	}
+	if got[0].Readiness != model.ReadinessDisabled {
+		t.Fatalf("an all-disabled PG aggregate must surface disabled, got %q", got[0].Readiness)
+	}
+	if got[0].Governance.CredentialState != string(model.QueryCredentialRuntimeDisabled) {
+		t.Fatalf("credentialState = %q, want disabled", got[0].Governance.CredentialState)
+	}
+	if got[0].Governance.ExecutionEnabled {
+		t.Fatal("a disabled PG aggregate must not mark executionEnabled")
+	}
 }
 
 // TestQueryTargetService_List_ConnectionsMySQLResolvedGrantsExport proves the
 // fixture-only CSV affordance for mysql/tidb: when the connections lister is
-// wired, a resolver-verified ''-row credential grants Export on an executable
+// wired, a resolver-verified ”-row credential grants Export on an executable
 // target — the same trusted resolution that already grants Run. WHY: the e2e
 // proxy no longer rewrites availableActions, so the real backend must emit
 // export from each target's own trusted credential, and cmd/server never
@@ -663,7 +687,7 @@ func TestQueryTargetService_List_ConnectionsMySQLResolvedGrantsExport(t *testing
 }
 
 // TestQueryTargetService_List_ConnectionsMySQLUnresolvedKeepsExportOff is the
-// negative half: a disabled ''-row credential leaves the target locked and
+// negative half: a disabled ”-row credential leaves the target locked and
 // Export off — connections[] presence alone never implies the affordance.
 func TestQueryTargetService_List_ConnectionsMySQLUnresolvedKeepsExportOff(t *testing.T) {
 	store := newFakeCredentialStore()
@@ -683,5 +707,164 @@ func TestQueryTargetService_List_ConnectionsMySQLUnresolvedKeepsExportOff(t *tes
 	}
 	if len(got[0].Connections) != 1 || got[0].Connections[0].Runtime != model.QueryCredentialRuntimeDisabled {
 		t.Fatalf("the ''-row connection must report disabled verbatim, got %+v", got[0].Connections)
+	}
+}
+
+// TestQueryTargetService_List_PGResolvedConnectionMakesTargetReady proves the
+// composite-readiness correction on the minimal case: a PostgreSQL target with
+// no ” credential row but one resolver-verified database connection surfaces
+// target-level ready instead of the old missing_metadata/credential_required
+// misreport. WHY: the ” row is absent BY DESIGN for composite targets, so a
+// derivation that only reads it can never reflect the connections the user
+// actually sees and executes through.
+func TestQueryTargetService_List_PGResolvedConnectionMakesTargetReady(t *testing.T) {
+	store := newFakeCredentialStore()
+	store.metadata[credentialStoreKey{credentialTargetID, "labdb"}] = pgCredentialMeta("labdb", "app", "PG_LABDB_RO", true, model.QueryEnvPolicyNonProdOnly)
+	target := credentialTarget("postgresql", "db.internal", 5432, "staging")
+	svc := NewQueryTargetService(fakeTargetRepo{targets: []model.QueryTarget{target}}).
+		WithCredentialReader(store).
+		WithCredentialResolver(&fakeResolver{dsns: map[string]string{
+			"PG_LABDB_RO": "postgres://ro:pw@db.internal:5432/labdb?sslmode=disable",
+		}}).
+		WithConnectionLister(store)
+
+	got, _, err := svc.List(context.Background(), model.QueryTargetListQuery{})
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if got[0].Readiness != model.ReadinessReady {
+		t.Fatalf("readiness = %q, want ready (connection aggregate)", got[0].Readiness)
+	}
+	if got[0].Governance.CredentialState != string(model.QueryCredentialRuntimeSecretResolved) {
+		t.Fatalf("credentialState = %q, want secret_resolved", got[0].Governance.CredentialState)
+	}
+	if got[0].Governance.SafetyState != model.SafetyStateReadonlySandboxEnabled {
+		t.Fatalf("safetyState = %q, want readonly_sandbox_enabled", got[0].Governance.SafetyState)
+	}
+	if !got[0].Governance.ExecutionEnabled || !got[0].AvailableActions.Run {
+		t.Fatal("a resolved PG aggregate must mark executionEnabled and Run")
+	}
+	if len(got[0].MissingFields) != 0 {
+		t.Fatalf("a resolved composite target must not report missing fields, got %v", got[0].MissingFields)
+	}
+}
+
+// TestQueryTargetService_List_PGAllSecretMissingStaysCredentialRequired proves
+// the all-unresolved credential-side aggregate: every connection exists but no
+// env secret resolves — the target stays credential_required and the summary
+// names the actionable secret_missing, never the misleading missing_metadata.
+func TestQueryTargetService_List_PGAllSecretMissingStaysCredentialRequired(t *testing.T) {
+	store := newFakeCredentialStore()
+	store.metadata[credentialStoreKey{credentialTargetID, "analytics"}] = pgCredentialMeta("analytics", "app", "PG_ANALYTICS_RO", true, model.QueryEnvPolicyNonProdOnly)
+	store.metadata[credentialStoreKey{credentialTargetID, "labdb"}] = pgCredentialMeta("labdb", "app", "PG_LABDB_RO", true, model.QueryEnvPolicyNonProdOnly)
+	target := credentialTarget("postgresql", "db.internal", 5432, "staging")
+	svc := NewQueryTargetService(fakeTargetRepo{targets: []model.QueryTarget{target}}).
+		WithCredentialReader(store).
+		WithCredentialResolver(&fakeResolver{dsns: map[string]string{}}). // no refs resolve -> secret_missing
+		WithConnectionLister(store)
+
+	got, _, err := svc.List(context.Background(), model.QueryTargetListQuery{})
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if got[0].Readiness != model.ReadinessCredentialRequired {
+		t.Fatalf("readiness = %q, want credential_required", got[0].Readiness)
+	}
+	if got[0].Governance.CredentialState != string(model.QueryCredentialRuntimeSecretMissing) {
+		t.Fatalf("credentialState = %q, want secret_missing", got[0].Governance.CredentialState)
+	}
+	if got[0].Governance.ExecutionEnabled || got[0].AvailableActions.Run {
+		t.Fatal("no resolved connection must keep the target locked")
+	}
+}
+
+// TestQueryTargetService_List_PGAllPolicyBlockedStaysDisabled proves an
+// all-locked aggregate surfaces disabled — a policy-blocked or disabled
+// connection set is an authorization state, not a missing credential.
+func TestQueryTargetService_List_PGAllPolicyBlockedStaysDisabled(t *testing.T) {
+	store := newFakeCredentialStore()
+	// non_prod_only policy on a production target -> policy_blocked.
+	store.metadata[credentialStoreKey{credentialTargetID, "labdb"}] = pgCredentialMeta("labdb", "app", "PG_LABDB_RO", true, model.QueryEnvPolicyNonProdOnly)
+	target := credentialTarget("postgresql", "db.internal", 5432, "production")
+	svc := NewQueryTargetService(fakeTargetRepo{targets: []model.QueryTarget{target}}).
+		WithCredentialReader(store).
+		WithCredentialResolver(&fakeResolver{dsns: map[string]string{
+			"PG_LABDB_RO": "postgres://ro:pw@db.internal:5432/labdb?sslmode=disable",
+		}}).
+		WithConnectionLister(store)
+
+	got, _, err := svc.List(context.Background(), model.QueryTargetListQuery{})
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if got[0].Readiness != model.ReadinessDisabled {
+		t.Fatalf("readiness = %q, want disabled (policy_blocked aggregate)", got[0].Readiness)
+	}
+	if got[0].Governance.CredentialState != string(model.QueryCredentialRuntimePolicyBlocked) {
+		t.Fatalf("credentialState = %q, want policy_blocked", got[0].Governance.CredentialState)
+	}
+	if got[0].Governance.ExecutionEnabled || got[0].AvailableActions.Run {
+		t.Fatal("a policy-blocked aggregate must not mark executionEnabled/Run")
+	}
+}
+
+// TestQueryTargetService_List_PGBindingMismatchStaysCredentialRequired proves a
+// connection whose DSN binds the wrong database fails closed at BOTH levels:
+// the connection keeps binding_mismatch verbatim and the aggregate stays
+// credential_required — aggregation never launders a binding violation.
+func TestQueryTargetService_List_PGBindingMismatchStaysCredentialRequired(t *testing.T) {
+	store := newFakeCredentialStore()
+	store.metadata[credentialStoreKey{credentialTargetID, "labdb"}] = pgCredentialMeta("labdb", "app", "PG_LABDB_RO", true, model.QueryEnvPolicyNonProdOnly)
+	target := credentialTarget("postgresql", "db.internal", 5432, "staging")
+	svc := NewQueryTargetService(fakeTargetRepo{targets: []model.QueryTarget{target}}).
+		WithCredentialReader(store).
+		WithCredentialResolver(&fakeResolver{dsns: map[string]string{
+			// DSN dbname != credential row database_name -> binding_mismatch.
+			"PG_LABDB_RO": "postgres://ro:pw@db.internal:5432/otherdb?sslmode=disable",
+		}}).
+		WithConnectionLister(store)
+
+	got, _, err := svc.List(context.Background(), model.QueryTargetListQuery{})
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if got[0].Readiness != model.ReadinessCredentialRequired {
+		t.Fatalf("readiness = %q, want credential_required", got[0].Readiness)
+	}
+	if got[0].Governance.CredentialState != string(model.QueryCredentialRuntimeBindingMismatch) {
+		t.Fatalf("credentialState = %q, want binding_mismatch", got[0].Governance.CredentialState)
+	}
+	if got[0].Governance.ExecutionEnabled || got[0].AvailableActions.Run {
+		t.Fatal("a binding-mismatched connection must not unlock execution")
+	}
+	if len(got[0].Connections) != 1 || got[0].Connections[0].Runtime != model.QueryCredentialRuntimeBindingMismatch {
+		t.Fatalf("connection must report binding_mismatch verbatim, got %+v", got[0].Connections)
+	}
+}
+
+// TestQueryTargetService_List_PGNoConnectionsKeepsLegacyDerivation proves a PG
+// target with zero credential rows keeps the ”-row derivation untouched —
+// no connection exists to aggregate, so credential_required + the
+// readonlyCredential missing field is the honest report.
+func TestQueryTargetService_List_PGNoConnectionsKeepsLegacyDerivation(t *testing.T) {
+	store := newFakeCredentialStore()
+	target := credentialTarget("postgresql", "db.internal", 5432, "staging")
+	svc := NewQueryTargetService(fakeTargetRepo{targets: []model.QueryTarget{target}}).
+		WithCredentialReader(store).
+		WithCredentialResolver(&fakeResolver{}).
+		WithConnectionLister(store)
+
+	got, _, err := svc.List(context.Background(), model.QueryTargetListQuery{})
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if got[0].Readiness != model.ReadinessCredentialRequired {
+		t.Fatalf("readiness = %q, want credential_required", got[0].Readiness)
+	}
+	if got[0].Governance.CredentialState != "missing_metadata" {
+		t.Fatalf("credentialState = %q, want missing_metadata (no rows to aggregate)", got[0].Governance.CredentialState)
+	}
+	if !slices.Contains(got[0].MissingFields, "readonlyCredential") {
+		t.Fatalf("missingFields = %v, want readonlyCredential", got[0].MissingFields)
 	}
 }
