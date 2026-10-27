@@ -145,17 +145,19 @@ func Build(db *sql.DB, cfg config.Config) (api.Dependencies, Parts) {
 		service.NewExplainAuditRecorder(queryExecutionRepo),
 	)
 
-	// Release assembly gate: CONTROLHUB_PG_HTTP_ENTRIES=on opens both
+	// Release assembly gate: CONTROLHUB_PG_HTTP_ENTRIES=on opens the
 	// construction-time capabilities atomically in this single branch —
-	// the PG HTTP execution entries and the connections[] read model.
-	// One flag flips both, so no deployment can reach a half-enabled state
-	// (entries without the read model, or vice versa). With the flag off
-	// the graph stays exactly the default-closed production shape. Opening
-	// here grants no connection any privilege: enabled, environment_policy,
-	// and credential binding still govern every request.
+	// the PG HTTP execution entries, the connections[] read model, and the
+	// PG Explain dispatch. One flag flips all, so no deployment can reach a
+	// half-enabled state (entries without the read model, or vice versa).
+	// With the flag off the graph stays exactly the default-closed
+	// production shape. Opening here grants no connection any privilege:
+	// enabled, environment_policy, and credential binding still govern
+	// every request.
 	if cfg.PGHTTPEntries {
 		queryExecutionSvc.WithPGHTTPEntries()
 		queryTargetSvc = queryTargetSvc.WithConnectionLister(queryExecutionRepo)
+		queryExplainSvc.WithPGExplain(service.NewPGExplainRunner(), service.NewPGExplainNormalizer())
 	}
 
 	return api.Dependencies{

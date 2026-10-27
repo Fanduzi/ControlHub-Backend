@@ -186,6 +186,7 @@ func (s *QueryTargetService) populateConnections(ctx context.Context, target *mo
 		// read-model capability, not an execution grant.
 		target.AvailableActions.Run = true
 		target.AvailableActions.Export = true
+		target.AvailableActions.Explain = true
 	} else if resolved && target.AvailableActions.Run {
 		// mysql/tidb with its own resolver-verified ''-row credential: the CSV
 		// affordance is granted only here (the test-only connections lister is

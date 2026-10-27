@@ -15,19 +15,20 @@ import (
 const ExplainFormatVersion = 1
 
 // ExplainEngine is the finite, validated enum of engines the v1 Explain
-// normalizer can emit. v1 ships MySQL only; TiDB fails closed because it
-// cannot satisfy the same bounded source contract.
+// normalizer can emit. MySQL and PostgreSQL are supported; TiDB fails
+// closed because it cannot satisfy the same bounded source contract.
 type ExplainEngine string
 
 const (
-	ExplainEngineMySQL ExplainEngine = "mysql"
+	ExplainEngineMySQL      ExplainEngine = "mysql"
+	ExplainEnginePostgreSQL ExplainEngine = "postgresql"
 )
 
 // Validate returns nil only for a known Explain engine. Unknown values fail
 // closed so the response can never relay arbitrary target metadata.
 func (e ExplainEngine) Validate() error {
 	switch e {
-	case ExplainEngineMySQL:
+	case ExplainEngineMySQL, ExplainEnginePostgreSQL:
 		return nil
 	}
 	return fmt.Errorf("invalid explain engine: %s", e)
@@ -36,28 +37,40 @@ func (e ExplainEngine) Validate() error {
 // ExplainRequest is the body of POST /query-targets/{id}/explain. Only the
 // worksheet statement is accepted; the actor is derived from the verified
 // token and the engine/governance context from target resolution.
+//
+// Database and Schema are the composite connection-identity selectors used
+// only by PostgreSQL targets — credentials are keyed by (target, database)
+// and the pinned schema scopes unqualified name resolution. They are
+// required for postgresql targets and ignored for mysql.
 type ExplainRequest struct {
 	Statement string `json:"statement"`
+	Database  string `json:"database,omitempty"`
+	Schema    string `json:"schema,omitempty"`
 }
 
 // ExplainNodeOperation is the finite enum of normalized plan node operations.
 type ExplainNodeOperation string
 
 const (
-	ExplainOpTableAccess   ExplainNodeOperation = "table_access"
-	ExplainOpIndexAccess   ExplainNodeOperation = "index_access"
-	ExplainOpNestedLoop    ExplainNodeOperation = "nested_loop"
-	ExplainOpSort          ExplainNodeOperation = "sort"
-	ExplainOpAggregate     ExplainNodeOperation = "aggregate"
-	ExplainOpTemporaryTbl  ExplainNodeOperation = "temporary_table"
-	ExplainOpUnknown       ExplainNodeOperation = "unknown"
+	ExplainOpTableAccess  ExplainNodeOperation = "table_access"
+	ExplainOpIndexAccess  ExplainNodeOperation = "index_access"
+	ExplainOpNestedLoop   ExplainNodeOperation = "nested_loop"
+	ExplainOpSort         ExplainNodeOperation = "sort"
+	ExplainOpAggregate    ExplainNodeOperation = "aggregate"
+	ExplainOpTemporaryTbl ExplainNodeOperation = "temporary_table"
+	// ExplainOpContainer marks known plan-structure nodes (LIMIT, Hash,
+	// Gather, Append …) kept for tree fidelity. They carry no access/risk
+	// semantics of their own.
+	ExplainOpContainer ExplainNodeOperation = "container"
+	ExplainOpUnknown   ExplainNodeOperation = "unknown"
 )
 
 // Validate returns nil only for a known operation.
 func (o ExplainNodeOperation) Validate() error {
 	switch o {
 	case ExplainOpTableAccess, ExplainOpIndexAccess, ExplainOpNestedLoop,
-		ExplainOpSort, ExplainOpAggregate, ExplainOpTemporaryTbl, ExplainOpUnknown:
+		ExplainOpSort, ExplainOpAggregate, ExplainOpTemporaryTbl,
+		ExplainOpContainer, ExplainOpUnknown:
 		return nil
 	}
 	return fmt.Errorf("invalid explain node operation: %s", o)
@@ -88,11 +101,11 @@ func (a ExplainNodeAccess) Validate() error {
 type ExplainRiskCode string
 
 const (
-	ExplainRiskFullTableScan    ExplainRiskCode = "full_table_scan"
-	ExplainRiskFilesort         ExplainRiskCode = "filesort"
-	ExplainRiskTemporaryTable   ExplainRiskCode = "temporary_table"
+	ExplainRiskFullTableScan     ExplainRiskCode = "full_table_scan"
+	ExplainRiskFilesort          ExplainRiskCode = "filesort"
+	ExplainRiskTemporaryTable    ExplainRiskCode = "temporary_table"
 	ExplainRiskHighEstimatedRows ExplainRiskCode = "high_estimated_rows"
-	ExplainRiskUnknownPlanShape ExplainRiskCode = "unknown_plan_shape"
+	ExplainRiskUnknownPlanShape  ExplainRiskCode = "unknown_plan_shape"
 )
 
 // Validate returns nil only for a known risk code.
@@ -125,10 +138,18 @@ func (s ExplainRiskSeverity) Validate() error {
 	return fmt.Errorf("invalid explain risk severity: %s", s)
 }
 
+// MaxExplainNodeLabelLen bounds the engine node label carried on the wire.
+// Labels come only from fixed planner vocabulary (PostgreSQL "Node Type"),
+// never from user-controlled text — the bound is a defense-in-depth wire cap.
+const MaxExplainNodeLabelLen = 64
+
 // ExplainNode is one normalized plan node. No free-form engine strings,
 // relation names, index names, predicates, or literals leave the normalizer.
-// EstimatedRows is omitted (nil) when the engine does not report it or when
-// the value would exceed Number.MAX_SAFE_INTEGER (2^53-1) on the wire.
+// Label carries the engine's planner-vocabulary node name (e.g. "Seq Scan"),
+// StartupCost/TotalCost the planner's own scalar estimates; all three are
+// engine metadata, never user data. EstimatedRows is omitted (nil) when the
+// engine does not report it or when the value would exceed
+// Number.MAX_SAFE_INTEGER (2^53-1) on the wire.
 type ExplainNode struct {
 	ID            string               `json:"id"`
 	ParentID      *string              `json:"parentId,omitempty"`
@@ -136,9 +157,13 @@ type ExplainNode struct {
 	Access        ExplainNodeAccess    `json:"access"`
 	EstimatedRows *uint64              `json:"estimatedRows,omitempty"`
 	UsesIndex     *bool                `json:"usesIndex,omitempty"`
+	Label         string               `json:"label,omitempty"`
+	StartupCost   *float64             `json:"startupCost,omitempty"`
+	TotalCost     *float64             `json:"totalCost,omitempty"`
 }
 
-// Validate returns nil only if every enum field is known and the ID is non-empty.
+// Validate returns nil only if every enum field is known, the ID is non-empty,
+// and the label stays inside its wire bound.
 func (n ExplainNode) Validate() error {
 	if n.ID == "" {
 		return errors.New("explain node id is required")
@@ -148,6 +173,9 @@ func (n ExplainNode) Validate() error {
 	}
 	if err := n.Access.Validate(); err != nil {
 		return err
+	}
+	if len(n.Label) > MaxExplainNodeLabelLen {
+		return fmt.Errorf("explain node label exceeds %d bytes", MaxExplainNodeLabelLen)
 	}
 	return nil
 }

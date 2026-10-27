@@ -1,7 +1,7 @@
 // Package service provides the governed Explain service for Phase 38N.
-// input: context, errors, fmt, time, internal/model
-// output: QueryExplainService, NewQueryExplainService, ExplainAuditRecorder (interface), QueryExplainAuditRepository (interface)
-// pos: Orchestrates governed target access, SELECT-only guard, typed Explain executor, normalization, and fixed audit
+// input: context, errors, fmt, time, internal/model, internal/pgsql
+// output: QueryExplainService, NewQueryExplainService, WithPGExplain, ExplainAuditRecorder (interface), QueryExplainAuditRepository (interface)
+// pos: Orchestrates governed target access, engine-dispatched SELECT-only guard (Vitess for MySQL, pg_query for PostgreSQL), typed Explain executor, normalization, and fixed audit
 // note: if this file changes, update header and README.md
 package service
 
@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/fan/controlhub/internal/model"
+	"github.com/fan/controlhub/internal/pgsql"
 )
 
 // Explain timeouts mirror the execute path's bounded policy. Production gets
@@ -44,6 +45,14 @@ type QueryExplainService struct {
 	normalizer *ExplainNormalizer
 	clock      Clock
 	audit      QueryExplainAuditRecorder
+
+	// pgRunner/pgNormalizer are the construction-time PostgreSQL capability.
+	// Nil means the default-closed production shape: postgresql targets
+	// answer query_explain_not_supported. They are set only by
+	// WithPGExplain, which serverboot calls under the same
+	// CONTROLHUB_PG_HTTP_ENTRIES release gate as execution.
+	pgRunner     PGExplainExecutor
+	pgNormalizer *PGExplainNormalizer
 }
 
 // NewQueryExplainService wires the service. guard is the same concrete
@@ -68,6 +77,20 @@ func NewQueryExplainService(
 	}
 }
 
+// WithPGExplain installs the construction-time PostgreSQL Explain
+// capability: postgresql targets dispatch through the PG-native guard,
+// connection identity, and plan normalizer. It is a release gate only —
+// connection enabled state, environment policy, credential binding, the
+// read-only guard, and the bounded plan contract all still apply, and it
+// never widens user privileges. Production assembly enables it under the
+// same CONTROLHUB_PG_HTTP_ENTRIES flag as execution; with the flag off a
+// postgresql target answers query_explain_not_supported.
+func (s *QueryExplainService) WithPGExplain(runner PGExplainExecutor, normalizer *PGExplainNormalizer) *QueryExplainService {
+	s.pgRunner = runner
+	s.pgNormalizer = normalizer
+	return s
+}
+
 // Explain runs one governed EXPLAIN for a target and returns the normalized
 // v1 response. The order (design line 35-46):
 //
@@ -82,6 +105,17 @@ func NewQueryExplainService(
 // InsertExecution — this is a structural guarantee that Explain cannot create
 // a query_executions row.
 func (s *QueryExplainService) Explain(ctx context.Context, actorUserID uint64, targetID uint64, req model.ExplainRequest) (model.ExplainResponse, error) {
+	// Engine dispatch needs the target before the engine-specific
+	// credential path is chosen: postgresql credentials are keyed by
+	// (target, database), not the empty-database MySQL convention.
+	target, err := s.access.ResolveTarget(ctx, targetID)
+	if err != nil {
+		return model.ExplainResponse{}, err
+	}
+	if isPGEngine(target.ConnectionContext.Engine) {
+		return s.explainPG(ctx, actorUserID, target, req)
+	}
+
 	access, err := s.access.Resolve(ctx, actorUserID, targetID)
 	if err != nil {
 		if errors.Is(err, ErrQueryTargetNotFound) {
@@ -94,8 +128,6 @@ func (s *QueryExplainService) Explain(ctx context.Context, actorUserID uint64, t
 		}
 		return model.ExplainResponse{}, err
 	}
-
-	target := access.Target
 
 	if !isExplainEngine(target.ConnectionContext.Engine) {
 		s.recordAudit(ctx, actorUserID, target.ResourceID, model.ExplainAuditUnsupported)
@@ -147,6 +179,90 @@ func (s *QueryExplainService) Explain(ctx context.Context, actorUserID uint64, t
 	}, nil
 }
 
+// explainPG runs governed EXPLAIN for a PostgreSQL target. The order mirrors
+// the MySQL path with PG-native pieces: (target,database) connection access
+// via ResolvePGExecution, the pg_query read-only SELECT guard, a read-only
+// transaction with the pinned search_path and an armed statement_timeout,
+// EXPLAIN (FORMAT JSON), then the PG normalizer. It never executes the bare
+// SELECT (ANALYZE is never requested) and never creates a query_executions
+// row.
+func (s *QueryExplainService) explainPG(ctx context.Context, actorUserID uint64, target model.QueryTarget, req model.ExplainRequest) (model.ExplainResponse, error) {
+	if s.pgRunner == nil || s.pgNormalizer == nil {
+		// Release gate closed: PG Explain is not part of this build's HTTP
+		// surface. Same verdict as an unsupported engine.
+		s.recordAudit(ctx, actorUserID, target.ResourceID, model.ExplainAuditUnsupported)
+		return model.ExplainResponse{}, ErrQueryExplainNotSupported
+	}
+
+	access, err := s.access.ResolvePGExecution(ctx, target.ResourceID, req.Database)
+	if err != nil {
+		if errors.Is(err, ErrQueryTargetNotFound) {
+			return model.ExplainResponse{}, err
+		}
+		s.recordAudit(ctx, actorUserID, target.ResourceID, model.ExplainAuditRejected)
+		if errors.Is(err, ErrSchemaValidationFailed) {
+			// An empty database names no connection identity — the same
+			// request-shape sentinel the schema entries return; the handler
+			// maps it to schema_validation_failed like those routes do.
+			return model.ExplainResponse{}, ErrSchemaValidationFailed
+		}
+		return model.ExplainResponse{}, pgAccessRefusalError(err)
+	}
+
+	// The pg_query guard proves a single read-only SelectStmt — the PG
+	// counterpart of GuardExplainSelect. A user-typed EXPLAIN or any
+	// non-SELECT is rejected here, before any wire traffic.
+	if _, err := pgsql.GuardPG(req.Statement); err != nil {
+		s.recordAudit(ctx, actorUserID, target.ResourceID, model.ExplainAuditRejected)
+		return model.ExplainResponse{}, fmt.Errorf("%w: statement is not a permitted read-only SELECT", ErrQueryValidationFailed)
+	}
+
+	// An empty schema resolves to the connection's configured default, the
+	// same rule the keyed execute entries apply.
+	pinnedSchema := req.Schema
+	if pinnedSchema == "" {
+		pinnedSchema = access.Credential.DefaultSchema
+	}
+
+	timeout := defaultExplainTimeout
+	if isProductionEnvironment(target.ConnectionContext.Environment) {
+		timeout = productionExplainTimeout
+	}
+	execCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+
+	raw, err := s.pgRunner.Explain(execCtx, access.pgConfig, pinnedSchema, req.Statement)
+	if err != nil {
+		if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, ErrQueryTimeout) {
+			s.recordAudit(ctx, actorUserID, target.ResourceID, model.ExplainAuditError)
+			return model.ExplainResponse{}, ErrQueryTimeout
+		}
+		if errors.Is(err, ErrQueryExplainNotSupported) {
+			s.recordAudit(ctx, actorUserID, target.ResourceID, model.ExplainAuditUnsupported)
+			return model.ExplainResponse{}, ErrQueryExplainNotSupported
+		}
+		s.recordAudit(ctx, actorUserID, target.ResourceID, model.ExplainAuditError)
+		return model.ExplainResponse{}, ErrQueryBackendFailure
+	}
+
+	result, err := s.pgNormalizer.Normalize(raw)
+	if err != nil {
+		s.recordAudit(ctx, actorUserID, target.ResourceID, model.ExplainAuditUnsupported)
+		return model.ExplainResponse{}, ErrQueryExplainNotSupported
+	}
+
+	s.recordAudit(ctx, actorUserID, target.ResourceID, model.ExplainAuditSuccess)
+
+	return model.ExplainResponse{
+		TargetResourceID: target.ResourceID,
+		Engine:           model.ExplainEnginePostgreSQL,
+		FormatVersion:    model.ExplainFormatVersion,
+		Nodes:            result.Nodes,
+		Risks:            result.Risks,
+		Truncated:        result.Truncated,
+	}, nil
+}
+
 // recordAudit is best-effort. Unlike execute's persist-or-fail policy, an
 // unaudited Explain attempt does not create the silent-data-access risk that
 // justifies execute's strictness — Explain returns no rows and only
@@ -159,12 +275,12 @@ func (s *QueryExplainService) recordAudit(ctx context.Context, actorUserID, targ
 }
 
 // isExplainEngine reports whether an engine supports the v1 Explain
-// normalizer. MySQL only in v1 (compatibility spike: TiDB v8.5 rejects
-// EXPLAIN FORMAT=JSON). This is strictly narrower than isExecutableEngine,
-// which includes TiDB.
+// normalizer. MySQL and PostgreSQL in v1 (compatibility spike: TiDB v8.5
+// rejects EXPLAIN FORMAT=JSON). This is strictly narrower than
+// isExecutableEngine, which includes TiDB.
 func isExplainEngine(engine string) bool {
 	switch normalizeEngineName(engine) {
-	case "mysql":
+	case "mysql", "postgresql":
 		return true
 	}
 	return false

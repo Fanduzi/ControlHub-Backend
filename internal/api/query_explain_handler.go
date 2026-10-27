@@ -74,6 +74,14 @@ func writeQueryExplainError(w http.ResponseWriter, err error) {
 		writeJSONError(w, http.StatusForbidden, "query_not_allowed", "target is not enabled for execution")
 	case errors.Is(err, service.ErrQueryTargetNotFound):
 		writeJSONError(w, http.StatusNotFound, "query_target_not_found", "query target not found")
+	case errors.Is(err, service.ErrSchemaValidationFailed):
+		writeJSONError(w, http.StatusBadRequest, "schema_validation_failed", "database is required")
+	case errors.Is(err, service.ErrSchemaConnectionNotFound):
+		writeJSONError(w, http.StatusNotFound, "query_connection_not_found", "query connection not found")
+	case errors.Is(err, service.ErrSchemaConnectionDisabled):
+		writeJSONError(w, http.StatusForbidden, "query_connection_disabled", "query connection disabled")
+	case errors.Is(err, service.ErrSchemaBindingMismatch):
+		writeJSONError(w, http.StatusForbidden, "dsn_binding_mismatch", "dsn binding mismatch")
 	case errors.Is(err, service.ErrQueryExplainNotSupported):
 		writeJSONError(w, http.StatusConflict, "query_explain_not_supported", "explain is not supported for this target engine")
 	case errors.Is(err, service.ErrQueryTimeout):

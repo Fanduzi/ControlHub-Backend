@@ -52,7 +52,9 @@ jobs:
           go-version-file: go.mod
           cache: true
       - name: Install Schemathesis
-        run: python -m pip install --upgrade "schemathesis==4.15.2"
+        # hypothesis-jsonschema 0.23.1 relies on hypothesis internals removed
+        # in >=6.170.10 ("many" object has no attribute "more"); pin below it.
+        run: python -m pip install --upgrade "schemathesis==4.15.2" "hypothesis<6.170.10"
       - name: Run backend Docker release gates
         run: make release-docker-gates
       - name: Upload Schemathesis reports
