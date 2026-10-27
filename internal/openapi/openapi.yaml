@@ -588,19 +588,25 @@ paths:
       summary: Explain a read-only SELECT against a query target
       operationId: explainQueryTarget
       description: >
-        Phase 38N governed Explain. Runs EXPLAIN FORMAT=JSON against a
+        Phase 38N governed Explain. Runs the engine Explain form against a
         parser-approved bare SELECT under the same governed target access,
-        credential binding, timeout, and read-only transaction as execution.
-        The browser sends only the worksheet statement; it never constructs
-        EXPLAIN, engine-specific syntax, or actor/credential fields. The
-        backend owns wrapping the guarded SELECT in the engine Explain
-        syntax and normalizing the raw plan into a bounded, versioned, leak-
-        free response. Explain never executes the underlying bare SELECT and
-        never creates a query_executions row.
-        MySQL is the only supported engine in v1; TiDB rejects EXPLAIN
-        FORMAT=JSON and returns query_explain_not_supported. Requires a fresh
-        Bearer token (bounded TTL). The actor is derived from the verified
-        token and is never accepted in the request body.
+        credential binding, timeout, and read-only transaction as execution
+        (EXPLAIN FORMAT=JSON for MySQL; EXPLAIN (FORMAT JSON) for
+        PostgreSQL). The browser sends only the worksheet statement plus the
+        (database, schema) connection identity required by postgresql
+        targets; it never constructs EXPLAIN, engine-specific syntax, or
+        actor/credential fields. The backend owns wrapping the guarded
+        SELECT in the engine Explain syntax and normalizing the raw plan
+        into a bounded, versioned, leak-free response. Explain never
+        executes the underlying bare SELECT and never creates a
+        query_executions row.
+        MySQL and PostgreSQL are supported; TiDB rejects EXPLAIN FORMAT=JSON
+        and returns query_explain_not_supported. PostgreSQL Explain follows
+        the same CONTROLHUB_PG_HTTP_ENTRIES release gate as execution — with
+        the gate closed a postgresql target answers
+        query_explain_not_supported. Requires a fresh Bearer token (bounded
+        TTL). The actor is derived from the verified token and is never
+        accepted in the request body.
       security:
         - bearerAuth: []
       parameters:
@@ -7530,14 +7536,29 @@ components:
       required: [statement]
       description: >
         The body of POST /query-targets/{id}/explain. Only the worksheet
-        statement is accepted; the actor is derived from the verified token
-        and the engine/governance context from target resolution. The browser
-        must never construct EXPLAIN, engine-specific syntax, or send
-        actor/role/credential/DSN fields.
+        statement plus the connection-identity selectors are accepted; the
+        actor is derived from the verified token and the engine/governance
+        context from target resolution. The browser must never construct
+        EXPLAIN, engine-specific syntax, or send actor/role/credential/DSN
+        fields.
       properties:
         statement:
           type: string
           description: A single bare parser-approved SELECT. Typed EXPLAIN, SHOW, DESCRIBE, DML, DDL, multi-statement, and unsafe functions are rejected.
+        database:
+          type: string
+          maxLength: 128
+          description: >
+            PostgreSQL composite connection identity — required for
+            postgresql targets (credentials are keyed by target and
+            database), ignored for mysql.
+        schema:
+          type: string
+          maxLength: 128
+          description: >
+            PostgreSQL pinned schema for unqualified name resolution;
+            omitted resolves to the connection's configured default schema.
+            Ignored for mysql.
     ExplainNode:
       type: object
       additionalProperties: false
@@ -7555,7 +7576,11 @@ components:
           description: The enclosing node's ID, or null for the root.
         operation:
           type: string
-          enum: [table_access, index_access, nested_loop, sort, aggregate, temporary_table, unknown]
+          enum: [table_access, index_access, nested_loop, sort, aggregate, temporary_table, container, unknown]
+          description: >
+            Normalized operation. `container` marks known plan-structure
+            nodes (Limit, Hash, Gather, Append …) kept for tree fidelity;
+            they carry no access or risk semantics.
         access:
           type: string
           enum: [full_scan, index, unique_row, range, unknown]
@@ -7568,6 +7593,22 @@ components:
         usesIndex:
           type: boolean
           nullable: true
+        label:
+          type: string
+          maxLength: 64
+          description: >
+            The engine's planner-vocabulary node name (PostgreSQL "Node
+            Type" such as "Seq Scan" / "Nested Loop"). Engine metadata only
+            — relation names, index names, predicates, and literals are
+            never exposed.
+        startupCost:
+          type: number
+          nullable: true
+          description: Planner's own startup-cost scalar estimate (PostgreSQL "Startup Cost").
+        totalCost:
+          type: number
+          nullable: true
+          description: Planner's own total-cost scalar estimate (PostgreSQL "Total Cost").
     ExplainRisk:
       type: object
       additionalProperties: false
@@ -7600,8 +7641,8 @@ components:
           format: int64
         engine:
           type: string
-          enum: [mysql]
-          description: v1 supports MySQL only. TiDB fails closed because it rejects EXPLAIN FORMAT=JSON.
+          enum: [mysql, postgresql]
+          description: v1 supports MySQL and PostgreSQL. TiDB fails closed because it rejects EXPLAIN FORMAT=JSON.
         formatVersion:
           type: integer
           description: Always 1 in v1. Unknown future versions fail closed.

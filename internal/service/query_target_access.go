@@ -270,6 +270,13 @@ func (r *TargetAccessResolver) resolvePGMetadata(ctx context.Context, target mod
 	}, nil
 }
 
+// ResolveTarget reads the target row only — engine dispatch needs the
+// engine before the engine-specific credential path is chosen. A missing
+// target maps to ErrQueryTargetNotFound.
+func (r *TargetAccessResolver) ResolveTarget(ctx context.Context, targetID uint64) (model.QueryTarget, error) {
+	return r.findTarget(ctx, targetID)
+}
+
 // findTarget locates a single query target by id. A read error or missing
 // target maps to ErrQueryTargetNotFound so callers fail closed.
 func (r *TargetAccessResolver) findTarget(ctx context.Context, targetID uint64) (model.QueryTarget, error) {
