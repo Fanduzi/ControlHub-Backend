@@ -116,14 +116,15 @@ container_running() {
 }
 
 wait_ready() {
-  # Use a real authenticated query, NOT `mysqladmin ping`: ping can report
-  # success against the entrypoint's temporary init server before the real
-  # server (with the configured root password) is up, which would let setup
-  # run against the temp server and fail. This returns only once root with the
-  # fixture password can actually execute a statement.
+  # Probe over TCP, NOT the container-local socket: the image's entrypoint
+  # runs a temporary init server with --skip-networking that already has the
+  # root password applied, so a socket probe can succeed moments before the
+  # temp server shuts down and let the first seed exec hit the restart gap
+  # (ERROR 2002). A TCP probe can only succeed once the real, networked
+  # server is listening — temp-server answers are impossible by definition.
   local i=0
   while [ "$i" -lt "$READY_TIMEOUT" ]; do
-    if docker exec -e MYSQL_PWD="$1" "$CONTAINER" mysql -uroot -N -e "select 1" >/dev/null 2>&1; then
+    if docker exec -e MYSQL_PWD="$1" "$CONTAINER" mysql -h127.0.0.1 -P3306 -uroot -N -e "select 1" >/dev/null 2>&1; then
       return 0
     fi
     i=$((i + 1))
