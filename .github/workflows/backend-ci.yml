@@ -29,6 +29,10 @@ jobs:
         with:
           go-version-file: go.mod
           cache: true
+      - name: Check Go formatting
+        run: test -z "$(gofmt -l $(git ls-files '*.go'))"
+      - name: Check reachable Go vulnerabilities
+        run: go run golang.org/x/vuln/cmd/govulncheck@v1.9.0 ./...
       - name: Run backend local release gates
         run: make release-local-gates
       - name: Run Argon2id verification-budget gate
@@ -52,9 +56,9 @@ jobs:
           go-version-file: go.mod
           cache: true
       - name: Install Schemathesis
-        # hypothesis-jsonschema 0.23.1 relies on hypothesis internals removed
-        # in >=6.170.10 ("many" object has no attribute "more"); pin below it.
-        run: python -m pip install --upgrade "schemathesis==4.15.2" "hypothesis<6.170.10"
+        # hypothesis-jsonschema 0.23.2 supports hypothesis >=6.170.10; exact
+        # pins verified by the array-generation compatibility probe.
+        run: python -m pip install "schemathesis==4.15.2" "hypothesis-jsonschema==0.23.2" "hypothesis==6.170.15"
       - name: Run backend Docker release gates
         run: make release-docker-gates
       - name: Upload Schemathesis reports

@@ -138,7 +138,9 @@ func TestGetLegacyHashCount_AuthMatrix(t *testing.T) {
 
 			// Admin path must return a valid count JSON.
 			if tc.wantStatus == http.StatusOK {
-				var resp struct{ Count int64 `json:"count"` }
+				var resp struct {
+					Count int64 `json:"count"`
+				}
 				if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
 					t.Fatalf("decode: %v", err)
 				}

@@ -230,7 +230,7 @@ cmd_up() {
     # MYSQL_ROOT_PASSWORD is required by the image on first init only; the value
     # is the local fixture password (hex), not printed here.
     docker run -d --name "$CONTAINER" \
-      -p "${PORT}:3306" \
+      -p "127.0.0.1:${PORT}:3306" \
       -e MYSQL_ROOT_PASSWORD="$PW" \
       -e MYSQL_DATABASE="$DATABASE" \
       "$IMAGE" >/dev/null

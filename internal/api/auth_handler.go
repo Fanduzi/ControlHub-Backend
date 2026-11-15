@@ -10,11 +10,17 @@ import (
 	"github.com/fan/controlhub/internal/service"
 )
 
-func handleLogin(authService *service.AuthService, emitter service.AuthAuditEmitter) http.HandlerFunc {
+func handleLogin(authService *service.AuthService, emitter service.AuthAuditEmitter, limiter *loginRateLimiter) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		r.Body = http.MaxBytesReader(w, r.Body, loginBodyMaxBytes)
 		var req model.LoginRequest
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			writeJSONError(w, http.StatusBadRequest, "invalid_payload", "invalid payload")
+			return
+		}
+
+		if !limiter.allow(r.RemoteAddr, req.Email) {
+			writeLoginRateLimited(w)
 			return
 		}
 

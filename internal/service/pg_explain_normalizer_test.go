@@ -113,8 +113,8 @@ func TestPGNestedPlanTree(t *testing.T) {
 	if got.Nodes[1].ParentID == nil || *got.Nodes[1].ParentID != got.Nodes[0].ID {
 		t.Errorf("index scan parent = %v, want %s", got.Nodes[1].ParentID, got.Nodes[0].ID)
 	}
-	if got.Nodes[2].Operation != model.ExplainOpNestedLoop || got.Nodes[2].Label != "Hash Join" {
-		t.Errorf("hash join = %s/%q, want nested_loop/\"Hash Join\"", got.Nodes[2].Operation, got.Nodes[2].Label)
+	if got.Nodes[2].Operation != model.ExplainOpHashJoin || got.Nodes[2].Label != "Hash Join" {
+		t.Errorf("hash join = %s/%q, want hash_join/\"Hash Join\"", got.Nodes[2].Operation, got.Nodes[2].Label)
 	}
 	// Hash is a kept container: it links under the Hash Join node (2), and
 	// the inner Seq Scan links to the Hash container (4).
@@ -129,26 +129,65 @@ func TestPGNestedPlanTree(t *testing.T) {
 	}
 }
 
-// TestPGSortAndMaterializeRisks proves the sort/temp-table warnings fire.
-func TestPGSortAndMaterializeRisks(t *testing.T) {
+// TestPGMergeJoinMapsToDistinctOp proves Merge Join is its own operation,
+// not collapsed into nested_loop or hash_join.
+func TestPGMergeJoinMapsToDistinctOp(t *testing.T) {
+	raw := pgRawPlan(t, `[{"Plan":{"Node Type":"Merge Join","Plan Rows":10,
+		"Plans":[{"Node Type":"Index Scan","Plan Rows":5},{"Node Type":"Index Scan","Plan Rows":5}]}}]`)
+	got, err := NewPGExplainNormalizer().Normalize(raw)
+	if err != nil {
+		t.Fatalf("Normalize: %v", err)
+	}
+	if got.Nodes[0].Operation != model.ExplainOpMergeJoin || got.Nodes[0].Label != "Merge Join" {
+		t.Errorf("merge join = %s/%q, want merge_join/\"Merge Join\"", got.Nodes[0].Operation, got.Nodes[0].Label)
+	}
+}
+
+// TestPGSortCacheAndWorktableNodesEmitNoWarnings proves PG plan nodes that
+// carry no engine spill evidence (Sort, Incremental Sort, Materialize,
+// Memoize, CTE Scan, WorkTable Scan) never emit the filesort or
+// temporary-table warnings, while a real Seq Scan still warns.
+func TestPGSortCacheAndWorktableNodesEmitNoWarnings(t *testing.T) {
 	raw := pgRawPlan(t, `[{"Plan":{"Node Type":"Sort","Plans":[
-		{"Node Type":"Materialize","Plans":[{"Node Type":"Seq Scan","Plan Rows":500}]}
+		{"Node Type":"Incremental Sort","Plans":[
+			{"Node Type":"Materialize","Plans":[
+				{"Node Type":"Memoize","Plans":[
+					{"Node Type":"CTE Scan","Plans":[
+						{"Node Type":"WorkTable Scan","Plans":[{"Node Type":"Seq Scan","Plan Rows":500}]}
+					]}
+				]}
+			]}
+		]}
 	]}}]`)
 	got, err := NewPGExplainNormalizer().Normalize(raw)
 	if err != nil {
 		t.Fatalf("Normalize: %v", err)
 	}
-	if got.Nodes[0].Operation != model.ExplainOpSort {
-		t.Errorf("root op = %s, want sort", got.Nodes[0].Operation)
+	wantOps := []model.ExplainNodeOperation{
+		model.ExplainOpSort,
+		model.ExplainOpSort,
+		model.ExplainOpContainer,
+		model.ExplainOpContainer,
+		model.ExplainOpTableAccess,
+		model.ExplainOpTableAccess,
+		model.ExplainOpTableAccess,
 	}
-	if got.Nodes[1].Operation != model.ExplainOpTemporaryTbl {
-		t.Errorf("child op = %s, want temporary_table", got.Nodes[1].Operation)
+	if len(got.Nodes) != len(wantOps) {
+		t.Fatalf("nodes = %d, want %d: %+v", len(got.Nodes), len(wantOps), got.Nodes)
+	}
+	for i, want := range wantOps {
+		if got.Nodes[i].Operation != want {
+			t.Errorf("node %d op = %s, want %s", i, got.Nodes[i].Operation, want)
+		}
 	}
 	codes := riskCodes(got)
-	for _, want := range []model.ExplainRiskCode{model.ExplainRiskFilesort, model.ExplainRiskTemporaryTable, model.ExplainRiskFullTableScan} {
-		if !containsRisk(codes, want) {
-			t.Errorf("missing risk %s in %v", want, codes)
+	for _, unwanted := range []model.ExplainRiskCode{model.ExplainRiskFilesort, model.ExplainRiskTemporaryTable} {
+		if containsRisk(codes, unwanted) {
+			t.Errorf("unexpected risk %s in %v", unwanted, codes)
 		}
+	}
+	if !containsRisk(codes, model.ExplainRiskFullTableScan) {
+		t.Errorf("missing risk %s in %v", model.ExplainRiskFullTableScan, codes)
 	}
 }
 

@@ -1,6 +1,6 @@
 module github.com/fan/controlhub
 
-go 1.26.2
+go 1.26.11
 
 require (
 	github.com/DATA-DOG/go-sqlmock v1.5.2
@@ -17,9 +17,9 @@ require (
 	github.com/testcontainers/testcontainers-go/modules/postgres v0.42.0
 	github.com/wasilibs/go-pgquery v0.0.0-20260721025817-45baeffb0133
 	golang.org/x/crypto v0.50.0
-	golang.org/x/sync v0.20.0
+	golang.org/x/sync v0.22.0
 	google.golang.org/protobuf v1.36.11
-	vitess.io/vitess v0.24.1
+	vitess.io/vitess v0.24.5
 )
 
 require (
@@ -93,7 +93,7 @@ require (
 	go.opentelemetry.io/otel/trace v1.43.0 // indirect
 	go.uber.org/multierr v1.11.0 // indirect
 	golang.org/x/sys v0.44.0 // indirect
-	golang.org/x/text v0.36.0 // indirect
+	golang.org/x/text v0.41.0 // indirect
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20260414002931-afd174a4e478 // indirect
 	google.golang.org/grpc v1.80.0 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect

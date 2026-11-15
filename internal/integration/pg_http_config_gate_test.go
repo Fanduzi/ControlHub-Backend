@@ -99,8 +99,8 @@ func TestPGHTTPConfigGate(t *testing.T) {
 			t.Fatalf("enabled execute: %d; body=%s", rr.Code, rr.Body.String())
 		}
 		var resp struct {
-			Status  string `json:"status"`
-			RowCount int   `json:"rowCount"`
+			Status   string `json:"status"`
+			RowCount int    `json:"rowCount"`
 		}
 		if err := json.Unmarshal(rr.Body.Bytes(), &resp); err != nil {
 			t.Fatalf("decode execute: %v", err)

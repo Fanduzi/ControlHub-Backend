@@ -26,9 +26,9 @@ func TestRunLocalPreserveThenImport_PreservesRebuildsAndImports(t *testing.T) {
 	var importConfig ImportConfig
 
 	err := runLocalPreserveThenImport(ctx, LocalCutoverConfig{
-		RuntimeDSN:      "controlhub:controlhub_dev@tcp(127.0.0.1:3306)/controlhub?parseTime=true&charset=utf8mb4",
-		PreserveDBName:  "controlhub_v1",
-		TargetDBName:    "controlhub",
+		RuntimeDSN:     "controlhub:controlhub_dev@tcp(127.0.0.1:3306)/controlhub?parseTime=true&charset=utf8mb4",
+		PreserveDBName: "controlhub_v1",
+		TargetDBName:   "controlhub",
 	}, localCutoverDeps{
 		openAdmin: func(string) (adminStore, error) { return admin, nil },
 		runMigrations: func(context.Context, string) error {

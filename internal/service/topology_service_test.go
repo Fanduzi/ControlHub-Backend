@@ -21,10 +21,10 @@ const (
 
 // fakeTopologyRepo implements TopologyRepository for testing.
 type fakeTopologyRepo struct {
-	resources          map[uint64]model.Resource
-	hidden             map[uint64]bool
-	relations          []model.ResourceRelation
-	candidateIDs       []uint64
+	resources            map[uint64]model.Resource
+	hidden               map[uint64]bool
+	relations            []model.ResourceRelation
+	candidateIDs         []uint64
 	topologyReadLimits   []int
 	candidateLimits      []int
 	getResourceCalls     int
