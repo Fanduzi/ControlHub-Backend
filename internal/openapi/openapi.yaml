@@ -187,6 +187,17 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/ErrorResponse"
+        "429":
+          description: Too many login attempts
+          headers:
+            Retry-After:
+              schema:
+                type: integer
+              description: Suggested retry delay in seconds.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
   /health:
     get:
       summary: Health check
@@ -7252,6 +7263,7 @@ components:
             - invalid_request
             - ingestion_conflict
             - ingestion_preview_stale
+            - login_rate_limited
             - machine_credential_expired
             - machine_credential_invalid
             - machine_credential_revoked
@@ -7571,7 +7583,7 @@ components:
           description: The enclosing node's ID, or null for the root.
         operation:
           type: string
-          enum: [table_access, index_access, nested_loop, sort, aggregate, temporary_table, container, unknown]
+          enum: [table_access, index_access, nested_loop, hash_join, merge_join, sort, aggregate, temporary_table, container, unknown]
           description: >
             Normalized operation. `container` marks known plan-structure
             nodes (Limit, Hash, Gather, Append …) kept for tree fidelity;

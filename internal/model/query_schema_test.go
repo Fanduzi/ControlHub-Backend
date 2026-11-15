@@ -487,7 +487,7 @@ func TestRelationshipMapResponseMarshalJSON(t *testing.T) {
 	t.Parallel()
 	resp := RelationshipMapResponse{
 		TargetResourceID: 22,
-		Root: RelationshipMapNode{ID: "n0", Database: "db", Name: "t1", Kind: ObjectKindTable, Role: RelationshipMapRoleRoot},
+		Root:             RelationshipMapNode{ID: "n0", Database: "db", Name: "t1", Kind: ObjectKindTable, Role: RelationshipMapRoleRoot},
 		// Intentionally leave Nodes/Edges as nil to test MarshalJSON defaults.
 	}
 	raw, err := json.Marshal(resp)

@@ -654,6 +654,7 @@ func TestOpenAPIErrorResponseErrorIsClosedControlledErrorCodeEnum(t *testing.T) 
 		"invalid_credentials",
 		"invalid_payload",
 		"invalid_request",
+		"login_rate_limited",
 		"machine_credential_expired",
 		"machine_credential_invalid",
 		"machine_credential_revoked",

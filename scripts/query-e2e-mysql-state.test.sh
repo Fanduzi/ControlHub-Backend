@@ -29,7 +29,7 @@ case "${1:-}" in
   ps) printf 'fx-a\n' ;;
   rm) exit 0 ;;
   start) exit 0 ;;
-  run) exit 0 ;;
+  run) printf '%s\n' "$*" >> "${DOCKER_STUB_RUN_LOG:-/dev/null}" ; exit 0 ;;
   *) echo "unexpected docker command" >&2; exit 97 ;;
 esac
 EOF
@@ -67,8 +67,10 @@ run_up "$ROOT/fresh" >/dev/null 2>&1
 # --- Identity isolation: two identities, distinct non-clobbering state ---
 ID_A="QUERY_E2E_MYSQL_CONTAINER=fx-a QUERY_E2E_MYSQL_PORT=13310 QUERY_E2E_MYSQL_DATABASE=query_e2e QUERY_E2E_MYSQL_READONLY_USER=query_e2e_ro"
 ID_B="QUERY_E2E_MYSQL_CONTAINER=fx-b QUERY_E2E_MYSQL_PORT=13311 QUERY_E2E_MYSQL_DATABASE=query_e2e QUERY_E2E_MYSQL_READONLY_USER=query_e2e_ro"
+export DOCKER_STUB_RUN_LOG="$ROOT/docker-run.args"
 # shellcheck disable=SC2086
 run_up "$ROOT/dir-a" $ID_A >/dev/null 2>&1
+grep -q '127.0.0.1:13310' "$DOCKER_STUB_RUN_LOG"
 # shellcheck disable=SC2086
 P_A="$(env_file $ID_A)"
 cp "$P_A" "$ROOT/pa.before"

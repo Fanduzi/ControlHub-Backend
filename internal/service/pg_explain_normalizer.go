@@ -100,16 +100,20 @@ func (c *normCtx) pgWalk(node map[string]interface{}, parentID string, depth int
 		emitParent = c.emitPGNode(parentID, model.ExplainOpTableAccess, model.ExplainAccessUniqueRow, node, boolPtr(true))
 	case "Tid Range Scan":
 		emitParent = c.emitPGNode(parentID, model.ExplainOpTableAccess, model.ExplainAccessRange, node, nil)
-	case "Nested Loop", "Hash Join", "Merge Join":
+	case "Nested Loop":
 		emitParent = c.emitPGNode(parentID, model.ExplainOpNestedLoop, model.ExplainAccessUnknown, node, nil)
+	case "Hash Join":
+		emitParent = c.emitPGNode(parentID, model.ExplainOpHashJoin, model.ExplainAccessUnknown, node, nil)
+	case "Merge Join":
+		emitParent = c.emitPGNode(parentID, model.ExplainOpMergeJoin, model.ExplainAccessUnknown, node, nil)
 	case "Sort", "Incremental Sort":
 		emitParent = c.emitPGNode(parentID, model.ExplainOpSort, model.ExplainAccessUnknown, node, nil)
-		c.addRisk(model.ExplainRiskFilesort, model.ExplainSeverityWarning)
 	case "Aggregate", "HashAggregate", "GroupAggregate", "Partial HashAggregate":
 		emitParent = c.emitPGNode(parentID, model.ExplainOpAggregate, model.ExplainAccessUnknown, node, nil)
-	case "Materialize", "CTE Scan", "WorkTable Scan", "Memoize":
-		emitParent = c.emitPGNode(parentID, model.ExplainOpTemporaryTbl, model.ExplainAccessUnknown, node, nil)
-		c.addRisk(model.ExplainRiskTemporaryTable, model.ExplainSeverityWarning)
+	case "Materialize", "Memoize":
+		emitParent = c.emitPGNode(parentID, model.ExplainOpContainer, model.ExplainAccessUnknown, node, nil)
+	case "CTE Scan", "WorkTable Scan":
+		emitParent = c.emitPGNode(parentID, model.ExplainOpTableAccess, model.ExplainAccessUnknown, node, nil)
 	case "Function Scan", "Values Scan", "Table Function Scan", "Sample Scan", "Foreign Scan":
 		emitParent = c.emitPGNode(parentID, model.ExplainOpTableAccess, model.ExplainAccessUnknown, node, nil)
 	default:

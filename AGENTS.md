@@ -1,6 +1,6 @@
 # Agent Instructions
 
-- Token limits: **4,000 per task; 30,000 per session**. When approaching a limit, summarize and start fresh. Report any breach.
+- Use small, bounded work packets and checkpoint after meaningful changes. Before context becomes crowded, save verified state, evidence paths, unresolved blockers and the next action. Do not stop or claim completion solely because of an unverifiable token estimate.
 - After each significant step, report what changed, what is verified, and what remains. Completion reports must disclose skipped work, skipped tests, and uncertainty.
 - Use the model for judgment: classification, drafting, summarization, and extraction. Use deterministic code for routing, retries, and deterministic transforms; if code can answer, code answers.
 

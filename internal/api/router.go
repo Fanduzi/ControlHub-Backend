@@ -3,6 +3,7 @@ package api
 
 import (
 	"net/http"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 
@@ -67,21 +68,6 @@ type Dependencies struct {
 	AuthAuditEmitter service.AuthAuditEmitter
 }
 
-func corsLocalDev(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Header.Get("Origin") == "http://localhost:3000" {
-			w.Header().Set("Access-Control-Allow-Origin", "http://localhost:3000")
-			w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS")
-			w.Header().Set("Access-Control-Allow-Headers", "Authorization, Content-Type")
-		}
-		if r.Method == http.MethodOptions {
-			w.WriteHeader(http.StatusNoContent)
-			return
-		}
-		next.ServeHTTP(w, r)
-	})
-}
-
 func NewRouter(deps Dependencies) *chi.Mux {
 	emitter := deps.AuthAuditEmitter
 	if emitter == nil {
@@ -96,9 +82,8 @@ func NewRouter(deps Dependencies) *chi.Mux {
 	emitter = service.NewBoundedAuthAuditEmitter(emitter, service.ProcessBearerRejectBudget)
 
 	router := chi.NewRouter()
-	router.Use(corsLocalDev)
 	router.Get("/health", handleHealth)
-	router.Post("/auth/login", handleLogin(deps.AuthService, emitter))
+	router.Post("/auth/login", handleLogin(deps.AuthService, emitter, newLoginRateLimiter(time.Now)))
 	router.Get("/openapi.yaml", handleOpenAPIYAML)
 	router.Get("/docs", handleDocs)
 	requireUser := requireAuthenticatedActor(deps.AuthService, deps.QueryExecutionAuth, emitter)

@@ -51,6 +51,8 @@ const (
 	ExplainOpTableAccess  ExplainNodeOperation = "table_access"
 	ExplainOpIndexAccess  ExplainNodeOperation = "index_access"
 	ExplainOpNestedLoop   ExplainNodeOperation = "nested_loop"
+	ExplainOpHashJoin     ExplainNodeOperation = "hash_join"
+	ExplainOpMergeJoin    ExplainNodeOperation = "merge_join"
 	ExplainOpSort         ExplainNodeOperation = "sort"
 	ExplainOpAggregate    ExplainNodeOperation = "aggregate"
 	ExplainOpTemporaryTbl ExplainNodeOperation = "temporary_table"
@@ -65,6 +67,7 @@ const (
 func (o ExplainNodeOperation) Validate() error {
 	switch o {
 	case ExplainOpTableAccess, ExplainOpIndexAccess, ExplainOpNestedLoop,
+		ExplainOpHashJoin, ExplainOpMergeJoin,
 		ExplainOpSort, ExplainOpAggregate, ExplainOpTemporaryTbl,
 		ExplainOpContainer, ExplainOpUnknown:
 		return nil

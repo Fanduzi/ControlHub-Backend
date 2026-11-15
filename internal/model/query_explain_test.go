@@ -31,6 +31,7 @@ func TestExplainEngineValidate(t *testing.T) {
 func TestExplainNodeOperationValidate(t *testing.T) {
 	valid := []ExplainNodeOperation{
 		ExplainOpTableAccess, ExplainOpIndexAccess, ExplainOpNestedLoop,
+		ExplainOpHashJoin, ExplainOpMergeJoin,
 		ExplainOpSort, ExplainOpAggregate, ExplainOpTemporaryTbl, ExplainOpUnknown,
 	}
 	for _, o := range valid {
@@ -220,7 +221,7 @@ func TestExplainResponseJSONRoundTrip(t *testing.T) {
 		FormatVersion:    1,
 		Nodes: []ExplainNode{{
 			ID:            "0",
-			ParentID:       nil,
+			ParentID:      nil,
 			Operation:     ExplainOpTableAccess,
 			Access:        ExplainAccessFullScan,
 			EstimatedRows: uint64Ptr(120000),

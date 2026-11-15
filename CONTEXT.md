@@ -425,6 +425,18 @@ Bearer Credential used by programmatic clients and server-to-server calls. It
 has a fixed eight-hour maximum age matching query freshness; expiry requires
 an interactive login before any console operation resumes.
 
+### Login Attempt Budget
+
+The per-process fixed-window limit applied to POST /auth/login: at most 120
+attempts per source IP and 30 per normalized account within 60 seconds, both
+checked before any credential verification. Only admitted
+credential-verification attempts consume quota, whether their credentials
+later succeed or fail; a request refused by the limiter consumes nothing.
+Refusals answer HTTP 429 `login_rate_limited` with `Retry-After: 60`. The
+source IP is the socket RemoteAddr only — forwarding headers are never
+trusted. This is in-memory defense, not a persistent account lock; a shared
+BFF remote address shares one IP bucket.
+
 ### Console Origin
 
 The single configured web origin permitted to use an Operator Session. State

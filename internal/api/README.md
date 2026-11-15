@@ -1,11 +1,11 @@
 # API Module
 
-HTTP handlers, chi routing, CORS middleware, and fake-repo test infrastructure.
+HTTP handlers, chi routing, the login rate limiter, and fake-repo test infrastructure.
 
 ## Files
 | File | Responsibility |
 |------|---------------|
-| router.go | Route registration, including user-or-machine scoped inventory/dictionary/named-view/topology reads, reserved collector-scoped ingestion/health routes with an admin User alternative, user-only ordinary mutations, Operator Access Boundary middleware, Dependencies, CORS, and bounded auth-audit wiring; `chmp_` credentials never fall back to User auth |
+| router.go | Route registration, including user-or-machine scoped inventory/dictionary/named-view/topology reads, reserved collector-scoped ingestion/health routes with an admin User alternative, user-only ordinary mutations, Operator Access Boundary middleware, Dependencies, and bounded auth-audit wiring; `chmp_` credentials never fall back to User auth. Same-origin BFF needs no CORS middleware |
 | ingestion_handler.go | Bounded strict multipart CSV/JSON ingestion: non-empty admin User preview, verified collector preview including canonical empty fingerprints, and terminal confirmation with required scan metadata and controlled retry/state-capacity conflict mapping |
 | health_handler.go | GET /health endpoint |
 | resource_handler.go | Resource list/detail identity, bounded key/key:value label filtering, health, and server-derived completeness fields; explicit identity conflicts, machine observations attributed to the verified stable principal name, non-audited observation ingestion, and PATCH changes through atomic inventory audit |
@@ -13,7 +13,8 @@ HTTP handlers, chi routing, CORS middleware, and fake-repo test infrastructure.
 | relation_handler.go | Resource relation reads, source-specific rule discovery, and token-derived atomic audited create/delete handlers |
 | topology_handler.go | Resource-rooted and environment-scoped topology workspace read handlers |
 | audit_handler.go | Audit event list handlers (global and per-resource), including privacy-safe actor labels, pagination, target-resource/environment filters, search, and inventory field changes |
-| auth_handler.go | POST /auth/login handler |
+| auth_handler.go | POST /auth/login handler: 16 KiB body cap, then the per-process fixed-window limiter (120/IP + 30/account per 60 s, RemoteAddr only — forwarding headers never trusted) before any hashing or repository work; refusals answer `login_rate_limited` + `Retry-After: 60` |
+| login_rate_limiter.go | Mutex-guarded fixed-window login limiter with injected clock; one namespaced map checks both quotas and the 10 000-key bound before any counter or key is written, so only admitted credential-verification attempts consume quota |
 | auth_middleware.go | User Bearer, role, Authorization Version, and query-freshness middleware; machine-prefixed credentials are rejected without User/session fallback |
 | machine_credential_middleware.go | Independent opaque machine authentication and the shared user-or-machine scope guard |
 | machine_principal_handler.go | Admin-only machine principal create/list and credential rotate/revoke handlers |
@@ -35,6 +36,7 @@ HTTP handlers, chi routing, CORS middleware, and fake-repo test infrastructure.
 | topology_handler_test.go | Topology endpoint tests, including default depth, deeper traversals, and environment workspace starts |
 | audit_handler_test.go | Audit list contract tests, including privacy-safe actor labels and field-level before/after changes |
 | auth_handler_test.go | Auth endpoint tests |
+| login_rate_limiter_test.go | Limiter boundary/expiry/normalization/saturation proofs, 429+`Retry-After` refusal before auth work, X-Forwarded-For distrust, and the no-global-CORS/OPTIONS regression |
 | dictionary_handler_test.go | Dictionary endpoint tests |
 | query_credential_handler_test.go | Credential metadata handler tests |
 | query_disclosure_handler_test.go | Disclosure policy handler tests, including list `query_result_disclosure_blocked` and schemaName propagation through create/delete |
