@@ -91,7 +91,7 @@ func (e *MySQLQueryExecutor) queryGuarded(ctx context.Context, dsn string, guard
 	if guarded.ResultLimit > 0 {
 		scanLimit = guarded.ResultLimit
 	}
-	return e.scanBoundedRows(rows, scanLimit, guarded.ResultLimit > 0)
+	return e.scanBoundedRows(rows, scanLimit, guarded.Paginated)
 }
 
 // QueryRelatedRecords executes a parameterized SELECT built by the service for

@@ -142,13 +142,34 @@ func (s ExplainRiskSeverity) Validate() error {
 // never from user-controlled text — the bound is a defense-in-depth wire cap.
 const MaxExplainNodeLabelLen = 64
 
-// ExplainNode is one normalized plan node. No free-form engine strings,
-// relation names, index names, predicates, or literals leave the normalizer.
-// Label carries the engine's planner-vocabulary node name (e.g. "Seq Scan"),
-// StartupCost/TotalCost the planner's own scalar estimates; all three are
-// engine metadata, never user data. EstimatedRows is omitted (nil) when the
-// engine does not report it or when the value would exceed
-// Number.MAX_SAFE_INTEGER (2^53-1) on the wire.
+// MaxExplainIdentifierLen bounds a relation or index name carried on the wire
+// (bytes). Names over the bound or containing control characters are dropped
+// by the normalizers rather than failing the plan.
+const MaxExplainIdentifierLen = 128
+
+// ExplainIdentifierOK reports whether s fits the explain identifier wire
+// bound: at most MaxExplainIdentifierLen bytes and free of control
+// characters (< 0x20 and 0x7f).
+func ExplainIdentifierOK(s string) bool {
+	if len(s) > MaxExplainIdentifierLen {
+		return false
+	}
+	for _, r := range s {
+		if r < 0x20 || r == 0x7f {
+			return false
+		}
+	}
+	return true
+}
+
+// ExplainNode is one normalized plan node. Relation and Index carry the
+// engine's own relation/index names (bounded by MaxExplainIdentifierLen);
+// predicates, literals, and free-form engine strings never leave the
+// normalizer. Label carries the engine's planner-vocabulary node name
+// (e.g. "Seq Scan"), StartupCost/TotalCost the planner's own scalar
+// estimates; all three are engine metadata, never user data. EstimatedRows
+// is omitted (nil) when the engine does not report it or when the value
+// would exceed Number.MAX_SAFE_INTEGER (2^53-1) on the wire.
 type ExplainNode struct {
 	ID            string               `json:"id"`
 	ParentID      *string              `json:"parentId,omitempty"`
@@ -157,6 +178,8 @@ type ExplainNode struct {
 	EstimatedRows *uint64              `json:"estimatedRows,omitempty"`
 	UsesIndex     *bool                `json:"usesIndex,omitempty"`
 	Label         string               `json:"label,omitempty"`
+	Relation      string               `json:"relation,omitempty"`
+	Index         string               `json:"index,omitempty"`
 	StartupCost   *float64             `json:"startupCost,omitempty"`
 	TotalCost     *float64             `json:"totalCost,omitempty"`
 }
@@ -176,6 +199,12 @@ func (n ExplainNode) Validate() error {
 	if len(n.Label) > MaxExplainNodeLabelLen {
 		return fmt.Errorf("explain node label exceeds %d bytes", MaxExplainNodeLabelLen)
 	}
+	if n.Relation != "" && !ExplainIdentifierOK(n.Relation) {
+		return fmt.Errorf("explain node relation identifier out of bounds")
+	}
+	if n.Index != "" && !ExplainIdentifierOK(n.Index) {
+		return fmt.Errorf("explain node index identifier out of bounds")
+	}
 	return nil
 }
 
@@ -194,9 +223,9 @@ func (r ExplainRisk) Validate() error {
 }
 
 // ExplainResponse is the versioned, normalized, leak-free Explain output. It
-// carries only finite enums, bounded scalars, and the target resource ID.
-// No raw plan JSON, table names, index names, predicates, literals, DSNs,
-// credentials, actor IDs, or raw driver errors ever reach this struct.
+// carries only finite enums, bounded scalars and identifiers, and the target
+// resource ID. No raw plan JSON, predicates, literals, DSNs, credentials,
+// actor IDs, or raw driver errors ever reach this struct.
 type ExplainResponse struct {
 	TargetResourceID uint64        `json:"targetResourceId"`
 	Engine           ExplainEngine `json:"engine"`

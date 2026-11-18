@@ -383,9 +383,10 @@ func TestNormalizeMalformedTree(t *testing.T) {
 	}
 }
 
-// TestNormalizeNoFreeFormPassthrough proves the output never contains
-// table_name, possible_keys, key, used_columns, cost_info, ref, or message —
-// even when the raw plan carried them.
+// TestNormalizeNoFreeFormPassthrough proves bounded identifiers (table_name
+// → relation, key → index) are the ONLY values that cross the boundary:
+// possible_keys, used_columns, used_key_parts, cost_info, ref, and message
+// are dropped even when the raw plan carried them.
 func TestNormalizeNoFreeFormPassthrough(t *testing.T) {
 	t.Parallel()
 	raw := mustRaw(t, `{"query_block": {"table": {"table_name": "secret_table", "access_type": "ref", "possible_keys": ["idx_secret"], "key": "idx_secret", "used_key_parts": ["ssn"], "used_columns": ["id","name","ssn"], "ref": ["const"], "rows_examined_per_scan": 2, "cost_info": {"read_cost": "0.25"}, "message": "secret"}}}`)
@@ -394,14 +395,24 @@ func TestNormalizeNoFreeFormPassthrough(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Normalize error: %v", err)
 	}
+	foundRel, foundIdx := false, false
 	for _, node := range got.Nodes {
+		if node.Relation == "secret_table" {
+			foundRel = true
+		}
+		if node.Index == "idx_secret" {
+			foundIdx = true
+		}
 		data, _ := json.Marshal(node)
 		s := string(data)
-		for _, banned := range []string{"secret_table", "idx_secret", "ssn", "secret", "cost_info", "possible_keys", "used_columns", "table_name", "message"} {
+		for _, banned := range []string{"ssn", "used_key_parts", "cost_info", "read_cost", "possible_keys", "used_columns", "table_name", "message"} {
 			if strings.Contains(strings.ToLower(s), strings.ToLower(banned)) {
 				t.Errorf("node JSON must not contain %q, got: %s", banned, s)
 			}
 		}
+	}
+	if !foundRel || !foundIdx {
+		t.Errorf("expected relation=secret_table and index=idx_secret on a node, got %+v", got.Nodes)
 	}
 	for _, risk := range got.Risks {
 		data, _ := json.Marshal(risk)
@@ -411,6 +422,43 @@ func TestNormalizeNoFreeFormPassthrough(t *testing.T) {
 				t.Errorf("risk JSON must not contain %q, got: %s", banned, s)
 			}
 		}
+	}
+}
+
+// TestNormalizeIdentifierBoundaries proves over-bound or control-char
+// relation/index names are dropped rather than failing the plan.
+func TestNormalizeIdentifierBoundaries(t *testing.T) {
+	t.Parallel()
+	long := strings.Repeat("x", model.MaxExplainIdentifierLen+1)
+	raw := mustRaw(t, `{"query_block": {"nested_loop": [{"table": {"table_name": "`+long+`", "access_type": "ALL", "rows_examined_per_scan": 1}}, {"table": {"table_name": "evil\tname", "access_type": "ref", "key": "idx\tbad", "rows_examined_per_scan": 1}}, {"table": {"table_name": "ok_table", "access_type": "ref", "key": "idx_ok", "rows_examined_per_scan": 1}}]}}`)
+	n := NewExplainNormalizer()
+	got, err := n.Normalize(raw)
+	if err != nil {
+		t.Fatalf("Normalize error: %v", err)
+	}
+	tables := make([]model.ExplainNode, 0, 3)
+	for _, node := range got.Nodes {
+		if node.Relation != "" && !model.ExplainIdentifierOK(node.Relation) {
+			t.Errorf("relation %q failed identifier bound", node.Relation)
+		}
+		if node.Index != "" && !model.ExplainIdentifierOK(node.Index) {
+			t.Errorf("index %q failed identifier bound", node.Index)
+		}
+		if node.Operation == model.ExplainOpTableAccess || node.Operation == model.ExplainOpIndexAccess {
+			tables = append(tables, node)
+		}
+	}
+	if len(tables) != 3 {
+		t.Fatalf("table nodes = %d, want 3: %+v", len(tables), got.Nodes)
+	}
+	if tables[0].Relation != "" {
+		t.Errorf("over-bound relation must be dropped, got %q", tables[0].Relation)
+	}
+	if tables[1].Relation != "" || tables[1].Index != "" {
+		t.Errorf("control-char names must be dropped, got %q/%q", tables[1].Relation, tables[1].Index)
+	}
+	if tables[2].Relation != "ok_table" || tables[2].Index != "idx_ok" {
+		t.Errorf("valid names must be kept, got %q/%q", tables[2].Relation, tables[2].Index)
 	}
 }
 

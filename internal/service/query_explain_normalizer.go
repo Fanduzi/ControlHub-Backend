@@ -26,9 +26,10 @@ const (
 const maxSafeJSInteger uint64 = (1 << 53) - 1
 
 // ExplainNormalizer translates an ExplainRawPlan into the v1 normalized
-// model. It is the only consumer of the raw plan tree; no free-form engine
-// string, relation name, index name, predicate, literal, or message leaves
-// this type. Unknown shapes fail closed to ErrQueryExplainNotSupported.
+// model. It is the only consumer of the raw plan tree; bounded relation and
+// index names pass through on their nodes, but no free-form engine string,
+// predicate, literal, or message leaves this type. Unknown shapes fail
+// closed to ErrQueryExplainNotSupported.
 type ExplainNormalizer struct{}
 
 // NewExplainNormalizer builds the normalizer.
@@ -138,7 +139,10 @@ func (c *normCtx) walk(block map[string]interface{}, parentID string, depth int)
 }
 
 // emitTableNode emits a node for a table access block and derives its
-// operation/access/estimatedRows/usesIndex from the raw fields.
+// operation/access/estimatedRows/usesIndex from the raw fields. The engine's
+// own table name lands on Relation and its chosen key name on Index when
+// they fit the identifier bound; over-bound or control-char names are
+// dropped rather than failing the plan.
 func (c *normCtx) emitTableNode(block map[string]interface{}, parentID string) {
 	tbl, ok := block["table"].(map[string]interface{})
 	if !ok {
@@ -165,7 +169,13 @@ func (c *normCtx) emitTableNode(block map[string]interface{}, parentID string) {
 			node.EstimatedRows = est
 		}
 	}
-	if _, hasKey := tbl["key"]; hasKey {
+	if s, ok := tbl["table_name"].(string); ok && model.ExplainIdentifierOK(s) {
+		node.Relation = s
+	}
+	if key, hasKey := tbl["key"]; hasKey {
+		if s, ok := key.(string); ok && model.ExplainIdentifierOK(s) {
+			node.Index = s
+		}
 		b := true
 		node.UsesIndex = &b
 	} else if access == model.ExplainAccessFullScan {

@@ -783,19 +783,42 @@ func TestMySQLKeyedMatrixA_KeylessOrdinary(t *testing.T) {
 	}
 	fx.kmExpectCounts(t, mysqlKeyedScopeCounts{Executions: 3, Audits: 3})
 
+	// User LIMIT/OFFSET honored: `limit 2 offset 5` returns exactly the 6th/7th
+	// rows of the 11-row table and no next page instead of a rewritten window.
+	resp = kmDecodeSuccess(t, post(`{"statement":"select id from query_e2e_aux.km_paged order by id limit 2 offset 5","pagination":{"page":1,"pageSize":10}}`))
+	if len(resp.Rows) != 2 || resp.Rows[0][0] != float64(6) || resp.Rows[1][0] != float64(7) {
+		t.Fatalf("user-limited paged rows = %v, want exactly ids 6 and 7", resp.Rows)
+	}
+	var page struct {
+		HasNextPage bool `json:"hasNextPage"`
+	}
+	if resp.Pagination == nil {
+		t.Fatal("user-limited paged response must carry a pagination block")
+	}
+	if err := json.Unmarshal(*resp.Pagination, &page); err != nil {
+		t.Fatalf("decode pagination: %v", err)
+	}
+	if page.HasNextPage {
+		t.Fatal("HasNextPage = true, want false for an exhausted user LIMIT")
+	}
+	if resp.LimitApplied != 2 {
+		t.Fatalf("LimitApplied = %d, want user's own limit 2", resp.LimitApplied)
+	}
+	fx.kmExpectCounts(t, mysqlKeyedScopeCounts{Executions: 4, Audits: 4})
+
 	// Guard rejection: a non-SELECT is refused and still records one pair.
 	rec := post(`{"statement":"delete from query_e2e_aux.km_cells"}`)
 	if rec.Code != http.StatusBadRequest || kmErrorCode(t, rec) != "validation_failed" {
 		t.Fatalf("keyless guard rejection = %d %q", rec.Code, kmErrorCode(t, rec))
 	}
-	fx.kmExpectCounts(t, mysqlKeyedScopeCounts{Executions: 4, Audits: 4})
+	fx.kmExpectCounts(t, mysqlKeyedScopeCounts{Executions: 5, Audits: 5})
 
 	// Disclosure rejection: a column with no policy is blocked pre-SQL.
 	rec = post(`{"statement":"select free from query_e2e_aux.km_cells where id = 1"}`)
 	if rec.Code != http.StatusForbidden || kmErrorCode(t, rec) != "query_result_disclosure_blocked" {
 		t.Fatalf("keyless disclosure rejection = %d %q", rec.Code, kmErrorCode(t, rec))
 	}
-	fx.kmExpectCounts(t, mysqlKeyedScopeCounts{Executions: 5, Audits: 5})
+	fx.kmExpectCounts(t, mysqlKeyedScopeCounts{Executions: 6, Audits: 6})
 
 	// Timeout: the bulk-product subquery outlives the frozen 5s budget and is
 	// recorded as one terminal timeout pair. The server-side straggler is
@@ -812,14 +835,14 @@ func TestMySQLKeyedMatrixA_KeylessOrdinary(t *testing.T) {
 	if lastStatus != string(model.QueryExecutionTimeout) || lastCode != "query_timeout" {
 		t.Fatalf("timeout evidence = %s/%s", lastStatus, lastCode)
 	}
-	fx.kmExpectCounts(t, mysqlKeyedScopeCounts{Executions: 6, Audits: 6})
+	fx.kmExpectCounts(t, mysqlKeyedScopeCounts{Executions: 7, Audits: 7})
 
 	// Truncation without capability: 409 refusal but the success pair commits.
 	rec = post(`{"statement":"select id, pad from query_e2e_aux.km_cells where id = 2"}`)
 	if rec.Code != http.StatusConflict || kmErrorCode(t, rec) != "result_contract_upgrade_required" {
 		t.Fatalf("keyless truncation refusal = %d %q", rec.Code, kmErrorCode(t, rec))
 	}
-	fx.kmExpectCounts(t, mysqlKeyedScopeCounts{Executions: 7, Audits: 7})
+	fx.kmExpectCounts(t, mysqlKeyedScopeCounts{Executions: 8, Audits: 8})
 	if lastStatus := kmLastStatus(t, fx); lastStatus != string(model.QueryExecutionSuccess) {
 		t.Fatalf("refusal attempt status = %s, want success", lastStatus)
 	}
@@ -831,10 +854,10 @@ func TestMySQLKeyedMatrixA_KeylessOrdinary(t *testing.T) {
 	if rec.Code != http.StatusBadGateway || kmErrorCode(t, rec) != "query_backend_error" {
 		t.Fatalf("keyless evidence fault = %d %q", rec.Code, kmErrorCode(t, rec))
 	}
-	fx.kmExpectCounts(t, mysqlKeyedScopeCounts{Executions: 7, Audits: 7})
+	fx.kmExpectCounts(t, mysqlKeyedScopeCounts{Executions: 8, Audits: 8})
 	mustExec(t, fx.db, "DROP TRIGGER IF EXISTS km_a_execfail")
 	kmDecodeSuccess(t, post(`{"statement":"select id, note from query_e2e_aux.km_cells where id = 9"}`))
-	fx.kmExpectCounts(t, mysqlKeyedScopeCounts{Executions: 8, Audits: 8})
+	fx.kmExpectCounts(t, mysqlKeyedScopeCounts{Executions: 9, Audits: 9})
 
 	// Every keyless attempt stored a NULL key.
 	if n := countWhere(t, fx.db, `SELECT COUNT(*) FROM query_executions WHERE target_resource_id = ? AND client_execution_id IS NOT NULL`, fx.targetID); n != 0 {
