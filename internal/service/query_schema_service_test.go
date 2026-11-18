@@ -158,6 +158,77 @@ func TestQuerySchemaService_UnsupportedTargetNeverCallsInspector(t *testing.T) {
 	}
 }
 
+// TestQuerySchemaService_MySQLDefaultDatabaseFromDSN verifies that the MySQL
+// databases listing reports the credential DSN's database as the default and
+// marks the matching item, while a DSN without a database leaves it null.
+// WHY: MySQL execution always runs in the credential's database; the frontend
+// completion/context needs the same answer the backend will actually use.
+func TestQuerySchemaService_MySQLDefaultDatabaseFromDSN(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name        string
+		dsn         string
+		databases   []DatabaseSummary
+		wantDefault string
+		wantNil     bool
+	}{
+		{
+			name:        "dsn database becomes the default",
+			dsn:         "rouser:secret-dsn-do-not-leak@tcp(db.internal:3306)/demo_business",
+			databases:   []DatabaseSummary{{Name: "demo_business"}, {Name: "other"}},
+			wantDefault: "demo_business",
+		},
+		{
+			name:      "dsn without database leaves default null",
+			dsn:       "rouser:secret-dsn-do-not-leak@tcp(db.internal:3306)/",
+			databases: []DatabaseSummary{{Name: "demo_business"}},
+			wantNil:   true,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			audit := &fakeExecRepo{
+				credentials: map[uint64]model.QueryCredentialMetadata{
+					9001: enabledCred(model.QueryEnvPolicyNonProdOnly),
+				},
+			}
+			inspector := &fakeSchemaInspector{databases: tc.databases}
+			svc := NewQuerySchemaService(
+				NewTargetAccessResolver(
+					fakeTargetRepo{targets: []model.QueryTarget{mysqlTarget("Staging")}},
+					audit,
+					&fakeResolver{dsn: tc.dsn},
+				),
+				inspector,
+				NewQuerySchemaCache(100, &fakeClock{t: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)}),
+				audit,
+				&fakeClock{t: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)},
+			)
+
+			resp, err := svc.ListDatabases(context.Background(), 1, 9001, "", "", 1, 20, false, false)
+			if err != nil {
+				t.Fatalf("ListDatabases: %v", err)
+			}
+			if tc.wantNil {
+				if resp.DefaultDatabase != nil {
+					t.Fatalf("defaultDatabase = %q, want nil", *resp.DefaultDatabase)
+				}
+			} else {
+				if resp.DefaultDatabase == nil || *resp.DefaultDatabase != tc.wantDefault {
+					t.Fatalf("defaultDatabase = %v, want %q", resp.DefaultDatabase, tc.wantDefault)
+				}
+			}
+			for _, item := range resp.Items {
+				want := item.Name == tc.wantDefault
+				if item.IsDefault != want {
+					t.Fatalf("item %q isDefault = %v, want %v", item.Name, item.IsDefault, want)
+				}
+			}
+		})
+	}
+}
+
 // TestQuerySchemaService_AuditEventStringsAreFixed verifies that audit event
 // types and results are fixed strings that contain no object identifiers.
 // WHY: audit rows must be safe for the general event stream; they record
