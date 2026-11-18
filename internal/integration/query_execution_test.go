@@ -1419,10 +1419,13 @@ func TestQueryExecution_PaginatedSelectReturnsOrderedPagesAndSeparateCaps(t *tes
 	assertQueryPageIDs(t, page3, []int64{21, 22, 23, 24, 25})
 }
 
-func TestQueryExecution_PaginatedSelectIgnoresUserLimitAndOffset(t *testing.T) {
+func TestQueryExecution_PaginatedSelectHonorsUserLimitAndOffset(t *testing.T) {
 	svc, targetID, _ := setupQuerySandboxTarget(t)
 	ctx := context.Background()
 
+	// The user's own LIMIT narrows the browsable window; the user's OFFSET
+	// shifts the fetch origin, so page 1 of `LIMIT 1 OFFSET 24` is the 25th
+	// row, never the first ten.
 	resp, err := svc.Execute(ctx, queryUserIdentity(ownerDBA), targetID, model.QueryExecuteRequest{
 		Statement: "SELECT id, name FROM qe_sandbox_fixtures ORDER BY id LIMIT 1 OFFSET 24",
 		MaxRows:   25,
@@ -1433,22 +1436,22 @@ func TestQueryExecution_PaginatedSelectIgnoresUserLimitAndOffset(t *testing.T) {
 	if err != nil {
 		t.Fatalf("user-window page 1 Execute error: %v", err)
 	}
-	if resp.LimitApplied != 25 || resp.Pagination == nil || resp.Pagination.Page != 1 {
-		t.Fatalf("server page window = limit=%d pagination=%+v, want maxRows=25 page=1", resp.LimitApplied, resp.Pagination)
+	if resp.LimitApplied != 1 || resp.Pagination == nil || resp.Pagination.Page != 1 || resp.Pagination.HasNextPage {
+		t.Fatalf("user-window page = limit=%d pagination=%+v, want limit 1 page 1 no next", resp.LimitApplied, resp.Pagination)
 	}
-	assertQueryPageIDs(t, resp, []int64{1, 2, 3, 4, 5, 6, 7, 8, 9, 10})
+	assertQueryPageIDs(t, resp, []int64{25})
 
-	resp, err = svc.Execute(ctx, queryUserIdentity(ownerDBA), targetID, model.QueryExecuteRequest{
+	// A page beyond the user's own LIMIT is rejected, not silently widened.
+	_, err = svc.Execute(ctx, queryUserIdentity(ownerDBA), targetID, model.QueryExecuteRequest{
 		Statement: "SELECT id, name FROM qe_sandbox_fixtures ORDER BY id LIMIT 1 OFFSET 0",
 		MaxRows:   25,
 		Pagination: &model.QueryExecutePaginationRequest{
 			Page: 2, PageSize: 10,
 		},
 	})
-	if err != nil {
-		t.Fatalf("user-window page 2 Execute error: %v", err)
+	if !errors.Is(err, service.ErrQueryValidationFailed) {
+		t.Fatalf("beyond-user-limit page error = %v, want ErrQueryValidationFailed", err)
 	}
-	assertQueryPageIDs(t, resp, []int64{11, 12, 13, 14, 15, 16, 17, 18, 19, 20})
 }
 
 func TestQueryExecution_PaginatedSelectRejectsPageAtMaxRowsBoundaryBeforeTargetExecution(t *testing.T) {

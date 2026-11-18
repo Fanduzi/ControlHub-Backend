@@ -6,8 +6,9 @@
 // string, ≤64 bytes) and numeric `startupCost`/`totalCost` ("Startup
 // Cost"/"Total Cost", numeric JSON values only). Structural plan nodes
 // (Result, Hash, Limit, …) emit `container` nodes so the rendered tree
-// keeps the native shape. No relation name, index name, predicate, or
-// literal ever leaves this file.
+// keeps the native shape. Bounded relation and index names ("Relation Name"
+// or "CTE Name" / "Index Name") pass through on their nodes; predicates and
+// literals never leave this file.
 package service
 
 import (
@@ -152,6 +153,16 @@ func (c *normCtx) emitPGNode(parentID string, op model.ExplainNodeOperation, acc
 		Access:    access,
 		UsesIndex: usesIndex,
 		Label:     pgNodeLabel(node),
+	}
+	if s, ok := node["Relation Name"].(string); !ok || !model.ExplainIdentifierOK(s) {
+		if s2, ok2 := node["CTE Name"].(string); ok2 && model.ExplainIdentifierOK(s2) {
+			n.Relation = s2
+		}
+	} else {
+		n.Relation = s
+	}
+	if s, ok := node["Index Name"].(string); ok && model.ExplainIdentifierOK(s) {
+		n.Index = s
 	}
 	if v, ok := toFloat64(node["Startup Cost"]); ok {
 		n.StartupCost = &v

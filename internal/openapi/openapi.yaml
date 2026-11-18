@@ -7571,8 +7571,9 @@ components:
       additionalProperties: false
       required: [id, operation, access]
       description: >
-        One normalized plan node. No free-form engine strings, relation
-        names, index names, predicates, or literals leave the normalizer.
+        One normalized plan node. Bounded relation and index names may be
+        carried; no free-form engine strings, predicates, or literals leave
+        the normalizer.
       properties:
         id:
           type: string
@@ -7606,8 +7607,24 @@ components:
           description: >
             The engine's planner-vocabulary node name (PostgreSQL "Node
             Type" such as "Seq Scan" / "Nested Loop"). Engine metadata only
-            — relation names, index names, predicates, and literals are
-            never exposed.
+            — predicates and literals are never exposed.
+        relation:
+          type: string
+          maxLength: 128
+          description: >
+            Bounded relation/table identifier the node accesses (MySQL
+            `table_name`; PostgreSQL "Relation Name", falling back to "CTE
+            Name"). An engine identifier only — it never carries predicates,
+            literals, or column lists; over-bound or malformed names are
+            omitted.
+        index:
+          type: string
+          maxLength: 128
+          description: >
+            Bounded index identifier the engine chose for the access
+            (MySQL `key`; PostgreSQL "Index Name"). Identifier only — no
+            predicates, literals, or free-form plan detail is exposed;
+            over-bound or malformed names are omitted.
         startupCost:
           type: number
           nullable: true

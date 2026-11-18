@@ -27,14 +27,18 @@ type GuardedQuery struct {
 	ExecutableSQL     string
 	LimitApplied      int
 	ResultLimit       int
-	StatementDigest   string
-	StatementPreview  string
+	// Paginated marks statements guarded by GuardPaginatedSelect so a zero
+	// ResultLimit (e.g. user LIMIT 0) still reports an empty page window.
+	Paginated        bool
+	StatementDigest  string
+	StatementPreview string
 }
 
 var (
 	ErrQueryStatementEmpty          = errors.New("query statement is empty")
 	ErrQueryStatementNotAllowed     = errors.New("only read-only SQL statements are allowed")
 	ErrQueryLimitInvalid            = errors.New("query maxRows must not be negative")
+	ErrQueryLimitFormUnsupported    = errors.New("only literal integer LIMIT/OFFSET values are supported")
 	ErrQueryPaginationInvalid       = errors.New("query pagination is invalid")
 	ErrQueryPaginationNotApplicable = errors.New("query pagination is not applicable")
 )
@@ -60,8 +64,9 @@ func NewQueryGuard(config QueryGuardConfig) *QueryGuard {
 // Guard validates a user statement and returns the backend-owned executable
 // form. It allows a small read-only allow-list (SELECT, SHOW DATABASES, SHOW
 // TABLES, SHOW COLUMNS, DESCRIBE/DESC, EXPLAIN SELECT), rejects side-effecting
-// /resource/locking constructs via AST walk, and injects a backend-owned LIMIT
-// for SELECT.
+// /resource/locking constructs via AST walk, and bounds SELECT row release:
+// the user's own literal LIMIT/OFFSET is honored and intersected with the
+// governed cap rather than overridden.
 // Guard is the execute-route entry point. It accepts SELECT, SHOW, typed
 // EXPLAIN, and DESCRIBE/DESC. Do NOT call it from the Explain route — use
 // GuardExplainSelect instead, which accepts a bare SELECT only.
@@ -80,7 +85,7 @@ func (g *QueryGuard) Guard(statement string, requestedMaxRows int) (GuardedQuery
 	}
 
 	// Dispatch on statement type. SELECT gets the full side-effect walk + LIMIT
-	// injection. Allowed metadata statements pass through as-is. Everything else
+	// window. Allowed metadata statements pass through as-is. Everything else
 	// is rejected.
 	switch s := stmt.(type) {
 	case *sqlparser.Select:
@@ -120,12 +125,31 @@ func (g *QueryGuard) GuardPaginatedSelect(statement string, page, pageSize, requ
 		if err := g.validateSelect(s); err != nil {
 			return GuardedQuery{}, err
 		}
-		offset, pageRows, err := paginationWindow(page, pageSize, effectiveMaxRows)
+		browsable, userOffset, err := browsableRows(s, effectiveMaxRows)
 		if err != nil {
 			return GuardedQuery{}, err
 		}
-		setPaginatedSelectLimit(s, pageRows, offset)
-		return g.newGuardedQuery(trimmed, sqlparser.String(s), effectiveMaxRows, pageRows), nil
+		if page < 1 || pageSize < 1 {
+			return GuardedQuery{}, ErrQueryPaginationInvalid
+		}
+		pageStart, ok := checkedMulInt64(int64(page-1), int64(pageSize))
+		if !ok {
+			return GuardedQuery{}, ErrQueryPaginationInvalid
+		}
+		if pageStart >= browsable && !(browsable == 0 && page == 1) {
+			return GuardedQuery{}, ErrQueryPaginationInvalid
+		}
+		fetchOffset, ok := checkedAddInt64(userOffset, pageStart)
+		if !ok {
+			return GuardedQuery{}, ErrQueryPaginationInvalid
+		}
+		remaining := browsable - pageStart
+		resultLimit := min(int64(pageSize), remaining)
+		fetchCount := min(int64(pageSize)+1, remaining)
+		setSelectLimitWindow(s, fetchCount, fetchOffset)
+		guarded := g.newGuardedQuery(trimmed, sqlparser.String(s), int(browsable), int(resultLimit))
+		guarded.Paginated = true
+		return guarded, nil
 	case *sqlparser.Show, *sqlparser.ExplainStmt, *sqlparser.ExplainTab:
 		return GuardedQuery{}, ErrQueryPaginationNotApplicable
 	default:
@@ -196,15 +220,20 @@ func (g *QueryGuard) GuardSavedStatement(statement string) (string, error) {
 }
 
 // guardSelect validates a SELECT statement: rejects INTO, locking clauses, and
-// side-effect functions, then injects a backend-owned LIMIT.
+// side-effect functions, then bounds the release window by the user's own
+// LIMIT intersected with the governed cap.
 func (g *QueryGuard) guardSelect(sel *sqlparser.Select, trimmed string, requestedMaxRows int) (GuardedQuery, error) {
 	if err := g.validateSelect(sel); err != nil {
 		return GuardedQuery{}, err
 	}
 
 	effective := g.effectiveMaxRows(requestedMaxRows)
-	setSelectLimit(sel, effective)
-	return g.newGuardedQuery(trimmed, sqlparser.String(sel), effective, 0), nil
+	browsable, userOffset, fetch, err := governedFetch(sel, effective)
+	if err != nil {
+		return GuardedQuery{}, err
+	}
+	setSelectLimitWindow(sel, fetch, userOffset)
+	return g.newGuardedQuery(trimmed, sqlparser.String(sel), int(browsable), 0), nil
 }
 
 // guardShow validates a SHOW statement against the read-only allow-list.
@@ -252,14 +281,19 @@ func (g *QueryGuard) guardExplain(explain *sqlparser.ExplainStmt, trimmed string
 		return GuardedQuery{}, err
 	}
 
-	// Apply backend-owned LIMIT to the inner SELECT.
+	// Apply the governed LIMIT window to the inner SELECT: the user's own
+	// LIMIT/OFFSET is honored and intersected with the cap.
 	effective := g.effectiveMaxRows(requestedMaxRows)
-	setSelectLimit(innerSelect, effective)
+	browsable, userOffset, fetch, err := governedFetch(innerSelect, effective)
+	if err != nil {
+		return GuardedQuery{}, err
+	}
+	setSelectLimitWindow(innerSelect, fetch, userOffset)
 
 	// Rebuild the EXPLAIN wrapper with the guarded inner SELECT.
 	explain.Statement = innerSelect
 
-	return g.newGuardedQuery(trimmed, sqlparser.String(explain), effective, 0), nil
+	return g.newGuardedQuery(trimmed, sqlparser.String(explain), int(browsable), 0), nil
 }
 
 // guardExplainTab validates a DESCRIBE/DESC <table> statement. These are safe
@@ -313,37 +347,94 @@ func (g *QueryGuard) effectiveMaxRows(requestedMaxRows int) int {
 	return effective
 }
 
-func setSelectLimit(sel *sqlparser.Select, limit int) {
+// browsableRows resolves the total row window the user may browse: the
+// governed cap intersected with the user's own literal LIMIT. It returns the
+// browsable bound and the user's own OFFSET (0 when absent). Non-literal
+// LIMIT/OFFSET forms (template placeholders, expressions) are rejected so they
+// cannot smuggle an unbounded window past the guard.
+func browsableRows(sel *sqlparser.Select, effectiveMaxRows int) (browsable, userOffset int64, err error) {
+	limit := sel.Limit
+	if limit == nil || limit.Rowcount == nil {
+		return int64(effectiveMaxRows), 0, nil
+	}
+	userLimit, err := literalLimitValue(limit.Rowcount)
+	if err != nil {
+		return 0, 0, err
+	}
+	userOffset = int64(0)
+	if limit.Offset != nil {
+		userOffset, err = literalLimitValue(limit.Offset)
+		if err != nil {
+			return 0, 0, err
+		}
+	}
+	browsable = int64(effectiveMaxRows)
+	if userLimit < browsable {
+		browsable = userLimit
+	}
+	return browsable, userOffset, nil
+}
+
+// governedFetch resolves the executable fetch window for a non-paginated
+// guarded statement: browsable rows plus one probe row when the governed cap
+// is the binding bound so the executor can flag truncation; exactly the user's
+// own LIMIT when it is tighter so it is never reported truncated.
+func governedFetch(sel *sqlparser.Select, effectiveMaxRows int) (browsable, userOffset, fetch int64, err error) {
+	browsable, userOffset, err = browsableRows(sel, effectiveMaxRows)
+	if err != nil {
+		return 0, 0, 0, err
+	}
+	fetch = browsable + 1
+	if sel.Limit != nil && sel.Limit.Rowcount != nil {
+		if userLimit, lerr := literalLimitValue(sel.Limit.Rowcount); lerr == nil && userLimit <= int64(effectiveMaxRows) {
+			fetch = userLimit
+		}
+	}
+	return browsable, userOffset, fetch, nil
+}
+
+func literalLimitValue(expr sqlparser.Expr) (int64, error) {
+	lit, ok := expr.(*sqlparser.Literal)
+	if !ok || lit.Type != sqlparser.IntVal {
+		return 0, ErrQueryLimitFormUnsupported
+	}
+	v, err := strconv.ParseUint(lit.Val, 0, 64)
+	if err != nil {
+		if errors.Is(err, strconv.ErrRange) {
+			return math.MaxInt64, nil
+		}
+		return 0, ErrQueryLimitFormUnsupported
+	}
+	if v > math.MaxInt64 {
+		return math.MaxInt64, nil
+	}
+	return int64(v), nil
+}
+
+// setSelectLimitWindow rewrites the executable LIMIT to the governed fetch
+// window: `LIMIT fetchOffset, fetchCount`, with the offset literal omitted
+// when it is 0.
+func setSelectLimitWindow(sel *sqlparser.Select, fetchCount, fetchOffset int64) {
 	sel.Limit = &sqlparser.Limit{
-		Rowcount: &sqlparser.Literal{Type: sqlparser.IntVal, Val: strconv.Itoa(limit + 1)},
+		Rowcount: &sqlparser.Literal{Type: sqlparser.IntVal, Val: strconv.FormatInt(fetchCount, 10)},
+	}
+	if fetchOffset > 0 {
+		sel.Limit.Offset = &sqlparser.Literal{Type: sqlparser.IntVal, Val: strconv.FormatInt(fetchOffset, 10)}
 	}
 }
 
-func setPaginatedSelectLimit(sel *sqlparser.Select, pageRows, offset int) {
-	sel.Limit = &sqlparser.Limit{
-		Offset:   &sqlparser.Literal{Type: sqlparser.IntVal, Val: strconv.Itoa(offset)},
-		Rowcount: &sqlparser.Literal{Type: sqlparser.IntVal, Val: strconv.Itoa(pageRows + 1)},
+func checkedMulInt64(a, b int64) (int64, bool) {
+	if a != 0 && b != 0 && (a > math.MaxInt64/b || a < math.MinInt64/b) {
+		return 0, false
 	}
+	return a * b, true
 }
 
-func paginationWindow(page, pageSize, effectiveMaxRows int) (offset, pageRows int, err error) {
-	if page < 1 || pageSize < 1 || effectiveMaxRows < 1 {
-		return 0, 0, ErrQueryPaginationInvalid
+func checkedAddInt64(a, b int64) (int64, bool) {
+	if (b > 0 && a > math.MaxInt64-b) || (b < 0 && a < math.MinInt64-b) {
+		return 0, false
 	}
-	pageIndex := page - 1
-	if pageIndex > math.MaxInt/pageSize {
-		return 0, 0, ErrQueryPaginationInvalid
-	}
-	offset = pageIndex * pageSize
-	remaining := effectiveMaxRows - offset
-	if remaining <= 0 {
-		return 0, 0, ErrQueryPaginationInvalid
-	}
-	pageRows = min(pageSize, remaining)
-	if pageRows == math.MaxInt {
-		return 0, 0, ErrQueryPaginationInvalid
-	}
-	return offset, pageRows, nil
+	return a + b, true
 }
 
 func (g *QueryGuard) newGuardedQuery(trimmed, executableSQL string, limitApplied, resultLimit int) GuardedQuery {

@@ -834,20 +834,130 @@ func TestQueryGuard_GuardPaginatedSelect_serializesBackendOwnedWindow(t *testing
 	}
 }
 
-func TestQueryGuard_GuardPaginatedSelect_overridesClientLimitAndOffset(t *testing.T) {
+// TestQueryGuard_GuardPaginatedSelect_honorsClientLimitAndOffset proves the
+// user's own LIMIT/OFFSET is intersected with the governed window instead of
+// overridden: the executable OFFSET is user offset + page start, the rowcount
+// is the smaller page/remaining bound plus one probe row.
+func TestQueryGuard_GuardPaginatedSelect_honorsClientLimitAndOffset(t *testing.T) {
 	t.Parallel()
 	g := newTestGuard()
 
-	// Given client-controlled pagination clauses.
-	// When the server guards page three with a 10-row page size.
-	got, err := g.GuardPaginatedSelect("select id from t limit 1000 offset 500", 3, 10, 100)
-
-	// Then neither client value survives the AST rewrite.
-	if err != nil {
-		t.Fatalf("GuardPaginatedSelect error: %v", err)
+	tests := []struct {
+		name             string
+		statement        string
+		page, size       int
+		maxRows          int
+		wantSQL          string
+		wantLimitApplied int
+		wantResultLimit  int
+	}{
+		{"user cap far above governed cap keeps offset", "select id from t limit 1000 offset 500", 3, 10, 100, "select id from t limit 520, 11", 100, 10},
+		{"user limit smaller than page", "select id from t limit 3", 1, 10, 100, "select id from t limit 3", 3, 3},
+		{"user offset honored", "select id from t limit 2 offset 5", 1, 10, 100, "select id from t limit 5, 2", 2, 2},
+		{"user limit spanning pages", "select id from t limit 25", 3, 10, 100, "select id from t limit 20, 5", 25, 5},
+		{"user limit zero yields empty first page", "select id from t limit 0", 1, 10, 100, "select id from t limit 0", 0, 0},
+		{"huge literal clamps to cap", "select id from t limit 18446744073709551615", 1, 10, 100, "select id from t limit 11", 100, 10},
 	}
-	if got.ExecutableSQL != "select id from t limit 20, 11" {
-		t.Fatalf("ExecutableSQL = %q, want server-owned limit and offset", got.ExecutableSQL)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := g.GuardPaginatedSelect(tt.statement, tt.page, tt.size, tt.maxRows)
+			if err != nil {
+				t.Fatalf("GuardPaginatedSelect error: %v", err)
+			}
+			if got.ExecutableSQL != tt.wantSQL {
+				t.Fatalf("ExecutableSQL = %q, want %q", got.ExecutableSQL, tt.wantSQL)
+			}
+			if got.LimitApplied != tt.wantLimitApplied {
+				t.Fatalf("LimitApplied = %d, want %d", got.LimitApplied, tt.wantLimitApplied)
+			}
+			if got.ResultLimit != tt.wantResultLimit {
+				t.Fatalf("ResultLimit = %d, want %d", got.ResultLimit, tt.wantResultLimit)
+			}
+		})
+	}
+}
+
+func TestQueryGuard_GuardPaginatedSelect_rejectsPageBeyondUserLimit(t *testing.T) {
+	t.Parallel()
+	g := newTestGuard()
+
+	// Given a user LIMIT smaller than the requested page start.
+	// When page two is guarded.
+	_, err := g.GuardPaginatedSelect("select id from t limit 5", 2, 10, 100)
+
+	// Then it is rejected before SQL generation, not silently widened.
+	if !errors.Is(err, ErrQueryPaginationInvalid) {
+		t.Fatalf("GuardPaginatedSelect error = %v, want ErrQueryPaginationInvalid", err)
+	}
+}
+
+func TestQueryGuard_GuardPaginatedSelect_rejectsPageBeyondZeroUserLimit(t *testing.T) {
+	t.Parallel()
+	g := newTestGuard()
+
+	// LIMIT 0 browses an empty window: only page one may be yielded.
+	if _, err := g.GuardPaginatedSelect("select id from t limit 0", 2, 10, 100); !errors.Is(err, ErrQueryPaginationInvalid) {
+		t.Fatalf("limit 0 page 2 error = %v, want ErrQueryPaginationInvalid", err)
+	}
+}
+
+func TestQueryGuard_rejectsNonLiteralLimitForms(t *testing.T) {
+	t.Parallel()
+	g := newTestGuard()
+
+	for _, tt := range []struct {
+		name      string
+		statement string
+	}{
+		{"placeholder rowcount", "select id from t limit :n"},
+		{"placeholder offset", "select id from t limit :off, 10"},
+		{"expression rowcount", "select id from t limit 1+1"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			if _, err := g.Guard(tt.statement, 100); !errors.Is(err, ErrQueryLimitFormUnsupported) {
+				t.Fatalf("Guard(%q) error = %v, want ErrQueryLimitFormUnsupported", tt.statement, err)
+			}
+			if _, err := g.GuardPaginatedSelect(tt.statement, 1, 10, 100); !errors.Is(err, ErrQueryLimitFormUnsupported) {
+				t.Fatalf("GuardPaginatedSelect(%q) error = %v, want ErrQueryLimitFormUnsupported", tt.statement, err)
+			}
+		})
+	}
+}
+
+// TestQueryGuard_GuardSelect_honorsUserLimit proves non-paginated execution
+// keeps a tighter user LIMIT verbatim and reports it as the applied bound so
+// it is never flagged as governed truncation.
+func TestQueryGuard_GuardSelect_honorsUserLimit(t *testing.T) {
+	t.Parallel()
+	g := newTestGuard()
+
+	got, err := g.Guard("select id from t limit 3", 100)
+	if err != nil {
+		t.Fatalf("Guard error: %v", err)
+	}
+	if got.ExecutableSQL != "select id from t limit 3" {
+		t.Fatalf("ExecutableSQL = %q, want the user's limit kept verbatim", got.ExecutableSQL)
+	}
+	if got.LimitApplied != 3 {
+		t.Fatalf("LimitApplied = %d, want 3", got.LimitApplied)
+	}
+}
+
+// TestQueryGuard_GuardSelect_honorsUserOffset proves the governed cap is
+// intersected on top of the user's own OFFSET for non-paginated execution.
+func TestQueryGuard_GuardSelect_honorsUserOffset(t *testing.T) {
+	t.Parallel()
+	g := newTestGuard()
+
+	got, err := g.Guard("select id from t limit 1000 offset 500", 100)
+	if err != nil {
+		t.Fatalf("Guard error: %v", err)
+	}
+	if got.ExecutableSQL != "select id from t limit 500, 101" {
+		t.Fatalf("ExecutableSQL = %q, want user offset + governed cap probe", got.ExecutableSQL)
+	}
+	if got.LimitApplied != 100 {
+		t.Fatalf("LimitApplied = %d, want governed cap 100", got.LimitApplied)
 	}
 }
 

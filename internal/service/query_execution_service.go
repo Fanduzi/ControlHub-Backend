@@ -469,7 +469,7 @@ func (s *QueryExecutionService) executeGuardedChain(
 	}
 
 	var pagination *model.QueryExecutePaginationResponse
-	if guarded.ResultLimit > 0 {
+	if guarded.Paginated {
 		offset := (page - 1) * pageSize
 		// ResultLimit is the guard-owned effective window; when the release cap
 		// truncates the requested pageSize, report the real window instead of

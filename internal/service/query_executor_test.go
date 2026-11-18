@@ -281,6 +281,7 @@ func TestMySQLQueryExecutorQueryTemplatePreservesPaginatedPayloadCap(t *testing.
 			ExecutableSQL: "select payload from orders where `status` = ? limit 11",
 			LimitApplied:  10,
 			ResultLimit:   10,
+			Paginated:     true,
 		},
 		args: []any{"paid"},
 	}

@@ -3,6 +3,7 @@ package service
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 
 	"github.com/fan/controlhub/internal/model"
@@ -265,5 +266,60 @@ func TestPGValidateResponse(t *testing.T) {
 	}
 	if err := resp.Validate(); err != nil {
 		t.Fatalf("response failed contract validation: %v", err)
+	}
+}
+
+// TestPGNoFreeFormPassthrough proves bounded identifiers (Relation Name →
+// relation, Index Name → index) are the ONLY values that cross the
+// boundary: Filter and Index Cond strings never leave the normalizer.
+func TestPGNoFreeFormPassthrough(t *testing.T) {
+	raw := pgRawPlan(t, `[{"Plan":{"Node Type":"Index Scan","Plan Rows":10,
+		"Relation Name":"secret_orders","Index Name":"idx_secret_key",
+		"Index Cond":"(ssn = '123'::text)","Filter":"(balance > 100)"}}]`)
+	got, err := NewPGExplainNormalizer().Normalize(raw)
+	if err != nil {
+		t.Fatalf("Normalize: %v", err)
+	}
+	if len(got.Nodes) != 1 {
+		t.Fatalf("nodes = %d, want 1", len(got.Nodes))
+	}
+	n := got.Nodes[0]
+	if n.Relation != "secret_orders" || n.Index != "idx_secret_key" {
+		t.Errorf("relation/index = %q/%q, want secret_orders/idx_secret_key", n.Relation, n.Index)
+	}
+	data, _ := json.Marshal(n)
+	s := strings.ToLower(string(data))
+	for _, banned := range []string{"ssn", "balance", "filter", "index cond"} {
+		if strings.Contains(s, banned) {
+			t.Errorf("node JSON must not contain %q, got: %s", banned, s)
+		}
+	}
+}
+
+// TestPGRelationFallbackAndBounds proves CTE Name is used when Relation
+// Name is absent, and over-bound or control-char names are dropped rather
+// than failing the plan.
+func TestPGRelationFallbackAndBounds(t *testing.T) {
+	long := strings.Repeat("x", model.MaxExplainIdentifierLen+1)
+	raw := pgRawPlan(t, `[{"Plan":{"Node Type":"Append","Plan Rows":3,"Plans":[
+		{"Node Type":"CTE Scan","Plan Rows":1,"CTE Name":"my_cte"},
+		{"Node Type":"Seq Scan","Plan Rows":1,"Relation Name":"`+long+`","Index Name":"idx\tbad"},
+		{"Node Type":"Index Scan","Plan Rows":1,"Relation Name":"ok_rel","Index Name":"ok_idx"}
+	]}}]`)
+	got, err := NewPGExplainNormalizer().Normalize(raw)
+	if err != nil {
+		t.Fatalf("Normalize: %v", err)
+	}
+	if len(got.Nodes) != 4 {
+		t.Fatalf("nodes = %d, want 4: %+v", len(got.Nodes), got.Nodes)
+	}
+	if got.Nodes[1].Relation != "my_cte" {
+		t.Errorf("CTE node relation = %q, want my_cte", got.Nodes[1].Relation)
+	}
+	if got.Nodes[2].Relation != "" || got.Nodes[2].Index != "" {
+		t.Errorf("invalid names must be dropped, got %q/%q", got.Nodes[2].Relation, got.Nodes[2].Index)
+	}
+	if got.Nodes[3].Relation != "ok_rel" || got.Nodes[3].Index != "ok_idx" {
+		t.Errorf("valid names must be kept, got %q/%q", got.Nodes[3].Relation, got.Nodes[3].Index)
 	}
 }

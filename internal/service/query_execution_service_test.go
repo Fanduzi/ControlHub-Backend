@@ -2207,7 +2207,7 @@ func TestExecute_PagedResponseReportsEffectivePageWindow(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Execute: %v", err)
 	}
-	if got := executor.queries[0].ExecutableSQL; got != "select `value` from metrics limit 0, 11" {
+	if got := executor.queries[0].ExecutableSQL; got != "select `value` from metrics limit 10" {
 		t.Fatalf("SQL = %q, want cap-bounded first window", got)
 	}
 	if resp.Pagination == nil || resp.Pagination.PageSize != 10 {
