@@ -121,7 +121,7 @@ Business logic layer with interface-based repository dependencies. Each service 
 
 ## Exports
 - `NewXxxService(repo) *XxxService` constructors for all services
-- `ResourceService.ObserveHealth` — validated operational evidence ingestion that never emits inventory audit events
+- `ResourceService.ObserveHealth` — operational evidence ingestion that validates the UTC `observedAt` storage range and never emits inventory audit events
 - `RelationService.Rules` returns source-specific relation types, target resource types, and environment constraints derived from the write validator's matrix
 - `DeriveCompleteness` — pure read-only score/status/missing-requirements projection; labels never satisfy a requirement
 - `ValidateResourceUpdate` — normal update validation against an already-read current resource, reused by locked bulk mutations

@@ -7,13 +7,63 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"fmt"
+	"net/http"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/fan/controlhub/internal/api"
 	"github.com/fan/controlhub/internal/model"
 	"github.com/fan/controlhub/internal/repository/mysql"
+	"github.com/fan/controlhub/internal/service"
 )
+
+func TestHealthObservationObservedAtRange(t *testing.T) {
+	db := setupTestDB(t)
+	repo := mysql.NewResourceRepository(db)
+	resource, err := repo.CreateResource(context.Background(), inventoryAuditResource("health-observation-range"))
+	if err != nil {
+		t.Fatalf("create resource: %v", err)
+	}
+	router := api.NewRouter(api.Dependencies{
+		ResourceService: service.NewResourceService(repo, mysql.NewRelationRepository(db)),
+		AuthService:     service.NewAuthService(mysql.NewUserRepository(db), authzIntegrationSecret),
+	})
+	const email = "health-observation-range@example.com"
+	userID := insertAuthzTestUser(t, db, email, "admin")
+	t.Cleanup(func() { deleteAuthzTestUser(t, db, userID) })
+	token := mustLogin(t, router, email, "secret123")
+	path := fmt.Sprintf("/resources/%d/health-observations", resource.ID)
+
+	for _, tc := range []struct {
+		name, observedAt string
+		want             int
+	}{
+		{"issue 154", "0001-01-01T00:00:14.000001+01:06", http.StatusBadRequest},
+		{"just below minimum in UTC", "1000-01-01T00:59:59.999999+01:00", http.StatusBadRequest},
+		{"minimum in UTC", "0999-12-31T23:00:00-01:00", http.StatusNoContent},
+		{"maximum in UTC", "9999-12-31T22:59:59.999999-01:00", http.StatusNoContent},
+		{"sub-microsecond above maximum in UTC", "9999-12-31T22:59:59.999999999-01:00", http.StatusBadRequest},
+		{"year 10000 in UTC", "9999-12-31T23:00:00-01:00", http.StatusBadRequest},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			body := fmt.Sprintf(`{"status":"healthy","observer":"test","observedAt":%q}`, tc.observedAt)
+			resp := doBearerWithBody(t, router, http.MethodPost, path, token, body)
+			if resp.Code != tc.want {
+				t.Fatalf("status = %d, want %d; body=%s", resp.Code, tc.want, resp.Body.String())
+			}
+			if tc.want == http.StatusBadRequest {
+				var respBody struct {
+					Error string `json:"error"`
+				}
+				if err := json.Unmarshal(resp.Body.Bytes(), &respBody); err != nil || respBody.Error != "validation_failed" {
+					t.Fatalf("want validation_failed; err=%v, body=%s", err, resp.Body.String())
+				}
+			}
+		})
+	}
+}
 
 func TestHealthObservationsKeepLatestPerObserverAndNeverInventoryAudit(t *testing.T) {
 	db := setupTestDB(t)

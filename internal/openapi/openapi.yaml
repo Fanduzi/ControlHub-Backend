@@ -6925,6 +6925,9 @@ components:
         observedAt:
           type: string
           format: date-time
+          description: >-
+            After conversion to UTC, must be between 1000-01-01T00:00:00Z and
+            9999-12-31T23:59:59.999999Z, inclusive.
         observer:
           type: string
           minLength: 1

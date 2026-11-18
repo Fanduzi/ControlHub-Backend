@@ -8,6 +8,7 @@ import (
 	"regexp"
 	"slices"
 	"strings"
+	"time"
 	"unicode"
 
 	"github.com/fan/controlhub/internal/model"
@@ -265,6 +266,10 @@ func (s *ResourceService) ObserveHealth(ctx context.Context, id uint64, observat
 	}
 	if observation.ObservedAt.IsZero() {
 		return wrapValidation("observedAt is required")
+	}
+	observedAt := observation.ObservedAt.UTC()
+	if observedAt.Year() < 1000 || observedAt.After(time.Date(9999, 12, 31, 23, 59, 59, 999999000, time.UTC)) {
+		return wrapValidation("observedAt must be within the UTC range 1000-01-01T00:00:00Z to 9999-12-31T23:59:59.999999Z")
 	}
 	repo, ok := s.repo.(healthObservationRepository)
 	if !ok {

@@ -5,7 +5,7 @@ Integration tests run against disposable Testcontainers databases (MySQL for the
 ## Files
 | File | Responsibility |
 |------|---------------|
-| health_observation_test.go | Real-MySQL latest observation, freshness, effective filtering, no-audit, and atomic manual override contracts |
+| health_observation_test.go | Real-MySQL HTTP `observedAt` range validation, latest observation, freshness, effective filtering, no-audit, and atomic manual override contracts |
 | testenv_test.go | Starts MySQL, applies migrations, and provides database helpers; the `CH_T12_ORPHAN_CHILD` env guard re-dispatches the test binary into the T12-R1 child server before suite setup |
 | mysql_test.go | Exact migration-30 schema/table, collector/user/machine/claim constraints and indexes, unsigned-ID, and no-foreign-key guards after clean migration |
 | resource_test.go | Resource repository CRUD, key-presence/exact-value label filtering, constant-query batched-profile reads, seed-isolated observation-derived cluster rollups, create-with-profile atomicity, profile validation, and PATCH partial-merge semantics against real MySQL |
