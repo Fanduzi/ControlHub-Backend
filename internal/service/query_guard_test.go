@@ -751,6 +751,14 @@ func TestGuardSavedStatement(t *testing.T) {
 
 		// Rejected: user variable assignment
 		{"user variable", "SELECT @var := 1", true},
+
+		// Allowed: literal LIMIT/OFFSET
+		{"select with literal limit", "SELECT id FROM orders LIMIT 3 OFFSET 1", false},
+
+		// Rejected: non-literal LIMIT/OFFSET (would bypass the execution guard)
+		{"select with placeholder limit", "SELECT id FROM orders LIMIT ?", true},
+		{"select with expression limit", "SELECT id FROM orders LIMIT 1+1", true},
+		{"select with placeholder offset", "SELECT id FROM orders LIMIT ?, 10", true},
 	}
 
 	for _, tt := range tests {
@@ -764,6 +772,25 @@ func TestGuardSavedStatement(t *testing.T) {
 				t.Errorf("GuardSavedStatement(%q) returned empty result", tt.statement)
 			}
 		})
+	}
+}
+
+// TestGuardSavedStatementRejectsNonLiteralLimit proves the save route fails
+// closed on LIMIT/OFFSET forms the execution guard cannot bound — the same
+// rejection the PG path applies through the pagination gate — instead of
+// storing a statement that would error only at execution time.
+func TestGuardSavedStatementRejectsNonLiteralLimit(t *testing.T) {
+	t.Parallel()
+	g := newTestGuard()
+	for _, stmt := range []string{
+		"SELECT id FROM orders LIMIT ?",
+		"SELECT id FROM orders LIMIT 1+1",
+		"SELECT id FROM orders LIMIT ?, 10",
+		"SELECT id FROM orders LIMIT 10 OFFSET ?",
+	} {
+		if _, err := g.GuardSavedStatement(stmt); !errors.Is(err, ErrQueryLimitFormUnsupported) {
+			t.Errorf("GuardSavedStatement(%q) error = %v, want ErrQueryLimitFormUnsupported", stmt, err)
+		}
 	}
 }
 
@@ -857,6 +884,7 @@ func TestQueryGuard_GuardPaginatedSelect_honorsClientLimitAndOffset(t *testing.T
 		{"user limit spanning pages", "select id from t limit 25", 3, 10, 100, "select id from t limit 20, 5", 25, 5},
 		{"user limit zero yields empty first page", "select id from t limit 0", 1, 10, 100, "select id from t limit 0", 0, 0},
 		{"huge literal clamps to cap", "select id from t limit 18446744073709551615", 1, 10, 100, "select id from t limit 11", 100, 10},
+		{"leading-zero literal is decimal", "select id from t limit 010", 1, 10, 100, "select id from t limit 10", 10, 10},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

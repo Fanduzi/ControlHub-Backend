@@ -216,6 +216,13 @@ func (g *QueryGuard) GuardSavedStatement(statement string) (string, error) {
 		return "", err
 	}
 
+	// A stored statement must not smuggle a non-literal LIMIT/OFFSET past the
+	// execution guard later (template placeholders, expressions) — the same
+	// rule the PG save path enforces via the pagination gate.
+	if _, _, err := browsableRows(sel, 1); err != nil {
+		return "", err
+	}
+
 	return trimmed, nil
 }
 
@@ -398,7 +405,7 @@ func literalLimitValue(expr sqlparser.Expr) (int64, error) {
 	if !ok || lit.Type != sqlparser.IntVal {
 		return 0, ErrQueryLimitFormUnsupported
 	}
-	v, err := strconv.ParseUint(lit.Val, 0, 64)
+	v, err := strconv.ParseUint(lit.Val, 10, 64)
 	if err != nil {
 		if errors.Is(err, strconv.ErrRange) {
 			return math.MaxInt64, nil
