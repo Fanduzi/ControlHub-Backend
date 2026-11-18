@@ -9,6 +9,8 @@ import (
 	"fmt"
 	"strings"
 
+	drivermysql "github.com/go-sql-driver/mysql"
+
 	"github.com/fan/controlhub/internal/model"
 )
 
@@ -113,9 +115,26 @@ func (s *QuerySchemaService) ListDatabases(
 		if iErr != nil {
 			return nil, iErr
 		}
+		// The default database is the one named in the credential DSN. The DSN
+		// is part of the cache key via the credential ref, so the cached value
+		// stays bound to the credential that produced it. A DSN without a
+		// database name (or one that fails to parse) leaves it null; the parse
+		// failure is intentionally swallowed so DSN text never surfaces.
+		databaseItems := s.toModelDatabases(items)
+		var defaultDatabase *string
+		if cfg, pErr := drivermysql.ParseDSN(bound.dsn); pErr == nil && cfg.DBName != "" {
+			def := cfg.DBName
+			defaultDatabase = &def
+			for i := range databaseItems {
+				if databaseItems[i].Name == def {
+					databaseItems[i].IsDefault = true
+				}
+			}
+		}
 		return model.DatabaseListResponse{
 			TargetResourceID: int64(targetID),
-			Items:            s.toModelDatabases(items),
+			DefaultDatabase:  defaultDatabase,
+			Items:            databaseItems,
 			PageInfo:         pageInfo,
 		}, nil
 	})
