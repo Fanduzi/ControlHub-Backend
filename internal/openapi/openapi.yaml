@@ -365,6 +365,7 @@ paths:
                         name: {type: string}
                         columns: {type: array, items: {type: string}}
                         dailyCountColumns: {type: array, description: Raw-disclosable time columns explicitly approved for daily counts., items: {type: string}}
+                        worksheet: {type: boolean, description: Table approved for developer-authored queries under the worksheet grammar.}
         '400': &chInvalid {description: Invalid request, content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}}
         '401': &chAuth {description: Fresh user login required, content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}}
         '403': &chDenied {description: Target or disclosure policy denied access, content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}}
@@ -5171,6 +5172,7 @@ components:
         drive a locked Query Workbench shell. No credentials or execution state.
       required: [resourceId, resourceName, displayName, resourceType, connectionContext, capability, readiness, missingFields, governance, availableActions, schemaPreview]
       properties:
+        clickHouseGeneration: {type: string, pattern: '^[a-f0-9]{64}$', description: Echo this opaque approval generation when running ClickHouse worksheet SQL.}
         resourceId:
           type: integer
           format: int64
@@ -7405,8 +7407,12 @@ components:
       description: >
         Body of POST /query-targets/{id}/execute. The actor is never taken from
         here — it is derived from the verified User or Machine credential.
-        Unknown fields are rejected by strict decoding.
+        Unknown fields are rejected by strict decoding. For an explicitly worksheet-enabled
+        local ClickHouse target, the ordinary Run route accepts a fresh user and a bounded
+        single-table SELECT with projection, equality filter, grouping/count, ordering and LIMIT.
+        The server rechecks source-column policies and commits history/audit before delivery.
       properties:
+        clickHouseGeneration: {type: string, pattern: '^[a-f0-9]{64}$', description: Required for ClickHouse Run and omitted for other engines.}
         statement:
           type: string
           description: >

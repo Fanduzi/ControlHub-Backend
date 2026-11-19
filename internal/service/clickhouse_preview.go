@@ -34,7 +34,9 @@ type CHPreview struct {
 }
 
 func NewCHPreview(dir string, execution *QueryExecutionService, policies QueryDisclosureReader) *CHPreview {
-	return &CHPreview{dir, execution, policies}
+	preview := &CHPreview{dir, execution, policies}
+	execution.clickHouse = preview
+	return preview
 }
 
 type CHPreviewRequest struct {
@@ -45,6 +47,7 @@ type CHPreviewRequest struct {
 	DailyCountColumn string   `json:"dailyCountColumn,omitempty"`
 }
 type CHPreviewTable struct {
+	Worksheet         bool     `json:"worksheet,omitempty"`
 	Name              string   `json:"name"`
 	Columns           []string `json:"columns"`
 	DailyCountColumns []string `json:"dailyCountColumns,omitempty"`
@@ -62,6 +65,7 @@ type chApproval struct {
 		UUID              string
 		Columns           []string
 		DailyCountColumns []string
+		Worksheet         bool
 	}
 }
 type chPreviewResult struct {
@@ -149,18 +153,47 @@ func chNonProduction(env string) bool {
 	return slices.Contains([]string{"Staging", "Development", "Test"}, env)
 }
 
-// Discoverable only controls the catalog affordance; each read independently reauthorizes.
-func (s *CHPreview) Discoverable(target model.QueryTarget, user uint64) bool {
+// ApplyWorksheetActions advertises Run only for a separately approved worksheet table
+// and a bound credential. Execute always repeats these checks under its own lease.
+func (s *CHPreview) ApplyWorksheetActions(ctx context.Context, target *model.QueryTarget, user uint64) {
 	if target.ConnectionContext.Engine != "clickhouse" {
-		return false
+		return
 	}
 	lock, err := s.acquire()
 	if err != nil {
-		return false
+		return
 	}
 	defer lock.Close()
-	_, err = s.approval(target, user)
-	return err == nil
+	a, err := s.approval(*target, user)
+	if err != nil {
+		return
+	}
+	target.AvailableActions.ClickHousePreview = true
+	for _, table := range a.Tables {
+		if !table.Worksheet {
+			continue
+		}
+		if _, err := s.password(ctx, *target, a); err != nil {
+			return
+		}
+		ca, err := os.ReadFile(filepath.Join(s.dir, "ca.pem"))
+		if err != nil {
+			return
+		}
+		target.ClickHouseGeneration = chGeneration(a, ca)
+		target.AvailableActions.Run = true
+		target.Readiness = model.ReadinessReady
+		target.MissingFields = []string{}
+		target.Governance.ExecutionEnabled = true
+		target.Governance.SafetyState = model.SafetyStateReadonlySandboxEnabled
+		target.Governance.CredentialState = string(model.QueryCredentialRuntimeSecretResolved)
+		target.Governance.SafetyNote = "Approved read-only ClickHouse worksheet"
+		target.Governance.PolicyNotes = []string{"Non-production, single-table queries only"}
+		return
+	}
+}
+func chGeneration(a chApproval, ca []byte) string {
+	return fmt.Sprintf("%x", sha256.Sum256(append([]byte(a.generation), ca...)))
 }
 
 func chCredentialURL(secret, address string) (*url.URL, error) {
@@ -174,31 +207,39 @@ func chCredentialURL(secret, address string) (*url.URL, error) {
 	return u, nil
 }
 
+func (s *CHPreview) password(ctx context.Context, target model.QueryTarget, a chApproval) (string, error) {
+	meta, err := s.execution.executions.GetCredential(ctx, target.ResourceID, "")
+	if err != nil || !meta.Enabled || meta.EnvironmentPolicy != model.QueryEnvPolicyNonProdOnly || meta.Engine != "clickhouse" || meta.CredentialRef != a.CredentialRef {
+		return "", ErrQueryNotAllowed
+	}
+	secret, err := s.execution.credentials.Resolve(ctx, a.CredentialRef)
+	if err != nil {
+		return "", ErrQueryNotAllowed
+	}
+	u, err := chCredentialURL(secret, a.Address)
+	if err != nil || u.Path != "/"+a.Database || u.User.Username() != a.User {
+		return "", ErrQueryNotAllowed
+	}
+	password, _ := u.User.Password()
+	return password, nil
+}
+
 func (s *CHPreview) session(ctx context.Context, target model.QueryTarget, user uint64, fn func(ch.Conn, chApproval, chCatalog) error) error {
 	a, err := s.approval(target, user)
 	if err != nil {
 		return err
 	}
-	t := target.ConnectionContext
-	meta, err := s.execution.executions.GetCredential(ctx, target.ResourceID, "")
-	if err != nil || !meta.Enabled || meta.EnvironmentPolicy != model.QueryEnvPolicyNonProdOnly || meta.Engine != "clickhouse" || meta.CredentialRef != a.CredentialRef {
-		return ErrQueryNotAllowed
-	}
-	secret, err := s.execution.credentials.Resolve(ctx, a.CredentialRef)
+	password, err := s.password(ctx, target, a)
 	if err != nil {
-		return ErrQueryNotAllowed
+		return err
 	}
-	u, err := chCredentialURL(secret, a.Address)
-	if err != nil || u.Path != "/"+a.Database || u.User.Username() != a.User {
-		return ErrQueryNotAllowed
-	}
-	password, _ := u.User.Password()
+	t := target.ConnectionContext
 	ca, err := os.ReadFile(filepath.Join(s.dir, "ca.pem"))
 	roots := x509.NewCertPool()
 	if err != nil || !roots.AppendCertsFromPEM(ca) {
 		return ErrQueryNotAllowed
 	}
-	a.generation = fmt.Sprintf("%x", sha256.Sum256(append([]byte(a.generation), ca...)))
+	a.generation = chGeneration(a, ca)
 	conn, err := ch.Open(&ch.Options{Addr: []string{a.Address}, Auth: ch.Auth{Database: a.Database, Username: a.User, Password: password}, TLS: &tls.Config{RootCAs: roots, ServerName: t.Host, MinVersion: tls.VersionTLS12}, MaxOpenConns: 1, MaxIdleConns: 1, DialTimeout: 2 * time.Second, ReadTimeout: 5 * time.Second, BlockBufferSize: 1, MaxCompressionBuffer: 1 << 20})
 	if err != nil {
 		return ErrQueryBackendFailure
@@ -266,7 +307,7 @@ func (s *CHPreview) catalog(ctx context.Context, conn ch.Conn, a chApproval) (ch
 	}
 	sort.Strings(names)
 	for _, name := range names {
-		table := CHPreviewTable{Name: name}
+		table := CHPreviewTable{Name: name, Worksheet: a.Tables[name].Worksheet}
 		for _, col := range a.Tables[name].Columns {
 			if cat.types[name][col] != "" {
 				table.Columns = append(table.Columns, col)
@@ -377,6 +418,14 @@ func (s *CHPreview) Preview(ctx context.Context, user, id uint64, req CHPreviewR
 	if err != nil && attempt.Err() != nil {
 		err = attempt.Err()
 	}
+	_, err = s.finishAttempt(ctx, rec, started, count, err)
+	if err != nil {
+		return nil, err
+	}
+	return payload, nil
+}
+
+func (s *CHPreview) finishAttempt(ctx context.Context, rec model.QueryExecutionRecord, started time.Time, count int, err error) (uint64, error) {
 	rec.DurationMs = time.Since(started).Milliseconds()
 	rec.RowCount = count
 	rec.Status = model.QueryExecutionSuccess
@@ -395,13 +444,11 @@ func (s *CHPreview) Preview(ctx context.Context, user, id uint64, req CHPreviewR
 			rec.Status, err, rec.ErrorCode, rec.ErrorMessage = classifyExecutorError(err)
 		}
 	}
-	if _, saveErr := s.execution.persistEvidencePair(ctx, rec, executionEvidenceQuery); saveErr != nil {
-		return nil, ErrQueryBackendFailure
+	id, saveErr := s.execution.persistEvidencePair(ctx, rec, executionEvidenceQuery)
+	if saveErr != nil {
+		return 0, ErrQueryBackendFailure
 	}
-	if err != nil {
-		return nil, err
-	}
-	return payload, nil
+	return id, err
 }
 
 func readCHProjection(ctx context.Context, conn ch.Conn, query string, limit int, columns []model.QueryResultColumn, rec *model.QueryExecutionRecord) ([][]any, error) {

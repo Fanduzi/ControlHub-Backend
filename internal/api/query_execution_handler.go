@@ -256,13 +256,14 @@ func rejectNestedNullScalars(members map[string]json.RawMessage, field string, s
 // executeAllowedFields is the exact case-sensitive field set for the ordinary
 // execute route; pagination carries the nested exact set.
 var executeAllowedFields = map[string][]string{
-	"statement":         nil,
-	"database":          nil,
-	"schema":            nil,
-	"maxRows":           nil,
-	"pagination":        {"page", "pageSize"},
-	"capabilities":      nil,
-	"clientExecutionId": nil,
+	"clickHouseGeneration": nil,
+	"statement":            nil,
+	"database":             nil,
+	"schema":               nil,
+	"maxRows":              nil,
+	"pagination":           {"page", "pageSize"},
+	"capabilities":         nil,
+	"clientExecutionId":    nil,
 }
 
 // decodeExecuteJSONBody is the route-local strict decoder for ordinary
@@ -284,6 +285,7 @@ func decodeExecuteJSONBody(r *http.Request, target *model.QueryExecuteRequest) e
 	}
 	if err := rejectNullScalars(fields, "",
 		nullScalarField{"statement", "string"},
+		nullScalarField{"clickHouseGeneration", "string"},
 		nullScalarField{"database", "string"},
 		nullScalarField{"schema", "string"},
 		nullScalarField{"maxRows", "number"},

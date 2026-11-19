@@ -199,6 +199,7 @@ type QueryExecutionService struct {
 	// fields stay rejected. It is set only by WithPGHTTPEntries and can
 	// never be opened by request fields, roles, or target labels.
 	pgHTTPEntries bool
+	clickHouse    *CHPreview
 }
 
 // QueryEvidencePersistenceFailures exposes the dimensionless persistence-
@@ -284,19 +285,23 @@ func (s *QueryExecutionService) Execute(ctx context.Context, identity model.Quer
 	if err := req.ValidateShape(); err != nil {
 		return model.QueryExecuteResponse{}, fmt.Errorf("%w: %v", ErrQueryValidationFailed, err)
 	}
-	// Engine dispatch: only when the construction-time PG HTTP capability is
-	// wired may a postgresql target leave the legacy path. The minimal
-	// metadata read never resolves credentials, never connects, and never
-	// occupies a key — governed access, claims, and all PG-specific
-	// required-field checks belong to the orchestrator.
-	if s.pgHTTPEntries {
+	// Dispatch only after resolving the trusted target engine.
+	if s.pgHTTPEntries || s.clickHouse != nil {
 		target, terr := s.pgDispatchTarget(ctx, targetID)
 		if terr != nil {
 			return model.QueryExecuteResponse{}, terr
 		}
-		if isPGEngine(target.ConnectionContext.Engine) {
+		if target.ConnectionContext.Engine == "clickhouse" && s.clickHouse != nil {
+			return s.clickHouse.executeWorksheet(ctx, identity, target, req)
+		}
+		if req.ClickHouseGeneration != "" {
+			return model.QueryExecuteResponse{}, ErrQueryValidationFailed
+		}
+		if s.pgHTTPEntries && isPGEngine(target.ConnectionContext.Engine) {
 			return s.executePGHTTP(ctx, identity, target, req)
 		}
+	} else if req.ClickHouseGeneration != "" {
+		return model.QueryExecuteResponse{}, ErrQueryValidationFailed
 	}
 	if err := req.Validate(); err != nil {
 		return model.QueryExecuteResponse{}, fmt.Errorf("%w: %v", ErrQueryValidationFailed, err)

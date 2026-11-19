@@ -136,17 +136,18 @@ type QueryTargetConnection struct {
 // QueryTarget is the read-only query capability context for one database
 // resource, ready to drive a locked Query Workbench shell.
 type QueryTarget struct {
-	ResourceID        uint64                         `json:"resourceId"`
-	ResourceName      string                         `json:"resourceName"`
-	DisplayName       string                         `json:"displayName"`
-	ResourceType      ResourceType                   `json:"resourceType"`
-	ConnectionContext QueryTargetConnectionContext   `json:"connectionContext"`
-	Capability        QueryTargetCapability          `json:"capability"`
-	Readiness         QueryTargetReadiness           `json:"readiness"`
-	MissingFields     []string                       `json:"missingFields"`
-	Governance        QueryTargetGovernance          `json:"governance"`
-	AvailableActions  QueryTargetAvailableActions    `json:"availableActions"`
-	SchemaPreview     []QueryTargetSchemaPreviewNode `json:"schemaPreview"`
+	ClickHouseGeneration string                         `json:"clickHouseGeneration,omitempty"`
+	ResourceID           uint64                         `json:"resourceId"`
+	ResourceName         string                         `json:"resourceName"`
+	DisplayName          string                         `json:"displayName"`
+	ResourceType         ResourceType                   `json:"resourceType"`
+	ConnectionContext    QueryTargetConnectionContext   `json:"connectionContext"`
+	Capability           QueryTargetCapability          `json:"capability"`
+	Readiness            QueryTargetReadiness           `json:"readiness"`
+	MissingFields        []string                       `json:"missingFields"`
+	Governance           QueryTargetGovernance          `json:"governance"`
+	AvailableActions     QueryTargetAvailableActions    `json:"availableActions"`
+	SchemaPreview        []QueryTargetSchemaPreviewNode `json:"schemaPreview"`
 	// Connections enumerates this target's Query Connection rows for
 	// connection selection; populated once the composite-key read exists (T2).
 	Connections []QueryTargetConnection `json:"connections,omitempty"`

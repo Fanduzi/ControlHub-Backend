@@ -22,5 +22,7 @@ CREATE TABLE g2.events UUID 'cb200000-0000-4000-8000-000000000007'
 (request_id UInt64, observed_at DateTime('Asia/Tokyo'), request_date Date, private_time DateTime, preview_only Date, missing_date Date)
 ENGINE = MergeTree ORDER BY observed_at;
 INSERT INTO g2.events
-WITH toStartOfDay(now('UTC')) + toIntervalSecond(arrayJoin([-518401,-518400,-518399,-432001,-432000,0,toInt32(toUnixTimestamp(now())-toUnixTimestamp(toStartOfDay(now('UTC'))))+600,86400])) AS instant
-SELECT toUInt64('18446744073709551615'), instant, toDate(instant, 'UTC'), instant, toDate(instant, 'UTC'), toDate(instant, 'UTC');
+WITH toStartOfDay(now('UTC')) AS midnight
+SELECT multiIf(number=0,toUInt64(42),number=1,toUInt64(43),toUInt64('18446744073709551615')),
+       midnight + toIntervalSecond([-518401,-518400,-518399,-432001,-432000,0,toInt32(toUnixTimestamp(now())-toUnixTimestamp(midnight))+600,86400][number+1]) AS instant,
+       toDate(instant, 'UTC'), instant, toDate(instant, 'UTC'), toDate(instant, 'UTC') FROM numbers(8);

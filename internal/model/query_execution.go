@@ -80,9 +80,10 @@ type QueryExecutePaginationResponse struct {
 // QueryExecuteRequest is the body of POST /query-targets/{id}/execute. The
 // actor is never taken from here — it is derived from the verified token.
 type QueryExecuteRequest struct {
-	Statement  string                         `json:"statement"`
-	MaxRows    int                            `json:"maxRows,omitempty"`
-	Pagination *QueryExecutePaginationRequest `json:"pagination,omitempty"`
+	ClickHouseGeneration string                         `json:"clickHouseGeneration,omitempty"`
+	Statement            string                         `json:"statement"`
+	MaxRows              int                            `json:"maxRows,omitempty"`
+	Pagination           *QueryExecutePaginationRequest `json:"pagination,omitempty"`
 	// Database and Schema are the composite connection-identity selectors.
 	// Engine decides their contract at the service layer: PostgreSQL
 	// requires a non-empty database (schema defaults to the connection's

@@ -26,7 +26,7 @@ func handleListQueryTargets(queryTargetService *service.QueryTargetService, prev
 		// Optional discovery never grants access to the sibling Run endpoint.
 		if user, ok := actorUserIDFromContext(r.Context()); ok && preview != nil {
 			for i := range items {
-				items[i].AvailableActions.ClickHousePreview = preview.Discoverable(items[i], user)
+				preview.ApplyWorksheetActions(r.Context(), &items[i], user)
 			}
 		}
 		writeJSON(w, http.StatusOK, model.QueryTargetListResponse{Items: items, PageInfo: pageInfo})
