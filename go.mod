@@ -3,6 +3,7 @@ module github.com/fan/controlhub
 go 1.26.11
 
 require (
+	github.com/AfterShip/clickhouse-sql-parser v0.5.7
 	github.com/ClickHouse/clickhouse-go/v2 v2.51.0
 	github.com/DATA-DOG/go-sqlmock v1.5.2
 	github.com/getkin/kin-openapi v0.135.0

@@ -117,10 +117,8 @@ func (q chSelect) compile(db string, c chCatalog, maxRows int) (*chCompiled, err
 	result := &chCompiled{limit: 20, params: ch.Parameters{}}
 	types, modes := c.types[q.table], c.modes[q.table]
 	raw := func(col string) bool { return types[col] != "" && modes[col] == model.ResultDisclosureRawCopyAllowed }
-	for _, col := range []string{q.filter, q.group} {
-		if col != "" && !raw(col) {
-			return nil, ErrQueryDisclosureBlocked
-		}
+	if q.group != "" && !raw(q.group) {
+		return nil, ErrQueryDisclosureBlocked
 	}
 	if q.order != "" && q.order != q.countAlias && !raw(q.order) {
 		return nil, ErrQueryDisclosureBlocked
@@ -142,13 +140,13 @@ func (q chSelect) compile(db string, c chCatalog, maxRows int) (*chCompiled, err
 		result.plan.Columns = append(result.plan.Columns, ColumnDisclosure{Mode: mode, CopyAllowed: mode == model.ResultDisclosureRawCopyAllowed})
 	}
 	query := "SELECT " + strings.Join(selectList, ",") + " FROM `" + db + "`.`" + q.table + "` AS src"
-	if q.filter != "" {
-		expression, value, err := chFilterValue(types[q.filter], q.literal)
+	if q.where != nil {
+		filter := chPredicate{types: types, modes: modes, params: result.params, countAlias: q.countAlias}
+		expr, err := filter.compile(q.where, 0)
 		if err != nil {
 			return nil, err
 		}
-		result.params["worksheet_value"] = value
-		query += " WHERE src.`" + q.filter + "` = " + expression
+		query += " WHERE " + expr
 	}
 	if q.group != "" {
 		query += " GROUP BY src.`" + q.group + "`"
@@ -178,37 +176,35 @@ func (q chSelect) compile(db string, c chCatalog, maxRows int) (*chCompiled, err
 	return result, nil
 }
 
-func chFilterValue(typ, literal string) (string, string, error) {
-	quoted := strings.HasPrefix(literal, "'")
+func chFilterValue(name, typ, value string, quoted bool) (string, string, error) {
 	if typ == "UInt32" || typ == "UInt64" {
 		bits := 64
 		if typ == "UInt32" {
 			bits = 32
 		}
-		n, err := strconv.ParseUint(literal, 10, bits)
+		n, err := strconv.ParseUint(value, 10, bits)
 		if quoted || err != nil {
 			return "", "", ErrQueryValidationFailed
 		}
-		return "{worksheet_value:" + typ + "}", strconv.FormatUint(n, 10), nil
+		return "{" + name + ":" + typ + "}", strconv.FormatUint(n, 10), nil
 	}
 	if !quoted {
 		return "", "", ErrQueryValidationFailed
 	}
-	value := strings.ReplaceAll(literal[1:len(literal)-1], "''", "'")
 	if len(value) > 1024 {
 		return "", "", ErrQueryValidationFailed
 	}
 	switch {
 	case typ == "String" || typ == "Nullable(String)":
-		return "{worksheet_value:String}", value, nil
+		return "{" + name + ":String}", value, nil
 	case typ == "Date":
 		if _, err := time.Parse(time.DateOnly, value); err == nil && value >= "1970-01-01" && value <= "2149-06-06" {
-			return "{worksheet_value:Date}", value, nil
+			return "{" + name + ":Date}", value, nil
 		}
 	case chTimestamp(typ):
 		t, err := time.Parse(time.RFC3339, value)
 		if err == nil && t.Nanosecond() == 0 && t.Unix() >= 0 && t.Unix() <= 4294967295 {
-			return "toDateTime({worksheet_value:UInt32},'UTC')", strconv.FormatInt(t.Unix(), 10), nil
+			return "toDateTime({" + name + ":UInt32},'UTC')", strconv.FormatInt(t.Unix(), 10), nil
 		}
 	}
 	return "", "", ErrQueryValidationFailed
