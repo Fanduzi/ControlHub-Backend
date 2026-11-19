@@ -2,6 +2,8 @@
 
 The workbench offers an approved user a table picker, column selection and a 1–20 row preview. Free SQL execution remains separately governed. The HTTP surface is `GET` (catalog) and `POST` (preview) on `/query-targets/{id}/clickhouse-preview`. Both require a fresh user session. The catalog carries an opaque generation that the POST must echo. A changed approval or generation CA invalidates the selection. The target list advertises `availableActions.clickHousePreview` only for an approved user and target. The result contains only disclosed values and is released after the MySQL history/audit transaction commits.
 
+This guide covers the optional picker and fixed count. Developer-authored ClickHouse SQL in the shared worksheet is the next engine-integration milestone; its [scope and acceptance](superpowers/specs/2026-06-20-query-workbench-roadmap.md#engine-integration-acceptance) are tracked separately.
+
 ## Supported installation
 
 Use a single, local, controller-owned non-production instance with a private state directory on a local filesystem supporting Unix `flock`. The controller owns the ClickHouse instance, certificates, all DDL and its credential configuration. The serving phase has read-only SQL users, a local TLS listener, no external maintenance access, no configuration hot reload by other operators, and one fixed database. Shared servers, other DDL writers, multiple hosts, remote endpoints and production targets fall outside this implementation's isolation guarantee.
