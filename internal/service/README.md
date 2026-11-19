@@ -121,7 +121,7 @@ Business logic layer with interface-based repository dependencies. Each service 
 
 ## Exports
 
-- `clickhouse_select.go` parses the complete single-table worksheet grammar. `clickhouse_worksheet.go` compiles it against approved objects and current column policy and returns ordinary Run results after evidence commit.
+- `clickhouse_select.go` validates the single-table structure from the pinned ClickHouse dialect AST. `clickhouse_predicate.go` compiles comparisons, ranges and Boolean expressions against the raw-column policy with a separate Native parameter for every literal. `clickhouse_worksheet.go` compiles it against approved objects and current column policy and returns ordinary Run results after evidence commit.
 - `clickhouse_daily_count.go` groups one explicitly approved raw date or timestamp column into seven UTC day buckets. The preview catalog and Native reader preserve `Date`, `DateTime` and decimal `UInt64` results.
 - `CHPreview` in `clickhouse_preview.go` checks the controller lease, generation, target, user, TLS credential and column policies. Native reads, masking, result limits and atomic evidence precede delivery.
 - `NewXxxService(repo) *XxxService` constructors for all services

@@ -1,114 +1,89 @@
 package service
 
 import (
-	"regexp"
+	"slices"
 	"strconv"
 	"strings"
+
+	ast "github.com/AfterShip/clickhouse-sql-parser/parser"
 )
 
-// This is the complete worksheet grammar, not a prefix check. Only parsed fields
-// are used to construct SQL; the original text is never sent to the target.
-var chSQLToken = regexp.MustCompile(`[A-Za-z_][A-Za-z_0-9]*|[0-9]+|'(?:[^'\\\x00-\x1f]|'')*'|[(),;=*]`)
-
+// The dialect parser owns syntax. This plan retains only the worksheet operations
+// for which we can bind every source column. We never execute the input or serialize
+// an arbitrary AST subtree back to SQL.
 type chSelect struct {
-	table                         string
-	columns                       []string
-	countAlias                    string
-	filter, literal, group, order string
-	descending                    bool
-	limit                         uint64
-	hasLimit                      bool
+	table                    string
+	columns                  []string
+	countAlias, group, order string
+	where                    ast.Expr
+	descending               bool
+	limit                    uint64
+	hasLimit                 bool
 }
-type chTokens []string
 
-func (p *chTokens) take(word string) bool {
-	if len(*p) == 0 || !strings.EqualFold((*p)[0], word) {
-		return false
-	}
-	*p = (*p)[1:]
-	return true
-}
-func (p *chTokens) next() string {
-	if len(*p) == 0 {
-		return ""
-	}
-	s := (*p)[0]
-	*p = (*p)[1:]
-	return s
-}
-func (p *chTokens) ident() string {
-	s := p.next()
-	if !chIdentifier.MatchString(s) {
-		return ""
-	}
-	return s
-}
-func parseCHSelect(sql string) (chSelect, error) {
+func parseCHSelect(statement string) (chSelect, error) {
 	var q chSelect
-	if len(sql) > 8192 {
+	if len(statement) > 8192 {
 		return q, ErrQueryValidationFailed
 	}
-	var p chTokens
-	end := 0
-	for _, m := range chSQLToken.FindAllStringIndex(sql, -1) {
-		if strings.Trim(sql[end:m[0]], " \r\n\t") != "" || len(p) >= 64 {
-			return q, ErrQueryValidationFailed
-		}
-		p = append(p, sql[m[0]:m[1]])
-		end = m[1]
-	}
-	if strings.Trim(sql[end:], " \r\n\t") != "" || !p.take("select") {
+	statements, err := ast.NewParser(statement).ParseStmts()
+	if err != nil || len(statements) != 1 {
 		return q, ErrQueryValidationFailed
 	}
-	seen := map[string]bool{}
-	for {
-		name := p.ident()
-		if name == "" {
+	s, ok := statements[0].(*ast.SelectQuery)
+	if !ok || s.From == nil || len(s.SelectItems) == 0 || len(s.SelectItems) > 8 {
+		return q, ErrQueryValidationFailed
+	}
+	// Fail closed on clauses that add sources, change cardinality, or change target settings.
+	if s.InnerQuery != nil || s.With != nil || s.Top != nil || s.HasDistinct || s.DistinctOn != nil ||
+		s.Window != nil || s.Prewhere != nil || s.WithTotal || s.Having != nil || s.LimitBy != nil ||
+		s.Settings != nil || s.Format != nil || s.UnionAll != nil || s.UnionDistinct != nil || s.Except != nil || s.Intersect != nil {
+		return q, ErrQueryValidationFailed
+	}
+	source, ok := s.From.Expr.(*ast.JoinTableExpr)
+	if !ok || source.Table == nil || source.HasFinal || source.SampleRatio != nil || source.Table.HasFinal || source.Table.Alias != nil {
+		return q, ErrQueryValidationFailed
+	}
+	table, ok := source.Table.Expr.(*ast.TableIdentifier)
+	if !ok || table.Database != nil || table.Table == nil || !chIdentifier.MatchString(table.Table.Name) {
+		return q, ErrQueryValidationFailed
+	}
+	q.table = table.Table.Name
+	for _, item := range s.SelectItems {
+		if len(item.Modifiers) != 0 {
 			return q, ErrQueryValidationFailed
 		}
-		if strings.EqualFold(name, "count") && p.take("(") {
-			p.take("*")
-			if !p.take(")") || q.countAlias != "" {
+		name := chColumnName(item.Expr)
+		if chCountFunction(item.Expr) {
+			if q.countAlias != "" {
 				return q, ErrQueryValidationFailed
 			}
 			name = "count"
-			if p.take("as") {
-				name = p.ident()
+			if item.Alias != nil {
+				name = chColumnName(item.Alias)
 			}
 			q.countAlias = name
-		}
-		if name == "" || seen[name] || len(q.columns) == 8 {
+		} else if item.Alias != nil {
 			return q, ErrQueryValidationFailed
 		}
-		seen[name] = true
+		if name == "" || slices.Contains(q.columns, name) {
+			return q, ErrQueryValidationFailed
+		}
 		q.columns = append(q.columns, name)
-		if !p.take(",") {
-			break
-		}
 	}
-	if !p.take("from") {
-		return q, ErrQueryValidationFailed
+	if s.Where != nil {
+		q.where = s.Where.Expr
 	}
-	q.table = p.ident()
-	if q.table == "" {
-		return q, ErrQueryValidationFailed
-	}
-	if p.take("where") {
-		q.filter = p.ident()
-		if q.filter == "" || !p.take("=") {
+	if g := s.GroupBy; g != nil {
+		if g.AggregateType != "" || g.WithCube || g.WithRollup || g.WithTotals {
 			return q, ErrQueryValidationFailed
 		}
-		q.literal = p.next()
-		if q.literal == "" || !(q.literal[0] == '\'' || (q.literal[0] >= '0' && q.literal[0] <= '9')) {
+		list, ok := g.Expr.(*ast.ColumnExprList)
+		if !ok {
 			return q, ErrQueryValidationFailed
 		}
-	}
-	if p.take("group") {
-		if !p.take("by") {
-			return q, ErrQueryValidationFailed
-		}
-		q.group = p.ident()
-		if q.group == "" || q.group == q.countAlias || !seen[q.group] || q.countAlias == "" {
+		q.group = chColumnName(chSingleItem(list))
+		if q.group == "" || q.countAlias == "" || q.group == q.countAlias || !slices.Contains(q.columns, q.group) {
 			return q, ErrQueryValidationFailed
 		}
 	}
@@ -121,30 +96,71 @@ func parseCHSelect(sql string) (chSelect, error) {
 			return q, ErrQueryValidationFailed
 		}
 	}
-	if p.take("order") {
-		if !p.take("by") {
+	if o := s.OrderBy; o != nil {
+		if len(o.Items) != 1 || o.Interpolate != nil {
 			return q, ErrQueryValidationFailed
 		}
-		q.order = p.ident()
-		if q.order == "" || !seen[q.order] {
+		item, ok := o.Items[0].(*ast.OrderExpr)
+		if !ok || item.Fill != nil || item.Alias != nil {
 			return q, ErrQueryValidationFailed
 		}
-		q.descending = p.take("desc")
-		if !q.descending {
-			p.take("asc")
+		q.order = chColumnName(item.Expr)
+		if q.order == "" || !slices.Contains(q.columns, q.order) {
+			return q, ErrQueryValidationFailed
+		}
+		switch item.Direction {
+		case ast.OrderDirectionAsc, ast.OrderDirectionNone:
+		case ast.OrderDirectionDesc:
+			q.descending = true
+		default:
+			return q, ErrQueryValidationFailed
 		}
 	}
-	if p.take("limit") {
-		var err error
-		q.limit, err = strconv.ParseUint(p.next(), 10, 64)
+	if l := s.Limit; l != nil {
+		n, ok := l.Limit.(*ast.NumberLiteral)
+		if !ok || l.Offset != nil || n.Base != 10 {
+			return q, ErrQueryValidationFailed
+		}
+		q.limit, err = strconv.ParseUint(n.Literal, 10, 64)
 		if err != nil {
 			return q, ErrQueryValidationFailed
 		}
 		q.hasLimit = true
 	}
-	p.take(";")
-	if len(p) != 0 {
-		return q, ErrQueryValidationFailed
-	}
 	return q, nil
+}
+
+func chColumnName(expr ast.Expr) string {
+	id, ok := expr.(*ast.Ident)
+	if !ok || id == nil || !chIdentifier.MatchString(id.Name) {
+		return ""
+	}
+	return id.Name
+}
+
+func chSingleItem(list *ast.ColumnExprList) ast.Expr {
+	if list == nil || list.HasDistinct || len(list.Items) != 1 {
+		return nil
+	}
+	col, ok := list.Items[0].(*ast.ColumnExpr)
+	if !ok || col.Alias != nil {
+		return nil
+	}
+	return col.Expr
+}
+
+func chCountFunction(expr ast.Expr) bool {
+	f, ok := expr.(*ast.FunctionExpr)
+	if !ok || f.Name == nil || !strings.EqualFold(f.Name.Name, "count") || f.Params == nil || f.Params.ColumnArgList != nil {
+		return false
+	}
+	args := f.Params.Items
+	if args == nil || args.HasDistinct {
+		return false
+	}
+	if len(args.Items) == 0 {
+		return true
+	}
+	star, ok := chSingleItem(args).(*ast.Ident)
+	return ok && star.Name == "*" && star.QuoteType == 0
 }

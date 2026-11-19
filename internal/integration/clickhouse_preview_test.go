@@ -100,6 +100,17 @@ func TestClickHousePreviewHTTP(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
+	logColumns := []string{"request_date", "service", "private_label"}
+	tables["http_log"] = map[string]any{"Worksheet": true, "UUID": "cb200000-0000-4000-8000-000000000008", "Columns": logColumns}
+	for _, col := range logColumns {
+		mode := model.ResultDisclosureRawCopyAllowed
+		if col == "private_label" {
+			mode = model.ResultDisclosureMaskedNoCopy
+		}
+		if _, err := policies.Insert(ctx, model.ResultDisclosurePolicyUpsertRequest{TargetResourceID: target.ID, DatabaseName: "g2", ObjectName: "http_log", ColumnName: col, Mode: mode}); err != nil {
+			t.Fatal(err)
+		}
+	}
 	manifest := map[string]any{"TargetID": target.ID, "Environment": "Staging", "Address": remote.Addr, "Database": "g2", "User": "preview_reader", "CredentialRef": "G3_FIXTURE", "Users": []uint64{editor}, "Tables": tables}
 	publish := func() {
 		b, _ := json.Marshal(manifest)

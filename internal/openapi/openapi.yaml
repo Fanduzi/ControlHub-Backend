@@ -7409,7 +7409,8 @@ components:
         here — it is derived from the verified User or Machine credential.
         Unknown fields are rejected by strict decoding. For an explicitly worksheet-enabled
         local ClickHouse target, the ordinary Run route accepts a fresh user and a bounded
-        single-table SELECT with projection, equality filter, grouping/count, ordering and LIMIT.
+        single-table SELECT with projection, typed comparisons and ranges, parenthesized AND/OR predicates,
+        grouping/count, ordering and LIMIT.
         The server rechecks source-column policies and commits history/audit before delivery.
       properties:
         clickHouseGeneration: {type: string, pattern: '^[a-f0-9]{64}$', description: Required for ClickHouse Run and omitted for other engines.}
