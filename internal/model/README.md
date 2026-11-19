@@ -42,6 +42,8 @@ Domain structs, taxonomy constants, validation methods, and dictionary definitio
 | query_saved_statement_test.go | Saved-statement scope, create, and update request validation tests (fail-closed scope, name bounds/control chars, statement size) |
 
 ## Exports
+
+`QueryTargetAvailableActions.ClickHousePreview` advertises the actor-specific preview catalog independently of SQL Run; omitted when unavailable.
 - All domain structs (Resource, ResourceRelation, Completeness, AuditEvent, etc.)
 - `HealthObservation`, `HealthFreshness`, and `HealthObservation.FreshnessAt()`
 - `AuditChange`, `AuditChangeOperation`, and add/update/remove constants for extensible inventory evidence; `AuditEvent.Actor` is the privacy-safe user/machine label and `AuditListQuery` carries optional target-resource environment filtering

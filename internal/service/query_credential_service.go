@@ -6,6 +6,8 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"net"
+	"strconv"
 
 	"github.com/fan/controlhub/internal/model"
 )
@@ -62,8 +64,13 @@ const (
 // DSN's dbname must equal the credential row's database_name — the composite
 // connection identity segment — not merely the target's host/port.
 func InspectCredentialRuntime(ctx context.Context, resolver QueryCredentialResolver, target model.QueryTarget, cred *model.QueryCredentialMetadata) model.QueryCredentialRuntimeStatus {
+	return inspectCredentialRuntime(ctx, resolver, target, cred, false)
+}
+
+func inspectCredentialRuntime(ctx context.Context, resolver QueryCredentialResolver, target model.QueryTarget, cred *model.QueryCredentialMetadata, previewEnabled bool) model.QueryCredentialRuntimeStatus {
 	engine := target.ConnectionContext.Engine
-	if !isCredentialManagedEngine(engine) {
+	preview := previewEnabled && engine == "clickhouse"
+	if !isCredentialManagedEngine(engine) && !preview {
 		return model.QueryCredentialRuntimeUnsupportedTarget
 	}
 	if target.ConnectionContext.Host == "" || target.ConnectionContext.Port == 0 {
@@ -84,6 +91,9 @@ func InspectCredentialRuntime(ctx context.Context, resolver QueryCredentialResol
 	if !cred.Enabled {
 		return model.QueryCredentialRuntimeDisabled
 	}
+	if preview && (!chNonProduction(target.ConnectionContext.Environment) || cred.EnvironmentPolicy != model.QueryEnvPolicyNonProdOnly) {
+		return model.QueryCredentialRuntimePolicyBlocked
+	}
 	if !credentialAllowsExecution(*cred, engine, target.ConnectionContext.Environment) {
 		return model.QueryCredentialRuntimePolicyBlocked
 	}
@@ -91,7 +101,11 @@ func InspectCredentialRuntime(ctx context.Context, resolver QueryCredentialResol
 	if err != nil || dsn == "" {
 		return model.QueryCredentialRuntimeSecretMissing
 	}
-	if isPGEngine(engine) {
+	if preview {
+		if _, err := chCredentialURL(dsn, net.JoinHostPort(target.ConnectionContext.Host, strconv.Itoa(target.ConnectionContext.Port))); err != nil {
+			return model.QueryCredentialRuntimeBindingMismatch
+		}
+	} else if isPGEngine(engine) {
 		if _, err := validatePGDSNBindingForTarget(dsn, target, cred.DatabaseName); err != nil {
 			return model.QueryCredentialRuntimeBindingMismatch
 		}
@@ -109,10 +123,14 @@ func InspectCredentialRuntime(ctx context.Context, resolver QueryCredentialResol
 // The engine is always derived from the selected target, never accepted from a
 // request.
 type QueryCredentialService struct {
-	targets  QueryTargetRepository
-	store    QueryCredentialMetadataStore
-	resolver QueryCredentialResolver
+	chPreviewCredentials bool
+	targets              QueryTargetRepository
+	store                QueryCredentialMetadataStore
+	resolver             QueryCredentialResolver
 }
+
+// EnableCHPreviewCredentials permits staging-only profile setup without granting SQL execution.
+func (s *QueryCredentialService) EnableCHPreviewCredentials() { s.chPreviewCredentials = true }
 
 // NewQueryCredentialService wires the service with the query target read model,
 // the metadata/audit store, and the credential resolver.
@@ -142,10 +160,10 @@ func (s *QueryCredentialService) GetStatus(ctx context.Context, targetID uint64,
 	c, readErr := s.store.GetCredential(ctx, targetID, databaseName)
 	switch {
 	case readErr == nil:
-		runtime := InspectCredentialRuntime(ctx, s.resolver, target, &c)
+		runtime := inspectCredentialRuntime(ctx, s.resolver, target, &c, s.chPreviewCredentials)
 		return buildCredentialStatusResponse(target, &c, runtime), nil
 	case errors.Is(readErr, sql.ErrNoRows):
-		runtime := InspectCredentialRuntime(ctx, s.resolver, target, nil)
+		runtime := inspectCredentialRuntime(ctx, s.resolver, target, nil, s.chPreviewCredentials)
 		return buildCredentialStatusResponse(target, nil, runtime), nil
 	case errors.Is(readErr, model.ErrInvalidCredentialMetadata):
 		// A row exists but is corrupt. Fail closed as invalid_ref (no resolver
@@ -182,7 +200,8 @@ func (s *QueryCredentialService) Upsert(ctx context.Context, actor Authenticated
 	if err != nil {
 		return model.QueryCredentialStatusResponse{}, err
 	}
-	if !isCredentialManagedEngine(target.ConnectionContext.Engine) || target.ConnectionContext.Host == "" || target.ConnectionContext.Port == 0 {
+	previewEngine := s.chPreviewCredentials && target.ConnectionContext.Engine == "clickhouse" && chNonProduction(target.ConnectionContext.Environment) && req.EnvironmentPolicy != model.QueryEnvPolicyAllEnvironments
+	if (!previewEngine && !isCredentialManagedEngine(target.ConnectionContext.Engine)) || target.ConnectionContext.Host == "" || target.ConnectionContext.Port == 0 {
 		return model.QueryCredentialStatusResponse{}, fmt.Errorf("%w: target is not a complete query target", ErrQueryCredentialValidation)
 	}
 	if err := validateConnectionSelector(target.ConnectionContext.Engine, databaseName); err != nil {
@@ -210,7 +229,7 @@ func (s *QueryCredentialService) Upsert(ctx context.Context, actor Authenticated
 	if err := s.store.UpsertCredentialMetadataWithAudit(ctx, meta, actor.ID, queryCredentialUpdatedEvent, auditResultSuccess); err != nil {
 		return model.QueryCredentialStatusResponse{}, err
 	}
-	runtime := InspectCredentialRuntime(ctx, s.resolver, target, &meta)
+	runtime := inspectCredentialRuntime(ctx, s.resolver, target, &meta, s.chPreviewCredentials)
 	return buildCredentialStatusResponse(target, &meta, runtime), nil
 }
 

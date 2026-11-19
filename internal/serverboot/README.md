@@ -11,6 +11,8 @@ The single dependency-injection seam that builds the production
 
 ## Contract
 
+`Build` wires the Native ClickHouse preview and its credential provisioning only when the explicit non-production configuration is present. [Controller and binding contract](../../docs/clickhouse-preview.md)
+
 - `Build` returns the production graph **default-closed**: the PostgreSQL
   HTTP entries (`WithPGHTTPEntries`) and the connections[] read model
   (`WithConnectionLister`) are construction-time capabilities left off.

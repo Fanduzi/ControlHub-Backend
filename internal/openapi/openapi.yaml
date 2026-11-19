@@ -340,6 +340,69 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/ErrorResponse"
+  /query-targets/{id}/clickhouse-preview:
+    parameters:
+      - { name: id, in: path, required: true, schema: { type: integer, format: int64, minimum: 1 } }
+    get:
+      operationId: getClickHousePreviewCatalog
+      summary: List approved ClickHouse preview tables for a fresh user
+      responses:
+        '200':
+          description: Tables and columns available to this user
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [generation, tables]
+                properties:
+                  generation: {type: string, pattern: '^[a-f0-9]{64}$'}
+                  tables:
+                    type: array
+                    items:
+                      type: object
+                      required: [name, columns]
+                      properties:
+                        name: {type: string}
+                        columns: {type: array, items: {type: string}}
+        '400': &chInvalid {description: Invalid request, content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}}
+        '401': &chAuth {description: Fresh user login required, content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}}
+        '403': &chDenied {description: Target or disclosure policy denied access, content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}}
+        '404': &chMissing {description: Preview disabled or target missing, content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}}
+        '408': &chTimeout {description: Query timed out, content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}}
+        '502': &chFailure {description: Backend failure, content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}}
+    post:
+      operationId: previewClickHouseTable
+      summary: Preview approved columns from one non-production base table
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [generation, table, columns, limit]
+              properties:
+                generation: {type: string, pattern: '^[a-f0-9]{64}$'}
+                table: {type: string, minLength: 1, maxLength: 64}
+                columns: {type: array, minItems: 1, maxItems: 8, uniqueItems: true, items: {type: string, minLength: 1, maxLength: 64}}
+                limit: {type: integer, minimum: 1, maximum: 20}
+      responses:
+        '200':
+          description: Disclosed rows after execution history and audit commit
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [columns, rows]
+                properties:
+                  columns: {type: array, items: {$ref: '#/components/schemas/QueryResultColumn'}}
+                  rows: {type: array, maxItems: 20, items: {type: array, maxItems: 8, items: {nullable: true}}}
+        '400': *chInvalid
+        '401': *chAuth
+        '403': *chDenied
+        '404': *chMissing
+        '408': *chTimeout
+        '502': *chFailure
   /query-targets/{id}/execute:
     post:
       summary: Execute a read-only SQL statement against a query target
@@ -5270,6 +5333,9 @@ components:
           type: boolean
         saveSheet:
           type: boolean
+        clickHousePreview:
+          type: boolean
+          description: Allows this user to request the separately authorized ClickHouse preview catalog.
         requestAccess:
           type: boolean
     QueryTargetSchemaPreviewNode:
