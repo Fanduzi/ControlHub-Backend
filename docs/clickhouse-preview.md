@@ -2,7 +2,7 @@
 
 The workbench offers an approved user a table picker, column selection and a 1–20 row preview. Free SQL execution remains separately governed. The HTTP surface is `GET` (catalog) and `POST` (preview) on `/query-targets/{id}/clickhouse-preview`. Both require a fresh user session. The catalog carries an opaque generation that the POST must echo. A changed approval or generation CA invalidates the selection. The target list advertises `availableActions.clickHousePreview` only for an approved user and target. The result contains only disclosed values and is released after the MySQL history/audit transaction commits.
 
-This guide covers the optional picker and fixed count. Developer-authored ClickHouse SQL in the shared worksheet is the next engine-integration milestone; its [scope and acceptance](superpowers/specs/2026-06-20-query-workbench-roadmap.md#engine-integration-acceptance) are tracked separately.
+This guide covers the optional picker, fixed count, and [developer-authored SQL in the shared worksheet](#developer-authored-sql-in-the-worksheet). The [engine integration roadmap](superpowers/specs/2026-06-20-query-workbench-roadmap.md#engine-integration-acceptance) defines acceptance for each slice.
 
 ## Supported installation
 
@@ -30,6 +30,14 @@ Only local `MergeTree` base tables and ordinary `UInt32`, `UInt64`, `Date`, `Dat
 To allow counting all matching rows in an approved table, add the time column to both `Columns` and `DailyCountColumns` in that table's controller approval, under the exclusive maintenance lease. The time column must be `Date` or `DateTime` and have current `raw_copy_allowed` disclosure. Existing approvals opt into no aggregates. Catalog responses advertise eligible `dailyCountColumns` per table; the server rechecks them on every request, including after policy revocation.
 
 POST `{"generation":"<catalog generation>","table":"events","dailyCountColumn":"observed_at"}` to the preview endpoint. This request accepts no preview column list, limit, predicate, SQL or client clock. The server filters and groups by the same approved column and returns seven ascending `day`/`count` rows, including zeros for empty days. For a timestamp, the interval starts at 00:00 UTC six calendar days ago and ends at the request's UTC second (inclusive); a date column includes today's date. One matching table row counts once. The normal read budgets, terminal-result checks and atomic evidence commit still apply. No pagination or export is introduced.
+
+## Developer-authored SQL in the worksheet
+
+To enable worksheet Run for an approved base table, add `"Worksheet": true` to that table in `active.json` under the controller's exclusive lease. Existing preview and `DailyCountColumns` approvals alone leave SQL Run closed. This permission includes counting table rows. The target catalog supplies the fresh user with `clickHouseGeneration`; the ordinary `POST /query-targets/{id}/execute` rechecks that generation, table identity, credential and current disclosure policies. Machine principals cannot execute ClickHouse SQL.
+
+In `/query`, select the target, expand an approved table in the object browser and type a query in the worksheet. For example, run `SELECT request_id FROM events WHERE request_id = 42 LIMIT 10`, edit the ID and run again. `SELECT request_id, count() AS hits FROM events GROUP BY request_id ORDER BY hits DESC LIMIT 5` uses the same editor and result grid. The query reads a single table in the fixed database. This first grammar supports explicit plain column names, one equality predicate (unsigned integers or single-quoted text, including ISO date/whole-second timestamps for temporal columns), `count()`/`count(*)` with an optional alias, a single group column, ordering by a projected column or count and optional unsigned `LIMIT`. End-of-statement semicolon is optional. Predicate values are typed Native parameters. Projection masks still apply; filtering, grouping and sorting on a source column require raw disclosure. Unsupported syntax receives a controlled refusal.
+
+The smaller of the user's limit, `maxRows` and the 20-row platform budget governs delivery. Results preserve types and masks, suppress partial output on failure, and commit one history/audit pair before delivery. Evidence contains a literal-free digest; SQL text is not restorable. A worksheet request omits paging, keys, database/schema overrides and machine credentials. Saved-template execution, Explain and export remain outside this slice. The optional preview and fixed count remain available alongside the editor.
 
 ## Verification
 

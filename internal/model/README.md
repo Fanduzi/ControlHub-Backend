@@ -43,6 +43,8 @@ Domain structs, taxonomy constants, validation methods, and dictionary definitio
 
 ## Exports
 
+`QueryTarget.ClickHouseGeneration` binds a fresh user's worksheet Run to its advertised generation via `QueryExecuteRequest.ClickHouseGeneration`.
+
 `QueryTargetAvailableActions.ClickHousePreview` advertises the actor-specific preview catalog independently of SQL Run; omitted when unavailable.
 - All domain structs (Resource, ResourceRelation, Completeness, AuditEvent, etc.)
 - `HealthObservation`, `HealthFreshness`, and `HealthObservation.FreshnessAt()`

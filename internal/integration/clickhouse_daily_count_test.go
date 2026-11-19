@@ -62,14 +62,19 @@ func testCHDailyCount(t *testing.T, h http.Handler, path, token, generation stri
 	if len(events) != 8 {
 		t.Fatal("fixture did not return all eight boundary instants")
 	}
+	ids := map[string]int{}
 	for _, row := range events {
-		if len(row) != 4 || row[0] != "18446744073709551615" || row[3] != "[MASKED]" {
+		if len(row) != 4 || row[3] != "[MASKED]" {
 			t.Fatal("lossy UInt64 or missing mask")
 		}
+		ids[row[0]]++
 		instant, err := time.Parse(time.RFC3339, row[1])
 		if err != nil || !strings.HasSuffix(row[1], "Z") || row[2] != instant.UTC().Format(time.DateOnly) {
 			t.Fatal("calendar date or UTC conversion mismatch", row[1:3])
 		}
+	}
+	if !reflect.DeepEqual(ids, map[string]int{"42": 1, "43": 1, "18446744073709551615": 6}) {
+		t.Fatal("lossy UInt64 projection", ids)
 	}
 	for _, axis := range []string{"observed_at", "request_date"} {
 		before := time.Now().UTC()

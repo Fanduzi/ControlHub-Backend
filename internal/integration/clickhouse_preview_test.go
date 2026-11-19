@@ -89,7 +89,7 @@ func TestClickHousePreviewHTTP(t *testing.T) {
 		}
 	}
 	eventColumns := []string{"request_id", "observed_at", "request_date", "private_time", "preview_only", "missing_date"}
-	tables["events"] = map[string]any{"UUID": "cb200000-0000-4000-8000-000000000007", "Columns": eventColumns, "DailyCountColumns": []string{"observed_at", "request_date", "private_time", "missing_date"}}
+	tables["events"] = map[string]any{"Worksheet": true, "UUID": "cb200000-0000-4000-8000-000000000007", "Columns": eventColumns, "DailyCountColumns": []string{"observed_at", "request_date", "private_time", "missing_date"}}
 	for _, col := range eventColumns[:5] {
 		mode := model.ResultDisclosureRawCopyAllowed
 		if col == "private_time" {
@@ -319,6 +319,7 @@ func TestClickHousePreviewHTTP(t *testing.T) {
 		})
 	}
 	t.Run("daily_counts", func(t *testing.T) { testCHDailyCount(t, h, path, token, catalog.Generation, db, target.ID) })
+	t.Run("worksheet", func(t *testing.T) { testCHWorksheet(t, h, target.ID, token, otherToken, catalog.Generation, db) })
 	if front := os.Getenv("CONTROLHUB_CH_BROWSER_CHECKOUT"); front != "" && !t.Failed() {
 		srv := httptest.NewServer(h)
 		defer srv.Close()

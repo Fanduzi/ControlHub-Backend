@@ -77,7 +77,7 @@ Integration tests run against disposable Testcontainers databases (MySQL for the
 
 ## Operator access coverage
 
-`clickhouse_daily_count_test.go` exercises UTC boundaries, timezone-qualified timestamp decoding, exact UInt64 values, masked and revoked policies, and rollback on audit failure inside the same fixture. `TestClickHousePreviewHTTP` uses a loopback TLS ClickHouse and the disposable MySQL metadata database. Its fixtures live in `testdata/clickhouse`; see the [browser and backend commands](../../docs/clickhouse-preview.md).
+`clickhouse_worksheet_test.go` exercises the ordinary Run path against a real target, including edited predicates, grouped counts, denied references and audit rollback. `clickhouse_daily_count_test.go` exercises UTC boundaries, timezone-qualified timestamp decoding, exact UInt64 values, masked and revoked policies, and rollback on audit failure inside the same fixture. `TestClickHousePreviewHTTP` uses a loopback TLS ClickHouse and the disposable MySQL metadata database. Its fixtures live in `testdata/clickhouse`; see the [browser and backend commands](../../docs/clickhouse-preview.md).
 
 `operator_access_boundary_test.go` consumes `internal/testsupport/operatoraccess`,
 the same test-only operation table used by the API and OpenAPI tests. Saved
