@@ -17,6 +17,20 @@ accidentally become a production write console or a data exfiltration path.
 
 The roadmap below records the intended sequence and safety boundaries.
 
+## Engine integration acceptance
+
+The platform serves developers. Deliver each engine through the existing `/query` workbench: select the target and connection, inspect the available schema, author a read-only query in the worksheet, run it, and see bounded results or a controlled refusal. SQL engines use SQL; Redis and MongoDB use their native read-only query models. MySQL/TiDB and the PostgreSQL worksheet are the reference experience. The sections below record the original phase plan; use the accepted [multi-engine decisions (#98)](https://github.com/Fanduzi/ControlHub-Backend/issues/98), [minimum engine capability decision (#99)](https://github.com/Fanduzi/ControlHub-Backend/issues/99) and [PostgreSQL delivery spec (#108)](https://github.com/Fanduzi/ControlHub-Backend/issues/108) for later decisions.
+
+**Planning and review.** Name the user action the change enables and the existing worksheet path it extends. Treat a request such as “seven-day volume” or “top services” as an example query for acceptance. A dedicated report or shortcut is a separate product feature when explicitly requested. A feasibility test can settle a driver, budget or disclosure question; record exactly which worksheet actions still need implementation. If a safety constraint limits the first slice, narrow the supported query grammar and describe its refusals. Surface a proposal to change the user workflow before building a different interface.
+
+### ClickHouse recovery milestone
+
+The shipped [table preview and fixed daily count](../../clickhouse-preview.md) remain available on their existing contracts. They supply evidence for Native TLS, target binding, budgets, cancellation, lossless values, masking and atomic history/audit. **Developer-authored ClickHouse SQL in the worksheet remains open.** The preview-specific approval for a timestamp and a fixed count does not authorize arbitrary SQL. Keep the production rollout separate.
+
+1. Extend the ordinary governed Run path with a ClickHouse dialect guard for a bounded, single-statement `SELECT` subset. Start with single-table projections and filters; extend to grouping and aggregation once their referenced columns can be verified. Check every reference, including those used only for filtering, grouping and ordering. Refuse unsupported shapes or uncertain provenance before returning rows. Reuse the proven connection, disclosure and evidence contracts where applicable.
+2. Expose Run in the existing SQL editor only for eligible targets. Use the existing result grid and cancellation flow. Track schema browsing, completion, history/restore, paging, saved statements, Explain and export against the PostgreSQL reference, stating what each slice actually delivers.
+3. Accept the first slice in a real browser against synthetic non-production data. Select ClickHouse, type `SELECT request_id FROM events WHERE request_id = 42 LIMIT 10`, run it, edit `42` to another seeded ID, and verify the new result and corresponding execution evidence. Verify that disallowed SQL and an unauthorized predicate receive a controlled refusal with no data. Accept aggregation by typing a second SQL statement with `GROUP BY` into the **same worksheet**. A preview-only test or a test that clicks a fixed count button covers only that feature.
+
 ## Phase 36 — Query Workbench Shell + Capability Inventory
 
 Status: **Complete**.

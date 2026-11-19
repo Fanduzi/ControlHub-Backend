@@ -10,6 +10,7 @@
 - **Issue intake/publication or security-sensitive publication:** Read [issue-tracker.md](docs/agents/issue-tracker.md).
 - **Triage or label changes:** Read [triage-labels.md](docs/agents/triage-labels.md).
 - **Feature/design work, resolved product language, or accepted trade-offs:** Read [domain.md](docs/agents/domain.md), relevant [CONTEXT.md](CONTEXT.md) entries, and applicable [decision records](docs/decisions/).
+- **Query engine planning, implementation, or review:** Start with the [workbench integration goal and ClickHouse acceptance](docs/superpowers/specs/2026-06-20-query-workbench-roadmap.md#engine-integration-acceptance). For a SQL engine, the developer authors and edits a read-only statement in the existing worksheet, runs it, and sees the governed result. Use business questions as queries in that workflow.
 - **Setup, running the project, or command lookup:** Read [README.md](README.md) and [Makefile](Makefile).
 
 ## Documentation convention
