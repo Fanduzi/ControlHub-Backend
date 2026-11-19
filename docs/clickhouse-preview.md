@@ -21,7 +21,13 @@ Use a single, local, controller-owned non-production instance with a private sta
 }
 ```
 
-Only local `MergeTree` base tables and plain `UInt32`, `String`, or `Nullable(String)` columns are admitted. Identifiers use ASCII letters, digits and underscores and start with a letter or underscore. The preview admits up to eight columns, validates UTF-8, rejects cells over 1 KiB and JSON replies over 64 KiB, and discards partial rows. There is no sorting guarantee. A terminal server response and a client disconnect carry different remote-state evidence. When the target's end state cannot be confirmed, history records `unknown`. Removing `active.json` under the exclusive lock closes admission. Leaving `CONTROLHUB_CH_PREVIEW_DIR` unset at startup closes the whole facility.
+Only local `MergeTree` base tables and ordinary `UInt32`, `UInt64`, `Date`, `DateTime` (including a declared timezone), `String`, or `Nullable(String)` columns are admitted. `UInt64` values, including `count()`, travel as decimal strings; `Date` travels as `YYYY-MM-DD` and `DateTime` as an RFC 3339 UTC instant at second precision. Identifiers use ASCII letters, digits and underscores and start with a letter or underscore. The preview admits up to eight columns, validates UTF-8, rejects cells over 1 KiB and JSON replies over 64 KiB, and discards partial rows. There is no sorting guarantee. A terminal server response and a client disconnect carry different remote-state evidence. When the target's end state cannot be confirmed, history records `unknown`. Removing `active.json` under the exclusive lock closes admission. Leaving `CONTROLHUB_CH_PREVIEW_DIR` unset at startup closes the whole facility.
+
+## Last seven days by UTC day
+
+To allow counting all matching rows in an approved table, add the time column to both `Columns` and `DailyCountColumns` in that table's controller approval, under the exclusive maintenance lease. The time column must be `Date` or `DateTime` and have current `raw_copy_allowed` disclosure. Existing approvals opt into no aggregates. Catalog responses advertise eligible `dailyCountColumns` per table; the server rechecks them on every request, including after policy revocation.
+
+POST `{"generation":"<catalog generation>","table":"events","dailyCountColumn":"observed_at"}` to the preview endpoint. This request accepts no preview column list, limit, predicate, SQL or client clock. The server filters and groups by the same approved column and returns seven ascending `day`/`count` rows, including zeros for empty days. For a timestamp, the interval starts at 00:00 UTC six calendar days ago and ends at the request's UTC second (inclusive); a date column includes today's date. One matching table row counts once. The normal read budgets, terminal-result checks and atomic evidence commit still apply. No pagination or export is introduced.
 
 ## Verification
 

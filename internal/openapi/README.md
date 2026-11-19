@@ -19,6 +19,7 @@ Embeds and validates the OpenAPI contract served by the API documentation route.
 
 ## Contracts
 
+- `POST /query-targets/{id}/clickhouse-preview` accepts either a bounded projection or a `dailyCountColumn`. A count request uses a reauthorized date column and returns seven UTC days with exact decimal-string counts.
 - The ClickHouse preview catalog returns an opaque generation and approved columns. Preview requires that generation and a bounded projection and releases a masked matrix after evidence commit. [Configuration](../../docs/clickhouse-preview.md)
 - `GET /resources`: free-text `q` across CI identity fields (excluding owner and labels), exact `ownerId`, and repeatable bounded `label=key` presence or `label=key:value` exact filters combined with AND.
 - `/inventory/views`: authenticated personal/shared named inventory view CRUD; shared mutations are admin-only and personal mutations are owner-only.

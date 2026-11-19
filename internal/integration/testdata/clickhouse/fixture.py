@@ -131,6 +131,7 @@ try:
             f"<query>GRANT SELECT(id,title,secret) ON g2.{name}</query>"
             for name in tables
         )
+        grants += '<query>GRANT SELECT(request_id,observed_at,request_date,private_time,preview_only,missing_date) ON g2.events</query>'
         (ROOT / "reader.xml").write_text(
             f"""<clickhouse><profiles><default/><limited><readonly>1</readonly><allow_ddl>0</allow_ddl><max_execution_time>2</max_execution_time><timeout_before_checking_execution_speed>0</timeout_before_checking_execution_speed><max_rows_to_read>10000</max_rows_to_read><max_result_bytes>1048576</max_result_bytes><max_result_rows>32</max_result_rows><max_memory_usage>67108864</max_memory_usage><max_threads>1</max_threads><max_block_size>1</max_block_size></limited></profiles><quotas><default/></quotas><users><preview_reader><password>{secret}</password><networks><ip>::/0</ip></networks><profile>limited</profile><quota>default</quota><grants>{grants}</grants></preview_reader></users></clickhouse>"""
         )

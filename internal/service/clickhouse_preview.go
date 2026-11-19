@@ -38,14 +38,16 @@ func NewCHPreview(dir string, execution *QueryExecutionService, policies QueryDi
 }
 
 type CHPreviewRequest struct {
-	Generation string   `json:"generation"`
-	Table      string   `json:"table"`
-	Columns    []string `json:"columns"`
-	Limit      int      `json:"limit"`
+	Generation       string   `json:"generation"`
+	Table            string   `json:"table"`
+	Columns          []string `json:"columns"`
+	Limit            int      `json:"limit"`
+	DailyCountColumn string   `json:"dailyCountColumn,omitempty"`
 }
 type CHPreviewTable struct {
-	Name    string   `json:"name"`
-	Columns []string `json:"columns"`
+	Name              string   `json:"name"`
+	Columns           []string `json:"columns"`
+	DailyCountColumns []string `json:"dailyCountColumns,omitempty"`
 }
 type CHPreviewCatalog struct {
 	Generation string           `json:"generation"`
@@ -57,15 +59,26 @@ type chApproval struct {
 	Environment, Address, Database, CredentialRef, User string
 	Users                                               []uint64
 	Tables                                              map[string]struct {
-		UUID    string
-		Columns []string
+		UUID              string
+		Columns           []string
+		DailyCountColumns []string
 	}
 }
+type chPreviewResult struct {
+	Columns []model.QueryResultColumn `json:"columns"`
+	Rows    [][]any                   `json:"rows"`
+}
+
 type chCatalog struct {
 	tables []CHPreviewTable
 	types  map[string]map[string]string
 	modes  map[string]map[string]model.ResultDisclosureMode
 }
+
+var chDateTimeZone = regexp.MustCompile(`^DateTime\('[A-Za-z0-9_+./-]+'\)$`)
+
+func chTimestamp(typ string) bool { return typ == "DateTime" || chDateTimeZone.MatchString(typ) }
+func chTemporal(typ string) bool  { return typ == "Date" || chTimestamp(typ) }
 
 var chIdentifier = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]{0,63}$`)
 
@@ -122,6 +135,11 @@ func (s *CHPreview) approval(target model.QueryTarget, user uint64) (chApproval,
 				return a, ErrQueryNotAllowed
 			}
 			seen[c] = true
+		}
+		for _, c := range table.DailyCountColumns {
+			if !seen[c] {
+				return a, ErrQueryNotAllowed
+			}
 		}
 	}
 	return a, nil
@@ -239,7 +257,7 @@ func (s *CHPreview) catalog(ctx context.Context, conn ch.Conn, a chApproval) (ch
 		if !ok || approved.UUID != id || engine != "MergeTree" {
 			return cat, ErrQueryDisclosureBlocked
 		}
-		if kind == "" && slices.Contains(approved.Columns, col) && cat.modes[table][col] != "" && slices.Contains([]string{"UInt32", "String", "Nullable(String)"}, typ) {
+		if kind == "" && slices.Contains(approved.Columns, col) && cat.modes[table][col] != "" && (chTemporal(typ) || slices.Contains([]string{"UInt32", "UInt64", "String", "Nullable(String)"}, typ)) {
 			cat.types[table][col] = typ
 		}
 	}
@@ -252,6 +270,9 @@ func (s *CHPreview) catalog(ctx context.Context, conn ch.Conn, a chApproval) (ch
 		for _, col := range a.Tables[name].Columns {
 			if cat.types[name][col] != "" {
 				table.Columns = append(table.Columns, col)
+				if chTemporal(cat.types[name][col]) && cat.modes[name][col] == model.ResultDisclosureRawCopyAllowed && slices.Contains(a.Tables[name].DailyCountColumns, col) {
+					table.DailyCountColumns = append(table.DailyCountColumns, col)
+				}
 			}
 		}
 		if len(table.Columns) > 0 {
@@ -303,6 +324,14 @@ func (s *CHPreview) Preview(ctx context.Context, user, id uint64, req CHPreviewR
 			if req.Generation != a.generation {
 				return ErrQueryNotAllowed
 			}
+			if req.DailyCountColumn != "" {
+				if req.Columns != nil || req.Limit != 0 {
+					return ErrQueryValidationFailed
+				}
+				var err error
+				payload, count, err = chDailyCounts(attempt, conn, a, c, req, s.execution.clock.Now().UTC(), &rec)
+				return err
+			}
 			if req.Limit < 1 || req.Limit > 20 || len(req.Columns) == 0 || len(req.Columns) > 8 {
 				return ErrQueryValidationFailed
 			}
@@ -325,7 +354,7 @@ func (s *CHPreview) Preview(ctx context.Context, user, id uint64, req CHPreviewR
 				projection = append(projection, "`"+name+"`")
 			}
 			query := fmt.Sprintf("SELECT %s FROM `%s`.`%s` LIMIT %d", strings.Join(projection, ","), a.Database, req.Table, req.Limit)
-			values, readErr := readCHProjection(attempt, conn, query, req, columns, &rec)
+			values, readErr := readCHProjection(attempt, conn, query, req.Limit, columns, &rec)
 			if readErr != nil {
 				return readErr
 			}
@@ -333,10 +362,7 @@ func (s *CHPreview) Preview(ctx context.Context, user, id uint64, req CHPreviewR
 			if err != nil {
 				return ErrQueryDisclosureBlocked
 			}
-			encoded, err := json.Marshal(struct {
-				Columns []model.QueryResultColumn `json:"columns"`
-				Rows    [][]any                   `json:"rows"`
-			}{cols, values})
+			encoded, err := json.Marshal(chPreviewResult{Columns: cols, Rows: values})
 			if err != nil {
 				return ErrQueryBackendFailure
 			}
@@ -378,7 +404,7 @@ func (s *CHPreview) Preview(ctx context.Context, user, id uint64, req CHPreviewR
 	return payload, nil
 }
 
-func readCHProjection(ctx context.Context, conn ch.Conn, query string, req CHPreviewRequest, columns []model.QueryResultColumn, rec *model.QueryExecutionRecord) ([][]any, error) {
+func readCHProjection(ctx context.Context, conn ch.Conn, query string, limit int, columns []model.QueryResultColumn, rec *model.QueryExecutionRecord) ([][]any, error) {
 	wire := ch.Context(chQueryContext{ctx}, ch.WithQueryID(uuid.NewString()))
 	rec.RemoteState = model.QueryExecutionRemoteUnknown
 	rows, err := conn.Query(wire, query)
@@ -387,28 +413,36 @@ func readCHProjection(ctx context.Context, conn ch.Conn, query string, req CHPre
 	}
 	defer rows.Close()
 	types := rows.ColumnTypes()
-	if !slices.Equal(rows.Columns(), req.Columns) || len(types) != len(columns) {
+	names := rows.Columns()
+	if len(names) != len(columns) || len(types) != len(columns) {
 		return nil, ErrQueryDisclosureBlocked
 	}
 	ptr := make([]any, len(columns))
 	for i, col := range columns {
-		if types[i].DatabaseTypeName() != col.DatabaseType {
+		if names[i] != col.Name || types[i].DatabaseTypeName() != col.DatabaseType {
 			return nil, ErrQueryDisclosureBlocked
 		}
 		switch col.DatabaseType {
 		case "UInt32":
 			ptr[i] = new(uint32)
+		case "UInt64":
+			ptr[i] = new(uint64)
+		case "Date":
+			ptr[i] = new(time.Time)
 		case "String":
 			ptr[i] = new(string)
 		case "Nullable(String)":
 			ptr[i] = new(*string)
 		default:
-			return nil, ErrQueryDisclosureBlocked
+			if !chTimestamp(col.DatabaseType) {
+				return nil, ErrQueryDisclosureBlocked
+			}
+			ptr[i] = new(time.Time)
 		}
 	}
 	values := [][]any{}
 	for rows.Next() {
-		if len(values) >= req.Limit {
+		if len(values) >= limit {
 			return nil, ErrQueryResultTooLarge
 		}
 		if err := rows.Scan(ptr...); err != nil {
@@ -420,6 +454,14 @@ func readCHProjection(ctx context.Context, conn ch.Conn, query string, req CHPre
 			switch p := v.(type) {
 			case *uint32:
 				row[i] = *p
+			case *uint64:
+				row[i] = strconv.FormatUint(*p, 10)
+			case *time.Time:
+				if columns[i].DatabaseType == "Date" {
+					row[i] = p.Format(time.DateOnly)
+				} else {
+					row[i] = p.UTC().Format(time.RFC3339)
+				}
 			case *string:
 				text = p
 			case **string:
