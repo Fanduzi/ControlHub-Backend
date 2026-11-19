@@ -54,7 +54,7 @@ HTTP handlers, chi routing, the login rate limiter, and fake-repo test infrastru
 
 ## Routes
 
-- `GET/POST /query-targets/{id}/clickhouse-preview` — fresh-user catalog and strict table preview requests in `clickhouse_preview.go`. See the [non-production preview contract](../../docs/clickhouse-preview.md).
+- `GET/POST /query-targets/{id}/clickhouse-preview` — fresh-user catalog and mutually exclusive table projection or UTC daily count requests in `clickhouse_preview.go`. See the [non-production preview contract](../../docs/clickhouse-preview.md).
 | Method | Path | Description |
 |--------|------|-------------|
 | GET | /resources and inventory dictionaries | `inventory:read` machine scope or authenticated user |

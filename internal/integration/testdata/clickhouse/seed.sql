@@ -17,3 +17,10 @@ INSERT INTO g2.late SELECT number, 'ok', NULL FROM numbers(16);
 CREATE ROW POLICY g2_late_error ON g2.late FOR SELECT USING throwIf(if(id=15, sleep(0.7) + 1, 0), 'g2 fixture read error')=0 TO ALL;
 CREATE TABLE g2.server_budget UUID 'cb200000-0000-4000-8000-000000000006' AS g2.sample ENGINE = MergeTree ORDER BY id;
 INSERT INTO g2.server_budget SELECT 1, repeat('abcd', 524288), NULL;
+
+CREATE TABLE g2.events UUID 'cb200000-0000-4000-8000-000000000007'
+(request_id UInt64, observed_at DateTime('Asia/Tokyo'), request_date Date, private_time DateTime, preview_only Date, missing_date Date)
+ENGINE = MergeTree ORDER BY observed_at;
+INSERT INTO g2.events
+WITH toStartOfDay(now('UTC')) + toIntervalSecond(arrayJoin([-518401,-518400,-518399,-432001,-432000,0,toInt32(toUnixTimestamp(now())-toUnixTimestamp(toStartOfDay(now('UTC'))))+600,86400])) AS instant
+SELECT toUInt64('18446744073709551615'), instant, toDate(instant, 'UTC'), instant, toDate(instant, 'UTC'), toDate(instant, 'UTC');

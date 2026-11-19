@@ -88,6 +88,18 @@ func TestClickHousePreviewHTTP(t *testing.T) {
 			}
 		}
 	}
+	eventColumns := []string{"request_id", "observed_at", "request_date", "private_time", "preview_only", "missing_date"}
+	tables["events"] = map[string]any{"UUID": "cb200000-0000-4000-8000-000000000007", "Columns": eventColumns, "DailyCountColumns": []string{"observed_at", "request_date", "private_time", "missing_date"}}
+	for _, col := range eventColumns[:5] {
+		mode := model.ResultDisclosureRawCopyAllowed
+		if col == "private_time" {
+			mode = model.ResultDisclosureMaskedNoCopy
+		}
+		_, err := policies.Insert(ctx, model.ResultDisclosurePolicyUpsertRequest{TargetResourceID: target.ID, DatabaseName: "g2", ObjectName: "events", ColumnName: col, Mode: mode})
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
 	manifest := map[string]any{"TargetID": target.ID, "Environment": "Staging", "Address": remote.Addr, "Database": "g2", "User": "preview_reader", "CredentialRef": "G3_FIXTURE", "Users": []uint64{editor}, "Tables": tables}
 	publish := func() {
 		b, _ := json.Marshal(manifest)
@@ -306,6 +318,7 @@ func TestClickHousePreviewHTTP(t *testing.T) {
 			}
 		})
 	}
+	t.Run("daily_counts", func(t *testing.T) { testCHDailyCount(t, h, path, token, catalog.Generation, db, target.ID) })
 	if front := os.Getenv("CONTROLHUB_CH_BROWSER_CHECKOUT"); front != "" && !t.Failed() {
 		srv := httptest.NewServer(h)
 		defer srv.Close()

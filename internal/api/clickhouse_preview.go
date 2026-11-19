@@ -36,7 +36,11 @@ func handleCHPreview(s *service.CHPreview) http.HandlerFunc {
 		var req service.CHPreviewRequest
 		body, err := readStrictBody(r, 4096)
 		if err == nil {
-			_, err = strictJSONObjectFields(body, map[string][]string{"generation": nil, "table": nil, "columns": nil, "limit": nil})
+			var fields map[string]json.RawMessage
+			fields, err = strictJSONObjectFields(body, map[string][]string{"generation": nil, "table": nil, "columns": nil, "limit": nil, "dailyCountColumn": nil})
+			if _, daily := fields["dailyCountColumn"]; err == nil && daily && (fields["columns"] != nil || fields["limit"] != nil) {
+				err = service.ErrQueryValidationFailed
+			}
 		}
 		if err == nil {
 			err = json.Unmarshal(body, &req)
