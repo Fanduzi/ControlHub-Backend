@@ -12,6 +12,7 @@ import (
 )
 
 type Dependencies struct {
+	CHPreview              *service.CHPreview
 	ResourceService        *service.ResourceService
 	RelationService        *service.RelationService
 	TopologyService        *service.TopologyService
@@ -115,7 +116,7 @@ func NewRouter(deps Dependencies) *chi.Mux {
 	})
 	router.Group(func(r chi.Router) {
 		r.Use(requireUserOrMachineCredential(deps.MachineCredentialService, model.MachineScopeGovernedSelect, requireUser))
-		r.Get("/query-targets", handleListQueryTargets(deps.QueryTargetService))
+		r.Get("/query-targets", handleListQueryTargets(deps.QueryTargetService, deps.CHPreview))
 	})
 	if deps.NamedInventoryViewService != nil {
 		router.With(requireUserOrMachineCredential(deps.MachineCredentialService, model.MachineScopeNamedViewsRead, requireUser)).
@@ -167,6 +168,10 @@ func NewRouter(deps Dependencies) *chi.Mux {
 			}
 		})
 	})
+
+	preview := router.With(requireFreshQueryActor(deps.AuthService, deps.QueryExecutionAuth, emitter))
+	preview.Get("/query-targets/{id}/clickhouse-preview", handleCHPreview(deps.CHPreview))
+	preview.Post("/query-targets/{id}/clickhouse-preview", handleCHPreview(deps.CHPreview))
 
 	// Ordinary governed SELECT accepts either a scoped Machine Credential or a
 	// fresh current User bearer. Machine evidence uses the principal ID, never

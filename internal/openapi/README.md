@@ -18,6 +18,8 @@ Embeds and validates the OpenAPI contract served by the API documentation route.
 - `YAML` - embedded OpenAPI specification bytes
 
 ## Contracts
+
+- The ClickHouse preview catalog returns an opaque generation and approved columns. Preview requires that generation and a bounded projection and releases a masked matrix after evidence commit. [Configuration](../../docs/clickhouse-preview.md)
 - `GET /resources`: free-text `q` across CI identity fields (excluding owner and labels), exact `ownerId`, and repeatable bounded `label=key` presence or `label=key:value` exact filters combined with AND.
 - `/inventory/views`: authenticated personal/shared named inventory view CRUD; shared mutations are admin-only and personal mutations are owner-only.
 - `/resources/bulk-mutations/preview` and `/resources/bulk-mutations/confirm`: admin-only reviewed bulk mutation contract with per-CI diffs/errors and fingerprint conflict protection.

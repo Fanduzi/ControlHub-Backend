@@ -17,6 +17,10 @@ Environment variable and .env file loading with sensible defaults.
 - `ErrQueryExecutionTokenMaxAgeRejected` — sentinel error returned by Load when the removed QUERY_EXECUTION_TOKEN_MAX_AGE env var is supplied; the eight-hour freshness bound is a fixed backend contract (Issue #21)
 - `ErrInvalidPGHTTPEntries` — sentinel error returned by Load when CONTROLHUB_PG_HTTP_ENTRIES is misspelled or uses a loose form; the production PostgreSQL HTTP gate fails closed at startup rather than guessing at a typo
 
+## CONTROLHUB_CH_PREVIEW_DIR
+
+An absolute controller state directory enables the local preview only alongside `CONTROLHUB_ENVIRONMENT=nonproduction`. Omitting the directory closes the capability. [Configuration and isolation requirements](../../docs/clickhouse-preview.md)
+
 ## CONTROLHUB_PG_HTTP_ENTRIES
 
 Deployment-time release gate for PostgreSQL HTTP execution. Exact-match

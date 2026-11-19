@@ -11,7 +11,7 @@ import (
 	"github.com/fan/controlhub/internal/service"
 )
 
-func handleListQueryTargets(queryTargetService *service.QueryTargetService) http.HandlerFunc {
+func handleListQueryTargets(queryTargetService *service.QueryTargetService, preview *service.CHPreview) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		query, err := parseQueryTargetListQuery(r)
 		if err != nil {
@@ -22,6 +22,12 @@ func handleListQueryTargets(queryTargetService *service.QueryTargetService) http
 		if err != nil {
 			writeJSONError(w, http.StatusInternalServerError, "internal_error", "unexpected server failure")
 			return
+		}
+		// Optional discovery never grants access to the sibling Run endpoint.
+		if user, ok := actorUserIDFromContext(r.Context()); ok && preview != nil {
+			for i := range items {
+				items[i].AvailableActions.ClickHousePreview = preview.Discoverable(items[i], user)
+			}
 		}
 		writeJSON(w, http.StatusOK, model.QueryTargetListResponse{Items: items, PageInfo: pageInfo})
 	}

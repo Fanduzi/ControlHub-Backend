@@ -100,11 +100,12 @@ type QueryTargetGovernance struct {
 // QueryTargetAvailableActions are the locked/unlocked action flags for the
 // workbench action bar. All are false in Phase 36.
 type QueryTargetAvailableActions struct {
-	Run           bool `json:"run"`
-	Explain       bool `json:"explain"`
-	Export        bool `json:"export"`
-	SaveSheet     bool `json:"saveSheet"`
-	RequestAccess bool `json:"requestAccess"`
+	ClickHousePreview bool `json:"clickHousePreview,omitempty"`
+	Run               bool `json:"run"`
+	Explain           bool `json:"explain"`
+	Export            bool `json:"export"`
+	SaveSheet         bool `json:"saveSheet"`
+	RequestAccess     bool `json:"requestAccess"`
 }
 
 // QueryTargetSchemaPreviewNode is a lightweight schema/object placeholder node

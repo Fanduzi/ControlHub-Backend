@@ -156,7 +156,13 @@ func Build(db *sql.DB, cfg config.Config) (api.Dependencies, Parts) {
 		queryExplainSvc.WithPGExplain(service.NewPGExplainRunner(), service.NewPGExplainNormalizer())
 	}
 
+	var preview *service.CHPreview
+	if cfg.CHPreviewDir != "" {
+		preview = service.NewCHPreview(cfg.CHPreviewDir, queryExecutionSvc, queryDisclosureRepo)
+		queryCredentialSvc.EnableCHPreviewCredentials()
+	}
 	return api.Dependencies{
+			CHPreview:                      preview,
 			ResourceService:                service.NewResourceService(resourceRepo, relationRepo),
 			RelationService:                service.NewRelationService(relationRepo),
 			TopologyService:                service.NewTopologyService(relationRepo),

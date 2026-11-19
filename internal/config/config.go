@@ -5,6 +5,7 @@ import (
 	"errors"
 	"io/fs"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/joho/godotenv"
@@ -17,6 +18,7 @@ type Config struct {
 	// PGHTTPEntries is the production PostgreSQL HTTP release gate: true only
 	// when CONTROLHUB_PG_HTTP_ENTRIES is exactly "on" at process start.
 	PGHTTPEntries bool
+	CHPreviewDir  string
 }
 
 func LoadDotEnv(filenames ...string) error {
@@ -56,7 +58,15 @@ func Load() (Config, error) {
 		return Config{}, err
 	}
 
+	previewDir := os.Getenv("CONTROLHUB_CH_PREVIEW_DIR")
+	if previewDir != "" && !filepath.IsAbs(previewDir) {
+		return Config{}, errors.New("CONTROLHUB_CH_PREVIEW_DIR must be absolute")
+	}
+	if previewDir != "" && os.Getenv("CONTROLHUB_ENVIRONMENT") != "nonproduction" {
+		return Config{}, errors.New("ClickHouse preview requires CONTROLHUB_ENVIRONMENT=nonproduction")
+	}
 	return Config{
+		CHPreviewDir:  previewDir,
 		Port:          port,
 		DatabaseDSN:   os.Getenv("DATABASE_DSN"),
 		JWTSecret:     os.Getenv("JWT_SECRET"),

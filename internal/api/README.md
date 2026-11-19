@@ -53,6 +53,8 @@ HTTP handlers, chi routing, the login rate limiter, and fake-repo test infrastru
 | query_evidence_metrics_test.go | Query-evidence metrics endpoint tests: anonymous/editor/admin 401/403/200 matrix, exactly-one-field response, published counter |
 
 ## Routes
+
+- `GET/POST /query-targets/{id}/clickhouse-preview` — fresh-user catalog and strict table preview requests in `clickhouse_preview.go`. See the [non-production preview contract](../../docs/clickhouse-preview.md).
 | Method | Path | Description |
 |--------|------|-------------|
 | GET | /resources and inventory dictionaries | `inventory:read` machine scope or authenticated user |

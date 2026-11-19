@@ -120,6 +120,8 @@ Business logic layer with interface-based repository dependencies. Each service 
 | query_saved_statement_service_pg_test.go | PostgreSQL saved-statement tests: engine-aware context validation, save-time guard/pagination through the real PG path, and the `RestoreContext` revalidation matrix over fake catalog/credential seams |
 
 ## Exports
+
+- `CHPreview` in `clickhouse_preview.go` checks the controller lease, generation, target, user, TLS credential and column policies. Native reads, masking, result limits and atomic evidence precede delivery.
 - `NewXxxService(repo) *XxxService` constructors for all services
 - `ResourceService.ObserveHealth` — operational evidence ingestion that validates the UTC `observedAt` storage range and never emits inventory audit events
 - `RelationService.Rules` returns source-specific relation types, target resource types, and environment constraints derived from the write validator's matrix
