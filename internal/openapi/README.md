@@ -19,6 +19,7 @@ Embeds and validates the OpenAPI contract served by the API documentation route.
 
 ## Contracts
 
+- A ClickHouse target may advertise `clickHousePaging`. Worksheet Run then accepts the shared page request, returns the requested page size and navigation flags, and enforces the overall 20-row bound.
 - The ordinary execute request supports a user-only ClickHouse worksheet grammar bound to the target's `clickHouseGeneration`; accepted AST shapes (including grouped date-range predicates) and limits are in the [worksheet guide](../../docs/clickhouse-preview.md#developer-authored-sql-in-the-worksheet).
 - `POST /query-targets/{id}/clickhouse-preview` accepts either a bounded projection or a `dailyCountColumn`. A count request uses a reauthorized date column and returns seven UTC days with exact decimal-string counts.
 - The ClickHouse preview catalog returns an opaque generation and approved columns. Preview requires that generation and a bounded projection and releases a masked matrix after evidence commit. [Configuration](../../docs/clickhouse-preview.md)

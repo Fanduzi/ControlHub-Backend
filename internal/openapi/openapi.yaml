@@ -589,10 +589,10 @@ paths:
                     error: validation_failed
                     message: only read-only SQL statements are allowed
                 invalidPaginationPageSize:
-                  summary: pageSize not in [10, 25, 50, 100]
+                  summary: pageSize not in [5, 10, 25, 50, 100]
                   value:
                     error: validation_failed
-                    message: "pageSize must be one of [10 25 50 100], got 15"
+                    message: "pageSize must be one of [5 10 25 50 100], got 15"
                 invalidPaginationPage:
                   summary: page must be > 0
                   value:
@@ -5342,6 +5342,9 @@ components:
           type: boolean
         saveSheet:
           type: boolean
+        clickHousePaging:
+          type: boolean
+          description: The approved ClickHouse worksheet accepts optional governed pagination.
         clickHousePreview:
           type: boolean
           description: Allows this user to request the separately authorized ClickHouse preview catalog.
@@ -7410,7 +7413,8 @@ components:
         Unknown fields are rejected by strict decoding. For an explicitly worksheet-enabled
         local ClickHouse target, the ordinary Run route accepts a fresh user and a bounded
         single-table SELECT with projection, typed comparisons and ranges, parenthesized AND/OR predicates,
-        grouping/count, ordering and LIMIT.
+        grouping/count, ordering and LIMIT. Optional paging reruns the statement within the smaller of
+        its LIMIT, maxRows and 20 rows. Each page revalidates the caller's approval generation and policies.
         The server rechecks source-column policies and commits history/audit before delivery.
       properties:
         clickHouseGeneration: {type: string, pattern: '^[a-f0-9]{64}$', description: Required for ClickHouse Run and omitted for other engines.}
@@ -7473,7 +7477,7 @@ components:
           $ref: "#/components/schemas/QueryExecutePaginationRequest"
           description: >
             Optional governed result paging boundary. When present, page and
-            pageSize are validated strictly. When absent on MySQL/TiDB,
+            pageSize are validated strictly. When absent on MySQL/TiDB or ClickHouse,
             execution keeps its single-response behavior and returns all rows
             up to the row cap; PostgreSQL executions always resolve a bounded
             window (absent defaults to page 1 at the server default size) and
@@ -7484,7 +7488,7 @@ components:
       additionalProperties: false
       description: >
         Governed result paging boundary for query execution. Page is 1-based.
-        PageSize must be one of [10, 25, 50, 100]. When this object is present
+        PageSize must be one of [5, 10, 25, 50, 100]. When this object is present
         in the request, both fields are required and validated strictly.
       properties:
         page:
@@ -7495,9 +7499,9 @@ components:
             that would cause (page-1)*pageSize to overflow.
         pageSize:
           type: integer
-          enum: [10, 25, 50, 100]
+          enum: [5, 10, 25, 50, 100]
           description: >
-            Number of rows per page. Must be one of [10, 25, 50, 100]. Other
+            Number of rows per page. Must be one of [5, 10, 25, 50, 100]. Other
             values are rejected to prevent unbounded page shapes.
     QueryExecutePaginationResponse:
       type: object
@@ -7507,7 +7511,7 @@ components:
         HasPreviousPage and HasNextPage are derived from the offset and
         effective row cap; they never leak total-row counts or snapshot
         identifiers. Present only when the request included pagination on
-        MySQL/TiDB; PostgreSQL executions always report their resolved
+        MySQL/TiDB and ClickHouse; PostgreSQL executions always report their resolved
         window.
       properties:
         page:
@@ -7516,9 +7520,8 @@ components:
         pageSize:
           type: integer
           description: >
-            Effective rows-per-page window owned by the server-side guard.
-            Equals the requested pageSize except when the governed row cap
-            truncates the window, in which case it reports the real window.
+            Requested page size for ClickHouse and PostgreSQL, including a short final page.
+            MySQL/TiDB may report a smaller effective window at the overall row cap.
         hasPreviousPage:
           type: boolean
           description: True when page > 1.

@@ -111,6 +111,10 @@ func TestClickHousePreviewHTTP(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
+	tables["page_events"] = map[string]any{"Worksheet": true, "UUID": "cb200000-0000-4000-8000-000000000009", "Columns": []string{"request_id"}}
+	if _, err := policies.Insert(ctx, model.ResultDisclosurePolicyUpsertRequest{TargetResourceID: target.ID, DatabaseName: "g2", ObjectName: "page_events", ColumnName: "request_id", Mode: model.ResultDisclosureRawCopyAllowed}); err != nil {
+		t.Fatal(err)
+	}
 	manifest := map[string]any{"TargetID": target.ID, "Environment": "Staging", "Address": remote.Addr, "Database": "g2", "User": "preview_reader", "CredentialRef": "G3_FIXTURE", "Users": []uint64{editor}, "Tables": tables}
 	publish := func() {
 		b, _ := json.Marshal(manifest)
@@ -331,6 +335,7 @@ func TestClickHousePreviewHTTP(t *testing.T) {
 	}
 	t.Run("daily_counts", func(t *testing.T) { testCHDailyCount(t, h, path, token, catalog.Generation, db, target.ID) })
 	t.Run("worksheet", func(t *testing.T) { testCHWorksheet(t, h, target.ID, token, otherToken, catalog.Generation, db) })
+	t.Run("worksheet_paging", func(t *testing.T) { testCHWorksheetPages(t, h, target.ID, token, catalog.Generation, db) })
 	if front := os.Getenv("CONTROLHUB_CH_BROWSER_CHECKOUT"); front != "" && !t.Failed() {
 		srv := httptest.NewServer(h)
 		defer srv.Close()
