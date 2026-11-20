@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strconv"
 	"strings"
@@ -12,6 +13,8 @@ import (
 	ch "github.com/ClickHouse/clickhouse-go/v2"
 	"github.com/fan/controlhub/internal/model"
 )
+
+var ErrQueryPageOutOfRange = errors.New("query page is outside the allowed result window")
 
 func (s *CHPreview) executeWorksheet(ctx context.Context, identity model.QueryExecutionIdentity, target model.QueryTarget, req model.QueryExecuteRequest) (model.QueryExecuteResponse, error) {
 	started := time.Now()
@@ -23,7 +26,7 @@ func (s *CHPreview) executeWorksheet(ctx context.Context, identity model.QueryEx
 		if identity.Kind != model.QueryExecutionActorUser {
 			return ErrQueryNotAllowed
 		}
-		if req.Database != "" || req.Schema != "" || req.ClientExecutionID != "" || req.Pagination != nil {
+		if req.Database != "" || req.Schema != "" || req.ClientExecutionID != "" {
 			return ErrQueryValidationFailed
 		}
 		return s.session(attempt, target, identity.ID, func(conn ch.Conn, a chApproval, c chCatalog) error {
@@ -41,7 +44,7 @@ func (s *CHPreview) executeWorksheet(ctx context.Context, identity model.QueryEx
 			if len(c.types[q.table]) == 0 {
 				return ErrQueryDisclosureBlocked
 			}
-			compiled, err := q.compile(a.Database, c, req.MaxRows)
+			compiled, err := q.compile(a.Database, c, req.MaxRows, req.Pagination)
 			if err != nil {
 				return err
 			}
@@ -52,15 +55,21 @@ func (s *CHPreview) executeWorksheet(ctx context.Context, identity model.QueryEx
 			if err != nil {
 				return err
 			}
-			truncated := len(values) > compiled.limit
-			if truncated {
-				values = values[:compiled.limit]
+			hasMore := len(values) > compiled.pageLimit
+			if hasMore {
+				values = values[:compiled.pageLimit]
+			}
+			truncated := hasMore
+			var pagination *model.QueryExecutePaginationResponse
+			if page := req.Pagination; page != nil {
+				pagination = &model.QueryExecutePaginationResponse{Page: page.Page, PageSize: page.PageSize, HasPreviousPage: page.Page > 1, HasNextPage: hasMore}
+				truncated = compiled.budgetLimited && compiled.offset+len(values) == compiled.limit && compiled.limit > 0
 			}
 			cols, values, err := s.execution.disclosure.Apply(compiled.plan, compiled.columns, values)
 			if err != nil {
 				return ErrQueryDisclosureBlocked
 			}
-			out = model.QueryExecuteResponse{TargetResourceID: target.ResourceID, Engine: "clickhouse", Status: model.QueryExecutionSuccess, Columns: cols, Rows: values, RowCount: len(values), Truncated: truncated, LimitApplied: compiled.limit, ExecutedAt: started.UTC(), DurationMs: time.Since(started).Milliseconds()}
+			out = model.QueryExecuteResponse{TargetResourceID: target.ResourceID, Engine: "clickhouse", Status: model.QueryExecutionSuccess, Columns: cols, Rows: values, RowCount: len(values), Truncated: truncated, LimitApplied: compiled.limit, Pagination: pagination, ExecutedAt: started.UTC(), DurationMs: time.Since(started).Milliseconds()}
 			// Oversized cells fail the read; every delivered value is complete.
 			out.CellTruncated = make([][]bool, len(values))
 			for i := range values {
@@ -104,16 +113,17 @@ func (s *CHPreview) executeWorksheet(ctx context.Context, identity model.QueryEx
 }
 
 type chCompiled struct {
-	sql, digest  string
-	params       ch.Parameters
-	columns      []model.QueryResultColumn
-	plan         DisclosurePlan
-	limit, fetch int
+	sql, digest                     string
+	params                          ch.Parameters
+	columns                         []model.QueryResultColumn
+	plan                            DisclosurePlan
+	limit, pageLimit, offset, fetch int
+	budgetLimited                   bool
 }
 
 // Only catalog-validated identifiers and closed grammar constructs are rendered.
 // Predicate values travel via typed Native query parameters, separate from SQL.
-func (q chSelect) compile(db string, c chCatalog, maxRows int) (*chCompiled, error) {
+func (q chSelect) compile(db string, c chCatalog, maxRows int, page *model.QueryExecutePaginationRequest) (*chCompiled, error) {
 	result := &chCompiled{limit: 20, params: ch.Parameters{}}
 	types, modes := c.types[q.table], c.modes[q.table]
 	raw := func(col string) bool { return types[col] != "" && modes[col] == model.ResultDisclosureRawCopyAllowed }
@@ -167,12 +177,34 @@ func (q chSelect) compile(db string, c chCatalog, maxRows int) (*chCompiled, err
 	if maxRows > 0 {
 		result.limit = min(result.limit, maxRows)
 	}
-	result.fetch = result.limit + 1
-	if q.hasLimit && q.limit <= uint64(result.limit) {
+	result.budgetLimited = !q.hasLimit || q.limit > uint64(result.limit)
+	if !result.budgetLimited {
 		result.limit = int(q.limit)
-		result.fetch = result.limit
+	}
+	result.pageLimit = result.limit
+	result.fetch = result.limit
+	if page == nil {
+		// Unpaged callers keep the existing truncation probe.
+		if result.budgetLimited {
+			result.fetch++
+		}
+	} else {
+		if err := model.ValidatePagination(page.Page, page.PageSize); err != nil {
+			return nil, ErrQueryValidationFailed
+		}
+		result.offset = (page.Page - 1) * page.PageSize
+		if page.Page > 1 && result.offset >= result.limit {
+			return nil, ErrQueryPageOutOfRange
+		}
+		remaining := result.limit - result.offset
+		result.pageLimit = min(page.PageSize, remaining)
+		// A lookahead row is useful only inside the SQL and platform budgets.
+		result.fetch = min(result.pageLimit+1, remaining)
 	}
 	result.sql = query + " LIMIT " + strconv.Itoa(result.fetch)
+	if result.offset > 0 {
+		result.sql += " OFFSET " + strconv.Itoa(result.offset)
+	}
 	return result, nil
 }
 

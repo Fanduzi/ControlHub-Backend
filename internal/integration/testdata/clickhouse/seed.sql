@@ -27,6 +27,10 @@ SELECT multiIf(number=0,toUInt64(42),number=1,toUInt64(43),toUInt64('18446744073
        midnight + toIntervalSecond([-518401,-518400,-518399,-432001,-432000,0,toInt32(toUnixTimestamp(now())-toUnixTimestamp(midnight))+600,86400][number+1]) AS instant,
        toDate(instant, 'UTC'), instant, toDate(instant, 'UTC'), toDate(instant, 'UTC') FROM numbers(8);
 
+CREATE TABLE g2.page_events UUID 'cb200000-0000-4000-8000-000000000009'
+(request_id UInt64) ENGINE = MergeTree ORDER BY request_id;
+INSERT INTO g2.page_events SELECT number + 1 FROM numbers(25);
+
 CREATE TABLE g2.http_log UUID 'cb200000-0000-4000-8000-000000000008'
 (request_date Date, service String, private_label String) ENGINE = MergeTree ORDER BY (request_date, service);
 INSERT INTO g2.http_log VALUES ('2026-11-12','api','test'), ('2026-11-13','api','test'),

@@ -445,7 +445,7 @@ func TestValidatePagination_RejectsInvalidInputs(t *testing.T) {
 		{"negative_page", -1, 10},
 		{"zero_page_size", 1, 0},
 		{"negative_page_size", 1, -1},
-		{"disallowed_page_size", 1, 5},
+		{"disallowed_page_size", 1, 6},
 		{"page_size_overflow", math.MaxInt64, math.MaxInt64},
 	}
 	for _, tc := range tests {
@@ -469,8 +469,8 @@ func TestValidatePagination_AcceptsAllowedPageSizes(t *testing.T) {
 
 func TestValidatePagination_RejectsOverflow(t *testing.T) {
 	t.Parallel()
-	if err := ValidatePagination(math.MaxInt64, 2); err == nil {
-		t.Errorf("ValidatePagination(MaxInt64, 2) = nil, want overflow error")
+	if err := ValidatePagination(math.MaxInt64, 5); err == nil {
+		t.Errorf("ValidatePagination(MaxInt64, 5) = nil, want overflow error")
 	}
 }
 

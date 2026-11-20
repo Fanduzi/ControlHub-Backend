@@ -55,7 +55,7 @@ func (i QueryExecutionIdentity) Validate() error {
 // AllowedPageSizes lists the page sizes permitted for governed query-result
 // paging. Only these values are accepted by ValidatePagination; any other
 // pageSize is rejected so the executor never receives an unbounded page shape.
-var AllowedPageSizes = []int{10, 25, 50, 100}
+var AllowedPageSizes = []int{5, 10, 25, 50, 100}
 
 // QueryExecutePaginationRequest carries the caller's requested page boundary
 // for governed query-result paging. Page is 1-based; PageSize must be one of

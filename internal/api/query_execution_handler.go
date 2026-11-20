@@ -632,6 +632,8 @@ func parseExecutionFilters(r *http.Request) (status *model.QueryExecutionStatus,
 // internal-error default.
 func writeQueryExecutionError(w http.ResponseWriter, err error) {
 	switch {
+	case errors.Is(err, service.ErrQueryPageOutOfRange):
+		writeJSONError(w, http.StatusBadRequest, "page_out_of_range", err.Error())
 	case errors.Is(err, service.ErrQueryValidationFailed):
 		writeJSONError(w, http.StatusBadRequest, "validation_failed", err.Error())
 	case errors.Is(err, service.ErrQueryDisclosureBlocked):

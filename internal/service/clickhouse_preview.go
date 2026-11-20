@@ -182,6 +182,7 @@ func (s *CHPreview) ApplyWorksheetActions(ctx context.Context, target *model.Que
 		}
 		target.ClickHouseGeneration = chGeneration(a, ca)
 		target.AvailableActions.Run = true
+		target.AvailableActions.ClickHousePaging = true
 		target.Readiness = model.ReadinessReady
 		target.MissingFields = []string{}
 		target.Governance.ExecutionEnabled = true
@@ -434,6 +435,9 @@ func (s *CHPreview) finishAttempt(ctx context.Context, rec model.QueryExecutionR
 		case errors.Is(err, ErrQueryNotAllowed):
 			rec.Status = model.QueryExecutionRejected
 			rec.ErrorCode = "query_not_allowed"
+		case errors.Is(err, ErrQueryPageOutOfRange):
+			rec.Status = model.QueryExecutionRejected
+			rec.ErrorCode = "page_out_of_range"
 		case errors.Is(err, ErrQueryValidationFailed):
 			rec.Status = model.QueryExecutionRejected
 			rec.ErrorCode = "validation_failed"

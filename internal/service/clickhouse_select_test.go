@@ -15,7 +15,7 @@ func TestCHWorksheetTypedPredicateAndUserWindow(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		r, err := q.compile("app", c, max)
+		r, err := q.compile("app", c, max, nil)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -35,7 +35,7 @@ func TestCHWorksheetDialectBindings(t *testing.T) {
 		if err != nil {
 			return nil, err
 		}
-		return q.compile("app", c, 10)
+		return q.compile("app", c, 10, nil)
 	}
 	a, err := compile("SELECT id FROM events WHERE (id >= 42 AND id < 84) OR label = 'O''Brien'")
 	if err != nil {

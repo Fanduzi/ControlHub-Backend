@@ -67,7 +67,7 @@ Domain structs, taxonomy constants, validation methods, and dictionary definitio
 
 `QueryExecuteRequest.Pagination` is optional. When present, the request carries a
 1-based `page` and a `pageSize` from `AllowedPageSizes`, which is currently
-`[10, 25, 50, 100]`. When pagination is omitted, execute keeps its existing
+`[5, 10, 25, 50, 100]`. When pagination is omitted, execute keeps its existing
 single-response behavior.
 
 `ValidatePagination` checks the page number, supported page size, and checked
