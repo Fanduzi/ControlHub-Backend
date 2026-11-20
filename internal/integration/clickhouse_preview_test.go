@@ -137,6 +137,26 @@ func TestClickHousePreviewHTTP(t *testing.T) {
 	if rec.Code != 200 {
 		t.Fatalf("credential setup: %d %s", rec.Code, rec.Body.String())
 	}
+	assertActions := func(handler http.Handler, bearer string, preview, run bool) {
+		t.Helper()
+		listed := doBearer(t, handler, "GET", fmt.Sprintf("/query-targets?targetId=%d", target.ID), bearer)
+		var results model.QueryTargetListResponse
+		if listed.Code != 200 || json.Unmarshal(listed.Body.Bytes(), &results) != nil || len(results.Items) != 1 || results.Items[0].ResourceID != target.ID {
+			t.Fatalf("target discovery returned %d: %s", listed.Code, listed.Body.String())
+		}
+		actions := results.Items[0].AvailableActions
+		if actions.ClickHousePreview != preview || actions.Run != run || actions.Export != run {
+			t.Fatalf("actions=%+v; want preview=%t, run/export=%t", actions, preview, run)
+		}
+	}
+	assertActions(h, token, true, true)
+	assertActions(h, otherToken, false, false)
+	// Table preview by itself must never advertise worksheet export.
+	manifest["Tables"] = map[string]any{"sample": tables["sample"]}
+	publish()
+	assertActions(h, token, true, false)
+	manifest["Tables"] = tables
+	publish()
 	var catalog struct{ Generation string }
 	get := func(handler http.Handler, bearer string, want int) {
 		t.Helper()
@@ -155,7 +175,9 @@ func TestClickHousePreviewHTTP(t *testing.T) {
 	get(h, otherToken, 403)
 	get(h, "", 401)
 	off, _ := serverboot.Build(db, config.Config{JWTSecret: authzIntegrationSecret})
-	get(api.NewRouter(off), token, 404)
+	closedRouter := api.NewRouter(off)
+	get(closedRouter, token, 404)
+	assertActions(closedRouter, token, false, false)
 	lock := flock.New(filepath.Join(dir, "lease"))
 	if err := lock.Lock(); err != nil {
 		t.Fatal(err)
@@ -169,6 +191,7 @@ func TestClickHousePreviewHTTP(t *testing.T) {
 	publish()
 	t.Setenv("CONTROLHUB_QUERY_CREDENTIAL_G3_FIXTURE", dsn+"-wrong")
 	get(h, token, 403)
+	assertActions(h, token, true, false)
 	t.Setenv("CONTROLHUB_QUERY_CREDENTIAL_G3_FIXTURE", dsn)
 	count := func(table string) int {
 		t.Helper()

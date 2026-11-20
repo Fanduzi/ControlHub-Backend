@@ -182,6 +182,8 @@ func (s *CHPreview) ApplyWorksheetActions(ctx context.Context, target *model.Que
 		}
 		target.ClickHouseGeneration = chGeneration(a, ca)
 		target.AvailableActions.Run = true
+		// The shared grid checks every disclosed cell before serializing the current page.
+		target.AvailableActions.Export = true
 		target.AvailableActions.ClickHousePaging = true
 		target.Readiness = model.ReadinessReady
 		target.MissingFields = []string{}
