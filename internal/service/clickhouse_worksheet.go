@@ -30,21 +30,10 @@ func (s *CHPreview) executeWorksheet(ctx context.Context, identity model.QueryEx
 			return ErrQueryValidationFailed
 		}
 		return s.session(attempt, target, identity.ID, func(conn ch.Conn, a chApproval, c chCatalog) error {
-			if a.generation != req.ClickHouseGeneration {
-				return ErrQueryNotAllowed
+			compiled, err := compileCHWorksheet(a, c, req.ClickHouseGeneration, req.Statement, req.MaxRows, req.Pagination)
+			if a.generation == req.ClickHouseGeneration {
+				rec.DatabaseName = a.Database
 			}
-			rec.DatabaseName = a.Database
-			q, err := parseCHSelect(req.Statement)
-			if err != nil {
-				return err
-			}
-			if !a.Tables[q.table].Worksheet {
-				return ErrQueryNotAllowed
-			}
-			if len(c.types[q.table]) == 0 {
-				return ErrQueryDisclosureBlocked
-			}
-			compiled, err := q.compile(a.Database, c, req.MaxRows, req.Pagination)
 			if err != nil {
 				return err
 			}
@@ -110,6 +99,24 @@ func (s *CHPreview) executeWorksheet(ctx context.Context, identity model.QueryEx
 	}
 	out.ExecutionID = id
 	return out, nil
+}
+
+// Run and Explain use exactly the same generation, table identity, AST and column policies.
+func compileCHWorksheet(a chApproval, c chCatalog, generation, statement string, maxRows int, page *model.QueryExecutePaginationRequest) (*chCompiled, error) {
+	if generation != a.generation {
+		return nil, ErrQueryNotAllowed
+	}
+	q, err := parseCHSelect(statement)
+	if err != nil {
+		return nil, err
+	}
+	if !a.Tables[q.table].Worksheet {
+		return nil, ErrQueryNotAllowed
+	}
+	if len(c.types[q.table]) == 0 {
+		return nil, ErrQueryDisclosureBlocked
+	}
+	return q.compile(a.Database, c, maxRows, page)
 }
 
 type chCompiled struct {

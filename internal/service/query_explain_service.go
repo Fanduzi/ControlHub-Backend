@@ -47,6 +47,7 @@ type QueryExplainService struct {
 	// answer query_explain_not_supported. They are set only by
 	// WithPGExplain, which serverboot calls under the same
 	// CONTROLHUB_PG_HTTP_ENTRIES release gate as execution.
+	clickHouse   *CHPreview
 	pgRunner     PGExplainExecutor
 	pgNormalizer *PGExplainNormalizer
 }
@@ -71,6 +72,12 @@ func NewQueryExplainService(
 		clock:      clock,
 		audit:      audit,
 	}
+}
+
+// WithCHExplain installs the same non-production controller gate used by worksheet Run.
+func (s *QueryExplainService) WithCHExplain(preview *CHPreview) *QueryExplainService {
+	s.clickHouse = preview
+	return s
 }
 
 // WithPGExplain installs the construction-time PostgreSQL Explain
@@ -107,6 +114,13 @@ func (s *QueryExplainService) Explain(ctx context.Context, actorUserID uint64, t
 	target, err := s.access.ResolveTarget(ctx, targetID)
 	if err != nil {
 		return model.ExplainResponse{}, err
+	}
+	if target.ConnectionContext.Engine == "clickhouse" && s.clickHouse != nil {
+		return s.explainClickHouse(ctx, actorUserID, target, req)
+	}
+	if req.ClickHouseGeneration != "" || req.MaxRows != 0 || req.Pagination != nil {
+		s.recordAudit(ctx, actorUserID, target.ResourceID, model.ExplainAuditRejected)
+		return model.ExplainResponse{}, ErrQueryValidationFailed
 	}
 	if isPGEngine(target.ConnectionContext.Engine) {
 		return s.explainPG(ctx, actorUserID, target, req)

@@ -54,6 +54,8 @@ HTTP handlers, chi routing, the login rate limiter, and fake-repo test infrastru
 
 ## Routes
 
+- `POST /query-targets/{id}/explain` supports approved ClickHouse worksheets. A protected predicate returns `403 query_result_disclosure_blocked` with fixed error text.
+
 - `/query-targets/{id}/execute` also accepts a user-authored ClickHouse worksheet query with an advertised `clickHouseGeneration`. The server authenticates the user and checks table-level worksheet approval independently of preview access.
 - ClickHouse worksheet page bounds stay within the approved SQL result window and 20-row cap. Out-of-range pages return `400 page_out_of_range`; all page reads go through the same authorization and evidence chain.
 - `GET/POST /query-targets/{id}/clickhouse-preview` — fresh-user catalog and mutually exclusive table projection or UTC daily count requests in `clickhouse_preview.go`. See the [non-production preview contract](../../docs/clickhouse-preview.md).

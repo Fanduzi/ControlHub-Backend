@@ -31,6 +31,10 @@ CREATE TABLE g2.page_events UUID 'cb200000-0000-4000-8000-000000000009'
 (request_id UInt64) ENGINE = MergeTree ORDER BY request_id;
 INSERT INTO g2.page_events SELECT number + 1 FROM numbers(25);
 
+CREATE TABLE g2.plan_events UUID 'cb200000-0000-4000-8000-000000000010'
+(request_date Date, id UInt32, private_label String) ENGINE = MergeTree ORDER BY request_date SETTINGS index_granularity=8;
+INSERT INTO g2.plan_events SELECT toDate('2026-01-01') + toUInt16(number), number, 'fixture-private' FROM numbers(512);
+
 CREATE TABLE g2.http_log UUID 'cb200000-0000-4000-8000-000000000008'
 (request_date Date, service String, private_label String) ENGINE = MergeTree ORDER BY (request_date, service);
 INSERT INTO g2.http_log VALUES ('2026-11-12','api','test'), ('2026-11-13','api','test'),

@@ -19,6 +19,8 @@ Embeds and validates the OpenAPI contract served by the API documentation route.
 
 ## Contracts
 
+- ClickHouse Explain accepts the current worksheet generation and returns normalized v1 plan nodes. `primaryKeyGranules` is optional and scoped to a MergeTree primary-key index stage.
+
 - `availableActions.export` also applies to approved ClickHouse worksheets; its whole-page CSV rules use the public columns, rows and aligned `cellTruncated` evidence.
 - A ClickHouse target may advertise `clickHousePaging`. Worksheet Run then accepts the shared page request, returns the requested page size and navigation flags, and enforces the overall 20-row bound.
 - The ordinary execute request supports a user-only ClickHouse worksheet grammar bound to the target's `clickHouseGeneration`; accepted AST shapes (including grouped date-range predicates) and limits are in the [worksheet guide](../../docs/clickhouse-preview.md#developer-authored-sql-in-the-worksheet).

@@ -12,13 +12,13 @@ import (
 // engine string could relay arbitrary target metadata through the response.
 // This test fails if a future caller adds an undeclared engine value.
 func TestExplainEngineValidate(t *testing.T) {
-	valid := []ExplainEngine{ExplainEngineMySQL}
+	valid := []ExplainEngine{ExplainEngineMySQL, ExplainEnginePostgreSQL, ExplainEngineClickHouse}
 	for _, e := range valid {
 		if err := e.Validate(); err != nil {
 			t.Errorf("expected valid engine %s to pass, got %v", e, err)
 		}
 	}
-	invalid := []ExplainEngine{"tidb", "postgres", "clickhouse", "", "MySQL"}
+	invalid := []ExplainEngine{"tidb", "postgres", "ClickHouse", "", "MySQL"}
 	for _, e := range invalid {
 		if err := e.Validate(); err == nil {
 			t.Errorf("expected engine %q to fail validation, but it passed", e)

@@ -159,6 +159,7 @@ func Build(db *sql.DB, cfg config.Config) (api.Dependencies, Parts) {
 	var preview *service.CHPreview
 	if cfg.CHPreviewDir != "" {
 		preview = service.NewCHPreview(cfg.CHPreviewDir, queryExecutionSvc, queryDisclosureRepo)
+		queryExplainSvc.WithCHExplain(preview)
 		queryCredentialSvc.EnableCHPreviewCredentials()
 	}
 	return api.Dependencies{

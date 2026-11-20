@@ -66,6 +66,10 @@ func writeQueryExplainError(w http.ResponseWriter, err error) {
 	switch {
 	case errors.Is(err, service.ErrQueryValidationFailed):
 		writeJSONError(w, http.StatusBadRequest, "validation_failed", "statement is not a permitted read-only SELECT")
+	case errors.Is(err, service.ErrQueryPageOutOfRange):
+		writeJSONError(w, http.StatusBadRequest, "page_out_of_range", "page is outside the allowed result window")
+	case errors.Is(err, service.ErrQueryDisclosureBlocked):
+		writeJSONError(w, http.StatusForbidden, "query_result_disclosure_blocked", "explain blocked by result disclosure policy")
 	case errors.Is(err, service.ErrQueryNotAllowed):
 		writeJSONError(w, http.StatusForbidden, "query_not_allowed", "target is not enabled for execution")
 	case errors.Is(err, service.ErrQueryTargetNotFound):

@@ -76,7 +76,7 @@ func TestClickHousePreviewHTTP(t *testing.T) {
 	names := []string{"sample", "large_cell", "large_reply", "slow", "late", "server_budget"}
 	policies := mysql.NewQueryDisclosureRepository(db)
 	for i, name := range names {
-		tables[name] = map[string]any{"UUID": fmt.Sprintf("cb200000-0000-4000-8000-%012d", i+1), "Columns": []string{"id", "title", "secret"}}
+		tables[name] = map[string]any{"Worksheet": name == "late", "UUID": fmt.Sprintf("cb200000-0000-4000-8000-%012d", i+1), "Columns": []string{"id", "title", "secret"}}
 		for _, c := range []string{"id", "title", "secret"} {
 			mode := model.ResultDisclosureRawCopyAllowed
 			if c == "secret" {
@@ -115,6 +115,17 @@ func TestClickHousePreviewHTTP(t *testing.T) {
 	if _, err := policies.Insert(ctx, model.ResultDisclosurePolicyUpsertRequest{TargetResourceID: target.ID, DatabaseName: "g2", ObjectName: "page_events", ColumnName: "request_id", Mode: model.ResultDisclosureRawCopyAllowed}); err != nil {
 		t.Fatal(err)
 	}
+	planCols := []string{"request_date", "id", "private_label"}
+	tables["plan_events"] = map[string]any{"Worksheet": true, "UUID": "cb200000-0000-4000-8000-000000000010", "Columns": planCols}
+	for _, col := range planCols {
+		mode := model.ResultDisclosureRawCopyAllowed
+		if col == "private_label" {
+			mode = model.ResultDisclosureMaskedNoCopy
+		}
+		if _, err := policies.Insert(ctx, model.ResultDisclosurePolicyUpsertRequest{TargetResourceID: target.ID, DatabaseName: "g2", ObjectName: "plan_events", ColumnName: col, Mode: mode}); err != nil {
+			t.Fatal(err)
+		}
+	}
 	manifest := map[string]any{"TargetID": target.ID, "Environment": "Staging", "Address": remote.Addr, "Database": "g2", "User": "preview_reader", "CredentialRef": "G3_FIXTURE", "Users": []uint64{editor}, "Tables": tables}
 	publish := func() {
 		b, _ := json.Marshal(manifest)
@@ -145,7 +156,7 @@ func TestClickHousePreviewHTTP(t *testing.T) {
 			t.Fatalf("target discovery returned %d: %s", listed.Code, listed.Body.String())
 		}
 		actions := results.Items[0].AvailableActions
-		if actions.ClickHousePreview != preview || actions.Run != run || actions.Export != run {
+		if actions.ClickHousePreview != preview || actions.Run != run || actions.Export != run || actions.Explain != run {
 			t.Fatalf("actions=%+v; want preview=%t, run/export=%t", actions, preview, run)
 		}
 	}
@@ -359,6 +370,7 @@ func TestClickHousePreviewHTTP(t *testing.T) {
 	t.Run("daily_counts", func(t *testing.T) { testCHDailyCount(t, h, path, token, catalog.Generation, db, target.ID) })
 	t.Run("worksheet", func(t *testing.T) { testCHWorksheet(t, h, target.ID, token, otherToken, catalog.Generation, db) })
 	t.Run("worksheet_paging", func(t *testing.T) { testCHWorksheetPages(t, h, target.ID, token, catalog.Generation, db) })
+	t.Run("explain", func(t *testing.T) { testCHExplain(t, h, target.ID, token, otherToken, catalog.Generation, db) })
 	if front := os.Getenv("CONTROLHUB_CH_BROWSER_CHECKOUT"); front != "" && !t.Failed() {
 		srv := httptest.NewServer(h)
 		defer srv.Close()
