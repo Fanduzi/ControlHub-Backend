@@ -43,6 +43,8 @@ Domain structs, taxonomy constants, validation methods, and dictionary definitio
 
 ## Exports
 
+`ExplainRequest.ClickHouseGeneration` pins ClickHouse Explain to its approval. A MergeTree read may report a safe-integer `primaryKeyGranules` selected/initial pair.
+
 `QueryTarget.ClickHouseGeneration` binds a fresh user's worksheet Run to its advertised generation via `QueryExecuteRequest.ClickHouseGeneration`.
 
 `QueryTargetAvailableActions.ClickHousePreview` advertises the actor-specific preview catalog independently of SQL Run; omitted when unavailable.

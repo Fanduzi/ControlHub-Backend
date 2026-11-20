@@ -666,18 +666,19 @@ paths:
       operationId: explainQueryTarget
       description: >
         Phase 38N governed Explain. Runs the engine Explain form against a
-        parser-approved bare SELECT under the same governed target access,
-        credential binding, timeout, and read-only transaction as execution
-        (EXPLAIN FORMAT=JSON for MySQL; EXPLAIN (FORMAT JSON) for
-        PostgreSQL). The browser sends only the worksheet statement plus the
-        (database, schema) connection identity required by postgresql
-        targets; it never constructs EXPLAIN, engine-specific syntax, or
+        parser-approved bare SELECT under the same governed target access and credential binding
+        as execution. The server constructs EXPLAIN FORMAT=JSON for MySQL, EXPLAIN (FORMAT JSON)
+        for PostgreSQL or EXPLAIN PLAN json=1, indexes=1 for ClickHouse. PostgreSQL selects the
+        pinned database/schema; ClickHouse echoes the approved worksheet generation and may
+        specify the result window. The browser never constructs EXPLAIN, engine-specific syntax, or
         actor/credential fields. The backend owns wrapping the guarded
         SELECT in the engine Explain syntax and normalizing the raw plan
         into a bounded, versioned, leak-free response. Explain never
         executes the underlying bare SELECT and never creates a
         query_executions row.
-        MySQL and PostgreSQL are supported; TiDB rejects EXPLAIN FORMAT=JSON
+        ClickHouse worksheets use EXPLAIN PLAN with JSON and index evidence after validating the same
+        approval generation and current column policies as Run. The response may include selected/initial
+        primary-key granules reported for a MergeTree read. TiDB rejects EXPLAIN FORMAT=JSON
         and returns query_explain_not_supported. PostgreSQL Explain follows
         the same CONTROLHUB_PG_HTTP_ENTRIES release gate as execution — with
         the gate closed a postgresql target answers
@@ -7636,6 +7637,9 @@ components:
         EXPLAIN, engine-specific syntax, or send actor/role/credential/DSN
         fields.
       properties:
+        maxRows: {type: integer, minimum: 0, description: Optional ClickHouse worksheet result budget.}
+        pagination: {$ref: '#/components/schemas/QueryExecutePaginationRequest'}
+        clickHouseGeneration: {type: string, pattern: '^[a-f0-9]{64}$', description: Required for ClickHouse Explain and omitted for other engines.}
         statement:
           type: string
           description: A single bare parser-approved SELECT. Typed EXPLAIN, SHOW, DESCRIBE, DML, DDL, multi-statement, and unsafe functions are rejected.
@@ -7671,7 +7675,7 @@ components:
           description: The enclosing node's ID, or null for the root.
         operation:
           type: string
-          enum: [table_access, index_access, nested_loop, hash_join, merge_join, sort, aggregate, temporary_table, container, unknown]
+          enum: [table_access, index_access, nested_loop, hash_join, merge_join, filter, sort, aggregate, temporary_table, container, unknown]
           description: >
             Normalized operation. `container` marks known plan-structure
             nodes (Limit, Hash, Gather, Append …) kept for tree fidelity;
@@ -7679,6 +7683,14 @@ components:
         access:
           type: string
           enum: [full_scan, index, unique_row, range, unknown]
+        primaryKeyGranules:
+          type: object
+          additionalProperties: false
+          required: [selected, initial]
+          description: ClickHouse primary-key pruning stage only. Omitted when evidence is missing, ambiguous or invalid. Selected is at most initial.
+          properties:
+            selected: {type: integer, minimum: 0, maximum: 9007199254740991}
+            initial: {type: integer, minimum: 0, maximum: 9007199254740991}
         estimatedRows:
           type: integer
           format: int64
@@ -7742,18 +7754,17 @@ components:
       additionalProperties: false
       required: [targetResourceId, engine, formatVersion, nodes, risks, truncated]
       description: >
-        The versioned, normalized, leak-free Explain output. It carries only
-        finite enums, bounded scalars, and the target resource ID. No raw plan
-        JSON, table names, index names, predicates, literals, DSNs,
-        credentials, actor IDs, or raw driver errors ever reach this struct.
+        The versioned normalized plan includes only bounded structural metadata and the target
+        resource ID. MySQL and PostgreSQL may include bounded relation/index identifiers.
+        ClickHouse never returns index conditions, key names, raw plan text or predicates.
       properties:
         targetResourceId:
           type: integer
           format: int64
         engine:
           type: string
-          enum: [mysql, postgresql]
-          description: v1 supports MySQL and PostgreSQL. TiDB fails closed because it rejects EXPLAIN FORMAT=JSON.
+          enum: [mysql, postgresql, clickhouse]
+          description: v1 supports MySQL, PostgreSQL and explicitly enabled non-production ClickHouse worksheets.
         formatVersion:
           type: integer
           description: Always 1 in v1. Unknown future versions fail closed.

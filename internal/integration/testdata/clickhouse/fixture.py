@@ -131,6 +131,7 @@ try:
             f"<query>GRANT SELECT(id,title,secret) ON g2.{name}</query>"
             for name in tables
         )
+        grants += '<query>GRANT SELECT(request_date,id,private_label) ON g2.plan_events</query>'
         grants += '<query>GRANT SELECT(request_id) ON g2.page_events</query>'
         grants += '<query>GRANT SELECT(request_id,observed_at,request_date,private_time,preview_only,missing_date) ON g2.events</query>'
         grants += '<query>GRANT SELECT(request_date, service, private_label) ON g2.http_log</query>'

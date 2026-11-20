@@ -11,11 +11,11 @@ import (
 const ExplainFormatVersion = 1
 
 // ExplainEngine is the finite, validated enum of engines the v1 Explain
-// normalizer can emit. MySQL and PostgreSQL are supported; TiDB fails
-// closed because it cannot satisfy the same bounded source contract.
+// normalizer can emit. ClickHouse support is limited to approved non-production worksheets.
 type ExplainEngine string
 
 const (
+	ExplainEngineClickHouse ExplainEngine = "clickhouse"
 	ExplainEngineMySQL      ExplainEngine = "mysql"
 	ExplainEnginePostgreSQL ExplainEngine = "postgresql"
 )
@@ -24,24 +24,22 @@ const (
 // closed so the response can never relay arbitrary target metadata.
 func (e ExplainEngine) Validate() error {
 	switch e {
-	case ExplainEngineMySQL, ExplainEnginePostgreSQL:
+	case ExplainEngineMySQL, ExplainEnginePostgreSQL, ExplainEngineClickHouse:
 		return nil
 	}
 	return fmt.Errorf("invalid explain engine: %s", e)
 }
 
-// ExplainRequest is the body of POST /query-targets/{id}/explain. Only the
-// worksheet statement is accepted; the actor is derived from the verified
-// token and the engine/governance context from target resolution.
-//
-// Database and Schema are the composite connection-identity selectors used
-// only by PostgreSQL targets — credentials are keyed by (target, database)
-// and the pinned schema scopes unqualified name resolution. They are
-// required for postgresql targets and ignored for mysql.
+// ExplainRequest carries the bare worksheet statement. PostgreSQL uses database/schema;
+// ClickHouse uses the approval generation and optional Run budget and page window.
+// Only the authenticated request supplies an actor.
 type ExplainRequest struct {
-	Statement string `json:"statement"`
-	Database  string `json:"database,omitempty"`
-	Schema    string `json:"schema,omitempty"`
+	MaxRows              int                            `json:"maxRows,omitempty"`
+	Pagination           *QueryExecutePaginationRequest `json:"pagination,omitempty"`
+	ClickHouseGeneration string                         `json:"clickHouseGeneration,omitempty"`
+	Statement            string                         `json:"statement"`
+	Database             string                         `json:"database,omitempty"`
+	Schema               string                         `json:"schema,omitempty"`
 }
 
 // ExplainNodeOperation is the finite enum of normalized plan node operations.
@@ -53,6 +51,7 @@ const (
 	ExplainOpNestedLoop   ExplainNodeOperation = "nested_loop"
 	ExplainOpHashJoin     ExplainNodeOperation = "hash_join"
 	ExplainOpMergeJoin    ExplainNodeOperation = "merge_join"
+	ExplainOpFilter       ExplainNodeOperation = "filter"
 	ExplainOpSort         ExplainNodeOperation = "sort"
 	ExplainOpAggregate    ExplainNodeOperation = "aggregate"
 	ExplainOpTemporaryTbl ExplainNodeOperation = "temporary_table"
@@ -68,7 +67,7 @@ func (o ExplainNodeOperation) Validate() error {
 	switch o {
 	case ExplainOpTableAccess, ExplainOpIndexAccess, ExplainOpNestedLoop,
 		ExplainOpHashJoin, ExplainOpMergeJoin,
-		ExplainOpSort, ExplainOpAggregate, ExplainOpTemporaryTbl,
+		ExplainOpFilter, ExplainOpSort, ExplainOpAggregate, ExplainOpTemporaryTbl,
 		ExplainOpContainer, ExplainOpUnknown:
 		return nil
 	}
@@ -171,22 +170,32 @@ func ExplainIdentifierOK(s string) bool {
 // is omitted (nil) when the engine does not report it or when the value
 // would exceed Number.MAX_SAFE_INTEGER (2^53-1) on the wire.
 type ExplainNode struct {
-	ID            string               `json:"id"`
-	ParentID      *string              `json:"parentId,omitempty"`
-	Operation     ExplainNodeOperation `json:"operation"`
-	Access        ExplainNodeAccess    `json:"access"`
-	EstimatedRows *uint64              `json:"estimatedRows,omitempty"`
-	UsesIndex     *bool                `json:"usesIndex,omitempty"`
-	Label         string               `json:"label,omitempty"`
-	Relation      string               `json:"relation,omitempty"`
-	Index         string               `json:"index,omitempty"`
-	StartupCost   *float64             `json:"startupCost,omitempty"`
-	TotalCost     *float64             `json:"totalCost,omitempty"`
+	PrimaryKeyGranules *ExplainGranules     `json:"primaryKeyGranules,omitempty"`
+	ID                 string               `json:"id"`
+	ParentID           *string              `json:"parentId,omitempty"`
+	Operation          ExplainNodeOperation `json:"operation"`
+	Access             ExplainNodeAccess    `json:"access"`
+	EstimatedRows      *uint64              `json:"estimatedRows,omitempty"`
+	UsesIndex          *bool                `json:"usesIndex,omitempty"`
+	Label              string               `json:"label,omitempty"`
+	Relation           string               `json:"relation,omitempty"`
+	Index              string               `json:"index,omitempty"`
+	StartupCost        *float64             `json:"startupCost,omitempty"`
+	TotalCost          *float64             `json:"totalCost,omitempty"`
+}
+
+// ExplainGranules is the pair reported for one MergeTree primary-key pruning stage.
+type ExplainGranules struct {
+	Selected uint64 `json:"selected"`
+	Initial  uint64 `json:"initial"`
 }
 
 // Validate returns nil only if every enum field is known, the ID is non-empty,
 // and the label stays inside its wire bound.
 func (n ExplainNode) Validate() error {
+	if g := n.PrimaryKeyGranules; g != nil && (g.Selected > g.Initial || g.Initial > 1<<53-1) {
+		return errors.New("invalid primary-key granule counts")
+	}
 	if n.ID == "" {
 		return errors.New("explain node id is required")
 	}
@@ -246,6 +255,9 @@ func (r ExplainResponse) Validate() error {
 		return fmt.Errorf("unsupported explain format version: %d", r.FormatVersion)
 	}
 	for i, n := range r.Nodes {
+		if n.PrimaryKeyGranules != nil && (r.Engine != ExplainEngineClickHouse || n.Operation != ExplainOpTableAccess) {
+			return fmt.Errorf("unexpected primary-key granule evidence on node %d", i)
+		}
 		if err := n.Validate(); err != nil {
 			return fmt.Errorf("explain node %d: %w", i, err)
 		}
