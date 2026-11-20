@@ -371,6 +371,9 @@ func TestClickHousePreviewHTTP(t *testing.T) {
 	t.Run("worksheet", func(t *testing.T) { testCHWorksheet(t, h, target.ID, token, otherToken, catalog.Generation, db) })
 	t.Run("worksheet_paging", func(t *testing.T) { testCHWorksheetPages(t, h, target.ID, token, catalog.Generation, db) })
 	t.Run("explain", func(t *testing.T) { testCHExplain(t, h, target.ID, token, otherToken, catalog.Generation, db) })
+	t.Run("saved_query", func(t *testing.T) {
+		testCHSavedQuery(t, h, target.ID, token, otherToken, adminToken, catalog.Generation, db)
+	})
 	if front := os.Getenv("CONTROLHUB_CH_BROWSER_CHECKOUT"); front != "" && !t.Failed() {
 		srv := httptest.NewServer(h)
 		defer srv.Close()

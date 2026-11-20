@@ -19,6 +19,8 @@ Embeds and validates the OpenAPI contract served by the API documentation route.
 
 ## Contracts
 
+- ClickHouse personal saved-query writes require `clickHouseGeneration`. Shared scope and declarations are refused; saving does not execute the SQL, and run-time authorization remains independent.
+
 - ClickHouse Explain accepts the current worksheet generation and returns normalized v1 plan nodes. `primaryKeyGranules` is optional and scoped to a MergeTree primary-key index stage.
 
 - `availableActions.export` also applies to approved ClickHouse worksheets; its whole-page CSV rules use the public columns, rows and aligned `cellTruncated` evidence.

@@ -46,8 +46,11 @@ func (r *MySQLQuerySavedStatementRepository) ListVisible(ctx context.Context, qu
 	where := []string{"target_resource_id = ?", "database_name = ?"}
 	args := []any{query.TargetResourceID, query.Database}
 
-	// Visibility: shared OR (personal AND owned by actor)
-	where = append(where, "(scope = 'shared_template' OR (scope = 'personal' AND owner_user_id = ?))")
+	if query.PersonalOnly {
+		where = append(where, "scope = 'personal' AND owner_user_id = ?")
+	} else {
+		where = append(where, "(scope = 'shared_template' OR (scope = 'personal' AND owner_user_id = ?))")
+	}
 	args = append(args, query.OwnerUserID)
 
 	// Name-only search

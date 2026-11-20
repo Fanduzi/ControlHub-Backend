@@ -43,6 +43,8 @@ Domain structs, taxonomy constants, validation methods, and dictionary definitio
 
 ## Exports
 
+`QuerySavedStatementCreateRequest` and `QuerySavedStatementUpdateRequest` accept the current ClickHouse generation for personal saves. `PersonalOnly` scopes repository listing to the owner.
+
 `ExplainRequest.ClickHouseGeneration` pins ClickHouse Explain to its approval. A MergeTree read may report a safe-integer `primaryKeyGranules` selected/initial pair.
 
 `QueryTarget.ClickHouseGeneration` binds a fresh user's worksheet Run to its advertised generation via `QueryExecuteRequest.ClickHouseGeneration`.

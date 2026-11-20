@@ -50,6 +50,7 @@ type QuerySavedStatementService struct {
 	credentials QueryCredentialReader
 	access      *TargetAccessResolver
 	pgCatalog   pgSchemaCatalog
+	clickHouse  *CHPreview
 }
 
 // NewQuerySavedStatementService constructs a QuerySavedStatementService.
@@ -78,6 +79,9 @@ func (s *QuerySavedStatementService) WithPGContext(credentials QueryCredentialRe
 	return s
 }
 
+// WithCHContext hooks saved queries into the governed ClickHouse controller.
+func (s *QuerySavedStatementService) WithCHContext(preview *CHPreview) { s.clickHouse = preview }
+
 // pgRestoreCatalog returns the configured catalog or the live implementation.
 func (s *QuerySavedStatementService) pgRestoreCatalog() pgSchemaCatalog {
 	if s.pgCatalog != nil {
@@ -95,11 +99,17 @@ func (s *QuerySavedStatementService) pgRestoreCatalog() pgSchemaCatalog {
 // connection's runtime state — saved statements stay readable when a
 // connection is disabled.
 func (s *QuerySavedStatementService) List(ctx context.Context, actor AuthenticatedUser, targetResourceID uint64, q, database string, page, pageSize int) (model.QuerySavedStatementListResponse, error) {
-	if _, err := s.lookupTarget(ctx, targetResourceID); err != nil {
+	target, err := s.lookupTarget(ctx, targetResourceID)
+	if err != nil {
 		return model.QuerySavedStatementListResponse{}, err
+	}
+	clickHouse := target.ConnectionContext.Engine == "clickhouse"
+	if clickHouse && database != "" {
+		return model.QuerySavedStatementListResponse{}, ErrQueryValidationFailed
 	}
 
 	query := model.QuerySavedStatementListQuery{
+		PersonalOnly:     clickHouse,
 		TargetResourceID: targetResourceID,
 		OwnerUserID:      actor.ID,
 		Database:         database,
@@ -113,7 +123,7 @@ func (s *QuerySavedStatementService) List(ctx context.Context, actor Authenticat
 		return model.QuerySavedStatementListResponse{}, fmt.Errorf("list saved statements: %w", err)
 	}
 
-	resp.CanManageSharedTemplates = isAdmin(actor)
+	resp.CanManageSharedTemplates = !clickHouse && isAdmin(actor)
 	return resp, nil
 }
 
@@ -133,14 +143,8 @@ func (s *QuerySavedStatementService) Create(ctx context.Context, actor Authentic
 		return model.QuerySavedStatement{}, err
 	}
 
-	if err := s.validateStatementContext(ctx, target, req.Database, req.Schema); err != nil {
+	if err := s.validateWrite(ctx, target, actor.ID, req.Scope, req.Database, req.Schema, req.ClickHouseGeneration, req.Statement, req.Parameters); err != nil {
 		return model.QuerySavedStatement{}, err
-	}
-
-	if err := s.validateStatement(target.ConnectionContext.Engine, req.Statement, req.Parameters); err != nil {
-		// Keep the inner error chain visible: PostgreSQL guard/pagination
-		// RejectErrors carry the precise code callers map from.
-		return model.QuerySavedStatement{}, fmt.Errorf("%w: %w", ErrQueryValidationFailed, err)
 	}
 
 	return s.writer.CreateWithAudit(ctx, actor.ID, targetResourceID, req)
@@ -175,13 +179,8 @@ func (s *QuerySavedStatementService) Update(ctx context.Context, actor Authentic
 		return ErrQueryForbidden
 	}
 
-	if err := s.validateStatementContext(ctx, target, req.Database, req.Schema); err != nil {
+	if err := s.validateWrite(ctx, target, actor.ID, stmt.Scope, req.Database, req.Schema, req.ClickHouseGeneration, req.Statement, req.Parameters); err != nil {
 		return err
-	}
-
-	// Validate SQL statement.
-	if err := s.validateStatement(target.ConnectionContext.Engine, req.Statement, req.Parameters); err != nil {
-		return fmt.Errorf("%w: %w", ErrQueryValidationFailed, err)
 	}
 
 	isAdminUser := isAdmin(actor)
@@ -259,6 +258,9 @@ func (s *QuerySavedStatementService) RestoreContext(ctx context.Context, actor A
 	if err != nil {
 		return model.QuerySavedStatement{}, err
 	}
+	if target.ConnectionContext.Engine == "clickhouse" && stmt.Scope != model.QuerySavedStatementPersonal {
+		return model.QuerySavedStatement{}, ErrQuerySavedStatementNotFound
+	}
 	if !isPGEngine(target.ConnectionContext.Engine) {
 		return stmt, nil
 	}
@@ -316,6 +318,34 @@ func (s *QuerySavedStatementService) validateStatementContext(ctx context.Contex
 			return ErrSchemaConnectionNotFound
 		}
 		return fmt.Errorf("check query connection: %w", err)
+	}
+	return nil
+}
+
+func (s *QuerySavedStatementService) validateWrite(ctx context.Context, target model.QueryTarget, user uint64, scope model.QuerySavedStatementScope, database, schema, generation, statement string, params []model.QuerySavedStatementParameterDefinition) error {
+	if err := s.validateStatementContext(ctx, target, database, schema); err != nil {
+		return err
+	}
+	if target.ConnectionContext.Engine == "clickhouse" {
+		if scope != model.QuerySavedStatementPersonal {
+			return ErrQueryForbidden
+		}
+		if len(params) > 0 {
+			return ErrQueryValidationFailed
+		}
+		if s.clickHouse == nil || generation == "" {
+			return ErrQueryNotAllowed
+		}
+		attempt, cancel := context.WithTimeout(ctx, defaultQueryTimeout)
+		defer cancel()
+		return s.clickHouse.validateSavedQuery(attempt, target, user, generation, statement)
+	}
+	if generation != "" {
+		return ErrQueryValidationFailed
+	}
+	// Preserve PostgreSQL's precise guard/pagination rejection in the error chain.
+	if err := s.validateStatement(target.ConnectionContext.Engine, statement, params); err != nil {
+		return fmt.Errorf("%w: %w", ErrQueryValidationFailed, err)
 	}
 	return nil
 }
