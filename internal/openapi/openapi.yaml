@@ -5340,6 +5340,7 @@ components:
           type: boolean
         export:
           type: boolean
+          description: Offers CSV export of the current disclosed worksheet page; column permissions and cell completeness still govern each export.
         saveSheet:
           type: boolean
         clickHousePaging:
