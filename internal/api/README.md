@@ -54,6 +54,8 @@ HTTP handlers, chi routing, the login rate limiter, and fake-repo test infrastru
 
 ## Routes
 
+- The existing saved-statement routes support personal ClickHouse SQL. Create and update accept the current `clickHouseGeneration` and revalidate the query without executing it.
+
 - `POST /query-targets/{id}/explain` supports approved ClickHouse worksheets. A protected predicate returns `403 query_result_disclosure_blocked` with fixed error text.
 
 - `/query-targets/{id}/execute` also accepts a user-authored ClickHouse worksheet query with an advertised `clickHouseGeneration`. The server authenticates the user and checks table-level worksheet approval independently of preview access.

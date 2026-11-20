@@ -77,12 +77,13 @@ type QuerySavedStatement struct {
 // schema namespace; both are empty for legacy MySQL/TiDB targets, and whether
 // PostgreSQL requires them is decided by the service after the target lookup.
 type QuerySavedStatementCreateRequest struct {
-	Name       string                                   `json:"name"`
-	Statement  string                                   `json:"statement"`
-	Parameters []QuerySavedStatementParameterDefinition `json:"parameters,omitempty"`
-	Scope      QuerySavedStatementScope                 `json:"scope"`
-	Database   string                                   `json:"database,omitempty"`
-	Schema     string                                   `json:"schema,omitempty"`
+	ClickHouseGeneration string                                   `json:"clickHouseGeneration,omitempty"`
+	Name                 string                                   `json:"name"`
+	Statement            string                                   `json:"statement"`
+	Parameters           []QuerySavedStatementParameterDefinition `json:"parameters,omitempty"`
+	Scope                QuerySavedStatementScope                 `json:"scope"`
+	Database             string                                   `json:"database,omitempty"`
+	Schema               string                                   `json:"schema,omitempty"`
 }
 
 // Validate checks all required fields and bounds.
@@ -115,11 +116,12 @@ func (r QuerySavedStatementCreateRequest) Validate() error {
 // Scope is immutable and never accepted on update. Database and Schema rewrite
 // the statement's pinned context under the same rules as create.
 type QuerySavedStatementUpdateRequest struct {
-	Name       string                                   `json:"name"`
-	Statement  string                                   `json:"statement"`
-	Parameters []QuerySavedStatementParameterDefinition `json:"parameters,omitempty"`
-	Database   string                                   `json:"database,omitempty"`
-	Schema     string                                   `json:"schema,omitempty"`
+	ClickHouseGeneration string                                   `json:"clickHouseGeneration,omitempty"`
+	Name                 string                                   `json:"name"`
+	Statement            string                                   `json:"statement"`
+	Parameters           []QuerySavedStatementParameterDefinition `json:"parameters,omitempty"`
+	Database             string                                   `json:"database,omitempty"`
+	Schema               string                                   `json:"schema,omitempty"`
 }
 
 // Validate checks all required fields and bounds.
@@ -211,6 +213,7 @@ func (r QuerySavedStatementExecuteRequest) Validate() error {
 // empty-database identity — which is every MySQL/TiDB row — and a non-empty
 // value selects exactly one (target, database) connection's statements.
 type QuerySavedStatementListQuery struct {
+	PersonalOnly     bool
 	TargetResourceID uint64
 	OwnerUserID      uint64
 	Database         string

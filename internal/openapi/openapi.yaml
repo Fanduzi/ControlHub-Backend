@@ -6074,6 +6074,7 @@ components:
       required: [name, statement, scope]
       additionalProperties: false
       properties:
+        clickHouseGeneration: {type: string, pattern: '^[a-f0-9]{64}$', description: 'Required for ClickHouse personal saves, omitted for other engines.'}
         name:
           type: string
           minLength: 1
@@ -6113,6 +6114,7 @@ components:
       required: [name, statement]
       additionalProperties: false
       properties:
+        clickHouseGeneration: {type: string, pattern: '^[a-f0-9]{64}$', description: 'Required for ClickHouse personal edits, omitted for other engines.'}
         name:
           type: string
           minLength: 1

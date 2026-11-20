@@ -101,6 +101,21 @@ func (s *CHPreview) executeWorksheet(ctx context.Context, identity model.QueryEx
 	return out, nil
 }
 
+func (s *CHPreview) validateSavedQuery(ctx context.Context, target model.QueryTarget, user uint64, generation, statement string) error {
+	if err := (model.QueryExecuteRequest{Statement: statement}).ValidateShape(); err != nil {
+		return ErrQueryValidationFailed
+	}
+	lock, err := s.acquire()
+	if err != nil {
+		return err
+	}
+	defer lock.Close()
+	return s.session(ctx, target, user, func(_ ch.Conn, a chApproval, c chCatalog) error {
+		_, err := compileCHWorksheet(a, c, generation, statement, 0, nil)
+		return err
+	})
+}
+
 // Run and Explain use exactly the same generation, table identity, AST and column policies.
 func compileCHWorksheet(a chApproval, c chCatalog, generation, statement string, maxRows int, page *model.QueryExecutePaginationRequest) (*chCompiled, error) {
 	if generation != a.generation {

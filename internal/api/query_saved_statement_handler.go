@@ -272,6 +272,10 @@ func writeSavedStatementError(w http.ResponseWriter, err error) {
 		writeJSONError(w, http.StatusNotFound, "saved_statement_not_found", err.Error())
 	case errors.Is(err, service.ErrSchemaConnectionNotFound):
 		writeJSONError(w, http.StatusNotFound, "query_connection_not_found", err.Error())
+	case errors.Is(err, service.ErrQueryDisclosureBlocked):
+		writeJSONError(w, http.StatusForbidden, "query_result_disclosure_blocked", "saved query blocked by result disclosure policy")
+	case errors.Is(err, service.ErrQueryNotAllowed):
+		writeJSONError(w, http.StatusForbidden, "query_not_allowed", "target is not enabled for saving this query")
 	case errors.Is(err, service.ErrQueryForbidden):
 		writeJSONError(w, http.StatusForbidden, "forbidden", err.Error())
 	case errors.Is(err, service.ErrQueryValidationFailed):

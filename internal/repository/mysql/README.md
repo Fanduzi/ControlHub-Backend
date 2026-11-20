@@ -3,6 +3,8 @@
 Data access layer implementing service-layer repository interfaces with raw SQL queries. No ORM.
 
 ## Files
+
+`query_saved_statement_repository.go` supports owner-only listing for ClickHouse personal saves, along with the existing atomic write and audit paths.
 | File | Responsibility |
 |------|---------------|
 | resource_repository.go | Resource CRUD, governed identity and batched typed-profile/per-principal collector-presence reads, batched list identity/profile summaries, GetResourcesByIDs, key-presence/exact-value label filters, latest-per-observer health evidence, effective-health derivation, fail-closed cluster member operational summaries, per-source observed/effective values, validated previews, audited mutations, User/collector ingestion confirmation, shared isDuplicateKey, and ApplyLegacyCreateFields on create |
