@@ -12,6 +12,7 @@ import (
 // for which we can bind every source column. We never execute the input or serialize
 // an arbitrary AST subtree back to SQL.
 type chSelect struct {
+	template                 *chTemplate
 	table                    string
 	columns                  []string
 	countAlias, group, order string
@@ -23,9 +24,6 @@ type chSelect struct {
 
 func parseCHSelect(statement string) (chSelect, error) {
 	var q chSelect
-	if len(statement) > 8192 {
-		return q, ErrQueryValidationFailed
-	}
 	statements, err := ast.NewParser(statement).ParseStmts()
 	if err != nil || len(statements) != 1 {
 		return q, ErrQueryValidationFailed

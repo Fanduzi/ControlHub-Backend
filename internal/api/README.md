@@ -54,7 +54,7 @@ HTTP handlers, chi routing, the login rate limiter, and fake-repo test infrastru
 
 ## Routes
 
-- The existing saved-statement routes support personal ClickHouse SQL. Create and update accept the current `clickHouseGeneration` and revalidate the query without executing it.
+- The existing saved-statement routes support personal ClickHouse SQL. Create and update validate declarations and SQL without executing it. `/saved-statements/{statementId}/execute` accepts typed values and the current generation for each Run and page.
 
 - `POST /query-targets/{id}/explain` supports approved ClickHouse worksheets. A protected predicate returns `403 query_result_disclosure_blocked` with fixed error text.
 

@@ -14,9 +14,15 @@ import (
 	"github.com/fan/controlhub/internal/model"
 )
 
+const chWorksheetMaxSQLBytes = 8192
+
 var ErrQueryPageOutOfRange = errors.New("query page is outside the allowed result window")
 
 func (s *CHPreview) executeWorksheet(ctx context.Context, identity model.QueryExecutionIdentity, target model.QueryTarget, req model.QueryExecuteRequest) (model.QueryExecuteResponse, error) {
+	return s.runWorksheet(ctx, identity, target, req, nil)
+}
+
+func (s *CHPreview) runWorksheet(ctx context.Context, identity model.QueryExecutionIdentity, target model.QueryTarget, req model.QueryExecuteRequest, template func(context.Context) (string, *chTemplate, error)) (model.QueryExecuteResponse, error) {
 	started := time.Now()
 	attempt, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
@@ -30,15 +36,27 @@ func (s *CHPreview) executeWorksheet(ctx context.Context, identity model.QueryEx
 			return ErrQueryValidationFailed
 		}
 		return s.session(attempt, target, identity.ID, func(conn ch.Conn, a chApproval, c chCatalog) error {
-			compiled, err := compileCHWorksheet(a, c, req.ClickHouseGeneration, req.Statement, req.MaxRows, req.Pagination)
-			if a.generation == req.ClickHouseGeneration {
-				rec.DatabaseName = a.Database
+			if a.generation != req.ClickHouseGeneration {
+				return ErrQueryNotAllowed
 			}
+			rec.DatabaseName = a.Database
+			statement := req.Statement
+			var bindings *chTemplate
+			if template != nil {
+				var err error
+				statement, bindings, err = template(attempt)
+				if err != nil {
+					return err
+				}
+			}
+			compiled, err := compileCHWorksheet(a, c, req.ClickHouseGeneration, statement, req.MaxRows, req.Pagination, bindings)
 			if err != nil {
 				return err
 			}
 			// Persist a literal-free shape. Rejected text and predicate values stay private.
-			rec.StatementDigest = compiled.digest
+			if template == nil {
+				rec.StatementDigest = compiled.digest
+			}
 			wire := ch.Context(attempt, ch.WithParameters(compiled.params))
 			values, err := readCHProjection(wire, conn, compiled.sql, compiled.fetch, compiled.columns, &rec)
 			if err != nil {
@@ -101,7 +119,7 @@ func (s *CHPreview) executeWorksheet(ctx context.Context, identity model.QueryEx
 	return out, nil
 }
 
-func (s *CHPreview) validateSavedQuery(ctx context.Context, target model.QueryTarget, user uint64, generation, statement string) error {
+func (s *CHPreview) validateSavedQuery(ctx context.Context, target model.QueryTarget, user uint64, generation, statement string, definitions []model.QuerySavedStatementParameterDefinition) error {
 	if err := (model.QueryExecuteRequest{Statement: statement}).ValidateShape(); err != nil {
 		return ErrQueryValidationFailed
 	}
@@ -111,15 +129,29 @@ func (s *CHPreview) validateSavedQuery(ctx context.Context, target model.QueryTa
 	}
 	defer lock.Close()
 	return s.session(ctx, target, user, func(_ ch.Conn, a chApproval, c chCatalog) error {
-		_, err := compileCHWorksheet(a, c, generation, statement, 0, nil)
+		if generation != a.generation {
+			return ErrQueryNotAllowed
+		}
+		var bindings *chTemplate
+		if len(definitions) > 0 {
+			var err error
+			statement, bindings, err = prepareCHTemplate(statement, definitions, nil, true)
+			if err != nil {
+				return err
+			}
+		}
+		_, err := compileCHWorksheet(a, c, generation, statement, 0, nil, bindings)
 		return err
 	})
 }
 
 // Run and Explain use exactly the same generation, table identity, AST and column policies.
-func compileCHWorksheet(a chApproval, c chCatalog, generation, statement string, maxRows int, page *model.QueryExecutePaginationRequest) (*chCompiled, error) {
+func compileCHWorksheet(a chApproval, c chCatalog, generation, statement string, maxRows int, page *model.QueryExecutePaginationRequest, template *chTemplate) (*chCompiled, error) {
 	if generation != a.generation {
 		return nil, ErrQueryNotAllowed
+	}
+	if template == nil && len(statement) > chWorksheetMaxSQLBytes {
+		return nil, ErrQueryValidationFailed
 	}
 	q, err := parseCHSelect(statement)
 	if err != nil {
@@ -131,6 +163,7 @@ func compileCHWorksheet(a chApproval, c chCatalog, generation, statement string,
 	if len(c.types[q.table]) == 0 {
 		return nil, ErrQueryDisclosureBlocked
 	}
+	q.template = template
 	return q.compile(a.Database, c, maxRows, page)
 }
 
@@ -173,12 +206,15 @@ func (q chSelect) compile(db string, c chCatalog, maxRows int, page *model.Query
 	}
 	query := "SELECT " + strings.Join(selectList, ",") + " FROM `" + db + "`.`" + q.table + "` AS src"
 	if q.where != nil {
-		filter := chPredicate{types: types, modes: modes, params: result.params, countAlias: q.countAlias}
+		filter := chPredicate{types: types, modes: modes, params: result.params, countAlias: q.countAlias, template: q.template}
 		expr, err := filter.compile(q.where, 0)
 		if err != nil {
 			return nil, err
 		}
 		query += " WHERE " + expr
+	}
+	if q.template != nil && q.template.used != len(q.template.markers) {
+		return nil, ErrQueryValidationFailed
 	}
 	if q.group != "" {
 		query += " GROUP BY src.`" + q.group + "`"

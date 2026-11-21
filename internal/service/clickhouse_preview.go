@@ -435,7 +435,14 @@ func (s *CHPreview) finishAttempt(ctx context.Context, rec model.QueryExecutionR
 	rec.RowCount = count
 	rec.Status = model.QueryExecutionSuccess
 	if err != nil {
+		var valueErr *TemplateValueValidationError
 		switch {
+		case errors.As(err, &valueErr):
+			rec.Status = model.QueryExecutionRejected
+			rec.ErrorCode = "validation_failed"
+		case errors.Is(err, ErrQuerySavedStatementNotFound):
+			rec.Status = model.QueryExecutionRejected
+			rec.ErrorCode = "saved_statement_not_found"
 		case errors.Is(err, ErrQueryNotAllowed):
 			rec.Status = model.QueryExecutionRejected
 			rec.ErrorCode = "query_not_allowed"

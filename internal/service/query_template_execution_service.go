@@ -52,23 +52,28 @@ func (s *QueryExecutionService) ExecuteSavedStatement(ctx context.Context, actor
 		return model.QueryExecuteResponse{}, ErrQueryBackendFailure
 	}
 
-	// Engine dispatch: only when the construction-time PG HTTP capability is
-	// wired may a postgresql target leave the legacy path. The ?database=
-	// scope is engine-bound: PG requires an explicit single non-empty value
-	// (matched to the authorized statement's own snapshot inside the
-	// orchestrator); every other engine keeps the legacy empty-scope
-	// contract and must not let a PG-style selector slide in.
-	if s.pgHTTPEntries {
+	// Look up the trusted engine for wired PostgreSQL and ClickHouse routes.
+	// PostgreSQL requires its database scope. ClickHouse requires the current
+	// approval generation, which other engines reject.
+	if s.pgHTTPEntries || s.clickHouse != nil {
 		target, terr := s.pgDispatchTarget(ctx, targetID)
 		if terr != nil {
 			return model.QueryExecuteResponse{}, terr
 		}
-		if isPGEngine(target.ConnectionContext.Engine) {
+		if target.ConnectionContext.Engine == "clickhouse" && s.clickHouse != nil {
+			return s.executeCHSavedQuery(ctx, identity, target, statementID, req)
+		}
+		if req.ClickHouseGeneration != "" {
+			return model.QueryExecuteResponse{}, ErrQueryValidationFailed
+		}
+		if s.pgHTTPEntries && isPGEngine(target.ConnectionContext.Engine) {
 			if err := model.ValidateIdentifierShape("database", req.ScopeDatabase, true); err != nil {
 				return model.QueryExecuteResponse{}, fmt.Errorf("%w: %v", ErrQueryValidationFailed, err)
 			}
 			return s.executeSavedPGHTTP(ctx, identity, target, statementID, req)
 		}
+	} else if req.ClickHouseGeneration != "" {
+		return model.QueryExecuteResponse{}, ErrQueryValidationFailed
 	}
 	if req.ScopeDatabase != "" {
 		return model.QueryExecuteResponse{}, fmt.Errorf("%w: database is not accepted for this target", ErrQueryValidationFailed)

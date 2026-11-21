@@ -330,15 +330,12 @@ func (s *QuerySavedStatementService) validateWrite(ctx context.Context, target m
 		if scope != model.QuerySavedStatementPersonal {
 			return ErrQueryForbidden
 		}
-		if len(params) > 0 {
-			return ErrQueryValidationFailed
-		}
 		if s.clickHouse == nil || generation == "" {
 			return ErrQueryNotAllowed
 		}
 		attempt, cancel := context.WithTimeout(ctx, defaultQueryTimeout)
 		defer cancel()
-		return s.clickHouse.validateSavedQuery(attempt, target, user, generation, statement)
+		return s.clickHouse.validateSavedQuery(attempt, target, user, generation, statement, params)
 	}
 	if generation != "" {
 		return ErrQueryValidationFailed

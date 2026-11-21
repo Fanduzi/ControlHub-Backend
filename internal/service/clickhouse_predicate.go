@@ -14,6 +14,7 @@ type chPredicate struct {
 	modes      map[string]model.ResultDisclosureMode
 	params     ch.Parameters
 	countAlias string
+	template   *chTemplate
 }
 
 func (p chPredicate) compile(expr ast.Expr, depth int) (string, error) {
@@ -78,6 +79,14 @@ func (p chPredicate) bind(col string, literal ast.Expr) (string, error) {
 	name := "worksheet_value"
 	if len(p.params) > 0 {
 		name += strconv.Itoa(len(p.params) + 1)
+	}
+	if marker, ok := literal.(*ast.QueryParam); ok {
+		expr, value, err := p.template.bind(marker, name, typ)
+		if err != nil {
+			return "", err
+		}
+		p.params[name] = value
+		return expr, nil
 	}
 	var text string
 	var quoted bool

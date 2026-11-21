@@ -3041,18 +3041,20 @@ paths:
         Phase 38W. Executes a saved statement through the existing governed
         chain. The server re-reads and authorizes the latest saved statement,
         validates the submitted typed values against the stored parameter
-        declarations, compiles placeholders into positional driver bindings,
-        and runs target access, read-only guard, disclosure preflight,
-        executor, response caps, history, and audit unchanged. For a
+        declarations, binds values separately from SQL, and applies target
+        access, read-only validation, disclosure policy, response caps and
+        evidence recording. For ClickHouse, the statement must be personal and
+        each Run or page must supply the current clickHouseGeneration. Values
+        bind to approved WHERE comparisons using typed Native parameters.
+        For a
         PostgreSQL target — reachable only where the server-side PG HTTP
         capability is wired — a single ?database= scope value is required and
         must equal the statement's recorded database; the saved statement is
         compiled and executed under the keyed claim protocol on its own
         authorized snapshot, never redirected to another connection. Every
         template page is a fresh execution; a disclosure-policy change takes
-        effect on later pages. The request accepts only values, maxRows, and
-        optional governed pagination. SQL text, parameter declarations,
-        identities, roles, credentials, DSNs, and policy/audit/result fields
+        effect on later pages. SQL text, parameter declarations, identities,
+        roles, credentials, DSNs, and policy/audit/result fields
         are rejected. Parameter values are protected content and never appear
         in history, audit, logs, errors, or the response. Requires a fresh
         Bearer token.
@@ -3085,9 +3087,8 @@ paths:
             Engine-bound connection scope. Required single non-empty value
             for PostgreSQL targets — it must equal the authorized saved
             statement's recorded database or the statement is not found in
-            this scope. Repeated parameters and non-empty values on
-            MySQL/TiDB targets are rejected (validation_failed). The
-            statement is never redirected to another connection.
+            this scope. Repeated parameters are rejected. MySQL, TiDB and
+            ClickHouse reject a non-empty value (validation_failed).
       requestBody:
         required: true
         content:
@@ -6148,7 +6149,7 @@ components:
       additionalProperties: false
       description: >
         Body of POST /query-targets/{id}/saved-statements/{statementId}/execute.
-        Only values, maxRows, and optional governed pagination are accepted;
+        The body accepts values, maxRows, pagination, clientExecutionId, capabilities, and clickHouseGeneration.
         SQL text, parameter declarations, identities, roles, credentials,
         DSNs, and policy/audit/result fields are rejected by strict decoding.
         Values are typed JSON: strings are JSON strings, integers JSON
@@ -6157,13 +6158,14 @@ components:
         Values are protected content and are never persisted, logged,
         audited, or returned in errors.
       properties:
+        clickHouseGeneration: {type: string, pattern: '^[a-f0-9]{64}$', description: 'Required on each ClickHouse saved Run and page. Omit for other engines.'}
         values:
           type: object
           additionalProperties: true
           description: >
             Typed parameter values keyed by author-declared parameter name.
-            Unknown keys and values that do not match the declared type are
-            rejected with controlled per-field details.
+            Unknown keys and invalid values are rejected. ClickHouse returns per-field
+            details only for declared parameter names.
         maxRows:
           type: integer
           minimum: 0
