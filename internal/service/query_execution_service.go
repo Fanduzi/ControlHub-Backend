@@ -198,8 +198,9 @@ type QueryExecutionService struct {
 	// engine gate denies the attempt and the connection-scope request
 	// fields stay rejected. It is set only by WithPGHTTPEntries and can
 	// never be opened by request fields, roles, or target labels.
-	pgHTTPEntries bool
-	clickHouse    *CHPreview
+	pgHTTPEntries  bool
+	clickHouse     *CHPreview
+	redisWorksheet *RedisWorksheet
 }
 
 // QueryEvidencePersistenceFailures exposes the dimensionless persistence-
@@ -286,13 +287,16 @@ func (s *QueryExecutionService) Execute(ctx context.Context, identity model.Quer
 		return model.QueryExecuteResponse{}, fmt.Errorf("%w: %v", ErrQueryValidationFailed, err)
 	}
 	// Dispatch only after resolving the trusted target engine.
-	if s.pgHTTPEntries || s.clickHouse != nil {
+	if s.pgHTTPEntries || s.clickHouse != nil || s.redisWorksheet != nil {
 		target, terr := s.pgDispatchTarget(ctx, targetID)
 		if terr != nil {
 			return model.QueryExecuteResponse{}, terr
 		}
 		if target.ConnectionContext.Engine == "clickhouse" && s.clickHouse != nil {
 			return s.clickHouse.executeWorksheet(ctx, identity, target, req)
+		}
+		if target.ConnectionContext.Engine == "redis" && s.redisWorksheet != nil {
+			return s.redisWorksheet.execute(ctx, identity, target, req)
 		}
 		if req.ClickHouseGeneration != "" {
 			return model.QueryExecuteResponse{}, ErrQueryValidationFailed

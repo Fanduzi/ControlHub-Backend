@@ -11,6 +11,8 @@ The single dependency-injection seam that builds the production
 
 ## Contract
 
+`Build` wires the Redis worksheet and its admin credential setup when `RedisWorksheetPath` is configured. Redis uses the ordinary Run and target discovery routes. [Configuration](../../docs/redis-worksheet.md#enable-a-target)
+
 The ClickHouse gate also wires personal saved-query validation to the same controller used by Run.
 
 `Build` wires Native ClickHouse worksheet Explain alongside the preview and its credential provisioning only when the explicit non-production configuration is present. [Controller and binding contract](../../docs/clickhouse-preview.md)

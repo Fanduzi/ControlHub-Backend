@@ -119,7 +119,7 @@ func (s *CHPreview) approval(target model.QueryTarget, user uint64) (chApproval,
 	manifestDigest := sha256.Sum256(data)
 	a.generation = fmt.Sprintf("%x", manifestDigest)
 	t := target.ConnectionContext
-	if t.Engine != "clickhouse" || !chNonProduction(t.Environment) || a.Environment != t.Environment || a.TargetID != target.ResourceID {
+	if t.Engine != "clickhouse" || !isApprovedNonProduction(t.Environment) || a.Environment != t.Environment || a.TargetID != target.ResourceID {
 		return a, ErrQueryNotAllowed
 	}
 	if user == 0 || !slices.Contains(a.Users, user) || !net.ParseIP(t.Host).IsLoopback() || a.Address != net.JoinHostPort(t.Host, strconv.Itoa(t.Port)) {
@@ -149,7 +149,7 @@ func (s *CHPreview) approval(target model.QueryTarget, user uint64) (chApproval,
 	return a, nil
 }
 
-func chNonProduction(env string) bool {
+func isApprovedNonProduction(env string) bool {
 	return slices.Contains([]string{"Staging", "Development", "Test"}, env)
 }
 

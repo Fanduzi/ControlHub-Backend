@@ -17,6 +17,10 @@ Environment variable and .env file loading with sensible defaults.
 - `ErrQueryExecutionTokenMaxAgeRejected` — sentinel error returned by Load when the removed QUERY_EXECUTION_TOKEN_MAX_AGE env var is supplied; the eight-hour freshness bound is a fixed backend contract (Issue #21)
 - `ErrInvalidPGHTTPEntries` — sentinel error returned by Load when CONTROLHUB_PG_HTTP_ENTRIES is misspelled or uses a loose form; the production PostgreSQL HTTP gate fails closed at startup rather than guessing at a typo
 
+## CONTROLHUB_REDIS_WORKSHEET_CONFIG
+
+The Redis worksheet requires an absolute approval file path and `CONTROLHUB_ENVIRONMENT=nonproduction`. Unset leaves Redis execution closed. [Configuration](../../docs/redis-worksheet.md#enable-a-target)
+
 ## CONTROLHUB_CH_PREVIEW_DIR
 
 An absolute controller state directory enables the local preview only alongside `CONTROLHUB_ENVIRONMENT=nonproduction`. Omitting the directory closes the capability. [Configuration and isolation requirements](../../docs/clickhouse-preview.md)

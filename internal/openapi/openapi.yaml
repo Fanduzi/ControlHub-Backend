@@ -413,7 +413,7 @@ paths:
         '502': *chFailure
   /query-targets/{id}/execute:
     post:
-      summary: Execute a read-only SQL statement against a query target
+      summary: Execute a read-only statement against a query target
       operationId: executeQueryTarget
       description: >
         Phase 37 read-only sandbox. Runs a single guarded MySQL/TiDB read-only
@@ -430,7 +430,8 @@ paths:
         Machine Credential with the governed-select scope. Evidence records
         the verified User or Machine Principal identity, never the Machine
         Credential ID or secret. The actor is never accepted in the request
-        body. The resolved DSN is never returned.
+        body. The resolved DSN is never returned. An approved non-production
+        Redis worksheet accepts a fresh User and a single bounded GET in DB 0.
       security:
         - bearerAuth: []
         - machineCredential: []
@@ -1042,8 +1043,9 @@ paths:
         connection: an opaque credential reference, an enabled flag, and an
         environment policy. The ?database= query parameter selects the
         connection row — required non-empty for PostgreSQL targets (which also
-        require a non-empty defaultSchema body field), absent/empty for
-        MySQL/TiDB targets. The body must never carry a DSN, password, host,
+        require a non-empty defaultSchema body field), absent/empty on other
+        engines. Redis credential writes require non-production worksheet
+        configuration and disallow all_environments. The body must never carry a DSN, password, host,
         port, or actor field (unknown fields are rejected by strict decoding).
         The engine is derived from the target, never accepted from the request.
         Save succeeds even when the secret cannot be resolved yet; the returned
@@ -5202,8 +5204,9 @@ components:
         schemaPreview:
           type: array
           description: >-
-            Lightweight schema placeholder derived only from existing metadata.
-            Empty in Phase 36 — never the result of live database introspection.
+            Lightweight object list derived from existing metadata. An approved
+            Redis worksheet lists its configured key names as redis_key nodes
+            for the current User. The server does not scan Redis for this list.
           items:
             $ref: "#/components/schemas/QueryTargetSchemaPreviewNode"
         connections:
@@ -7422,12 +7425,17 @@ components:
         grouping/count, ordering and LIMIT. Optional paging reruns the statement within the smaller of
         its LIMIT, maxRows and 20 rows. Each page revalidates the caller's approval generation and policies.
         The server rechecks source-column policies and commits history/audit before delivery.
+        Approved non-production Redis targets accept a fresh User and one GET of
+        an approved key in DB 0. Redis returns one bounded UTF-8 string or null
+        through the same result envelope after history/audit commit. Redis omits
+        pagination, database/schema selectors, clientExecutionId and ClickHouse generation.
       properties:
         clickHouseGeneration: {type: string, pattern: '^[a-f0-9]{64}$', description: Required for ClickHouse Run and omitted for other engines.}
         statement:
           type: string
           description: >
-            A single read-only SQL statement in the target's own dialect.
+            A single read-only statement in the target's own dialect or an
+            approved Redis GET command.
             MySQL/TiDB allowed: SELECT, SHOW DATABASES, SHOW TABLES, SHOW
             COLUMNS, DESCRIBE/DESC, EXPLAIN SELECT. Schema-qualified metadata
             forms (SHOW TABLES FROM db, SHOW COLUMNS FROM db.tbl, DESCRIBE

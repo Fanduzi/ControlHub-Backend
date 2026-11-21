@@ -163,7 +163,13 @@ func Build(db *sql.DB, cfg config.Config) (api.Dependencies, Parts) {
 		querySavedStatementSvc.WithCHContext(preview)
 		queryCredentialSvc.EnableCHPreviewCredentials()
 	}
+	var redisWorksheet *service.RedisWorksheet
+	if cfg.RedisWorksheetPath != "" {
+		redisWorksheet = service.NewRedisWorksheet(cfg.RedisWorksheetPath, queryExecutionSvc)
+		queryCredentialSvc.EnableRedisWorksheetCredentials()
+	}
 	return api.Dependencies{
+			RedisWorksheet:                 redisWorksheet,
 			CHPreview:                      preview,
 			ResourceService:                service.NewResourceService(resourceRepo, relationRepo),
 			RelationService:                service.NewRelationService(relationRepo),
