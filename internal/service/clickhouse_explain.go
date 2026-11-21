@@ -22,7 +22,7 @@ func (s *QueryExplainService) explainClickHouse(ctx context.Context, user uint64
 			if req.Database != "" || req.Schema != "" || req.MaxRows < 0 {
 				return ErrQueryValidationFailed
 			}
-			compiled, err := compileCHWorksheet(a, c, req.ClickHouseGeneration, req.Statement, req.MaxRows, req.Pagination)
+			compiled, err := compileCHWorksheet(a, c, req.ClickHouseGeneration, req.Statement, req.MaxRows, req.Pagination, nil)
 			if err != nil {
 				return err
 			}

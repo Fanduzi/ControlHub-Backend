@@ -1,6 +1,8 @@
 package service
 
 import (
+	"encoding/json"
+	"errors"
 	"strings"
 	"testing"
 
@@ -52,6 +54,37 @@ func TestCHWorksheetDialectBindings(t *testing.T) {
 		if _, err := compile(sql); err == nil {
 			t.Errorf("unexpectedly accepted %q", sql)
 		}
+	}
+}
+
+func TestCHTemplateBindsOnlyDeclaredPredicateValues(t *testing.T) {
+	catalog := chCatalog{
+		types: map[string]map[string]string{"events": {"id": "UInt32", "label": "String"}},
+		modes: map[string]map[string]model.ResultDisclosureMode{"events": {"id": model.ResultDisclosureRawCopyAllowed, "label": model.ResultDisclosureRawCopyAllowed}},
+	}
+	definitions := []model.QuerySavedStatementParameterDefinition{{Name: "id", Type: model.QuerySavedStatementParameterInteger}, {Name: "label", Type: model.QuerySavedStatementParameterString}}
+	statement := "SELECT id FROM events /* :ignored */ WHERE (id >= :id AND label = :label) OR label = ':literal'"
+	raw := map[string]json.RawMessage{"id": json.RawMessage(`4294967295`), "label": json.RawMessage(`"O'Brien"`)}
+	compile := func() (*chCompiled, error) {
+		query, template, err := prepareCHTemplate(statement, definitions, raw, false)
+		if err != nil {
+			return nil, err
+		}
+		selected, err := parseCHSelect(query)
+		if err != nil {
+			return nil, err
+		}
+		selected.template = template
+		return selected.compile("app", catalog, 0, nil)
+	}
+	result, err := compile()
+	if err != nil || result.params["worksheet_value"] != "4294967295" || result.params["worksheet_value2"] != "O'Brien" || result.params["worksheet_value3"] != ":literal" || strings.Contains(result.sql, "Brien") {
+		t.Fatalf("incorrect Native filter binding: %v", err)
+	}
+	raw["id"] = json.RawMessage(`4294967296`)
+	var invalid *TemplateValueValidationError
+	if _, err := compile(); !errors.As(err, &invalid) || invalid.Fields["id"] != "invalid" {
+		t.Fatalf("expected controlled UInt32 range error, got %v", err)
 	}
 }
 

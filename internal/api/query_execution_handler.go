@@ -351,21 +351,21 @@ func queryExecutionIdentityFromContext(ctx context.Context) (model.QueryExecutio
 // saved-statement execute route; pagination carries the nested exact set and
 // values keys are author-declared parameter names validated by the model.
 var savedExecuteAllowedFields = map[string][]string{
-	"values":            nil,
-	"maxRows":           nil,
-	"pagination":        {"page", "pageSize"},
-	"capabilities":      nil,
-	"clientExecutionId": nil,
+	"clickHouseGeneration": nil,
+	"values":               nil,
+	"maxRows":              nil,
+	"pagination":           {"page", "pageSize"},
+	"capabilities":         nil,
+	"clientExecutionId":    nil,
 }
 
 // decodeTemplateExecuteJSONBody strictly decodes a template-execution request:
-// only values, maxRows, pagination, capabilities, and clientExecutionId
-// survive; duplicate keys, case-variant aliases, and unknown fields (SQL
+// Only values, maxRows, pagination, capabilities, clientExecutionId, and
+// clickHouseGeneration survive. Duplicate keys, case-variant aliases, and unknown fields (SQL
 // text, declarations, identities, roles, credentials, DSNs, policy and audit
 // payloads) are rejected. The body is bounded so the 16 KiB values limit is
-// enforced by the model Validate. An explicit JSON null on a typed field —
-// values, maxRows, pagination, capabilities, clientExecutionId, or a member
-// of capabilities — is a malformed type; a missing values object or {} is
+// enforced by the model Validate. Explicit JSON null on a typed field or a
+// member of capabilities is malformed. A missing values object or {} is
 // valid for static statements.
 func decodeTemplateExecuteJSONBody(r *http.Request, target any) error {
 	body, err := readStrictBody(r, int64(model.MaxQuerySavedStatementExecuteValuesSize+2*1024))
@@ -383,6 +383,7 @@ func decodeTemplateExecuteJSONBody(r *http.Request, target any) error {
 		}
 	}
 	if err := rejectNullScalars(fields, "",
+		nullScalarField{"clickHouseGeneration", "string"},
 		nullScalarField{"maxRows", "number"},
 		nullScalarField{"clientExecutionId", "string"}); err != nil {
 		return err

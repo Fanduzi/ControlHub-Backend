@@ -19,7 +19,7 @@ Embeds and validates the OpenAPI contract served by the API documentation route.
 
 ## Contracts
 
-- ClickHouse personal saved-query writes require `clickHouseGeneration`. Shared scope and declarations are refused; saving does not execute the SQL, and run-time authorization remains independent.
+- ClickHouse personal saved-query writes and executions require `clickHouseGeneration`. Personal statements accept string and integer declarations for authorized `WHERE` values. Every Run and page binds submitted values and checks current policy. Shared scope is refused.
 
 - ClickHouse Explain accepts the current worksheet generation and returns normalized v1 plan nodes. `primaryKeyGranules` is optional and scoped to a MergeTree primary-key index stage.
 

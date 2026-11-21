@@ -122,7 +122,7 @@ Business logic layer with interface-based repository dependencies. Each service 
 
 ## Exports
 
-- ClickHouse personal saved queries reuse the worksheet compiler and current approval at create/update. The saved-query store binds the SQL to the owner and target, and Run independently rechecks its own access.
+- ClickHouse personal saved queries reuse the worksheet compiler on save, Run and page. `clickhouse_template.go` checks owner and target, maps declared `:name` tokens to predicate AST positions, and validates submitted values for Native binding. Execution evidence omits template identity, SQL and values.
 
 - `clickhouse_select.go` validates the single-table structure from the pinned ClickHouse dialect AST. `clickhouse_predicate.go` compiles comparisons, ranges and Boolean expressions against the raw-column policy with a separate Native parameter for every literal. `clickhouse_worksheet.go` compiles it against approved objects and current column policy and returns ordinary Run results after evidence commit.
 - `clickhouse_daily_count.go` groups one explicitly approved raw date or timestamp column into seven UTC day buckets. The preview catalog and Native reader preserve `Date`, `DateTime` and decimal `UInt64` results.

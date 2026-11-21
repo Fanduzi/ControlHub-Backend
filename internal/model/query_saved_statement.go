@@ -153,14 +153,13 @@ const MaxQuerySavedStatementExecuteValuesSize = 16 * 1024
 
 // QuerySavedStatementExecuteRequest is the body of
 // POST /query-targets/{id}/saved-statements/{statementId}/execute.
-// It carries typed parameter values only; SQL text, parameter declarations,
-// identities, roles, credentials, DSNs, and policy/audit/result fields are
-// rejected by strict decoding. Values are protected content: they are never
-// persisted, logged, audited, or returned in errors.
+// SQL text, declarations and identity fields are rejected. ClickHouse may
+// supply an approval generation. Values are never persisted or logged.
 type QuerySavedStatementExecuteRequest struct {
-	Values     map[string]json.RawMessage     `json:"values"`
-	MaxRows    int                            `json:"maxRows,omitempty"`
-	Pagination *QueryExecutePaginationRequest `json:"pagination,omitempty"`
+	ClickHouseGeneration string                         `json:"clickHouseGeneration,omitempty"`
+	Values               map[string]json.RawMessage     `json:"values"`
+	MaxRows              int                            `json:"maxRows,omitempty"`
+	Pagination           *QueryExecutePaginationRequest `json:"pagination,omitempty"`
 	// ClientExecutionID is the idempotency key for the MySQL/TiDB execution
 	// claim (G9/T10): a non-empty key occupies one (target, key) slot —
 	// a same-digest replay returns execution_already_exists and a
