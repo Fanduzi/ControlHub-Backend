@@ -11,7 +11,7 @@ import (
 	"github.com/fan/controlhub/internal/service"
 )
 
-func handleListQueryTargets(queryTargetService *service.QueryTargetService, preview *service.CHPreview) http.HandlerFunc {
+func handleListQueryTargets(queryTargetService *service.QueryTargetService, preview *service.CHPreview, redis *service.RedisWorksheet) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		query, err := parseQueryTargetListQuery(r)
 		if err != nil {
@@ -24,9 +24,14 @@ func handleListQueryTargets(queryTargetService *service.QueryTargetService, prev
 			return
 		}
 		// Optional discovery never grants access to the sibling Run endpoint.
-		if user, ok := actorUserIDFromContext(r.Context()); ok && preview != nil {
+		if user, ok := actorUserIDFromContext(r.Context()); ok {
 			for i := range items {
-				preview.ApplyWorksheetActions(r.Context(), &items[i], user)
+				if preview != nil {
+					preview.ApplyWorksheetActions(r.Context(), &items[i], user)
+				}
+				if redis != nil {
+					redis.ApplyWorksheetActions(r.Context(), &items[i], user)
+				}
 			}
 		}
 		writeJSON(w, http.StatusOK, model.QueryTargetListResponse{Items: items, PageInfo: pageInfo})

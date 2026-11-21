@@ -17,8 +17,9 @@ type Config struct {
 	JWTSecret   string
 	// PGHTTPEntries is the production PostgreSQL HTTP release gate: true only
 	// when CONTROLHUB_PG_HTTP_ENTRIES is exactly "on" at process start.
-	PGHTTPEntries bool
-	CHPreviewDir  string
+	PGHTTPEntries      bool
+	CHPreviewDir       string
+	RedisWorksheetPath string
 }
 
 func LoadDotEnv(filenames ...string) error {
@@ -65,12 +66,22 @@ func Load() (Config, error) {
 	if previewDir != "" && os.Getenv("CONTROLHUB_ENVIRONMENT") != "nonproduction" {
 		return Config{}, errors.New("ClickHouse preview requires CONTROLHUB_ENVIRONMENT=nonproduction")
 	}
+	redisPath := os.Getenv("CONTROLHUB_REDIS_WORKSHEET_CONFIG")
+	if redisPath != "" {
+		if !filepath.IsAbs(redisPath) {
+			return Config{}, errors.New("CONTROLHUB_REDIS_WORKSHEET_CONFIG must be absolute")
+		}
+		if os.Getenv("CONTROLHUB_ENVIRONMENT") != "nonproduction" {
+			return Config{}, errors.New("Redis worksheet requires CONTROLHUB_ENVIRONMENT=nonproduction")
+		}
+	}
 	return Config{
-		CHPreviewDir:  previewDir,
-		Port:          port,
-		DatabaseDSN:   os.Getenv("DATABASE_DSN"),
-		JWTSecret:     os.Getenv("JWT_SECRET"),
-		PGHTTPEntries: pgHTTPEntries,
+		RedisWorksheetPath: redisPath,
+		CHPreviewDir:       previewDir,
+		Port:               port,
+		DatabaseDSN:        os.Getenv("DATABASE_DSN"),
+		JWTSecret:          os.Getenv("JWT_SECRET"),
+		PGHTTPEntries:      pgHTTPEntries,
 	}, nil
 }
 
