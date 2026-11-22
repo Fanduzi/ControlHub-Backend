@@ -676,6 +676,7 @@ func TestOpenAPIErrorResponseErrorIsClosedControlledErrorCodeEnum(t *testing.T) 
 		"query_not_allowed",
 		"query_object_definition_unsupported",
 		"query_object_not_found",
+		"query_rate_limited",
 		"query_reference_not_witnessable",
 		"query_result_disclosure_blocked",
 		"query_schema_not_usable",
