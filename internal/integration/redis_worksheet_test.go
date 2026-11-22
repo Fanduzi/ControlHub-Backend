@@ -342,8 +342,10 @@ func TestRedisWorksheetHTTP(t *testing.T) {
 			var err error
 			switch r.PathValue("action") {
 			case "revoke":
+				delete(hashFields[hashKey], "status")
 				err = setKey(false)
 			case "restore":
+				hashFields[hashKey]["status"] = raw
 				err = setKey(true)
 			case "break-audit":
 				err = breakAudit()
@@ -371,7 +373,7 @@ func TestRedisWorksheetHTTP(t *testing.T) {
 		if err := cmd.Run(); err != nil {
 			t.Fatalf("Redis Chromium worksheet: %v", err)
 		}
-		if countPair() != before+8 {
+		if countPair() != before+13 {
 			t.Fatal("browser Run outcomes did not match Redis evidence")
 		}
 	}
