@@ -641,6 +641,9 @@ func writeQueryExecutionError(w http.ResponseWriter, err error) {
 		writeJSONError(w, http.StatusForbidden, "query_result_disclosure_blocked", err.Error())
 	case errors.Is(err, service.ErrQueryNotAllowed):
 		writeJSONError(w, http.StatusForbidden, "query_not_allowed", err.Error())
+	case errors.Is(err, service.ErrQueryRateLimited):
+		w.Header().Set("Retry-After", "1")
+		writeJSONError(w, http.StatusTooManyRequests, "query_rate_limited", err.Error())
 	case errors.Is(err, service.ErrQueryTargetNotFound):
 		writeJSONError(w, http.StatusNotFound, "query_target_not_found", err.Error())
 	case errors.Is(err, service.ErrQueryTimeout), errors.Is(err, context.DeadlineExceeded):

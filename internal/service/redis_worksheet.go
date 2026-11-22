@@ -39,10 +39,11 @@ var (
 type RedisWorksheet struct {
 	path      string
 	execution *QueryExecutionService
+	limiter   *redisRunLimiter
 }
 
 func NewRedisWorksheet(path string, execution *QueryExecutionService) *RedisWorksheet {
-	worksheet := &RedisWorksheet{path: path, execution: execution}
+	worksheet := &RedisWorksheet{path: path, execution: execution, limiter: newRedisRunLimiter(time.Now)}
 	execution.redisWorksheet = worksheet
 	return worksheet
 }
@@ -57,6 +58,9 @@ type redisApproval struct {
 	Users         []uint64                                         `json:"users"`
 	Keys          map[string]model.ResultDisclosureMode            `json:"keys"`
 	HashFields    map[string]map[string]model.ResultDisclosureMode `json:"hashFields"`
+	Limits        *redisRunLimitsWire                              `json:"limits"`
+
+	limits redisRunLimits
 }
 
 func (s *RedisWorksheet) approval(target model.QueryTarget, user uint64) (redisApproval, error) {
@@ -105,6 +109,11 @@ func (s *RedisWorksheet) approval(target model.QueryTarget, user uint64) (redisA
 			}
 		}
 	}
+	limits, ok := a.Limits.resolve()
+	if !ok {
+		return redisApproval{}, ErrQueryNotAllowed
+	}
+	a.limits = limits
 	return a, nil
 }
 
@@ -281,6 +290,11 @@ func (s *RedisWorksheet) read(ctx context.Context, identity model.QueryExecution
 	if err != nil {
 		return nil, nil, err
 	}
+	release, ok := s.limiter.acquire(target.ResourceID, identity.ID, a.limits)
+	if !ok {
+		return nil, nil, ErrQueryRateLimited
+	}
+	defer release()
 	var value any
 	if hget {
 		value, err = readRedisHGET(ctx, a.Address, a.User, password, tlsConfig, key, field, &rec.RemoteState)
