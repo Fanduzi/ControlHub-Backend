@@ -33,6 +33,7 @@ const (
 	mongoRowLimitDefault  = 50
 	mongoRowLimitMax      = 100
 	mongoFilterFieldMax   = 16
+	mongoSortFieldMax     = 4
 	mongoCollectionFields = 32
 	mongoDefaultMaxTimeMS = 500
 	mongoComment          = "controlhub-worksheet"
@@ -371,8 +372,13 @@ func (s *MongoWorksheet) runFind(ctx context.Context, a mongoApproval, cred mong
 	// The explain is the first server command; past this point a disconnect
 	// can no longer prove the server saw nothing.
 	*remote = model.QueryExecutionRemoteUnknown
+	explainFind := bson.D{{Key: "find", Value: query.collection}, {Key: "filter", Value: query.filter}, {Key: "limit", Value: maxRows + 1}}
+	if len(query.sort) > 0 {
+		explainFind = append(explainFind, bson.E{Key: "sort", Value: query.sort})
+	}
+	findSort := len(query.sort) > 0
 	explain := bson.D{
-		{Key: "explain", Value: bson.D{{Key: "find", Value: query.collection}, {Key: "filter", Value: query.filter}, {Key: "limit", Value: maxRows + 1}}},
+		{Key: "explain", Value: explainFind},
 		{Key: "verbosity", Value: "queryPlanner"},
 		{Key: "maxTimeMS", Value: a.maxTimeMS},
 	}
@@ -390,11 +396,16 @@ func (s *MongoWorksheet) runFind(ctx context.Context, a mongoApproval, cred mong
 		{Key: "filter", Value: query.filter},
 		{Key: "projection", Value: query.cappedProjection()},
 		{Key: "limit", Value: maxRows + 1},
-		{Key: "singleBatch", Value: true},
-		{Key: "maxTimeMS", Value: a.maxTimeMS},
-		{Key: "hint", Value: indexName},
-		{Key: "comment", Value: mongoComment},
 	}
+	if findSort {
+		find = append(find, bson.E{Key: "sort", Value: query.sort})
+	}
+	find = append(find,
+		bson.E{Key: "singleBatch", Value: true},
+		bson.E{Key: "maxTimeMS", Value: a.maxTimeMS},
+		bson.E{Key: "hint", Value: indexName},
+		bson.E{Key: "comment", Value: mongoComment},
+	)
 	var out bson.M
 	if err := db.RunCommand(deadlineFreeContext{ctx}, find).Decode(&out); err != nil {
 		return nil, false, mongoReplyError(err, remote)

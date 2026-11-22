@@ -76,6 +76,7 @@ func TestMongoWorksheetHTTP(t *testing.T) {
 	for _, idx := range []mongo.IndexModel{
 		{Keys: bson.D{{Key: "orderNo", Value: 1}}, Options: options.Index().SetName("orderNo_1").SetUnique(true)},
 		{Keys: bson.D{{Key: "status", Value: 1}}, Options: options.Index().SetName("status_1")},
+		{Keys: bson.D{{Key: "status", Value: 1}, {Key: "amount", Value: -1}}, Options: options.Index().SetName("status_1_amount_-1")},
 	} {
 		if _, err := orders.Indexes().CreateOne(ctx, idx); err != nil {
 			t.Fatal(err)
@@ -91,6 +92,7 @@ func TestMongoWorksheetHTTP(t *testing.T) {
 			{Key: "region", Value: "cn-east"},
 			{Key: "note", Value: fmt.Sprintf("order-%d", i)},
 			{Key: "customer", Value: bson.D{{Key: "name", Value: fmt.Sprintf("cust-%d", i)}}},
+			{Key: "amount", Value: int64(i % 997)},
 			{Key: "cost", Value: int64(i)},
 		})
 		if len(docs) == batch {
@@ -142,7 +144,7 @@ func TestMongoWorksheetHTTP(t *testing.T) {
 
 	raw := model.ResultDisclosureRawCopyAllowed
 	collections := map[string]map[string]model.ResultDisclosureMode{
-		"orders": {"_id": raw, "orderNo": raw, "status": raw, "region": raw, "note": raw, "customer": model.ResultDisclosureMaskedNoCopy},
+		"orders": {"_id": raw, "orderNo": raw, "status": raw, "region": raw, "note": raw, "amount": raw, "customer": model.ResultDisclosureMaskedNoCopy},
 	}
 	manifestPath := filepath.Join(t.TempDir(), "active.json")
 	manifest := map[string]any{
@@ -218,7 +220,7 @@ func TestMongoWorksheetHTTP(t *testing.T) {
 			}
 			fields = append(fields, child.Name)
 		}
-		want := []string{"_id", "customer", "note", "orderNo", "region", "status"}
+		want := []string{"_id", "amount", "customer", "note", "orderNo", "region", "status"}
 		if fmt.Sprint(fields) != fmt.Sprint(want) {
 			t.Fatalf("MongoDB field list: %v", fields)
 		}
@@ -283,7 +285,7 @@ func TestMongoWorksheetHTTP(t *testing.T) {
 	if open.Rows[0][orderNoCol] == shipped.Rows[0][columnIndex(shipped, "orderNo")] {
 		t.Fatal("open and shipped finds returned the same first row")
 	}
-	if len(open.Columns) != 6 || open.Columns[0].Name != "_id" {
+	if len(open.Columns) != 7 || open.Columns[0].Name != "_id" {
 		t.Fatalf("default columns: %v", open.Columns)
 	}
 	projected := run(h, bearer, statement(`db.orders.find({"status": "open"}, {"orderNo": 1, "status": 1})`), 200, "")
@@ -293,6 +295,37 @@ func TestMongoWorksheetHTTP(t *testing.T) {
 	ranged := run(h, bearer, statement(`db.orders.find({"orderNo": {"$gte": 100, "$lt": 105}})`), 200, "")
 	if len(ranged.Rows) != 5 {
 		t.Fatalf("range find rows: %d", len(ranged.Rows))
+	}
+
+	// Index-provided sort: the gate accepts plans whose IXSCAN supplies the
+	// order, in either direction.
+	desc := run(h, bearer, statement(`db.orders.find({"orderNo": {"$gte": 100, "$lt": 110}}).sort({"orderNo": -1})`), 200, "")
+	if len(desc.Rows) != 10 {
+		t.Fatalf("descending sort rows: %d", len(desc.Rows))
+	}
+	descNo := columnIndex(desc, "orderNo")
+	for i, row := range desc.Rows {
+		if v, ok := row[descNo].(float64); !ok || int64(v) != int64(109-i) {
+			t.Fatalf("descending sort row %d: %v", i, row)
+		}
+	}
+	asc := run(h, bearer, statement(`db.orders.find({"orderNo": {"$gte": 100, "$lt": 110}}).sort({"orderNo": 1})`), 200, "")
+	ascNo := columnIndex(asc, "orderNo")
+	for i, row := range asc.Rows {
+		if v, ok := row[ascNo].(float64); !ok || int64(v) != int64(100+i) {
+			t.Fatalf("ascending sort row %d: %v", i, row)
+		}
+	}
+	// Compound index supplies the amount order inside a status equality.
+	byAmount := run(h, bearer, statement(`db.orders.find({"status": "open"}).sort({"amount": -1})`), 200, "")
+	amountCol := columnIndex(byAmount, "amount")
+	var last float64
+	for i, row := range byAmount.Rows {
+		v, ok := row[amountCol].(float64)
+		if !ok || (i > 0 && v > last) {
+			t.Fatalf("amount sort row %d: %v", i, row)
+		}
+		last = v
 	}
 	in := run(h, bearer, statement(`db.orders.find({"status": {"$in": ["open", "shipped"]}})`), 200, "")
 	inStatus := columnIndex(in, "status")
@@ -332,7 +365,13 @@ func TestMongoWorksheetHTTP(t *testing.T) {
 
 	// Index gate: approved fields that cannot plan through an index are refused
 	// before the find runs.
-	for _, s := range []string{`db.orders.find({"region": "cn-east"})`, `db.orders.find({})`} {
+	for _, s := range []string{
+		`db.orders.find({"region": "cn-east"})`,
+		`db.orders.find({})`,
+		// .sort on an unindexed key needs a blocking SORT stage: refused.
+		`db.orders.find({"status": "open"}).sort({"region": 1})`,
+		`db.orders.find({}).sort({"region": -1})`,
+	} {
 		run(h, bearer, statement(s), 400, "query_index_required")
 	}
 	for _, s := range []string{
@@ -344,6 +383,8 @@ func TestMongoWorksheetHTTP(t *testing.T) {
 		`db.orders.aggregate([{"$match": {"status": "open"}}])`,
 		`db.orders.find({"status": "open"}).limit(1)`,
 		`db.orders.find({"status": "open"}, {"orderNo": 0})`,
+		`db.orders.find({"status": "open"}).sort({"orderNo": "asc"})`,
+		`db.orders.find({"status": "open"}).sort({"orderNo": 1.0})`,
 	} {
 		run(h, bearer, statement(s), 400, "validation_failed")
 	}
@@ -355,6 +396,9 @@ func TestMongoWorksheetHTTP(t *testing.T) {
 		// guessed values by equality, so the filter is disclosure-blocked.
 		`db.orders.find({"customer": "x"})`,
 		`db.orders.find({"customer": {"$in": ["x"]}})`,
+		// Unapproved or masked sort keys leak order, same as filters.
+		`db.orders.find({"status": "open"}).sort({"cost": 1})`,
+		`db.orders.find({"status": "open"}).sort({"customer": 1})`,
 	} {
 		run(h, bearer, statement(s), 403, "query_result_disclosure_blocked")
 	}
@@ -522,7 +566,7 @@ func TestMongoWorksheetHTTP(t *testing.T) {
 		if err := cmd.Run(); err != nil {
 			t.Fatalf("MongoDB Chromium worksheet: %v", err)
 		}
-		if countPair() != beforeBrowser+10 {
+		if countPair() != beforeBrowser+13 {
 			t.Fatal("browser Run outcomes did not match MongoDB evidence")
 		}
 	}
