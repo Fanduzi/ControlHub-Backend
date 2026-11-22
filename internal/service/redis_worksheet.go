@@ -39,11 +39,11 @@ var (
 type RedisWorksheet struct {
 	path      string
 	execution *QueryExecutionService
-	limiter   *redisRunLimiter
+	limiter   *worksheetRunLimiter
 }
 
 func NewRedisWorksheet(path string, execution *QueryExecutionService) *RedisWorksheet {
-	worksheet := &RedisWorksheet{path: path, execution: execution, limiter: newRedisRunLimiter(time.Now)}
+	worksheet := &RedisWorksheet{path: path, execution: execution, limiter: newWorksheetRunLimiter(time.Now)}
 	execution.redisWorksheet = worksheet
 	return worksheet
 }
@@ -58,9 +58,9 @@ type redisApproval struct {
 	Users         []uint64                                         `json:"users"`
 	Keys          map[string]model.ResultDisclosureMode            `json:"keys"`
 	HashFields    map[string]map[string]model.ResultDisclosureMode `json:"hashFields"`
-	Limits        *redisRunLimitsWire                              `json:"limits"`
+	Limits        *worksheetRunLimitsWire                          `json:"limits"`
 
-	limits redisRunLimits
+	limits worksheetRunLimits
 }
 
 func (s *RedisWorksheet) approval(target model.QueryTarget, user uint64) (redisApproval, error) {

@@ -14,7 +14,7 @@ func testClock(t *testing.T) (*time.Time, func() time.Time) {
 	return &at, func() time.Time { return at }
 }
 
-func mustAcquire(t *testing.T, l *redisRunLimiter, target, user uint64, limits redisRunLimits) func() {
+func mustAcquire(t *testing.T, l *worksheetRunLimiter, target, user uint64, limits worksheetRunLimits) func() {
 	t.Helper()
 	release, ok := l.acquire(target, user, limits)
 	if !ok {
@@ -23,10 +23,10 @@ func mustAcquire(t *testing.T, l *redisRunLimiter, target, user uint64, limits r
 	return release
 }
 
-func TestRedisRunLimiterPerUserConcurrency(t *testing.T) {
+func TestWorksheetRunLimiterPerUserConcurrency(t *testing.T) {
 	at, now := testClock(t)
-	l := newRedisRunLimiter(now)
-	limits := defaultRedisRunLimits()
+	l := newWorksheetRunLimiter(now)
+	limits := defaultWorksheetRunLimits()
 
 	release := mustAcquire(t, l, 1, 7, limits)
 	if _, ok := l.acquire(1, 7, limits); ok {
@@ -38,10 +38,10 @@ func TestRedisRunLimiterPerUserConcurrency(t *testing.T) {
 	_ = at
 }
 
-func TestRedisRunLimiterTargetConcurrency(t *testing.T) {
+func TestWorksheetRunLimiterTargetConcurrency(t *testing.T) {
 	_, now := testClock(t)
-	l := newRedisRunLimiter(now)
-	limits := defaultRedisRunLimits()
+	l := newWorksheetRunLimiter(now)
+	limits := defaultWorksheetRunLimits()
 	limits.maxConcurrentRuns = 2
 	limits.maxConcurrentRunsPerUser = 4
 
@@ -54,10 +54,10 @@ func TestRedisRunLimiterTargetConcurrency(t *testing.T) {
 	mustAcquire(t, l, 2, 9, limits)
 }
 
-func TestRedisRunLimiterRateBuckets(t *testing.T) {
+func TestWorksheetRunLimiterRateBuckets(t *testing.T) {
 	at, now := testClock(t)
-	l := newRedisRunLimiter(now)
-	limits := defaultRedisRunLimits()
+	l := newWorksheetRunLimiter(now)
+	limits := defaultWorksheetRunLimits()
 	limits.runsPerSecond = 2
 	limits.runsPerMinutePerUser = 3
 
@@ -79,7 +79,7 @@ func TestRedisRunLimiterRateBuckets(t *testing.T) {
 
 	// Per-minute user bucket: capacity 3 across sequential Runs.
 	*at = at.Add(10 * time.Second)
-	l = newRedisRunLimiter(now)
+	l = newWorksheetRunLimiter(now)
 	limits.runsPerSecond = 50
 	limits.maxConcurrentRunsPerUser = 4
 	for i := 0; i < 3; i++ {
@@ -101,10 +101,10 @@ func TestRedisRunLimiterRateBuckets(t *testing.T) {
 	}
 }
 
-func TestRedisRunLimiterRefusalConsumesNothing(t *testing.T) {
+func TestWorksheetRunLimiterRefusalConsumesNothing(t *testing.T) {
 	_, now := testClock(t)
-	l := newRedisRunLimiter(now)
-	limits := defaultRedisRunLimits()
+	l := newWorksheetRunLimiter(now)
+	limits := defaultWorksheetRunLimits()
 	limits.maxConcurrentRunsPerUser = 1
 
 	release := mustAcquire(t, l, 1, 7, limits)
@@ -114,7 +114,7 @@ func TestRedisRunLimiterRefusalConsumesNothing(t *testing.T) {
 		t.Fatal("second in-flight Run for the same user was admitted")
 	}
 	target := l.targets[1]
-	user := l.users[redisRunUserKey{target: 1, user: 7}]
+	user := l.users[worksheetRunUserKey{target: 1, user: 7}]
 	if target.tokens != float64(limits.runsPerSecond)-1 || user.tokens != float64(limits.runsPerMinutePerUser)-1 {
 		t.Fatalf("a refused acquire consumed tokens: target=%v user=%v", target.tokens, user.tokens)
 	}
@@ -124,10 +124,10 @@ func TestRedisRunLimiterRefusalConsumesNothing(t *testing.T) {
 	release()
 }
 
-func TestRedisRunLimiterClampsOnLimitDecrease(t *testing.T) {
+func TestWorksheetRunLimiterClampsOnLimitDecrease(t *testing.T) {
 	at, now := testClock(t)
-	l := newRedisRunLimiter(now)
-	limits := defaultRedisRunLimits()
+	l := newWorksheetRunLimiter(now)
+	limits := defaultWorksheetRunLimits()
 	limits.runsPerSecond = 50
 	limits.maxConcurrentRunsPerUser = 4
 
@@ -146,35 +146,35 @@ func TestRedisRunLimiterClampsOnLimitDecrease(t *testing.T) {
 	_ = at
 }
 
-func TestRedisRunLimiterSaturation(t *testing.T) {
+func TestWorksheetRunLimiterSaturation(t *testing.T) {
 	_, now := testClock(t)
-	limits := defaultRedisRunLimits()
+	limits := defaultWorksheetRunLimits()
 
 	// A table of idle full buckets is evicted so a fresh user still fits.
-	l := newRedisRunLimiter(now)
-	for i := 0; i < redisRunMaxTrackedEntries; i++ {
-		l.users[redisRunUserKey{target: 1, user: uint64(i)}] = &redisRunWindow{tokens: 30, capacity: 30}
+	l := newWorksheetRunLimiter(now)
+	for i := 0; i < worksheetRunMaxTrackedEntries; i++ {
+		l.users[worksheetRunUserKey{target: 1, user: uint64(i)}] = &worksheetRunWindow{tokens: 30, capacity: 30}
 	}
 	mustAcquire(t, l, 1, 999_999, limits)
 
 	// A table of in-flight users cannot free entries: fail closed.
-	l2 := newRedisRunLimiter(now)
-	l2.targets[1] = &redisRunWindow{tokens: 10, capacity: 10}
-	for i := 0; i < redisRunMaxTrackedEntries-1; i++ {
-		l2.users[redisRunUserKey{target: 1, user: uint64(i)}] = &redisRunWindow{inFlight: 1, tokens: 30, capacity: 30}
+	l2 := newWorksheetRunLimiter(now)
+	l2.targets[1] = &worksheetRunWindow{tokens: 10, capacity: 10}
+	for i := 0; i < worksheetRunMaxTrackedEntries-1; i++ {
+		l2.users[worksheetRunUserKey{target: 1, user: uint64(i)}] = &worksheetRunWindow{inFlight: 1, tokens: 30, capacity: 30}
 	}
 	if _, ok := l2.acquire(1, 888_888, limits); ok {
 		t.Fatal("saturated limiter admitted a new tracked user")
 	}
 }
 
-func TestRedisRunLimitsResolve(t *testing.T) {
-	defaults, ok := (*redisRunLimitsWire)(nil).resolve()
-	if !ok || defaults != defaultRedisRunLimits() {
+func TestWorksheetRunLimitsResolve(t *testing.T) {
+	defaults, ok := (*worksheetRunLimitsWire)(nil).resolve()
+	if !ok || defaults != defaultWorksheetRunLimits() {
 		t.Fatalf("nil limits did not resolve to defaults: %+v", defaults)
 	}
 	ints := func(v int) *int { return &v }
-	for name, wire := range map[string]redisRunLimitsWire{
+	for name, wire := range map[string]worksheetRunLimitsWire{
 		"maxConcurrentRuns zero":        {MaxConcurrentRuns: ints(0)},
 		"maxConcurrentRuns over":        {MaxConcurrentRuns: ints(17)},
 		"maxConcurrentRunsPerUser zero": {MaxConcurrentRunsPerUser: ints(0)},
@@ -189,7 +189,7 @@ func TestRedisRunLimitsResolve(t *testing.T) {
 			t.Fatalf("out-of-range %s resolved", name)
 		}
 	}
-	w := redisRunLimitsWire{MaxConcurrentRuns: ints(8), RunsPerMinutePerUser: ints(60)}
+	w := worksheetRunLimitsWire{MaxConcurrentRuns: ints(8), RunsPerMinutePerUser: ints(60)}
 	resolved, ok := w.resolve()
 	if !ok || resolved.maxConcurrentRuns != 8 || resolved.runsPerMinutePerUser != 60 ||
 		resolved.maxConcurrentRunsPerUser != 1 || resolved.runsPerSecond != 10 {
@@ -197,7 +197,7 @@ func TestRedisRunLimitsResolve(t *testing.T) {
 	}
 }
 
-func TestRedisRateLimitedClassifies(t *testing.T) {
+func TestWorksheetRateLimitedClassifies(t *testing.T) {
 	status, sentinel, code, _ := classifyExecutorError(ErrQueryRateLimited)
 	if status != model.QueryExecutionRejected || !errors.Is(sentinel, ErrQueryRateLimited) || code != "query_rate_limited" {
 		t.Fatalf("rate limit misclassified: %s %v %s", status, sentinel, code)

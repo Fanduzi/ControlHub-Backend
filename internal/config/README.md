@@ -21,6 +21,10 @@ Environment variable and .env file loading with sensible defaults.
 
 The Redis worksheet requires an absolute approval file path and `CONTROLHUB_ENVIRONMENT=nonproduction`. Unset leaves Redis execution closed. [Configuration](../../docs/redis-worksheet.md#enable-a-target)
 
+## CONTROLHUB_MONGO_WORKSHEET_CONFIG
+
+The MongoDB worksheet requires an absolute approval file path and `CONTROLHUB_ENVIRONMENT=nonproduction`. Unset leaves MongoDB execution closed. [Configuration](../../docs/mongo-worksheet.md#enable-a-target)
+
 ## CONTROLHUB_CH_PREVIEW_DIR
 
 An absolute controller state directory enables the local preview only alongside `CONTROLHUB_ENVIRONMENT=nonproduction`. Omitting the directory closes the capability. [Configuration and isolation requirements](../../docs/clickhouse-preview.md)
