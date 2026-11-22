@@ -33,6 +33,11 @@ var (
 // 400 (validation_failed), never a 500.
 var ErrQueryResultTooLarge = errors.New("query result exceeds configured limits")
 
+// ErrQueryRateLimited is returned when an engine's Run load protection refuses
+// an attempt before contacting the backend. The service maps it to a controlled
+// 429 (query_rate_limited) with Retry-After, and records a rejected attempt.
+var ErrQueryRateLimited = errors.New("query rate limited")
+
 // Navigation-specific sentinel errors. They reuse the handler error mapping
 // (ErrQueryValidationFailed → 400, ErrQueryTargetNotFound → 404, etc.) but
 // carry distinct messages for navigation failures.
@@ -1044,6 +1049,10 @@ func classifyExecutorError(err error) (model.QueryExecutionStatus, error, string
 		return model.QueryExecutionRejected, ErrQueryValidationFailed, "validation_failed", "result set exceeds configured limits"
 	case errors.Is(err, ErrQueryDisclosureBlocked):
 		return model.QueryExecutionRejected, ErrQueryDisclosureBlocked, "query_result_disclosure_blocked", "query blocked by result disclosure policy"
+	case errors.Is(err, ErrQueryRateLimited):
+		// Run load protection refused before the backend was contacted: a
+		// rejected attempt with the fixed rate-limit code, no remote contact.
+		return model.QueryExecutionRejected, ErrQueryRateLimited, "query_rate_limited", "too many runs; try again later"
 	default:
 		return model.QueryExecutionFailed, ErrQueryBackendFailure, "query_backend_error", "target database query failed"
 	}

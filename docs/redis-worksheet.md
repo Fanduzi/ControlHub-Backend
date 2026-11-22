@@ -28,6 +28,12 @@ Select an approved Redis target in `/query`. The existing Objects pane lists its
       "region": "raw_copy_allowed",
       "masked": "masked_no_copy"
     }
+  },
+  "limits": {
+    "maxConcurrentRuns": 4,
+    "maxConcurrentRunsPerUser": 1,
+    "runsPerSecond": 10,
+    "runsPerMinutePerUser": 30
   }
 }
 ```
@@ -52,11 +58,27 @@ Complete UTF-8 strings within the bound pass through the existing disclosure ser
 
 Each attempt uses a two-second query deadline. Successful, rejected, failed, canceled and timed-out attempts on a resolved target record a history/audit pair before delivery. The backend persists a fixed preview and controlled outcome, with no key, field, value, credential or full command in the evidence. A persistence failure returns `502 query_backend_error` with no rows. A disconnect before a complete Redis reply does not prove the server stopped the transaction.
 
+## Load protection
+
+Every admitted Redis Run opens a fresh TLS connection and `AUTH` exchange, so Runs are bounded per ControlHub process by an optional `limits` object in the approval file. Omitted fields take the defaults; a present field outside its range invalidates the whole approval and closes the target.
+
+| Field | Bound | Default | Range |
+| --- | --- | --- | --- |
+| `maxConcurrentRuns` | in-flight Runs on the target | 4 | 1–16 |
+| `maxConcurrentRunsPerUser` | in-flight Runs per (target, user) | 1 | 1–4 |
+| `runsPerSecond` | token-bucket Runs per second on the target | 10 | 1–50 |
+| `runsPerMinutePerUser` | token-bucket Runs per minute per (target, user) | 30 | 1–600 |
+
+An admitted Run holds both concurrency slots and one token from each bucket for the whole Redis round trip. A refusal consumes nothing: requests refused earlier by validation, disclosure or approval checks are also free. A refusal returns `429 query_rate_limited` with `Retry-After: 1`, records the usual `rejected` history/audit pair, and never contacts Redis. Shrinking a limit on republish clamps stored tokens to the new capacity.
+
+The limiter is per ControlHub process. With N serving instances the effective ceiling is N × the configured limit — size limits for the real Redis accordingly. Redis-side backstops remain the operator's own decision: a network allowlist so only ControlHub reaches Redis, `maxclients` on a dedicated instance, preferring a read replica, and `SLOWLOG`/latency monitoring. `client-output-buffer-limit normal` affects every normal client on the server, so it is an operator decision rather than a worksheet setting.
+
 ## Verify
 
 ```bash
 go test -tags=integration -count=1 -v -run '^TestRedisWorksheetHTTP$' ./internal/integration
 go test -tags=integration -count=1 -v -run '^TestRedisHGETBoundProbe$' ./internal/integration
+go test -tags=integration -count=1 -v -run '^TestRedisWorksheetLimitsHTTP$' ./internal/integration
 ```
 
-`TestRedisWorksheetHTTP` starts disposable Redis over TLS and MySQL metadata, provisions the Redis target and users through the standard assembly, and exercises the ordinary API for `GET` and `HGET`. `TestRedisHGETBoundProbe` is the protocol evidence for the `HGET` bound, including concurrent-modification races. Set `CONTROLHUB_REDIS_BROWSER_CHECKOUT` to the companion frontend checkout (Node and Playwright Chromium installed) to also run the worksheet acceptance in real Chromium. It runs two different keys and checks permissions, audit rollback, stale-grid clearing and the execution history.
+`TestRedisWorksheetHTTP` starts disposable Redis over TLS and MySQL metadata, provisions the Redis target and users through the standard assembly, and exercises the ordinary API for `GET` and `HGET`. `TestRedisWorksheetLimitsHTTP` proves the Run limits against the same fixture: floods refused by the per-user and per-target concurrency caps, a slot released after a timed-out Run, both token buckets, and `429 query_rate_limited` evidence. `TestRedisHGETBoundProbe` is the protocol evidence for the `HGET` bound, including concurrent-modification races. Set `CONTROLHUB_REDIS_BROWSER_CHECKOUT` to the companion frontend checkout (Node and Playwright Chromium installed) to also run the worksheet acceptance in real Chromium. It runs two different keys and checks permissions, audit rollback, stale-grid clearing and the execution history.

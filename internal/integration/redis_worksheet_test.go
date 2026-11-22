@@ -92,7 +92,10 @@ func TestRedisWorksheetHTTP(t *testing.T) {
 		key1:    {"status": raw},
 	}
 	manifestPath := filepath.Join(t.TempDir(), "active.json")
-	manifest := map[string]any{"targetId": target.ID, "address": address, "environment": "Staging", "user": "reader", "credentialRef": "REDIS_WORKSHEET_FIXTURE", "caPem": ca, "users": []uint64{user}, "keys": keys, "hashFields": hashFields}
+	// Generous Run limits keep this test about disclosure and evidence; the
+	// limiting behavior itself is covered by TestRedisWorksheetLimitsHTTP.
+	manifest := map[string]any{"targetId": target.ID, "address": address, "environment": "Staging", "user": "reader", "credentialRef": "REDIS_WORKSHEET_FIXTURE", "caPem": ca, "users": []uint64{user}, "keys": keys, "hashFields": hashFields,
+		"limits": map[string]any{"maxConcurrentRuns": 16, "maxConcurrentRunsPerUser": 4, "runsPerSecond": 50, "runsPerMinutePerUser": 600}}
 	publish := func() error {
 		contents, err := json.Marshal(manifest)
 		if err != nil {
@@ -351,6 +354,9 @@ func TestRedisWorksheetHTTP(t *testing.T) {
 				err = breakAudit()
 			case "restore-audit":
 				err = dropTrigger()
+			case "throttle":
+				manifest["limits"] = map[string]any{"runsPerMinutePerUser": 1}
+				err = publish()
 			default:
 				http.NotFound(w, r)
 				return
@@ -373,7 +379,7 @@ func TestRedisWorksheetHTTP(t *testing.T) {
 		if err := cmd.Run(); err != nil {
 			t.Fatalf("Redis Chromium worksheet: %v", err)
 		}
-		if countPair() != before+13 {
+		if countPair() != before+15 {
 			t.Fatal("browser Run outcomes did not match Redis evidence")
 		}
 	}

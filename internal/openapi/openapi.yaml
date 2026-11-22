@@ -655,6 +655,26 @@ paths:
                   value:
                     error: result_contract_upgrade_required
                     message: result contract upgrade required
+        "429":
+          description: >
+            Run load protection refused the attempt before contacting the
+            backend (Redis worksheet per-target and per-user concurrency and
+            rate limits). The attempt is recorded as rejected with code
+            query_rate_limited; retry after Retry-After seconds.
+          headers:
+            Retry-After:
+              schema:
+                type: integer
+              description: Suggested retry delay in seconds.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              examples:
+                rateLimited:
+                  value:
+                    error: query_rate_limited
+                    message: query rate limited
         "502":
           description: Target database rejected or connection failed
           content:
@@ -7377,6 +7397,7 @@ components:
             - query_not_allowed
             - query_object_definition_unsupported
             - query_object_not_found
+            - query_rate_limited
             - query_reference_not_witnessable
             - query_result_disclosure_blocked
             - query_schema_not_usable

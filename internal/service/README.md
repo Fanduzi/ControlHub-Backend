@@ -122,7 +122,7 @@ Business logic layer with interface-based repository dependencies. Each service 
 
 ## Exports
 
-- `redis_worksheet.go` loads actor-specific key and hash-field approvals and applies shared disclosure and execution evidence. `redis_worksheet_wire.go` runs the bounded Redis GET transaction and the WATCH-guarded HSTRLEN+HGET protocol over a verified, short-lived TLS connection with fixed RESP2 reply bounds. [Redis worksheet](../../docs/redis-worksheet.md)
+- `redis_worksheet.go` loads actor-specific key and hash-field approvals and applies shared disclosure and execution evidence. `redis_worksheet_wire.go` runs the bounded Redis GET transaction and the WATCH-guarded HSTRLEN+HGET protocol over a verified, short-lived TLS connection with fixed RESP2 reply bounds. `redis_worksheet_limit.go` bounds Runs per ControlHub process with per-target and per-user concurrency slots and token buckets resolved from the approval file. [Redis worksheet](../../docs/redis-worksheet.md)
 - ClickHouse personal saved queries reuse the worksheet compiler on save, Run and page. `clickhouse_template.go` checks owner and target, maps declared `:name` tokens to predicate AST positions, and validates submitted values for Native binding. Execution evidence omits template identity, SQL and values.
 
 - `clickhouse_select.go` validates the single-table structure from the pinned ClickHouse dialect AST. `clickhouse_predicate.go` compiles comparisons, ranges and Boolean expressions against the raw-column policy with a separate Native parameter for every literal. `clickhouse_worksheet.go` compiles it against approved objects and current column policy and returns ordinary Run results after evidence commit.
