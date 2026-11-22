@@ -579,7 +579,7 @@ paths:
                     limitApplied: 0
                     executedAt: "2026-07-29T08:02:00Z"
         "400":
-          description: Validation failed (bad request, blocked statement, bad maxRows, invalid pagination)
+          description: Validation failed (bad request, blocked statement, bad maxRows, invalid pagination) or a governed MongoDB find whose winning plan is not index-backed
           content:
             application/json:
               schema:
@@ -589,6 +589,11 @@ paths:
                   value:
                     error: validation_failed
                     message: only read-only SQL statements are allowed
+                indexRequired:
+                  summary: MongoDB find refused by the index gate
+                  value:
+                    error: query_index_required
+                    message: query requires an index-backed plan
                 invalidPaginationPageSize:
                   summary: pageSize not in [5, 10, 25, 50, 100]
                   value:
@@ -7394,6 +7399,7 @@ components:
             - query_dependency_not_approved
             - query_execution_not_found
             - query_explain_not_supported
+            - query_index_required
             - query_not_allowed
             - query_object_definition_unsupported
             - query_object_not_found

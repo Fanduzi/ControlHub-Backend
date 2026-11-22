@@ -168,8 +168,14 @@ func Build(db *sql.DB, cfg config.Config) (api.Dependencies, Parts) {
 		redisWorksheet = service.NewRedisWorksheet(cfg.RedisWorksheetPath, queryExecutionSvc)
 		queryCredentialSvc.EnableRedisWorksheetCredentials()
 	}
+	var mongoWorksheet *service.MongoWorksheet
+	if cfg.MongoWorksheetPath != "" {
+		mongoWorksheet = service.NewMongoWorksheet(cfg.MongoWorksheetPath, queryExecutionSvc)
+		queryCredentialSvc.EnableMongoWorksheetCredentials()
+	}
 	return api.Dependencies{
 			RedisWorksheet:                 redisWorksheet,
+			MongoWorksheet:                 mongoWorksheet,
 			CHPreview:                      preview,
 			ResourceService:                service.NewResourceService(resourceRepo, relationRepo),
 			RelationService:                service.NewRelationService(relationRepo),

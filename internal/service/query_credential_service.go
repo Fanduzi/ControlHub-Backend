@@ -109,6 +109,10 @@ func inspectCredentialRuntime(ctx context.Context, resolver QueryCredentialResol
 		if _, err := redisCredentialURL(dsn, net.JoinHostPort(target.ConnectionContext.Host, strconv.Itoa(target.ConnectionContext.Port))); err != nil {
 			return model.QueryCredentialRuntimeBindingMismatch
 		}
+	case engine == "mongodb":
+		if _, err := mongoCredentialURL(dsn, net.JoinHostPort(target.ConnectionContext.Host, strconv.Itoa(target.ConnectionContext.Port)), cred.DatabaseName); err != nil {
+			return model.QueryCredentialRuntimeBindingMismatch
+		}
 	case isPGEngine(engine):
 		if _, err := validatePGDSNBindingForTarget(dsn, target, cred.DatabaseName); err != nil {
 			return model.QueryCredentialRuntimeBindingMismatch
@@ -131,6 +135,7 @@ func inspectCredentialRuntime(ctx context.Context, resolver QueryCredentialResol
 type QueryCredentialService struct {
 	chPreviewCredentials      bool
 	redisWorksheetCredentials bool
+	mongoWorksheetCredentials bool
 	targets                   QueryTargetRepository
 	store                     QueryCredentialMetadataStore
 	resolver                  QueryCredentialResolver
@@ -144,8 +149,13 @@ func (s *QueryCredentialService) EnableRedisWorksheetCredentials() {
 	s.redisWorksheetCredentials = true
 }
 
+// EnableMongoWorksheetCredentials enables admin metadata writes for non-production MongoDB.
+func (s *QueryCredentialService) EnableMongoWorksheetCredentials() {
+	s.mongoWorksheetCredentials = true
+}
+
 func (s *QueryCredentialService) managesNonProductionEngine(engine string) bool {
-	return (engine == "clickhouse" && s.chPreviewCredentials) || (engine == "redis" && s.redisWorksheetCredentials)
+	return (engine == "clickhouse" && s.chPreviewCredentials) || (engine == "redis" && s.redisWorksheetCredentials) || (engine == "mongodb" && s.mongoWorksheetCredentials)
 }
 
 // NewQueryCredentialService wires the service with the query target read model,

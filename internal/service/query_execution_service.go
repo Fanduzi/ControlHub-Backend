@@ -38,6 +38,11 @@ var ErrQueryResultTooLarge = errors.New("query result exceeds configured limits"
 // 429 (query_rate_limited) with Retry-After, and records a rejected attempt.
 var ErrQueryRateLimited = errors.New("query rate limited")
 
+// ErrQueryIndexRequired is returned by governed engines whose admission rule
+// requires an index-backed plan; it maps to HTTP 400 (query_index_required)
+// and records a rejected attempt.
+var ErrQueryIndexRequired = errors.New("query requires an index-backed plan")
+
 // Navigation-specific sentinel errors. They reuse the handler error mapping
 // (ErrQueryValidationFailed → 400, ErrQueryTargetNotFound → 404, etc.) but
 // carry distinct messages for navigation failures.
@@ -206,6 +211,7 @@ type QueryExecutionService struct {
 	pgHTTPEntries  bool
 	clickHouse     *CHPreview
 	redisWorksheet *RedisWorksheet
+	mongoWorksheet *MongoWorksheet
 }
 
 // QueryEvidencePersistenceFailures exposes the dimensionless persistence-
@@ -292,7 +298,7 @@ func (s *QueryExecutionService) Execute(ctx context.Context, identity model.Quer
 		return model.QueryExecuteResponse{}, fmt.Errorf("%w: %v", ErrQueryValidationFailed, err)
 	}
 	// Dispatch only after resolving the trusted target engine.
-	if s.pgHTTPEntries || s.clickHouse != nil || s.redisWorksheet != nil {
+	if s.pgHTTPEntries || s.clickHouse != nil || s.redisWorksheet != nil || s.mongoWorksheet != nil {
 		target, terr := s.pgDispatchTarget(ctx, targetID)
 		if terr != nil {
 			return model.QueryExecuteResponse{}, terr
@@ -302,6 +308,9 @@ func (s *QueryExecutionService) Execute(ctx context.Context, identity model.Quer
 		}
 		if target.ConnectionContext.Engine == "redis" && s.redisWorksheet != nil {
 			return s.redisWorksheet.execute(ctx, identity, target, req)
+		}
+		if target.ConnectionContext.Engine == "mongodb" && s.mongoWorksheet != nil {
+			return s.mongoWorksheet.execute(ctx, identity, target, req)
 		}
 		if req.ClickHouseGeneration != "" {
 			return model.QueryExecuteResponse{}, ErrQueryValidationFailed
@@ -1053,6 +1062,10 @@ func classifyExecutorError(err error) (model.QueryExecutionStatus, error, string
 		// Run load protection refused before the backend was contacted: a
 		// rejected attempt with the fixed rate-limit code, no remote contact.
 		return model.QueryExecutionRejected, ErrQueryRateLimited, "query_rate_limited", "too many runs; try again later"
+	case errors.Is(err, ErrQueryIndexRequired):
+		// The engine's plan gate refused a non-index-backed statement: a
+		// rejected attempt with the fixed index-required code.
+		return model.QueryExecutionRejected, ErrQueryIndexRequired, "query_index_required", "query requires an index-backed plan"
 	default:
 		return model.QueryExecutionFailed, ErrQueryBackendFailure, "query_backend_error", "target database query failed"
 	}

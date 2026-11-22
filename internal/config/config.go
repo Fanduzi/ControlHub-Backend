@@ -20,6 +20,7 @@ type Config struct {
 	PGHTTPEntries      bool
 	CHPreviewDir       string
 	RedisWorksheetPath string
+	MongoWorksheetPath string
 }
 
 func LoadDotEnv(filenames ...string) error {
@@ -75,8 +76,18 @@ func Load() (Config, error) {
 			return Config{}, errors.New("Redis worksheet requires CONTROLHUB_ENVIRONMENT=nonproduction")
 		}
 	}
+	mongoPath := os.Getenv("CONTROLHUB_MONGO_WORKSHEET_CONFIG")
+	if mongoPath != "" {
+		if !filepath.IsAbs(mongoPath) {
+			return Config{}, errors.New("CONTROLHUB_MONGO_WORKSHEET_CONFIG must be absolute")
+		}
+		if os.Getenv("CONTROLHUB_ENVIRONMENT") != "nonproduction" {
+			return Config{}, errors.New("MongoDB worksheet requires CONTROLHUB_ENVIRONMENT=nonproduction")
+		}
+	}
 	return Config{
 		RedisWorksheetPath: redisPath,
+		MongoWorksheetPath: mongoPath,
 		CHPreviewDir:       previewDir,
 		Port:               port,
 		DatabaseDSN:        os.Getenv("DATABASE_DSN"),

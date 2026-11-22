@@ -14,6 +14,7 @@ import (
 type Dependencies struct {
 	CHPreview              *service.CHPreview
 	RedisWorksheet         *service.RedisWorksheet
+	MongoWorksheet         *service.MongoWorksheet
 	ResourceService        *service.ResourceService
 	RelationService        *service.RelationService
 	TopologyService        *service.TopologyService
@@ -117,7 +118,7 @@ func NewRouter(deps Dependencies) *chi.Mux {
 	})
 	router.Group(func(r chi.Router) {
 		r.Use(requireUserOrMachineCredential(deps.MachineCredentialService, model.MachineScopeGovernedSelect, requireUser))
-		r.Get("/query-targets", handleListQueryTargets(deps.QueryTargetService, deps.CHPreview, deps.RedisWorksheet))
+		r.Get("/query-targets", handleListQueryTargets(deps.QueryTargetService, deps.CHPreview, deps.RedisWorksheet, deps.MongoWorksheet))
 	})
 	if deps.NamedInventoryViewService != nil {
 		router.With(requireUserOrMachineCredential(deps.MachineCredentialService, model.MachineScopeNamedViewsRead, requireUser)).

@@ -5,38 +5,38 @@ import (
 	"time"
 )
 
-// redisRunMaxTrackedEntries bounds the limiter's per-target and per-user entry
+// worksheetRunMaxTrackedEntries bounds the limiter's per-target and per-user entry
 // tables. Entries accrue only for approved users of configured targets, so
 // growth is naturally bounded; past the cap the limiter drops idle full
 // buckets and then fails closed rather than tracking unbounded flood keys.
-const redisRunMaxTrackedEntries = 10000
+const worksheetRunMaxTrackedEntries = 10000
 
-// redisRunLimits carries the four resolved Run protections for one approval
+// worksheetRunLimits carries the four resolved Run protections for one approval
 // snapshot: in-flight Runs per target and per (target, user), plus token
 // buckets for Runs per second per target and Runs per minute per user.
-type redisRunLimits struct {
+type worksheetRunLimits struct {
 	maxConcurrentRuns        int
 	maxConcurrentRunsPerUser int
 	runsPerSecond            int
 	runsPerMinutePerUser     int
 }
 
-func defaultRedisRunLimits() redisRunLimits {
-	return redisRunLimits{maxConcurrentRuns: 4, maxConcurrentRunsPerUser: 1, runsPerSecond: 10, runsPerMinutePerUser: 30}
+func defaultWorksheetRunLimits() worksheetRunLimits {
+	return worksheetRunLimits{maxConcurrentRuns: 4, maxConcurrentRunsPerUser: 1, runsPerSecond: 10, runsPerMinutePerUser: 30}
 }
 
-// redisRunLimitsWire is the optional "limits" object in the approval file.
+// worksheetRunLimitsWire is the optional "limits" object in the approval file.
 // Omitted fields take defaults; a present field outside its range invalidates
 // the whole approval.
-type redisRunLimitsWire struct {
+type worksheetRunLimitsWire struct {
 	MaxConcurrentRuns        *int `json:"maxConcurrentRuns"`
 	MaxConcurrentRunsPerUser *int `json:"maxConcurrentRunsPerUser"`
 	RunsPerSecond            *int `json:"runsPerSecond"`
 	RunsPerMinutePerUser     *int `json:"runsPerMinutePerUser"`
 }
 
-func (w *redisRunLimitsWire) resolve() (redisRunLimits, bool) {
-	l := defaultRedisRunLimits()
+func (w *worksheetRunLimitsWire) resolve() (worksheetRunLimits, bool) {
+	l := defaultWorksheetRunLimits()
 	if w == nil {
 		return l, true
 	}
@@ -67,11 +67,11 @@ func (w *redisRunLimitsWire) resolve() (redisRunLimits, bool) {
 	return l, true
 }
 
-// redisRunWindow tracks one in-flight count and one token bucket for a target
+// worksheetRunWindow tracks one in-flight count and one token bucket for a target
 // or a (target, user) pair. capacity records the last observed bucket size so
 // idle-full entries can be evicted under saturation without losing tokens a
 // later request should still own.
-type redisRunWindow struct {
+type worksheetRunWindow struct {
 	inFlight int
 	tokens   float64
 	capacity float64
@@ -80,7 +80,7 @@ type redisRunWindow struct {
 
 // refill credits elapsed time at rate tokens/second and clamps the bucket to
 // the caller's current capacity — a smaller approval shrinks stored tokens.
-func (w *redisRunWindow) refill(now time.Time, capacity int, rate float64) {
+func (w *worksheetRunWindow) refill(now time.Time, capacity int, rate float64) {
 	cap := float64(capacity)
 	if now.After(w.at) {
 		w.tokens += now.Sub(w.at).Seconds() * rate
@@ -92,33 +92,33 @@ func (w *redisRunWindow) refill(now time.Time, capacity int, rate float64) {
 	w.capacity = cap
 }
 
-type redisRunUserKey struct {
+type worksheetRunUserKey struct {
 	target uint64
 	user   uint64
 }
 
-// redisRunLimiter bounds Redis worksheet Runs inside one ControlHub process.
+// worksheetRunLimiter bounds governed worksheet Runs inside one ControlHub process.
 // Every admitted Run holds one in-flight slot per target and per (target,
 // user) plus one token from each bucket; a refusal consumes nothing.
-type redisRunLimiter struct {
+type worksheetRunLimiter struct {
 	mu      sync.Mutex
 	now     func() time.Time
-	targets map[uint64]*redisRunWindow
-	users   map[redisRunUserKey]*redisRunWindow
+	targets map[uint64]*worksheetRunWindow
+	users   map[worksheetRunUserKey]*worksheetRunWindow
 }
 
-func newRedisRunLimiter(now func() time.Time) *redisRunLimiter {
-	return &redisRunLimiter{
+func newWorksheetRunLimiter(now func() time.Time) *worksheetRunLimiter {
+	return &worksheetRunLimiter{
 		now:     now,
-		targets: make(map[uint64]*redisRunWindow),
-		users:   make(map[redisRunUserKey]*redisRunWindow),
+		targets: make(map[uint64]*worksheetRunWindow),
+		users:   make(map[worksheetRunUserKey]*worksheetRunWindow),
 	}
 }
 
 // acquire takes both concurrency slots and one token from both buckets
 // atomically, or nothing at all. The returned release is idempotent.
-func (l *redisRunLimiter) acquire(targetID, userID uint64, limits redisRunLimits) (func(), bool) {
-	key := redisRunUserKey{target: targetID, user: userID}
+func (l *worksheetRunLimiter) acquire(targetID, userID uint64, limits worksheetRunLimits) (func(), bool) {
+	key := worksheetRunUserKey{target: targetID, user: userID}
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	now := l.now()
@@ -133,7 +133,7 @@ func (l *redisRunLimiter) acquire(targetID, userID uint64, limits redisRunLimits
 		if user == nil {
 			missing++
 		}
-		if len(l.targets)+len(l.users)+missing > redisRunMaxTrackedEntries {
+		if len(l.targets)+len(l.users)+missing > worksheetRunMaxTrackedEntries {
 			l.dropIdle()
 			missing = 0
 			if l.targets[targetID] == nil {
@@ -142,17 +142,17 @@ func (l *redisRunLimiter) acquire(targetID, userID uint64, limits redisRunLimits
 			if l.users[key] == nil {
 				missing++
 			}
-			if len(l.targets)+len(l.users)+missing > redisRunMaxTrackedEntries {
+			if len(l.targets)+len(l.users)+missing > worksheetRunMaxTrackedEntries {
 				return nil, false
 			}
 		}
 	}
 	if target == nil {
-		target = &redisRunWindow{tokens: float64(limits.runsPerSecond), at: now}
+		target = &worksheetRunWindow{tokens: float64(limits.runsPerSecond), at: now}
 		l.targets[targetID] = target
 	}
 	if user == nil {
-		user = &redisRunWindow{tokens: float64(limits.runsPerMinutePerUser), at: now}
+		user = &worksheetRunWindow{tokens: float64(limits.runsPerMinutePerUser), at: now}
 		l.users[key] = user
 	}
 	target.refill(now, limits.runsPerSecond, float64(limits.runsPerSecond))
@@ -182,7 +182,7 @@ func (l *redisRunLimiter) acquire(targetID, userID uint64, limits redisRunLimits
 
 // dropIdle evicts entries with no in-flight Run and a full bucket; deleting
 // them loses no tokens a queued request could still have used.
-func (l *redisRunLimiter) dropIdle() {
+func (l *worksheetRunLimiter) dropIdle() {
 	for id, w := range l.targets {
 		if w.inFlight == 0 && w.tokens >= w.capacity {
 			delete(l.targets, id)
