@@ -3,12 +3,15 @@
 package integration
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net"
 	"net/http"
+	"net/http/httptest"
 	"net/url"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -462,6 +465,66 @@ func TestMongoWorksheetHTTP(t *testing.T) {
 	var rejected429 int
 	if err := db.QueryRow(`SELECT count(*) FROM query_executions WHERE target_resource_id=? AND status='rejected' AND error_code='query_rate_limited'`, target.ID).Scan(&rejected429); err != nil || rejected429 != 1 {
 		t.Fatalf("rate-limited evidence rows: %d: %v", rejected429, err)
+	}
+
+	// Paired Chromium journey (frontend checkout): the script drives the real
+	// worksheet while these control endpoints mutate approval, audit, and
+	// limits between steps.
+	if front := os.Getenv("CONTROLHUB_MONGO_BROWSER_CHECKOUT"); front != "" && !t.Failed() {
+		// The minute bucket above is exhausted; reset generous limits so the
+		// journey's early Runs are admitted (throttle re-clamps it at the end).
+		manifest["limits"] = map[string]any{"maxConcurrentRuns": 16, "maxConcurrentRunsPerUser": 4, "runsPerSecond": 50, "runsPerMinutePerUser": 600}
+		if err := publish(); err != nil {
+			t.Fatal(err)
+		}
+		beforeBrowser := countPair()
+		controlSecret := mongoRandomSecret(t, 16)
+		mux := http.NewServeMux()
+		mux.HandleFunc("POST /mongo-fixture/{action}", func(w http.ResponseWriter, r *http.Request) {
+			if r.Header.Get("X-Fixture-Control") != controlSecret {
+				http.NotFound(w, r)
+				return
+			}
+			var err error
+			switch r.PathValue("action") {
+			case "revoke":
+				delete(collections["orders"], "status")
+				err = publish()
+			case "restore":
+				collections["orders"]["status"] = raw
+				err = publish()
+			case "break-audit":
+				err = breakAudit()
+			case "restore-audit":
+				err = dropTrigger()
+			case "throttle":
+				manifest["limits"] = map[string]any{"maxConcurrentRuns": 16, "maxConcurrentRunsPerUser": 4, "runsPerSecond": 50, "runsPerMinutePerUser": 1}
+				err = publish()
+			default:
+				http.NotFound(w, r)
+				return
+			}
+			if err != nil {
+				http.Error(w, "fixture control failed", http.StatusInternalServerError)
+				return
+			}
+			w.WriteHeader(http.StatusNoContent)
+		})
+		mux.Handle("/", h)
+		server := httptest.NewServer(mux)
+		defer server.Close()
+		browserCtx, cancel := context.WithTimeout(ctx, 3*time.Minute)
+		defer cancel()
+		cmd := exec.CommandContext(browserCtx, "node", "scripts/e2e/mongo-worksheet.mjs", server.URL, strconv.FormatUint(target.ID, 10), email)
+		cmd.Dir = front
+		cmd.Env = append(os.Environ(), "CONTROLHUB_MONGO_FIXTURE_SECRET="+controlSecret)
+		cmd.Stdout, cmd.Stderr = os.Stdout, os.Stderr
+		if err := cmd.Run(); err != nil {
+			t.Fatalf("MongoDB Chromium worksheet: %v", err)
+		}
+		if countPair() != beforeBrowser+10 {
+			t.Fatal("browser Run outcomes did not match MongoDB evidence")
+		}
 	}
 
 	var privateEvidence int
