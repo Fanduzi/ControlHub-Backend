@@ -122,7 +122,7 @@ func startRedisFixture(t *testing.T) (string, string, string, string, *tls.Confi
 	cert, key, tlsConfig := redisFixtureTLS(t)
 	adminPassword := hex.EncodeToString(randomRedisFixtureSecret(t))
 	readerPassword := hex.EncodeToString(randomRedisFixtureSecret(t))
-	acl := fmt.Sprintf("user default reset off\nuser fixture on #%x ~* +@all\nuser reader on #%x %%R~demo:order:* +multi +exists +getrange +exec\n",
+	acl := fmt.Sprintf("user default reset off\nuser fixture on #%x ~* +@all\nuser reader on #%x %%R~demo:order:* +multi +exists +getrange +exec +watch +hstrlen +hget\n",
 		sha256.Sum256([]byte(adminPassword)), sha256.Sum256([]byte(readerPassword)))
 	ctx, cancel := context.WithTimeout(t.Context(), time.Minute)
 	defer cancel()

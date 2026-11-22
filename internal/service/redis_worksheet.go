@@ -30,6 +30,7 @@ const (
 var (
 	redisKey      = regexp.MustCompile(`^` + redisKeyPattern + `$`)
 	redisGet      = regexp.MustCompile(`^(?i:GET)[ \t]+(` + redisKeyPattern + `)$`)
+	redisHGet     = regexp.MustCompile(`^(?i:HGET)[ \t]+(` + redisKeyPattern + `)[ \t]+(` + redisKeyPattern + `)$`)
 	redisUsername = regexp.MustCompile(`^[A-Za-z0-9_-]{1,64}$`)
 )
 
@@ -47,14 +48,15 @@ func NewRedisWorksheet(path string, execution *QueryExecutionService) *RedisWork
 }
 
 type redisApproval struct {
-	TargetID      uint64                                `json:"targetId"`
-	Environment   string                                `json:"environment"`
-	Address       string                                `json:"address"`
-	User          string                                `json:"user"`
-	CredentialRef string                                `json:"credentialRef"`
-	CAPEM         string                                `json:"caPem"`
-	Users         []uint64                              `json:"users"`
-	Keys          map[string]model.ResultDisclosureMode `json:"keys"`
+	TargetID      uint64                                           `json:"targetId"`
+	Environment   string                                           `json:"environment"`
+	Address       string                                           `json:"address"`
+	User          string                                           `json:"user"`
+	CredentialRef string                                           `json:"credentialRef"`
+	CAPEM         string                                           `json:"caPem"`
+	Users         []uint64                                         `json:"users"`
+	Keys          map[string]model.ResultDisclosureMode            `json:"keys"`
+	HashFields    map[string]map[string]model.ResultDisclosureMode `json:"hashFields"`
 }
 
 func (s *RedisWorksheet) approval(target model.QueryTarget, user uint64) (redisApproval, error) {
@@ -85,12 +87,22 @@ func (s *RedisWorksheet) approval(target model.QueryTarget, user uint64) (redisA
 		return redisApproval{}, ErrQueryNotAllowed
 	}
 	if a.TargetID != target.ResourceID || a.Environment != t.Environment || a.Address != net.JoinHostPort(t.Host, strconv.Itoa(t.Port)) || !slices.Contains(a.Users, user) ||
-		!redisUsername.MatchString(a.User) || a.User == "default" || model.ValidateCredentialRef(a.CredentialRef) != nil || len(a.Keys) == 0 {
+		!redisUsername.MatchString(a.User) || a.User == "default" || model.ValidateCredentialRef(a.CredentialRef) != nil || (len(a.Keys) == 0 && len(a.HashFields) == 0) {
 		return redisApproval{}, ErrQueryNotAllowed
 	}
 	for key, mode := range a.Keys {
 		if !redisKey.MatchString(key) || mode.Validate() != nil {
 			return redisApproval{}, ErrQueryNotAllowed
+		}
+	}
+	for key, fields := range a.HashFields {
+		if !redisKey.MatchString(key) || len(fields) == 0 {
+			return redisApproval{}, ErrQueryNotAllowed
+		}
+		for field, mode := range fields {
+			if !redisKey.MatchString(field) || mode.Validate() != nil {
+				return redisApproval{}, ErrQueryNotAllowed
+			}
 		}
 	}
 	return a, nil
@@ -132,7 +144,8 @@ func (s *RedisWorksheet) binding(ctx context.Context, target model.QueryTarget, 
 	return password, &tls.Config{RootCAs: roots, ServerName: target.ConnectionContext.Host, MinVersion: tls.VersionTLS12}, nil
 }
 
-// ApplyWorksheetActions projects the caller's approved keys into the existing object list.
+// ApplyWorksheetActions projects the caller's approved keys and hash fields
+// into the existing object list.
 func (s *RedisWorksheet) ApplyWorksheetActions(ctx context.Context, target *model.QueryTarget, user uint64) {
 	a, err := s.approval(*target, user)
 	if err != nil {
@@ -141,13 +154,34 @@ func (s *RedisWorksheet) ApplyWorksheetActions(ctx context.Context, target *mode
 	if _, _, err := s.binding(ctx, *target, a); err != nil {
 		return
 	}
-	keys := make([]string, 0, len(a.Keys))
+	keys := make([]string, 0, len(a.Keys)+len(a.HashFields))
+	seen := make(map[string]bool, len(a.Keys)+len(a.HashFields))
 	for key := range a.Keys {
-		keys = append(keys, key)
+		if !seen[key] {
+			seen[key] = true
+			keys = append(keys, key)
+		}
+	}
+	for key := range a.HashFields {
+		if !seen[key] {
+			seen[key] = true
+			keys = append(keys, key)
+		}
 	}
 	slices.Sort(keys)
 	for _, key := range keys {
-		target.SchemaPreview = append(target.SchemaPreview, model.QueryTargetSchemaPreviewNode{Kind: "redis_key", Name: key})
+		node := model.QueryTargetSchemaPreviewNode{Kind: "redis_key", Name: key}
+		if fields, ok := a.HashFields[key]; ok {
+			names := make([]string, 0, len(fields))
+			for field := range fields {
+				names = append(names, field)
+			}
+			slices.Sort(names)
+			for _, field := range names {
+				node.Children = append(node.Children, model.QueryTargetSchemaPreviewNode{Kind: "redis_hash_field", Name: field})
+			}
+		}
+		target.SchemaPreview = append(target.SchemaPreview, node)
 	}
 	target.AvailableActions.Run = true
 	target.Readiness = model.ReadinessReady
@@ -156,14 +190,14 @@ func (s *RedisWorksheet) ApplyWorksheetActions(ctx context.Context, target *mode
 	target.Governance.SafetyState = model.SafetyStateReadonlySandboxEnabled
 	target.Governance.CredentialState = string(model.QueryCredentialRuntimeSecretResolved)
 	target.Governance.SafetyNote = "Approved read-only Redis worksheet"
-	target.Governance.PolicyNotes = []string{"Non-production, GET on approved keys in DB 0"}
+	target.Governance.PolicyNotes = []string{"Non-production, GET and HGET on approved keys and fields in DB 0"}
 }
 
 func (s *RedisWorksheet) execute(ctx context.Context, identity model.QueryExecutionIdentity, target model.QueryTarget, req model.QueryExecuteRequest) (model.QueryExecuteResponse, error) {
 	started := time.Now()
 	attempt, cancel := context.WithTimeout(ctx, redisWorksheetTimeout)
 	defer cancel()
-	rec := model.QueryExecutionRecord{TargetResourceID: target.ResourceID, Engine: "redis", StatementPreview: "Redis GET", Status: model.QueryExecutionSuccess}
+	rec := model.QueryExecutionRecord{TargetResourceID: target.ResourceID, Engine: "redis", StatementPreview: redisStatementPreview(req.Statement), Status: model.QueryExecutionSuccess}
 	if identity.Kind == model.QueryExecutionActorUser {
 		rec.ActorUserID = identity.ID
 	} else {
@@ -201,6 +235,15 @@ func (s *RedisWorksheet) execute(ctx context.Context, identity model.QueryExecut
 	}, nil
 }
 
+// redisStatementPreview is the fixed evidence label for a Redis statement.
+// Key, field and value never enter the preview.
+func redisStatementPreview(statement string) string {
+	if fields := strings.Fields(statement); len(fields) > 0 && strings.EqualFold(fields[0], "HGET") {
+		return "Redis HGET"
+	}
+	return "Redis GET"
+}
+
 func (s *RedisWorksheet) read(ctx context.Context, identity model.QueryExecutionIdentity, target model.QueryTarget, req model.QueryExecuteRequest, rec *model.QueryExecutionRecord) ([]model.QueryResultColumn, [][]any, error) {
 	if identity.Kind != model.QueryExecutionActorUser {
 		return nil, nil, ErrQueryNotAllowed
@@ -209,23 +252,41 @@ func (s *RedisWorksheet) read(ctx context.Context, identity model.QueryExecution
 	if err != nil {
 		return nil, nil, err
 	}
-	if req.Database != "" || req.Schema != "" || req.ClientExecutionID != "" || req.ClickHouseGeneration != "" || req.Pagination != nil || len(req.Statement) > 160 {
+	if req.Database != "" || req.Schema != "" || req.ClientExecutionID != "" || req.ClickHouseGeneration != "" || req.Pagination != nil || len(req.Statement) > 300 {
 		return nil, nil, ErrQueryValidationFailed
 	}
-	parts := redisGet.FindStringSubmatch(strings.Trim(req.Statement, " \t\r\n"))
-	if parts == nil {
+	statement := strings.Trim(req.Statement, " \t\r\n")
+	var mode model.ResultDisclosureMode
+	var key, field string
+	hget := false
+	if parts := redisGet.FindStringSubmatch(statement); parts != nil {
+		key = parts[1]
+		m, ok := a.Keys[key]
+		if !ok {
+			return nil, nil, ErrQueryDisclosureBlocked
+		}
+		mode = m
+	} else if parts := redisHGet.FindStringSubmatch(statement); parts != nil {
+		hget = true
+		key, field = parts[1], parts[2]
+		m, ok := a.HashFields[key][field]
+		if !ok {
+			return nil, nil, ErrQueryDisclosureBlocked
+		}
+		mode = m
+	} else {
 		return nil, nil, ErrQueryValidationFailed
-	}
-	key := parts[1]
-	mode, ok := a.Keys[key]
-	if !ok {
-		return nil, nil, ErrQueryDisclosureBlocked
 	}
 	password, tlsConfig, err := s.binding(ctx, target, a)
 	if err != nil {
 		return nil, nil, err
 	}
-	value, err := readRedisGET(ctx, a.Address, a.User, password, tlsConfig, key, &rec.RemoteState)
+	var value any
+	if hget {
+		value, err = readRedisHGET(ctx, a.Address, a.User, password, tlsConfig, key, field, &rec.RemoteState)
+	} else {
+		value, err = readRedisGET(ctx, a.Address, a.User, password, tlsConfig, key, &rec.RemoteState)
+	}
 	if err != nil {
 		var networkError net.Error
 		if errors.As(err, &networkError) && networkError.Timeout() {
