@@ -40,6 +40,10 @@ func TestMongoFindGrammarAccepts(t *testing.T) {
 		`db.orders.find({"status":{"$in":[{"$numberLong":"1"}]}})`,
 		`db.orders.find( { "status" : "open" } , { "status" : 1 } )`,
 		`db.orders.find({"status":"open"}, {"orderNo":1,"status":1,"_id":0})`,
+		`db.orders.find({"status":"open"}).sort({"status":1})`,
+		`db.orders.find({"orderNo":{"$gte":100,"$lt":110}}).sort({"orderNo":-1})`,
+		`db.orders.find({"status":"open"},{"orderNo":1}).sort({"status":-1,"orderNo":1})`,
+		`db.orders.find({}).sort({"_id":-1})`,
 	} {
 		query, err := parseMongoFind(statement, a)
 		if err != nil {
@@ -76,6 +80,25 @@ func TestMongoFindGrammarRejects(t *testing.T) {
 		`db.orders.find({status:"open"})`,
 		`db.orders.find({"status":"open"} extra)`,
 		`db.orders.find({"status":"open"}).limit(1)`,
+		`db.orders.sort({"orderNo":1}).find({})`,
+		`db.orders.find({"status":"open"}).sort({"orderNo":0})`,
+		`db.orders.find({"status":"open"}).sort({"orderNo":2})`,
+		`db.orders.find({"status":"open"}).sort({"orderNo":"asc"})`,
+		`db.orders.find({"status":"open"}).sort({"orderNo":true})`,
+		`db.orders.find({"status":"open"}).sort({"orderNo":1.0})`,
+		`db.orders.find({"status":"open"}).sort({"orderNo":1.5})`,
+		`db.orders.find({"status":"open"}).sort({"orderNo":[1]})`,
+		`db.orders.find({"status":"open"}).sort({"orderNo":{"$meta":"textScore"}})`,
+		`db.orders.find({"status":"open"}).sort({"orderNo":1,"status":1,"region":1,"note":1,"_id":1})`,
+		`db.orders.find({"status":"open"}).sort({"orderNo":1,"orderNo":-1})`,
+		`db.orders.find({"status":"open"}).sort({"orderNo":1}).sort({"status":1})`,
+		`db.orders.find({"status":"open"}).sort({"orderNo":1}).limit(1)`,
+		`db.orders.find({"status":"open"}).sort({"orderNo":1}) trailing`,
+		`db.orders.find({"status":"open"}).sort({"orderNo":1},{})`,
+		`db.orders.find({"status":"open"}).sort ({"orderNo":1})`,
+		`db.orders.find({"status":"open"}).sort()`,
+		`db.orders.find({"status":"open"}).sort({"customer.name":1})`,
+		`db.orders.find({"status":"open"}).sort({"$where":1})`,
 		`db.orders.find({"status":"open"},{"orderNo":1}).sort({})`,
 		`db.orders.aggregate([{"$match":{"status":"open"}}])`,
 		`db.orders.findOne({"status":"open"})`,
@@ -137,6 +160,9 @@ func TestMongoFindDisclosure(t *testing.T) {
 		// through equality, so the filter itself is disclosure-blocked.
 		{`db.orders.find({"customer":"x"})`, ErrQueryDisclosureBlocked},
 		{`db.orders.find({"customer":{"$in":["x","y"]}})`, ErrQueryDisclosureBlocked},
+		// Sorting on an unapproved or masked field leaks its order.
+		{`db.orders.find({"status":"open"}).sort({"secret":1})`, ErrQueryDisclosureBlocked},
+		{`db.orders.find({"status":"open"}).sort({"customer":1})`, ErrQueryDisclosureBlocked},
 	} {
 		if _, err := parseMongoFind(tc.statement, a); !errors.Is(err, tc.want) {
 			t.Fatalf("%s: got %v want %v", tc.statement, err, tc.want)
@@ -227,6 +253,18 @@ func TestMongoCappedProjection(t *testing.T) {
 	}
 }
 
+func TestMongoFindSort(t *testing.T) {
+	a := mongoTestApproval()
+	query, err := parseMongoFind(`db.orders.find({"status":"open"}).sort({"status":-1,"orderNo":1})`, a)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(query.sort) != 2 || query.sort[0].Key != "status" || query.sort[0].Value != int64(-1) ||
+		query.sort[1].Key != "orderNo" || query.sort[1].Value != int64(1) {
+		t.Fatalf("sort document: %+v", query.sort)
+	}
+}
+
 // Plan fixtures captured live from mongo:8.0.38 and mongo:9.0.8
 // (explain verbosity queryPlanner, find limit 51).
 var mongoPlanFixtures = []struct {
@@ -247,6 +285,11 @@ var mongoPlanFixtures = []struct {
 	{"9.0.8", "id_point", `{"isCached":false,"stage":"EXPRESS_IXSCAN","keyPattern":{"_id":1},"indexName":"_id_"}`, true, "_id_"},
 	{"9.0.8", "or_mixed", `{"isCached":false,"stage":"SUBPLAN","inputStage":{"stage":"LIMIT","limitAmount":51,"inputStage":{"stage":"COLLSCAN","filter":{"$or":[{"region":{"$eq":"x"}},{"status":{"$eq":"open"}}]},"direction":"forward"}}}`, false, ""},
 	{"9.0.8", "sort_region", `{"isCached":false,"stage":"SORT","sortPattern":{"region":1},"memLimit":104857600,"limitAmount":51,"type":"simple","inputStage":{"stage":"FETCH","nss":"test.orders","inputStage":{"stage":"IXSCAN","nss":"test.orders","keyPattern":{"status":1},"indexName":"status_1","direction":"forward"}}}`, false, ""},
+	{"8.0.38", "sort_orderNo_backward", `{"isCached":false,"stage":"LIMIT","limitAmount":11,"inputStage":{"stage":"FETCH","inputStage":{"stage":"IXSCAN","keyPattern":{"orderNo":1},"indexName":"orderNo_1","isMultiKey":false,"multiKeyPaths":{"orderNo":[]},"isUnique":false,"isSparse":false,"isPartial":false,"indexVersion":2,"direction":"backward","indexBounds":{"orderNo":["(10, 1]"]}}}}`, true, "orderNo_1"},
+	{"8.0.38", "sort_compound", `{"isCached":false,"stage":"LIMIT","limitAmount":51,"inputStage":{"stage":"FETCH","inputStage":{"stage":"IXSCAN","keyPattern":{"status":1,"amount":-1},"indexName":"status_1_amount_-1","isMultiKey":false,"multiKeyPaths":{"status":[],"amount":[]},"isUnique":false,"isSparse":false,"isPartial":false,"indexVersion":2,"direction":"forward","indexBounds":{"status":["[\"open\", \"open\"]"],"amount":["[MaxKey, MinKey]"]}}}}`, true, "status_1_amount_-1"},
+	{"8.0.38", "sort_region", `{"isCached":false,"stage":"SORT","sortPattern":{"region":1},"memLimit":104857600,"limitAmount":51,"type":"simple","inputStage":{"stage":"FETCH","inputStage":{"stage":"IXSCAN","keyPattern":{"status":1,"amount":-1},"indexName":"status_1_amount_-1","direction":"forward"}}}`, false, ""},
+	{"9.0.8", "sort_orderNo_backward", `{"isCached":false,"stage":"LIMIT","limitAmount":11,"inputStage":{"stage":"FETCH","nss":"test.orders","inputStage":{"stage":"IXSCAN","nss":"test.orders","keyPattern":{"orderNo":1},"indexName":"orderNo_1","isMultiKey":false,"multiKeyPaths":{"orderNo":[]},"isUnique":false,"isSparse":false,"isPartial":false,"indexVersion":2,"direction":"backward","indexBounds":{"orderNo":["(10, 1]"]}}}}`, true, "orderNo_1"},
+	{"9.0.8", "sort_compound", `{"isCached":false,"stage":"LIMIT","limitAmount":51,"inputStage":{"stage":"FETCH","nss":"test.orders","inputStage":{"stage":"IXSCAN","nss":"test.orders","keyPattern":{"status":1,"amount":-1},"indexName":"status_1_amount_-1","isMultiKey":false,"multiKeyPaths":{"status":[],"amount":[]},"isUnique":false,"isSparse":false,"isPartial":false,"indexVersion":2,"direction":"forward","indexBounds":{"status":["[\"open\", \"open\"]"],"amount":["[MaxKey, MinKey]"]}}}}`, true, "status_1_amount_-1"},
 }
 
 func TestMongoIndexGate(t *testing.T) {

@@ -23,10 +23,11 @@ type mongoCell struct {
 }
 
 // mongoFindQuery is the parsed and approved form of
-// db.<collection>.find(<filter>[, <projection>]).
+// db.<collection>.find(<filter>[, <projection>])[.sort(<object>)].
 type mongoFindQuery struct {
 	collection string
 	filter     bson.D
+	sort       bson.D   // optional; empty when the statement has no .sort()
 	columns    []string // output column order, approved fields only
 }
 
@@ -255,9 +256,11 @@ func mongoFilterValue(v mongoJSONValue) (any, error) {
 
 // ---- statement grammar ----------------------------------------------------
 
-// parseMongoFind parses and validates `db.<collection>.find(<filter>[, <proj>])`
-// against the approval. Field-shape failures are validation_failed; unapproved
-// collections or fields are disclosure_blocked.
+// parseMongoFind parses and validates
+// `db.<collection>.find(<filter>[, <proj>])[.sort(<object>)]` against the
+// approval. .sort is the only allowed chain, at most once, only after find.
+// Field-shape failures are validation_failed; unapproved collections or fields
+// are disclosure_blocked.
 func parseMongoFind(statement string, a mongoApproval) (mongoFindQuery, error) {
 	var query mongoFindQuery
 	match := mongoFind.FindStringSubmatch(statement)
@@ -290,7 +293,47 @@ func parseMongoFind(statement string, a mongoApproval) (mongoFindQuery, error) {
 		projectionValue = &projection
 		rest = strings.TrimLeft(rest, " \t\r\n")
 	}
-	if rest != ")" {
+	if !strings.HasPrefix(rest, ")") {
+		return query, ErrQueryValidationFailed
+	}
+	tail := strings.TrimLeft(rest[1:], " \t\r\n")
+	if strings.HasPrefix(tail, ".sort(") {
+		var sortValue mongoJSONValue
+		if sortValue, tail, err = mongoReadObjectArg(tail[len(".sort("):]); err != nil {
+			return query, err
+		}
+		tail = strings.TrimLeft(tail, " \t\r\n")
+		if !strings.HasPrefix(tail, ")") {
+			return query, ErrQueryValidationFailed
+		}
+		tail = strings.TrimLeft(tail[1:], " \t\r\n")
+		var sort bson.D
+		if len(sortValue.obj) == 0 || len(sortValue.obj) > mongoSortFieldMax {
+			return query, ErrQueryValidationFailed
+		}
+		for _, entry := range sortValue.obj {
+			if !mongoFieldNameValid(entry.key) {
+				return query, ErrQueryValidationFailed
+			}
+			// Sorting on a masked field leaks its order, so sort keys require
+			// raw disclosure just like filter fields.
+			if mode, ok := fields[entry.key]; !ok || mode != model.ResultDisclosureRawCopyAllowed {
+				return query, ErrQueryDisclosureBlocked
+			}
+			var direction int64
+			switch {
+			case entry.value.kind == mongoJSONNumber && entry.value.num.String() == "1":
+				direction = 1
+			case entry.value.kind == mongoJSONNumber && entry.value.num.String() == "-1":
+				direction = -1
+			default:
+				return query, ErrQueryValidationFailed
+			}
+			sort = append(sort, bson.E{Key: entry.key, Value: direction})
+		}
+		query.sort = sort
+	}
+	if tail != "" {
 		return query, ErrQueryValidationFailed
 	}
 
