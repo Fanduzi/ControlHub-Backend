@@ -13,6 +13,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -36,20 +37,23 @@ func TestRedisWorksheetHTTP(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = redis.Close() })
-	const key1, key2 = "demo:order:101", "demo:order:102"
+	const hashKey = "demo:order:101"
+	const key1, key2 = "demo:order:note:101", "demo:order:note:102"
 	for key, value := range map[string]string{key1: "fixture-open", key2: "fixture-shipped", "demo:order:empty": "", "demo:order:masked": "fixture-mask-secret", "demo:order:large": strings.Repeat("x", 4096), "demo:order:binary": "\xff", "demo:private:101": "fixture-private"} {
 		if err := redis.expect("+OK", "SET", key, value); err != nil {
 			t.Fatal(err)
 		}
 	}
-	if err := redis.expect(":1", "HSET", "demo:order:hash", "state", "fixture-hash"); err != nil {
+	if err := redis.expect(":7", "HSET", hashKey,
+		"status", "open", "region", "cn-east", "empty", "", "masked", "fixture-mask-secret",
+		"large", strings.Repeat("x", 4096), "binary", "\xff", "secret", "fixture-private"); err != nil {
 		t.Fatal(err)
 	}
 	reader, err := dialRedisFixture(seedCtx, address, "reader", readSecret, tlsConfig)
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, args := range [][]string{{"GETRANGE", "demo:private:101", "0", "3"}, {"SET", key1, "changed"}, {"SELECT", "1"}, {"SCAN", "0"}} {
+	for _, args := range [][]string{{"GETRANGE", "demo:private:101", "0", "3"}, {"SET", key1, "changed"}, {"HSET", hashKey, "status", "x"}, {"HGETALL", hashKey}, {"HGET", "demo:private:101", "status"}, {"SELECT", "1"}, {"SCAN", "0"}} {
 		if reply, err := reader.command(args...); err != nil || !strings.HasPrefix(reply, "-NOPERM ") {
 			t.Fatal("Redis reader ACL did not refuse", args[0], err)
 		}
@@ -80,9 +84,15 @@ func TestRedisWorksheetHTTP(t *testing.T) {
 	})
 
 	raw := model.ResultDisclosureRawCopyAllowed
-	keys := map[string]model.ResultDisclosureMode{key1: raw, key2: raw, "demo:order:empty": raw, "demo:order:missing": raw, "demo:order:large": raw, "demo:order:hash": raw, "demo:order:binary": raw, "demo:order:masked": model.ResultDisclosureMaskedNoCopy}
+	// keys and hashFields never authorize each other: demo:order:101 is approved
+	// for GET only so the statement can reach Redis and hit WRONGTYPE.
+	keys := map[string]model.ResultDisclosureMode{hashKey: raw, key1: raw, key2: raw, "demo:order:empty": raw, "demo:order:missing": raw, "demo:order:large": raw, "demo:order:binary": raw, "demo:order:masked": model.ResultDisclosureMaskedNoCopy}
+	hashFields := map[string]map[string]model.ResultDisclosureMode{
+		hashKey: {"status": raw, "region": raw, "empty": raw, "missing": raw, "large": raw, "binary": raw, "masked": model.ResultDisclosureMaskedNoCopy},
+		key1:    {"status": raw},
+	}
 	manifestPath := filepath.Join(t.TempDir(), "active.json")
-	manifest := map[string]any{"targetId": target.ID, "address": address, "environment": "Staging", "user": "reader", "credentialRef": "REDIS_WORKSHEET_FIXTURE", "caPem": ca, "users": []uint64{user}, "keys": keys}
+	manifest := map[string]any{"targetId": target.ID, "address": address, "environment": "Staging", "user": "reader", "credentialRef": "REDIS_WORKSHEET_FIXTURE", "caPem": ca, "users": []uint64{user}, "keys": keys, "hashFields": hashFields}
 	publish := func() error {
 		contents, err := json.Marshal(manifest)
 		if err != nil {
@@ -134,8 +144,34 @@ func TestRedisWorksheetHTTP(t *testing.T) {
 		if a.Run != run || a.Export || a.Explain || a.SaveSheet || item.Capability.EditorMode != "redis" {
 			t.Fatalf("unexpected Redis target actions: %+v", a)
 		}
-		if (!run && len(item.SchemaPreview) != 0) || (run && (len(item.SchemaPreview) != len(keys) || item.SchemaPreview[0].Name != key1 || item.SchemaPreview[0].Kind != "redis_key")) {
+		if !run {
+			if len(item.SchemaPreview) != 0 {
+				t.Fatal("Redis object list did not honor approval")
+			}
+			return
+		}
+		wantKeys := len(keys)
+		for key := range hashFields {
+			if _, dup := keys[key]; !dup {
+				wantKeys++
+			}
+		}
+		if len(item.SchemaPreview) != wantKeys || item.SchemaPreview[0].Name != hashKey || item.SchemaPreview[0].Kind != "redis_key" {
 			t.Fatal("Redis object list did not honor approval")
+		}
+		wantChildren := map[string][]string{hashKey: {"binary", "empty", "large", "masked", "missing", "region", "status"}, key1: {"status"}}
+		for _, node := range item.SchemaPreview {
+			want, approved := wantChildren[node.Name]
+			var got []string
+			for _, child := range node.Children {
+				if child.Kind != "redis_hash_field" {
+					t.Fatalf("unexpected Redis object child kind: %+v", child)
+				}
+				got = append(got, child.Name)
+			}
+			if !slices.Equal(got, want) || (!approved && len(got) != 0) {
+				t.Fatalf("Redis hash field list for %s: %v", node.Name, got)
+			}
 		}
 	}
 	assertTarget(h, bearer, true)
@@ -176,10 +212,23 @@ func TestRedisWorksheetHTTP(t *testing.T) {
 			t.Fatal("unexpected Redis value or disclosure")
 		}
 	}
-	for _, statement := range []string{"GET demo:order:large", "GET demo:order:binary", "GET demo:order:hash", "SET " + key1 + " changed", "GET " + key1 + "\nGET " + key2} {
+	for _, tc := range []struct {
+		field string
+		value any
+	}{{"status", "open"}, {"region", "cn-east"}, {"empty", ""}, {"missing", nil}, {"masked", "[MASKED]"}} {
+		result := run(h, bearer, request("hget\t"+hashKey+"\t"+tc.field+"\n"), 200, "")
+		if result.Rows[0][0] != tc.value || (result.Columns[0].CopyAllowed != (tc.value != "[MASKED]")) {
+			t.Fatal("unexpected Redis hash field value or disclosure")
+		}
+	}
+	for _, statement := range []string{"GET demo:order:large", "GET demo:order:binary", "GET " + hashKey, "SET " + key1 + " changed", "GET " + key1 + "\nGET " + key2,
+		"HGET " + hashKey + " large", "HGET " + hashKey + " binary", "HGET " + key1 + " status",
+		"HSET " + hashKey + " status x", "HGETALL " + hashKey, "HGET " + hashKey + " status\nHGET " + hashKey + " region", "HGET " + hashKey} {
 		run(h, bearer, request(statement), 400, "validation_failed")
 	}
 	run(h, bearer, request("GET demo:private:101"), 403, "query_result_disclosure_blocked")
+	run(h, bearer, request("HGET "+hashKey+" secret"), 403, "query_result_disclosure_blocked")
+	run(h, bearer, request("HGET demo:private:101 status"), 403, "query_result_disclosure_blocked")
 	run(h, bearer, model.QueryExecuteRequest{Statement: "GET " + key1, Database: "1"}, 400, "validation_failed")
 	run(h, bearer, model.QueryExecuteRequest{Statement: "GET " + key1, Pagination: &model.QueryExecutePaginationRequest{Page: 1, PageSize: 5}}, 400, "validation_failed")
 
@@ -197,6 +246,7 @@ func TestRedisWorksheetHTTP(t *testing.T) {
 		t.Fatal(err)
 	}
 	run(h, bearer, request("GET "+key1), 403, "query_not_allowed")
+	run(h, bearer, request("HGET "+hashKey+" status"), 403, "query_not_allowed")
 	if err := redis.expect("+OK", "ACL", "SETUSER", "reader", "resetkeys", "%R~demo:order:*"); err != nil {
 		t.Fatal(err)
 	}
@@ -223,6 +273,28 @@ func TestRedisWorksheetHTTP(t *testing.T) {
 	run(h, bearer, request("GET "+key1), 403, "query_result_disclosure_blocked")
 	if err := setKey(true); err != nil {
 		t.Fatal(err)
+	}
+	delete(hashFields[hashKey], "status")
+	if err := publish(); err != nil {
+		t.Fatal(err)
+	}
+	run(h, bearer, request("HGET "+hashKey+" status"), 403, "query_result_disclosure_blocked")
+	hashFields[hashKey]["status"] = raw
+	if err := publish(); err != nil {
+		t.Fatal(err)
+	}
+	manifest["users"] = []uint64{}
+	if err := publish(); err != nil {
+		t.Fatal(err)
+	}
+	run(h, bearer, request("HGET "+hashKey+" status"), 403, "query_not_allowed")
+	manifest["users"] = []uint64{user}
+	if err := publish(); err != nil {
+		t.Fatal(err)
+	}
+	result := run(h, bearer, request("HGET "+hashKey+" status"), 200, "")
+	if result.Rows[0][0] != "open" {
+		t.Fatal("restored hash field approval did not run")
 	}
 
 	dropTrigger := func() error {
@@ -251,6 +323,7 @@ func TestRedisWorksheetHTTP(t *testing.T) {
 		t.Fatal(err)
 	}
 	run(h, bearer, request("GET "+key1), 502, "query_backend_error")
+	run(h, bearer, request("HGET "+hashKey+" status"), 502, "query_backend_error")
 	if countPair() != before {
 		t.Fatal("audit refusal left partial Redis evidence")
 	}
@@ -269,8 +342,10 @@ func TestRedisWorksheetHTTP(t *testing.T) {
 			var err error
 			switch r.PathValue("action") {
 			case "revoke":
+				delete(hashFields[hashKey], "status")
 				err = setKey(false)
 			case "restore":
+				hashFields[hashKey]["status"] = raw
 				err = setKey(true)
 			case "break-audit":
 				err = breakAudit()
@@ -298,12 +373,20 @@ func TestRedisWorksheetHTTP(t *testing.T) {
 		if err := cmd.Run(); err != nil {
 			t.Fatalf("Redis Chromium worksheet: %v", err)
 		}
-		if countPair() != before+8 {
+		if countPair() != before+13 {
 			t.Fatal("browser Run outcomes did not match Redis evidence")
 		}
 	}
 	var privateEvidence int
 	if err := db.QueryRow(`SELECT count(*) FROM query_executions WHERE target_resource_id=? AND (statement_preview LIKE '%demo:%' OR full_statement IS NOT NULL OR error_message LIKE '%fixture-%' OR statement_digest<>'')`, target.ID).Scan(&privateEvidence); err != nil || privateEvidence != 0 {
 		t.Fatalf("Redis persisted protected evidence: %d: %v", privateEvidence, err)
+	}
+	var unlabeled int
+	if err := db.QueryRow(`SELECT count(*) FROM query_executions WHERE target_resource_id=? AND statement_preview NOT IN ('Redis GET','Redis HGET') AND NOT (statement_preview='' AND status='rejected' AND error_code='query_not_allowed')`, target.ID).Scan(&unlabeled); err != nil || unlabeled != 0 {
+		t.Fatalf("Redis statement previews left the fixed labels: %d: %v", unlabeled, err)
+	}
+	var hgetRuns int
+	if err := db.QueryRow(`SELECT count(*) FROM query_executions WHERE target_resource_id=? AND statement_preview='Redis HGET'`, target.ID).Scan(&hgetRuns); err != nil || hgetRuns == 0 {
+		t.Fatalf("Redis HGET history rows missing: %d: %v", hgetRuns, err)
 	}
 }

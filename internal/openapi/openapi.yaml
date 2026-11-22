@@ -5206,7 +5206,9 @@ components:
           description: >-
             Lightweight object list derived from existing metadata. An approved
             Redis worksheet lists its configured key names as redis_key nodes
-            for the current User. The server does not scan Redis for this list.
+            for the current User, with configured hash fields as
+            redis_hash_field children. The server does not scan Redis for this
+            list.
           items:
             $ref: "#/components/schemas/QueryTargetSchemaPreviewNode"
         connections:
