@@ -1,11 +1,11 @@
 # Non-production Redis worksheet
 
-Select an approved Redis target in `/query`. The existing Objects pane lists its approved keys, with approved hash fields nested under hash keys. Type `GET demo:order:note:101` or `HGET demo:order:101 status` in the worksheet and click **Run**. Edit the key or field and run the command again to read a different value. Each successful run returns one `value` cell, with an explicit NULL marker for an absent key or field. An empty string stays empty. The shared history records the outcome as `Redis GET` or `Redis HGET` and omits the key, field and result. The editor uses the ordinary private workspace-draft behavior.
+Select an approved Redis target in `/query`. The existing Objects pane lists its approved keys, with approved hash fields nested under hash keys. Type `GET demo:order:note:101` or `HGET demo:order:101 status` in the worksheet and click **Run**. Edit the key or field and run the command again to read a different value. Each successful run returns one `value` cell, with an explicit NULL marker for an absent key or field. An empty string stays empty. `TYPE` and `TTL` run the same way against separately approved metadata keys and return one `type` or `ttl_seconds` cell. The shared history records the outcome as `Redis GET`, `Redis HGET`, `Redis TYPE` or `Redis TTL` and omits the key, field and result. The editor uses the ordinary private workspace-draft behavior.
 
 ## Enable a target
 
 1. Register a Redis database-instance profile in `Staging`, `Development` or `Test`. Use a standalone TLS Redis server with DB 0. The verified engine baseline is Redis Open Source `8.10.3`.
-2. On the Redis server, provision a dedicated password-authenticated read account with `-@all +multi +exists +getrange +exec +watch +hstrlen +hget` and an explicit read-only key pattern that covers the approved keys. Give the application account only these privileges. Reserve ACL and database maintenance for a separate operator identity. Use a certificate valid for the target profile's exact host.
+2. On the Redis server, provision a dedicated password-authenticated read account with `-@all +multi +exists +getrange +exec +watch +hstrlen +hget` and an explicit read-only key pattern such as `%R~demo:order:*` that covers the approved keys. Add `+type +ttl` only when the approval also grants `metadataKeys`. Give the application account only these privileges. Reserve ACL and database maintenance for a separate operator identity. Use a certificate valid for the target profile's exact host.
 3. Set `CONTROLHUB_ENVIRONMENT=nonproduction` and `CONTROLHUB_REDIS_WORKSHEET_CONFIG` to the absolute path of an operator-owned JSON approval file. Use a private parent directory and an ordinary file. The directory and file must be non-writable by group or other users. Keep the only write authority with the operator. Set `CONTROLHUB_QUERY_CREDENTIAL_<REF>` to `rediss://<reader>:<url-encoded-password>@<host>:<tls-port>/0`. The host and port must match the profile and approval. Use the admin `PUT /query-targets/{id}/credential` route with the same reference, `enabled=true`, and `environmentPolicy=non_prod_only`.
 4. Publish the approval file by atomic rename. Use the real target and user IDs and trusted PEM certificate authority in place of the examples below.
 
@@ -29,6 +29,10 @@ Select an approved Redis target in `/query`. The existing Objects pane lists its
       "masked": "masked_no_copy"
     }
   },
+  "metadataKeys": [
+    "demo:order:101",
+    "demo:order:expiring"
+  ],
   "limits": {
     "maxConcurrentRuns": 4,
     "maxConcurrentRunsPerUser": 1,
@@ -38,13 +42,15 @@ Select an approved Redis target in `/query`. The existing Objects pane lists its
 }
 ```
 
-`keys` authorizes `GET` on a whole key; `hashFields` authorizes `HGET` on individual fields of a hash key. The two lists never authorize each other. At least one entry is required. Field names use the same 1–128 character pattern as keys.
+`keys` authorizes `GET` on a whole key; `hashFields` authorizes `HGET` on individual fields of a hash key. `metadataKeys` authorizes `TYPE` and `TTL` on exact literal keys — a separate permission, because both commands disclose key existence on their own. The three lists never authorize each other: approving `metadataKeys` for a masked or unlisted value key does not disclose its value, and `keys`/`hashFields` entries never imply metadata access. A `metadataKeys` entry can be the only approval for a key; metadata-only keys appear in Objects without children. At least one entry across the three lists is required. Field names and metadata keys use the same 1–128 character pattern as keys.
 
 The configuration authorizes one target. Target discovery and Run read the current file and credential metadata independently. Removing the file, disabling the credential, or removing an approved user, key or field blocks the next Run against that approval. A request in progress uses the file snapshot acquired for that attempt. Redis itself applies its current ACL to the transaction. The configured CA validates TLS independently on every Redis connection, and the server never follows redirects. An unset configuration leaves Redis Run disabled.
 
 ## Execution and evidence
 
-`GET` and `HGET` are case-insensitive. Each command names one key (and for `HGET` one field) of 1–128 ASCII letters, digits, colons, underscores or hyphens.
+`GET`, `HGET`, `TYPE` and `TTL` are case-insensitive. Each command names one key (and for `HGET` one field) of 1–128 ASCII letters, digits, colons, underscores or hyphens.
+
+For `TYPE` and `TTL` the backend issues one static O(1) command after `AUTH` — no `MULTI`, no `WATCH`, and no value payload is ever transferred. `TYPE` returns the built-in type name in a `type` column, or `none` for a missing key; replies naming module types or anything outside the trusted status words fail closed. `TTL` returns the canonical decimal text in a `ttl_seconds` column — nonnegative seconds for an expiring key, `-1` for no expiry and `-2` for a missing key. The value stays text end to end so precision-unsafe integers never pass through a JavaScript number. `PTTL`, `EXPIRE`, `SCAN`, batching and other command shapes are refused before dialing Redis.
 
 For `GET` the backend issues a fixed transaction with `EXISTS` and `GETRANGE` using a 1,025-byte probe. This distinguishes a missing key from an empty value and rejects values above 1,024 bytes without fetching their full content.
 
@@ -81,4 +87,4 @@ go test -tags=integration -count=1 -v -run '^TestRedisHGETBoundProbe$' ./interna
 go test -tags=integration -count=1 -v -run '^TestRedisWorksheetLimitsHTTP$' ./internal/integration
 ```
 
-`TestRedisWorksheetHTTP` starts disposable Redis over TLS and MySQL metadata, provisions the Redis target and users through the standard assembly, and exercises the ordinary API for `GET` and `HGET`. `TestRedisWorksheetLimitsHTTP` proves the Run limits against the same fixture: floods refused by the per-user and per-target concurrency caps, a slot released after a timed-out Run, both token buckets, and `429 query_rate_limited` evidence. `TestRedisHGETBoundProbe` is the protocol evidence for the `HGET` bound, including concurrent-modification races. Set `CONTROLHUB_REDIS_BROWSER_CHECKOUT` to the companion frontend checkout (Node and Playwright Chromium installed) to also run the worksheet acceptance in real Chromium. It runs two different keys and checks permissions, audit rollback, stale-grid clearing and the execution history.
+`TestRedisWorksheetHTTP` starts disposable Redis `8.10.3` over TLS and MySQL metadata, provisions the Redis target and users through the standard assembly, and exercises the ordinary API for `GET`, `HGET`, `TYPE` and `TTL`, including the separate `metadataKeys` approval, its revocation and audit rollback. `TestRedisWorksheetLimitsHTTP` proves the Run limits against the same fixture: floods refused by the per-user and per-target concurrency caps, a slot released after a timed-out Run, both token buckets, and `429 query_rate_limited` evidence. `TestRedisHGETBoundProbe` is the protocol evidence for the `HGET` bound, including concurrent-modification races. Set `CONTROLHUB_REDIS_BROWSER_CHECKOUT` to the companion frontend checkout (Node and Playwright Chromium installed) to also run the worksheet acceptance in real Chromium. It runs two different keys and checks permissions, audit rollback, stale-grid clearing and the execution history; the `type-ttl` feature argument additionally exercises `TYPE`/`TTL` in the real paired fixture.

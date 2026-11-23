@@ -23,7 +23,7 @@ type redisWorksheetWire struct {
 }
 
 // dialRedisWorksheet opens the short-lived authenticated RESP2 connection
-// shared by the fixed GET and HGET transactions. The returned cleanup stops
+// shared by the fixed worksheet commands. The returned cleanup stops
 // the cancellation watcher and closes the socket, in that order.
 func dialRedisWorksheet(ctx context.Context, address, user, password string, config *tls.Config) (redisWorksheetWire, func(), error) {
 	var dialer net.Dialer
@@ -142,6 +142,58 @@ func readRedisHGET(ctx context.Context, address, user, password string, config *
 	default:
 		return nil, ErrQueryBackendFailure
 	}
+}
+
+// readRedisMetadata runs one static O(1) TYPE or TTL command after AUTH. No
+// value payload is ever transferred — the reply is a status word or an
+// integer line, both bounded by the shared line reader.
+func readRedisMetadata(ctx context.Context, address, user, password string, config *tls.Config, command, key string, remote *model.QueryExecutionRemoteState) (any, error) {
+	if command != "TYPE" && command != "TTL" {
+		return nil, ErrQueryValidationFailed
+	}
+	wire, cleanup, err := dialRedisWorksheet(ctx, address, user, password, config)
+	if err != nil {
+		return nil, err
+	}
+	defer cleanup()
+	*remote = model.QueryExecutionRemoteUnknown
+	if err := wire.send(command, key); err != nil {
+		return nil, err
+	}
+	line, err := wire.line()
+	if err != nil {
+		return nil, err
+	}
+	return redisMetadataReply(command, line, remote)
+}
+
+// redisMetadataReply decodes the single reply line of a TYPE or TTL command.
+// TYPE accepts only the trusted built-in status words — module type names are
+// not part of the contract. TTL returns the canonical decimal text verbatim
+// so precision-unsafe values never pass through a JS number; -1 means no
+// expiry, -2 a missing key. Anything else fails closed.
+func redisMetadataReply(command, line string, remote *model.QueryExecutionRemoteState) (any, error) {
+	if strings.HasPrefix(line, "-NOPERM ") {
+		*remote = model.QueryExecutionRemoteCompleted
+		return nil, ErrQueryNotAllowed
+	}
+	switch command {
+	case "TYPE":
+		switch line {
+		case "+none", "+string", "+list", "+set", "+zset", "+hash", "+stream", "+array", "+gcra":
+			*remote = model.QueryExecutionRemoteCompleted
+			return line[1:], nil
+		}
+	case "TTL":
+		if text, ok := strings.CutPrefix(line, ":"); ok {
+			n, err := strconv.ParseInt(text, 10, 64)
+			if err == nil && n >= -2 && strconv.FormatInt(n, 10) == text {
+				*remote = model.QueryExecutionRemoteCompleted
+				return text, nil
+			}
+		}
+	}
+	return nil, ErrQueryBackendFailure
 }
 
 func (w redisWorksheetWire) send(args ...string) error {

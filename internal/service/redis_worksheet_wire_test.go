@@ -81,6 +81,99 @@ func TestRedisWorksheetHGETReplyBounds(t *testing.T) {
 	}
 }
 
+// The metadata reply decoder accepts only the trusted TYPE status words and
+// canonical TTL integers delivered as text — unknown module types, malformed
+// frames and redirects fail closed without touching payload allocation.
+func TestRedisWorksheetMetadataReply(t *testing.T) {
+	for _, tc := range []struct {
+		name, command, line string
+		value               any
+		err                 error
+		completed           bool
+	}{
+		{name: "type hash", command: "TYPE", line: "+hash", value: "hash", completed: true},
+		{name: "type string", command: "TYPE", line: "+string", value: "string", completed: true},
+		{name: "type none", command: "TYPE", line: "+none", value: "none", completed: true},
+		{name: "ttl no expiry", command: "TTL", line: ":-1", value: "-1", completed: true},
+		{name: "ttl missing", command: "TTL", line: ":-2", value: "-2", completed: true},
+		{name: "ttl zero", command: "TTL", line: ":0", value: "0", completed: true},
+		{name: "ttl precision-unsafe stays text", command: "TTL", line: ":9007199254740993", value: "9007199254740993", completed: true},
+		{name: "ttl below floor", command: "TTL", line: ":-3", err: ErrQueryBackendFailure},
+		{name: "ttl non-canonical sign", command: "TTL", line: ":+1", err: ErrQueryBackendFailure},
+		{name: "ttl non-canonical zeros", command: "TTL", line: ":007", err: ErrQueryBackendFailure},
+		{name: "ttl wrong marker", command: "TTL", line: "+1", err: ErrQueryBackendFailure},
+		{name: "ttl status reply", command: "TTL", line: "+OK", err: ErrQueryBackendFailure},
+		{name: "type untrusted module name", command: "TYPE", line: "+untrusted_module", err: ErrQueryBackendFailure},
+		{name: "type integer reply", command: "TYPE", line: ":1", err: ErrQueryBackendFailure},
+		{name: "type redirect", command: "TYPE", line: "-MOVED 1 :6379", err: ErrQueryBackendFailure},
+		{name: "noperm denied", command: "TYPE", line: "-NOPERM denied", err: ErrQueryNotAllowed, completed: true},
+		{name: "noperm denied ttl", command: "TTL", line: "-NOPERM denied", err: ErrQueryNotAllowed, completed: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			remote := model.QueryExecutionRemoteUnknown
+			got, err := redisMetadataReply(tc.command, tc.line, &remote)
+			if got != tc.value || !errors.Is(err, tc.err) || (remote == model.QueryExecutionRemoteCompleted) != tc.completed {
+				t.Fatalf("value=%v error=%v remote=%s", got, err, remote)
+			}
+		})
+	}
+}
+
+// The wire transaction is one static command after AUTH — anything before or
+// after is a protocol break.
+func TestRedisWorksheetMetadataWire(t *testing.T) {
+	base := map[string]string{
+		"AUTH": "+OK\r\n",
+		"TYPE": "+hash\r\n",
+		"TTL":  ":-1\r\n",
+	}
+	for _, tc := range []struct {
+		name, command string
+		replies       map[string]string
+		value         any
+		err           error
+		completed     bool
+		wantCommands  []string
+	}{
+		{name: "type value", command: "TYPE", value: "hash", completed: true, wantCommands: []string{"AUTH", "TYPE"}},
+		{name: "ttl value", command: "TTL", value: "-1", completed: true, wantCommands: []string{"AUTH", "TTL"}},
+		{name: "unknown command refused", command: "PTTL", err: ErrQueryValidationFailed, wantCommands: nil},
+		{name: "noperm", command: "TYPE", replies: map[string]string{"TYPE": "-NOPERM denied\r\n"}, err: ErrQueryNotAllowed, completed: true, wantCommands: []string{"AUTH", "TYPE"}},
+		{name: "redirect fails closed", command: "TYPE", replies: map[string]string{"TYPE": "-MOVED 1 :6379\r\n"}, err: ErrQueryBackendFailure, wantCommands: []string{"AUTH", "TYPE"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			replies := make(map[string]string, len(base)+len(tc.replies))
+			for k, v := range base {
+				replies[k] = v
+			}
+			for k, v := range tc.replies {
+				replies[k] = v
+			}
+			server := startFakeRedisServer(t, replies)
+			ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+			defer cancel()
+			remote := model.QueryExecutionRemoteNone
+			got, err := readRedisMetadata(ctx, server.listener.Addr().String(), "reader", "secret",
+				server.clientTLSConfig(t), tc.command, "demo:order:101", &remote)
+			if got != tc.value || !errors.Is(err, tc.err) || (remote == model.QueryExecutionRemoteCompleted) != tc.completed {
+				t.Fatalf("value=%v error=%v remote=%s", got, err, remote)
+			}
+			if tc.wantCommands == nil {
+				// A refused command never opens the connection.
+				return
+			}
+			select {
+			case <-server.done:
+			case <-time.After(5 * time.Second):
+				t.Fatal("fake server did not observe connection close")
+			}
+			if names := commandNames(server.received()); !slices.Equal(names, tc.wantCommands) {
+				t.Fatalf("server saw commands %v, want %v", names, tc.wantCommands)
+			}
+		})
+	}
+}
+
 // fakeRedisServer plays scripted RESP2 replies over one TLS connection and
 // records every command it receives, so tests can prove the client stops
 // before sending MULTI/HGET when the size probe refuses.

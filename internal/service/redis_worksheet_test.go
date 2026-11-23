@@ -59,6 +59,14 @@ func TestRedisWorksheetApproval(t *testing.T) {
 		{name: "keys and hashFields", manifest: baseRedisManifest()},
 		{name: "hashFields only", manifest: mutate(func(m map[string]any) { delete(m, "keys") })},
 		{name: "keys only", manifest: mutate(func(m map[string]any) { delete(m, "hashFields") })},
+		{name: "metadataKeys only", manifest: mutate(func(m map[string]any) {
+			delete(m, "keys")
+			delete(m, "hashFields")
+			m["metadataKeys"] = []string{"demo:order:101"}
+		})},
+		{name: "bad metadata key", manifest: mutate(func(m map[string]any) {
+			m["metadataKeys"] = []string{"demo:order:*"}
+		}), wantErr: true},
 		{name: "no approvals fails closed", manifest: mutate(func(m map[string]any) { delete(m, "keys"); delete(m, "hashFields") }), wantErr: true},
 		{name: "empty inner field map", manifest: mutate(func(m map[string]any) {
 			m["hashFields"] = map[string]any{"demo:order:101": map[string]any{}}
@@ -94,7 +102,7 @@ func TestRedisWorksheetApproval(t *testing.T) {
 			if err != nil {
 				t.Fatalf("approval err=%v", err)
 			}
-			if len(a.Keys)+len(a.HashFields) == 0 {
+			if len(a.Keys)+len(a.HashFields)+len(a.MetadataKeys) == 0 {
 				t.Fatal("approval accepted but empty")
 			}
 		})
@@ -137,6 +145,32 @@ func TestRedisWorksheetStatementShape(t *testing.T) {
 	}
 }
 
+// Metadata statements get their own fixed grammar: TYPE and TTL accept one
+// approved literal key and nothing else — no fields, globs, batches or PTTL.
+func TestRedisWorksheetMetadataStatementShape(t *testing.T) {
+	for _, tc := range []struct {
+		statement string
+		match     bool
+	}{
+		{"TYPE demo:order:101", true},
+		{"tYpE\tdemo:order:101", true},
+		{"TTL demo:order:101", true},
+		{"ttl demo:order:missing", true},
+		{"TYPE demo:order:*", false},
+		{"TTL demo:order:101 field", false},
+		{"TYPE demo:order:101\nTTL demo:order:101", false},
+		{"PTTL demo:order:101", false},
+		{"EXPIRE demo:order:101 600", false},
+	} {
+		t.Run(strings.ReplaceAll(tc.statement, "\n", "|"), func(t *testing.T) {
+			trimmed := strings.Trim(tc.statement, " \t\r\n")
+			if got := redisMetadata.FindStringSubmatch(trimmed) != nil; got != tc.match {
+				t.Fatalf("metadata match=%v", got)
+			}
+		})
+	}
+}
+
 // The evidence preview is a fixed label so history never carries keys,
 // fields or values.
 func TestRedisStatementPreview(t *testing.T) {
@@ -144,6 +178,8 @@ func TestRedisStatementPreview(t *testing.T) {
 		{"GET demo:order:101", "Redis GET"},
 		{"HGET demo:order:101 status", "Redis HGET"},
 		{"  hget\tdemo:order:101\tstatus  ", "Redis HGET"},
+		{"TYPE demo:order:101", "Redis TYPE"},
+		{"ttl demo:order:missing", "Redis TTL"},
 		{"HSET demo:order:101 status x", "Redis GET"},
 		{"", "Redis GET"},
 	} {

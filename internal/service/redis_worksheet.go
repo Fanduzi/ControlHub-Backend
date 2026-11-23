@@ -31,6 +31,7 @@ var (
 	redisKey      = regexp.MustCompile(`^` + redisKeyPattern + `$`)
 	redisGet      = regexp.MustCompile(`^(?i:GET)[ \t]+(` + redisKeyPattern + `)$`)
 	redisHGet     = regexp.MustCompile(`^(?i:HGET)[ \t]+(` + redisKeyPattern + `)[ \t]+(` + redisKeyPattern + `)$`)
+	redisMetadata = regexp.MustCompile(`^(?i:(TYPE|TTL))[ \t]+(` + redisKeyPattern + `)$`)
 	redisUsername = regexp.MustCompile(`^[A-Za-z0-9_-]{1,64}$`)
 )
 
@@ -58,6 +59,7 @@ type redisApproval struct {
 	Users         []uint64                                         `json:"users"`
 	Keys          map[string]model.ResultDisclosureMode            `json:"keys"`
 	HashFields    map[string]map[string]model.ResultDisclosureMode `json:"hashFields"`
+	MetadataKeys  []string                                         `json:"metadataKeys"`
 	Limits        *worksheetRunLimitsWire                          `json:"limits"`
 
 	limits worksheetRunLimits
@@ -91,7 +93,7 @@ func (s *RedisWorksheet) approval(target model.QueryTarget, user uint64) (redisA
 		return redisApproval{}, ErrQueryNotAllowed
 	}
 	if a.TargetID != target.ResourceID || a.Environment != t.Environment || a.Address != net.JoinHostPort(t.Host, strconv.Itoa(t.Port)) || !slices.Contains(a.Users, user) ||
-		!redisUsername.MatchString(a.User) || a.User == "default" || model.ValidateCredentialRef(a.CredentialRef) != nil || (len(a.Keys) == 0 && len(a.HashFields) == 0) {
+		!redisUsername.MatchString(a.User) || a.User == "default" || model.ValidateCredentialRef(a.CredentialRef) != nil || (len(a.Keys) == 0 && len(a.HashFields) == 0 && len(a.MetadataKeys) == 0) {
 		return redisApproval{}, ErrQueryNotAllowed
 	}
 	for key, mode := range a.Keys {
@@ -107,6 +109,11 @@ func (s *RedisWorksheet) approval(target model.QueryTarget, user uint64) (redisA
 			if !redisKey.MatchString(field) || mode.Validate() != nil {
 				return redisApproval{}, ErrQueryNotAllowed
 			}
+		}
+	}
+	for _, key := range a.MetadataKeys {
+		if !redisKey.MatchString(key) {
+			return redisApproval{}, ErrQueryNotAllowed
 		}
 	}
 	limits, ok := a.Limits.resolve()
@@ -177,6 +184,12 @@ func (s *RedisWorksheet) ApplyWorksheetActions(ctx context.Context, target *mode
 			keys = append(keys, key)
 		}
 	}
+	for _, key := range a.MetadataKeys {
+		if !seen[key] {
+			seen[key] = true
+			keys = append(keys, key)
+		}
+	}
 	slices.Sort(keys)
 	for _, key := range keys {
 		node := model.QueryTargetSchemaPreviewNode{Kind: "redis_key", Name: key}
@@ -199,7 +212,7 @@ func (s *RedisWorksheet) ApplyWorksheetActions(ctx context.Context, target *mode
 	target.Governance.SafetyState = model.SafetyStateReadonlySandboxEnabled
 	target.Governance.CredentialState = string(model.QueryCredentialRuntimeSecretResolved)
 	target.Governance.SafetyNote = "Approved read-only Redis worksheet"
-	target.Governance.PolicyNotes = []string{"Non-production, GET and HGET on approved keys and fields in DB 0"}
+	target.Governance.PolicyNotes = []string{"Non-production, GET, HGET, TYPE and TTL within approved DB 0 scope"}
 }
 
 func (s *RedisWorksheet) execute(ctx context.Context, identity model.QueryExecutionIdentity, target model.QueryTarget, req model.QueryExecuteRequest) (model.QueryExecuteResponse, error) {
@@ -247,8 +260,15 @@ func (s *RedisWorksheet) execute(ctx context.Context, identity model.QueryExecut
 // redisStatementPreview is the fixed evidence label for a Redis statement.
 // Key, field and value never enter the preview.
 func redisStatementPreview(statement string) string {
-	if fields := strings.Fields(statement); len(fields) > 0 && strings.EqualFold(fields[0], "HGET") {
-		return "Redis HGET"
+	if fields := strings.Fields(statement); len(fields) > 0 {
+		switch strings.ToUpper(fields[0]) {
+		case "HGET":
+			return "Redis HGET"
+		case "TYPE":
+			return "Redis TYPE"
+		case "TTL":
+			return "Redis TTL"
+		}
 	}
 	return "Redis GET"
 }
@@ -267,7 +287,8 @@ func (s *RedisWorksheet) read(ctx context.Context, identity model.QueryExecution
 	statement := strings.Trim(req.Statement, " \t\r\n")
 	var mode model.ResultDisclosureMode
 	var key, field string
-	hget := false
+	var metadataCommand string
+	column := model.QueryResultColumn{Name: "value", DatabaseType: "string", Nullable: true}
 	if parts := redisGet.FindStringSubmatch(statement); parts != nil {
 		key = parts[1]
 		m, ok := a.Keys[key]
@@ -276,13 +297,22 @@ func (s *RedisWorksheet) read(ctx context.Context, identity model.QueryExecution
 		}
 		mode = m
 	} else if parts := redisHGet.FindStringSubmatch(statement); parts != nil {
-		hget = true
 		key, field = parts[1], parts[2]
 		m, ok := a.HashFields[key][field]
 		if !ok {
 			return nil, nil, ErrQueryDisclosureBlocked
 		}
 		mode = m
+	} else if parts := redisMetadata.FindStringSubmatch(statement); parts != nil {
+		metadataCommand, key = strings.ToUpper(parts[1]), parts[2]
+		if !slices.Contains(a.MetadataKeys, key) {
+			return nil, nil, ErrQueryDisclosureBlocked
+		}
+		mode = model.ResultDisclosureRawCopyAllowed
+		column = model.QueryResultColumn{Name: "type", DatabaseType: "string"}
+		if metadataCommand == "TTL" {
+			column = model.QueryResultColumn{Name: "ttl_seconds", DatabaseType: "integer"}
+		}
 	} else {
 		return nil, nil, ErrQueryValidationFailed
 	}
@@ -296,9 +326,12 @@ func (s *RedisWorksheet) read(ctx context.Context, identity model.QueryExecution
 	}
 	defer release()
 	var value any
-	if hget {
+	switch {
+	case metadataCommand != "":
+		value, err = readRedisMetadata(ctx, a.Address, a.User, password, tlsConfig, metadataCommand, key, &rec.RemoteState)
+	case field != "":
 		value, err = readRedisHGET(ctx, a.Address, a.User, password, tlsConfig, key, field, &rec.RemoteState)
-	} else {
+	default:
 		value, err = readRedisGET(ctx, a.Address, a.User, password, tlsConfig, key, &rec.RemoteState)
 	}
 	if err != nil {
@@ -309,5 +342,5 @@ func (s *RedisWorksheet) read(ctx context.Context, identity model.QueryExecution
 		return nil, nil, err
 	}
 	plan := DisclosurePlan{Columns: []ColumnDisclosure{{Mode: mode, CopyAllowed: mode == model.ResultDisclosureRawCopyAllowed}}}
-	return s.execution.disclosure.Apply(plan, []model.QueryResultColumn{{Name: "value", DatabaseType: "string", Nullable: true}}, [][]any{{value}})
+	return s.execution.disclosure.Apply(plan, []model.QueryResultColumn{column}, [][]any{{value}})
 }

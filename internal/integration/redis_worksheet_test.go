@@ -49,11 +49,14 @@ func TestRedisWorksheetHTTP(t *testing.T) {
 		"large", strings.Repeat("x", 4096), "binary", "\xff", "secret", "fixture-private"); err != nil {
 		t.Fatal(err)
 	}
+	if err := redis.expect("+OK", "SET", "demo:order:expiring", "never-echo-this-value", "EX", "600"); err != nil {
+		t.Fatal(err)
+	}
 	reader, err := dialRedisFixture(seedCtx, address, "reader", readSecret, tlsConfig)
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, args := range [][]string{{"GETRANGE", "demo:private:101", "0", "3"}, {"SET", key1, "changed"}, {"HSET", hashKey, "status", "x"}, {"HGETALL", hashKey}, {"HGET", "demo:private:101", "status"}, {"SELECT", "1"}, {"SCAN", "0"}} {
+	for _, args := range [][]string{{"GETRANGE", "demo:private:101", "0", "3"}, {"SET", key1, "changed"}, {"HSET", hashKey, "status", "x"}, {"HGETALL", hashKey}, {"HGET", "demo:private:101", "status"}, {"TYPE", "demo:private:101"}, {"TTL", "demo:private:101"}, {"EXPIRE", key1, "600"}, {"SELECT", "1"}, {"SCAN", "0"}} {
 		if reply, err := reader.command(args...); err != nil || !strings.HasPrefix(reply, "-NOPERM ") {
 			t.Fatal("Redis reader ACL did not refuse", args[0], err)
 		}
@@ -91,10 +94,13 @@ func TestRedisWorksheetHTTP(t *testing.T) {
 		hashKey: {"status": raw, "region": raw, "empty": raw, "missing": raw, "large": raw, "binary": raw, "masked": model.ResultDisclosureMaskedNoCopy},
 		key1:    {"status": raw},
 	}
+	// TYPE and TTL disclose key existence and expiry themselves, so they carry
+	// their own explicit allowlist; keys and hashFields never imply metadata.
+	metadataKeys := []string{hashKey, key1, "demo:order:missing", "demo:order:expiring"}
 	manifestPath := filepath.Join(t.TempDir(), "active.json")
 	// Generous Run limits keep this test about disclosure and evidence; the
 	// limiting behavior itself is covered by TestRedisWorksheetLimitsHTTP.
-	manifest := map[string]any{"targetId": target.ID, "address": address, "environment": "Staging", "user": "reader", "credentialRef": "REDIS_WORKSHEET_FIXTURE", "caPem": ca, "users": []uint64{user}, "keys": keys, "hashFields": hashFields,
+	manifest := map[string]any{"targetId": target.ID, "address": address, "environment": "Staging", "user": "reader", "credentialRef": "REDIS_WORKSHEET_FIXTURE", "caPem": ca, "users": []uint64{user}, "keys": keys, "hashFields": hashFields, "metadataKeys": metadataKeys,
 		"limits": map[string]any{"maxConcurrentRuns": 16, "maxConcurrentRunsPerUser": 4, "runsPerSecond": 50, "runsPerMinutePerUser": 600}}
 	publish := func() error {
 		contents, err := json.Marshal(manifest)
@@ -156,6 +162,15 @@ func TestRedisWorksheetHTTP(t *testing.T) {
 		wantKeys := len(keys)
 		for key := range hashFields {
 			if _, dup := keys[key]; !dup {
+				wantKeys++
+			}
+		}
+		for _, key := range metadataKeys {
+			_, dup := keys[key]
+			if _, ok := hashFields[key]; ok {
+				dup = true
+			}
+			if !dup {
 				wantKeys++
 			}
 		}
@@ -224,14 +239,42 @@ func TestRedisWorksheetHTTP(t *testing.T) {
 			t.Fatal("unexpected Redis hash field value or disclosure")
 		}
 	}
+	for _, tc := range []struct {
+		statement, column, databaseType, value string
+	}{
+		{"type\t" + hashKey, "type", "string", "hash"},
+		{"TYPE " + key1, "type", "string", "string"},
+		{"TYPE demo:order:missing", "type", "string", "none"},
+		{"TTL " + key1, "ttl_seconds", "integer", "-1"},
+		{"TTL demo:order:missing", "ttl_seconds", "integer", "-2"},
+	} {
+		result := run(h, bearer, request(tc.statement+"\n"), 200, "")
+		column := result.Columns[0]
+		if result.Rows[0][0] != tc.value || column.Name != tc.column || column.DatabaseType != tc.databaseType || !column.CopyAllowed || column.Nullable {
+			t.Fatalf("unexpected Redis metadata result for %q: %+v -> %v", tc.statement, column, result.Rows[0][0])
+		}
+	}
+	expiring := run(h, bearer, request("TTL demo:order:expiring"), 200, "")
+	seconds, ok := expiring.Rows[0][0].(string)
+	parsed, parseErr := strconv.ParseInt(seconds, 10, 64)
+	if !ok || parseErr != nil || parsed < 0 || parsed > 600 {
+		t.Fatalf("unexpected Redis TTL value for expiring key: %v", expiring.Rows[0][0])
+	}
 	for _, statement := range []string{"GET demo:order:large", "GET demo:order:binary", "GET " + hashKey, "SET " + key1 + " changed", "GET " + key1 + "\nGET " + key2,
 		"HGET " + hashKey + " large", "HGET " + hashKey + " binary", "HGET " + key1 + " status",
-		"HSET " + hashKey + " status x", "HGETALL " + hashKey, "HGET " + hashKey + " status\nHGET " + hashKey + " region", "HGET " + hashKey} {
+		"HSET " + hashKey + " status x", "HGETALL " + hashKey, "HGET " + hashKey + " status\nHGET " + hashKey + " region", "HGET " + hashKey,
+		"TYPE demo:order:*", "TTL " + key1 + " field", "TYPE " + key1 + "\nTTL " + key1, "PTTL " + key1, "EXPIRE " + key1 + " 600"} {
 		run(h, bearer, request(statement), 400, "validation_failed")
 	}
 	run(h, bearer, request("GET demo:private:101"), 403, "query_result_disclosure_blocked")
 	run(h, bearer, request("HGET "+hashKey+" secret"), 403, "query_result_disclosure_blocked")
 	run(h, bearer, request("HGET demo:private:101 status"), 403, "query_result_disclosure_blocked")
+	run(h, bearer, request("TYPE "+key2), 403, "query_result_disclosure_blocked")
+	run(h, bearer, request("TTL demo:order:masked"), 403, "query_result_disclosure_blocked")
+	run(h, bearer, request("TYPE demo:private:101"), 403, "query_result_disclosure_blocked")
+	run(h, bearer, request("TTL demo:private:101"), 403, "query_result_disclosure_blocked")
+	run(h, bearer, request("GET demo:order:expiring"), 403, "query_result_disclosure_blocked")
+	run(h, bearer, request("HGET demo:order:expiring status"), 403, "query_result_disclosure_blocked")
 	run(h, bearer, model.QueryExecuteRequest{Statement: "GET " + key1, Database: "1"}, 400, "validation_failed")
 	run(h, bearer, model.QueryExecuteRequest{Statement: "GET " + key1, Pagination: &model.QueryExecutePaginationRequest{Page: 1, PageSize: 5}}, 400, "validation_failed")
 
@@ -250,6 +293,8 @@ func TestRedisWorksheetHTTP(t *testing.T) {
 	}
 	run(h, bearer, request("GET "+key1), 403, "query_not_allowed")
 	run(h, bearer, request("HGET "+hashKey+" status"), 403, "query_not_allowed")
+	run(h, bearer, request("TYPE "+key1), 403, "query_not_allowed")
+	run(h, bearer, request("TTL "+key1), 403, "query_not_allowed")
 	if err := redis.expect("+OK", "ACL", "SETUSER", "reader", "resetkeys", "%R~demo:order:*"); err != nil {
 		t.Fatal(err)
 	}
@@ -300,6 +345,22 @@ func TestRedisWorksheetHTTP(t *testing.T) {
 		t.Fatal("restored hash field approval did not run")
 	}
 
+	delete(manifest, "metadataKeys")
+	if err := publish(); err != nil {
+		t.Fatal(err)
+	}
+	run(h, bearer, request("TTL "+key1), 403, "query_result_disclosure_blocked")
+	if result = run(h, bearer, request("GET "+key1), 200, ""); result.Rows[0][0] != "fixture-open" {
+		t.Fatal("metadata revoke changed value approvals")
+	}
+	manifest["metadataKeys"] = metadataKeys
+	if err := publish(); err != nil {
+		t.Fatal(err)
+	}
+	if result = run(h, bearer, request("TTL "+key1), 200, ""); result.Rows[0][0] != "-1" {
+		t.Fatal("restored metadata approval did not run")
+	}
+
 	dropTrigger := func() error {
 		_, err := db.Exec(`DROP TRIGGER IF EXISTS redis_worksheet_audit_failure`)
 		return err
@@ -327,6 +388,7 @@ func TestRedisWorksheetHTTP(t *testing.T) {
 	}
 	run(h, bearer, request("GET "+key1), 502, "query_backend_error")
 	run(h, bearer, request("HGET "+hashKey+" status"), 502, "query_backend_error")
+	run(h, bearer, request("TTL "+key1), 502, "query_backend_error")
 	if countPair() != before {
 		t.Fatal("audit refusal left partial Redis evidence")
 	}
@@ -372,14 +434,14 @@ func TestRedisWorksheetHTTP(t *testing.T) {
 		defer server.Close()
 		browserCtx, cancel := context.WithTimeout(ctx, 3*time.Minute)
 		defer cancel()
-		cmd := exec.CommandContext(browserCtx, "node", "scripts/e2e/redis-worksheet.mjs", server.URL, strconv.FormatUint(target.ID, 10), email)
+		cmd := exec.CommandContext(browserCtx, "node", "scripts/e2e/redis-worksheet.mjs", server.URL, strconv.FormatUint(target.ID, 10), email, "type-ttl")
 		cmd.Dir = front
 		cmd.Env = append(os.Environ(), "CONTROLHUB_REDIS_FIXTURE_SECRET="+controlSecret)
 		cmd.Stdout, cmd.Stderr = os.Stdout, os.Stderr
 		if err := cmd.Run(); err != nil {
 			t.Fatalf("Redis Chromium worksheet: %v", err)
 		}
-		if countPair() != before+15 {
+		if countPair() != before+22 {
 			t.Fatal("browser Run outcomes did not match Redis evidence")
 		}
 	}
@@ -388,11 +450,15 @@ func TestRedisWorksheetHTTP(t *testing.T) {
 		t.Fatalf("Redis persisted protected evidence: %d: %v", privateEvidence, err)
 	}
 	var unlabeled int
-	if err := db.QueryRow(`SELECT count(*) FROM query_executions WHERE target_resource_id=? AND statement_preview NOT IN ('Redis GET','Redis HGET') AND NOT (statement_preview='' AND status='rejected' AND error_code='query_not_allowed')`, target.ID).Scan(&unlabeled); err != nil || unlabeled != 0 {
+	if err := db.QueryRow(`SELECT count(*) FROM query_executions WHERE target_resource_id=? AND statement_preview NOT IN ('Redis GET','Redis HGET','Redis TYPE','Redis TTL') AND NOT (statement_preview='' AND status='rejected' AND error_code='query_not_allowed')`, target.ID).Scan(&unlabeled); err != nil || unlabeled != 0 {
 		t.Fatalf("Redis statement previews left the fixed labels: %d: %v", unlabeled, err)
 	}
 	var hgetRuns int
 	if err := db.QueryRow(`SELECT count(*) FROM query_executions WHERE target_resource_id=? AND statement_preview='Redis HGET'`, target.ID).Scan(&hgetRuns); err != nil || hgetRuns == 0 {
 		t.Fatalf("Redis HGET history rows missing: %d: %v", hgetRuns, err)
+	}
+	var typeRuns, ttlRuns int
+	if err := db.QueryRow(`SELECT (SELECT count(*) FROM query_executions WHERE target_resource_id=? AND statement_preview='Redis TYPE'),(SELECT count(*) FROM query_executions WHERE target_resource_id=? AND statement_preview='Redis TTL')`, target.ID, target.ID).Scan(&typeRuns, &ttlRuns); err != nil || typeRuns == 0 || ttlRuns == 0 {
+		t.Fatalf("Redis TYPE/TTL history rows missing: type=%d ttl=%d err=%v", typeRuns, ttlRuns, err)
 	}
 }

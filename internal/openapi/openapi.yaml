@@ -431,7 +431,8 @@ paths:
         the verified User or Machine Principal identity, never the Machine
         Credential ID or secret. The actor is never accepted in the request
         body. The resolved DSN is never returned. An approved non-production
-        Redis worksheet accepts a fresh User and a single bounded GET in DB 0.
+        Redis worksheet accepts a fresh User and a single bounded GET, HGET,
+        TYPE or TTL command on an approved key in DB 0.
       security:
         - bearerAuth: []
         - machineCredential: []
@@ -7454,9 +7455,13 @@ components:
         grouping/count, ordering and LIMIT. Optional paging reruns the statement within the smaller of
         its LIMIT, maxRows and 20 rows. Each page revalidates the caller's approval generation and policies.
         The server rechecks source-column policies and commits history/audit before delivery.
-        Approved non-production Redis targets accept a fresh User and one GET of
-        an approved key in DB 0. Redis returns one bounded UTF-8 string or null
-        through the same result envelope after history/audit commit. Redis omits
+        Approved non-production Redis targets accept a fresh User and one GET or
+        HGET of an approved key or hash field in DB 0, or one TYPE or TTL on a
+        separately approved metadata key. Redis returns one bounded UTF-8 string
+        or null through the same result envelope after history/audit commit;
+        TYPE returns the type name in a `type` column and TTL returns canonical
+        decimal text in a `ttl_seconds` column — nonnegative seconds, -1 for no
+        expiry and -2 for a missing key. Redis omits
         pagination, database/schema selectors, clientExecutionId and ClickHouse generation.
       properties:
         clickHouseGeneration: {type: string, pattern: '^[a-f0-9]{64}$', description: Required for ClickHouse Run and omitted for other engines.}
@@ -7464,7 +7469,9 @@ components:
           type: string
           description: >
             A single read-only statement in the target's own dialect or an
-            approved Redis GET command.
+            approved Redis GET, HGET, TYPE or TTL command. Redis TYPE and TTL
+            require separately approved metadata keys and never transfer a
+            value payload.
             MySQL/TiDB allowed: SELECT, SHOW DATABASES, SHOW TABLES, SHOW
             COLUMNS, DESCRIBE/DESC, EXPLAIN SELECT. Schema-qualified metadata
             forms (SHOW TABLES FROM db, SHOW COLUMNS FROM db.tbl, DESCRIBE
